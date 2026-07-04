@@ -1,0 +1,151 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/inter";
+
+/* Dark variant is driven by the active theme's appearance: ThemeProvider toggles
+   the `.dark` class on <html> for dark themes, so shadcn `dark:` utilities work. */
+@custom-variant dark (&:is(.dark *));
+
+/* Map design tokens to Tailwind's color/radius scales. Utilities like
+   `bg-background`, `text-primary`, `border-border`, `bg-success` resolve here.
+   Never hardcode colors in components — only use these token-backed utilities. */
+@theme inline {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-sans);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* ── Themes ───────────────────────────────────────────────────────────────
+   Each theme is a self-contained token set. Adding a theme = add a block here
+   plus an entry in src/theme/themes.ts. serika-dark is the default (also on
+   :root so the very first paint, before JS runs, is already themed). */
+
+:root,
+[data-theme="serika-dark"] {
+  --radius: 0.625rem;
+
+  --background: #323437;
+  --foreground: #d1d0c5;
+  --card: #2c2e31;
+  --card-foreground: #d1d0c5;
+  --popover: #2c2e31;
+  --popover-foreground: #d1d0c5;
+  --primary: #e2b714;
+  --primary-foreground: #323437;
+  --secondary: #2c2e31;
+  --secondary-foreground: #d1d0c5;
+  --muted: #2c2e31;
+  --muted-foreground: #646669;
+  --accent: #2c2e31;
+  --accent-foreground: #d1d0c5;
+  --destructive: #ca4754;
+  --destructive-foreground: #f5f5f4;
+  --success: #5fb87a;
+  --success-foreground: #323437;
+  --warning: #e0a83c;
+  --warning-foreground: #323437;
+  --border: #46484b;
+  --input: #46484b;
+  --ring: #e2b714;
+}
+
+[data-theme="serika-light"] {
+  --radius: 0.625rem;
+
+  --background: #e1e1e3;
+  --foreground: #2c2e31;
+  --card: #d4d4d6;
+  --card-foreground: #2c2e31;
+  --popover: #d4d4d6;
+  --popover-foreground: #2c2e31;
+  --primary: #e2b714;
+  --primary-foreground: #2c2e31;
+  --secondary: #d4d4d6;
+  --secondary-foreground: #2c2e31;
+  --muted: #d4d4d6;
+  --muted-foreground: #6b6e74;
+  --accent: #d4d4d6;
+  --accent-foreground: #2c2e31;
+  --destructive: #ca4754;
+  --destructive-foreground: #f5f5f4;
+  --success: #4caf72;
+  --success-foreground: #ffffff;
+  --warning: #d99a2b;
+  --warning-foreground: #2c2e31;
+  --border: #c4c4c6;
+  --input: #c4c4c6;
+  --ring: #e2b714;
+}
+
+[data-theme="dracula"] {
+  --radius: 0.625rem;
+
+  --background: #282a36;
+  --foreground: #f8f8f2;
+  --card: #21222c;
+  --card-foreground: #f8f8f2;
+  --popover: #21222c;
+  --popover-foreground: #f8f8f2;
+  --primary: #bd93f9;
+  --primary-foreground: #282a36;
+  --secondary: #44475a;
+  --secondary-foreground: #f8f8f2;
+  --muted: #44475a;
+  --muted-foreground: #6272a4;
+  --accent: #44475a;
+  --accent-foreground: #f8f8f2;
+  --destructive: #ff5555;
+  --destructive-foreground: #282a36;
+  --success: #50fa7b;
+  --success-foreground: #282a36;
+  --warning: #ffb86c;
+  --warning-foreground: #282a36;
+  --border: #44475a;
+  --input: #44475a;
+  --ring: #bd93f9;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    @apply font-sans;
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    margin: 0;
+    min-height: 100svh;
+  }
+}

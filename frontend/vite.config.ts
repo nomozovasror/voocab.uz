@@ -16,4 +16,14 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  server: {
+    // Forward API calls to the FastAPI backend during local dev so the
+    // frontend can use same-origin `/api/v1` paths (no CORS needed).
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+    },
+  },
 })
