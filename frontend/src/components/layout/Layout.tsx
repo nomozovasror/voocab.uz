@@ -1,23 +1,24 @@
 import { Suspense } from "react";
 import { NavLink, Outlet } from "react-router-dom";
+import { Logo } from "@/components/Logo";
 import { ThemeSwitcher } from "@/theme/ThemeSwitcher";
 import { useScrolled } from "@/hooks/use-scrolled";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
-  { to: "/", label: "Home", end: true },
   { to: "/reading", label: "Reading" },
   { to: "/listening", label: "Listening" },
   { to: "/dictation", label: "Dictation" },
-  { to: "/profile", label: "Profile" },
+  { to: "/vocabulary", label: "Vocabulary" },
 ];
 
 export function Layout() {
   const scrolled = useScrolled();
 
-  // Each nav group is a floating pill that turns to frosted glass on scroll.
+  // Each group is its own floating island — transparent at the top, frosted
+  // glass once scrolled. A shared height keeps the three islands aligned.
   const pill = cn(
-    "flex items-center rounded-2xl border px-4 py-2 transition-[background-color,border-color,box-shadow,backdrop-filter] duration-300",
+    "flex h-12 items-center rounded-2xl border px-4 transition-[background-color,border-color,box-shadow,backdrop-filter] duration-300",
     scrolled
       ? "border-border bg-background/70 shadow-sm backdrop-blur-md supports-[backdrop-filter]:bg-background/60"
       : "border-transparent bg-transparent",
@@ -26,43 +27,48 @@ export function Layout() {
   return (
     <div className="flex min-h-svh flex-col">
       <header className="sticky top-0 z-30 w-full px-4 pt-3 sm:px-6 lg:px-8">
-        <div className="mx-auto flex w-full max-w-7xl items-center gap-3">
-          {/* Brand + primary nav */}
-          <div className={cn(pill, "gap-5")}>
+        {/* Three islands on one rail. The rail is wider than the content at the
+            top and snaps to the container width once scrolled. */}
+        <div
+          className={cn(
+            "mx-auto grid w-full grid-cols-[1fr_auto_1fr] items-center gap-3 transition-[max-width] duration-300",
+            scrolled ? "max-w-7xl" : "max-w-[85rem]",
+          )}
+        >
+          {/* Brand — the "voocab" wordmark is the Home link. */}
+          <div className={cn(pill, "gap-2 justify-self-start")}>
             <NavLink to="/" className="flex items-center gap-2">
-              <img src="/voocab.svg" alt="" className="size-6" />
+              <Logo className="size-6" />
               <span className="text-base font-semibold text-foreground">
                 voocab
               </span>
             </NavLink>
-
-            <span aria-hidden className="text-lg text-muted-foreground/40">
-              /
-            </span>
-
-            <nav className="hidden items-center gap-6 md:flex">
-              {NAV_ITEMS.map((item) => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  end={item.end}
-                  className={({ isActive }) =>
-                    cn(
-                      "text-xs font-medium tracking-wider uppercase transition-colors",
-                      isActive
-                        ? "text-foreground"
-                        : "text-muted-foreground hover:text-foreground",
-                    )
-                  }
-                >
-                  {item.label}
-                </NavLink>
-              ))}
-            </nav>
           </div>
 
+          {/* Primary nav, centered. Active item gets a soft glass chip. */}
+          <nav
+            className={cn(pill, "hidden gap-1 px-2 justify-self-center md:flex")}
+          >
+            {NAV_ITEMS.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  cn(
+                    "rounded-full px-3 py-1.5 text-xs font-medium tracking-wider uppercase transition-colors",
+                    isActive
+                      ? "bg-primary/10 text-primary"
+                      : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                  )
+                }
+              >
+                {item.label}
+              </NavLink>
+            ))}
+          </nav>
+
           {/* Actions */}
-          <div className={cn(pill, "ml-auto gap-2")}>
+          <div className={cn(pill, "gap-2 justify-self-end")}>
             <ThemeSwitcher />
             <NavLink
               to="/auth"

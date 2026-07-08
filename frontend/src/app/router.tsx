@@ -36,9 +36,9 @@ export const router = createBrowserRouter([
         }),
       },
       {
-        path: "profile",
+        path: "vocabulary",
         lazy: async () => ({
-          Component: (await import("@/pages/profile/ProfilePage")).default,
+          Component: (await import("@/pages/vocabulary/VocabularyPage")).default,
         }),
       },
       {

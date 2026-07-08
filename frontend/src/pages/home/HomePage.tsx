@@ -91,7 +91,7 @@ export default function HomePage() {
             <Link to="/dictation">Start practicing</Link>
           </Button>
           <Button asChild size="lg" variant="outline">
-            <Link to="/profile">View progress</Link>
+            <Link to="/vocabulary">Build vocabulary</Link>
           </Button>
         </div>
       </section>
