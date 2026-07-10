@@ -16,6 +16,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { ShootingStars } from "@/components/ShootingStars";
 import { useTheme } from "@/theme/useTheme";
 
 interface Section {
@@ -71,7 +72,10 @@ export default function HomePage() {
   const { theme } = useTheme();
 
   return (
-    <div className="space-y-16 pb-16">
+    <div className="relative z-10 space-y-16 pb-16">
+      {/* Shooting-stars background: fixed layer behind all content. */}
+      <ShootingStars className="fixed inset-0 -z-10" />
+
       {/* Hero */}
       <section className="space-y-5 pt-8">
         <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground">
