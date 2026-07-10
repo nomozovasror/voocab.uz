@@ -16,6 +16,12 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
+    environment:
+      # Reach the db service by name (overrides the localhost default and any
+      # DATABASE_URL in a mounted .env, since real env vars win in pydantic).
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/app
+    # Telegram/session secrets are read from backend/.env (bind-mounted here);
+    # see backend/.env.example.
     depends_on:
       - db
 
