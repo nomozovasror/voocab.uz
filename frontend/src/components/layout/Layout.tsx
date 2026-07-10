@@ -1,7 +1,9 @@
 import { Suspense } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { Logo } from "@/components/Logo";
+import { UserMenu } from "@/components/layout/UserMenu";
 import { ThemeSwitcher } from "@/theme/ThemeSwitcher";
+import { useAuth } from "@/auth/useAuth";
 import { useScrolled } from "@/hooks/use-scrolled";
 import { cn } from "@/lib/utils";
 
@@ -14,6 +16,7 @@ const NAV_ITEMS = [
 
 export function Layout() {
   const scrolled = useScrolled();
+  const { user, isLoading } = useAuth();
 
   // Each group is its own floating island — transparent at the top, frosted
   // glass once scrolled. A shared height keeps the three islands aligned.
@@ -70,12 +73,21 @@ export function Layout() {
           {/* Actions */}
           <div className={cn(pill, "gap-2 justify-self-end")}>
             <ThemeSwitcher />
-            <NavLink
-              to="/auth"
-              className="rounded-full bg-linear-to-b from-primary to-primary/80 px-4 py-1.5 text-sm font-medium text-primary-foreground shadow-[0_0_24px_-6px_var(--primary)] transition-shadow hover:shadow-[0_0_28px_-4px_var(--primary)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-            >
-              Sign in
-            </NavLink>
+            {/* Reflect session: signed-in users get an account menu, everyone
+                else a Sign in button. `isLoading` avoids a flash of the wrong
+                one on first paint. */}
+            {isLoading ? (
+              <div className="size-7 animate-pulse rounded-full bg-foreground/10" />
+            ) : user ? (
+              <UserMenu user={user} />
+            ) : (
+              <NavLink
+                to="/auth"
+                className="rounded-full bg-linear-to-b from-primary to-primary/80 px-4 py-1.5 text-sm font-medium text-primary-foreground shadow-[0_0_24px_-6px_var(--primary)] transition-shadow hover:shadow-[0_0_28px_-4px_var(--primary)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                Sign in
+              </NavLink>
+            )}
           </div>
         </div>
       </header>
