@@ -40,6 +40,9 @@ async function request<T>(
 ): Promise<T> {
   const res = await fetch(buildUrl(path, params), {
     method,
+    // Send the httpOnly session cookie, including cross-origin to the API
+    // subdomain in production.
+    credentials: "include",
     headers: {
       ...(json !== undefined ? { "Content-Type": "application/json" } : {}),
       ...headers,
