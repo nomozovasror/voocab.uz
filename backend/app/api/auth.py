@@ -60,13 +60,22 @@ class UserRead(BaseModel):
     avatar_url: str | None
 
 
+def _cookie_domain() -> str | None:
+    # Scope cookies to the parent domain (e.g. ".voocab.uz") so they're shared
+    # between the frontend host and the API subdomain. Empty config = host-only
+    # cookie (local dev, single host).
+    return settings.cookie_domain or None
+
+
 def _cookie_kwargs() -> dict[str, object]:
-    # Session cookies are only used same-site (frontend fetches /me), so Lax is
-    # both sufficient and safer.
+    # Session cookies are sent on same-site frontend fetches (Lax is sufficient
+    # and safer). In production the Domain attribute lets voocab.uz and
+    # api.voocab.uz share them.
     return {
         "httponly": True,
         "secure": settings.cookie_secure,
         "samesite": "lax",
+        "domain": _cookie_domain(),
         "path": "/",
     }
 
@@ -82,6 +91,7 @@ def _tx_cookie_kwargs() -> dict[str, object]:
         "httponly": True,
         "secure": secure,
         "samesite": "none" if secure else "lax",
+        "domain": _cookie_domain(),
         "path": "/",
     }
 
@@ -102,8 +112,8 @@ def _set_session_cookies(response: Response, user_id: str) -> None:
 
 
 def _clear_session_cookies(response: Response) -> None:
-    response.delete_cookie(ACCESS_COOKIE, path="/")
-    response.delete_cookie(REFRESH_COOKIE, path="/")
+    response.delete_cookie(ACCESS_COOKIE, path="/", domain=_cookie_domain())
+    response.delete_cookie(REFRESH_COOKIE, path="/", domain=_cookie_domain())
 
 
 @router.get("/telegram/start")
@@ -154,6 +164,7 @@ async def telegram_callback(
     failure.delete_cookie(
         OIDC_TX_COOKIE,
         path="/",
+        domain=_cookie_domain(),
         secure=settings.cookie_secure,
         samesite="none" if settings.cookie_secure else "lax",
     )
@@ -205,6 +216,7 @@ async def telegram_callback(
     success.delete_cookie(
         OIDC_TX_COOKIE,
         path="/",
+        domain=_cookie_domain(),
         secure=settings.cookie_secure,
         samesite="none" if settings.cookie_secure else "lax",
     )
