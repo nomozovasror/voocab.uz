@@ -1,4 +1,5 @@
-import { LogOut } from "lucide-react";
+import { LogOut, User as UserIcon } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -8,11 +9,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { UserAvatar } from "@/auth/UserAvatar";
-import { useAuth, type Me } from "@/auth/useAuth";
+import { useAuthActions } from "@/auth/useAuthActions";
+import type { User } from "@/auth/types";
 
 /** Header account control: avatar + name, with a sign-out menu. */
-export function UserMenu({ user }: { user: Me }) {
-  const { logout } = useAuth();
+export function UserMenu({ user }: { user: User }) {
+  const { logout } = useAuthActions();
+  const navigate = useNavigate();
 
   return (
     <DropdownMenu>
@@ -38,6 +41,13 @@ export function UserMenu({ user }: { user: Me }) {
           </div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onSelect={() => navigate("/profile")}
+          className="gap-2"
+        >
+          <UserIcon className="size-4" />
+          Profile
+        </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => void logout()}
           className="gap-2 text-destructive focus:text-destructive"

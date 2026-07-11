@@ -1,12 +1,12 @@
 import { cn } from "@/lib/utils";
-import type { Me } from "@/auth/useAuth";
+import type { User } from "@/auth/types";
 
 /** Telegram avatar if present, otherwise a themed initial. */
 export function UserAvatar({
   user,
   className,
 }: {
-  user: Me;
+  user: User;
   className?: string;
 }) {
   if (user.avatar_url) {

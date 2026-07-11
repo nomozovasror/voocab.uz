@@ -3,7 +3,7 @@ import { NavLink, Outlet } from "react-router-dom";
 import { Logo } from "@/components/Logo";
 import { UserMenu } from "@/components/layout/UserMenu";
 import { ThemeSwitcher } from "@/theme/ThemeSwitcher";
-import { useAuth } from "@/auth/useAuth";
+import { useCurrentUser } from "@/auth/useCurrentUser";
 import { useScrolled } from "@/hooks/use-scrolled";
 import { cn } from "@/lib/utils";
 
@@ -16,7 +16,7 @@ const NAV_ITEMS = [
 
 export function Layout() {
   const scrolled = useScrolled();
-  const { user, isLoading } = useAuth();
+  const { user, isLoading } = useCurrentUser();
 
   // Each group is its own floating island — transparent at the top, frosted
   // glass once scrolled. A shared height keeps the three islands aligned.
@@ -82,7 +82,7 @@ export function Layout() {
               <UserMenu user={user} />
             ) : (
               <NavLink
-                to="/auth"
+                to="/login"
                 className="rounded-full bg-linear-to-b from-primary to-primary/80 px-4 py-1.5 text-sm font-medium text-primary-foreground shadow-[0_0_24px_-6px_var(--primary)] transition-shadow hover:shadow-[0_0_28px_-4px_var(--primary)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
               >
                 Sign in

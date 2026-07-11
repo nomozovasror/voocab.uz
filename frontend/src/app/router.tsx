@@ -1,10 +1,13 @@
 import { createBrowserRouter } from "react-router-dom";
 import { Layout } from "@/components/layout/Layout";
+import { RequireAuth } from "@/auth/RequireAuth";
 
 /**
  * Central route config. Page components are lazy-loaded so each route is its
  * own chunk (code splitting). Add a section by dropping a page under
  * src/pages/<name>/ and registering a lazy child here.
+ *
+ * Routes that need a session live under the pathless <RequireAuth> layout route.
  */
 export const router = createBrowserRouter([
   {
@@ -30,22 +33,34 @@ export const router = createBrowserRouter([
         }),
       },
       {
-        path: "dictation",
-        lazy: async () => ({
-          Component: (await import("@/pages/dictation/DictationPage")).default,
-        }),
-      },
-      {
         path: "vocabulary",
         lazy: async () => ({
           Component: (await import("@/pages/vocabulary/VocabularyPage")).default,
         }),
       },
       {
-        path: "auth",
+        path: "login",
         lazy: async () => ({
-          Component: (await import("@/pages/auth/AuthPage")).default,
+          Component: (await import("@/pages/login/LoginPage")).default,
         }),
+      },
+      // --- Protected ---
+      {
+        element: <RequireAuth />,
+        children: [
+          {
+            path: "dictation",
+            lazy: async () => ({
+              Component: (await import("@/pages/dictation/DictationPage")).default,
+            }),
+          },
+          {
+            path: "profile",
+            lazy: async () => ({
+              Component: (await import("@/pages/profile/ProfilePage")).default,
+            }),
+          },
+        ],
       },
     ],
   },
