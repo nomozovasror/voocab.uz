@@ -1,0 +1,62 @@
+# Production stack: Postgres + FastAPI backend behind Caddy (which terminates
+# TLS for api.voocab.uz via Let's Encrypt). The frontend is served separately
+# from Cloudflare Pages, so only the API is exposed here.
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# All secrets/config come from .env.prod (gitignored; see .env.prod.example).
+services:
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql
+    # Not published to the host — only the backend reaches it over the compose
+    # network.
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    # DATABASE_URL, Telegram/session secrets, CORS, cookie + R2 settings.
+    env_file: .env.prod
+    # Override the image's dev CMD: no --reload, and trust the proxy headers
+    # Caddy sets so request.url is https and Secure cookies work.
+    command:
+      - uv
+      - run
+      - --no-sync
+      - uvicorn
+      - app.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - "*"
+    expose:
+      - "8000"
+    depends_on:
+      - db
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,12 @@
+# Caddy reverse proxy for the voocab API.
+#
+# Caddy automatically obtains and renews a Let's Encrypt certificate for the
+# domain below, so the DNS A-record for api.voocab.uz must be DNS-only (grey
+# cloud) in Cloudflare and ports 80/443 must reach this host.
+#
+# The SPA is hosted on Cloudflare Pages (voocab.uz) — not served here.
+
+api.voocab.uz {
+	encode gzip
+	reverse_proxy backend:8000
+}
