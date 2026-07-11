@@ -1,19 +1,20 @@
 /**
- * App-wide configuration. Values come from Vite env vars (VITE_*) with sane
- * defaults for local dev, where Vite proxies `/api` to the FastAPI backend.
+ * App-wide configuration. Values come from Vite env vars (VITE_*).
+ *
+ * VITE_API_BASE is the backend origin:
+ *   - dev  → http://localhost:8000 (see .env.development), a different origin
+ *            than the Vite dev server, so the real CORS + cookie path is used.
+ *   - prod → https://api.voocab.uz (set in the Cloudflare Pages build env).
+ * Leaving it empty falls back to the same origin (requests hit "/api/..."),
+ * which is handy behind a reverse proxy.
  */
 
-// Origin of the backend API. In production the API lives on its own subdomain
-// (e.g. https://api.voocab.uz); locally it's left empty so requests hit the
-// same origin and Vite's dev proxy forwards `/api` to the backend. Trailing
-// slash trimmed so we can safely concatenate paths.
+// Trailing slash trimmed so we can safely concatenate paths.
 const apiBase = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
 
 export const config = {
-  /** Backend origin ("" = same origin via the dev proxy). */
+  /** Backend origin ("" = same origin). All API paths are built on top. */
   apiBase,
-  /** Base path for versioned API requests; feature clients build on top. */
-  apiBaseUrl: `${apiBase}/api/v1`,
   appName: "voocab",
 } as const;
 

@@ -14,6 +14,9 @@ venv/
 .env.*
 !.env.example
 !.env.prod.example
+# Vite: committed shared config is safe (no secrets); *.local overrides are not.
+!.env.development
+.env.*.local
 
 # macOS
 .DS_Store
