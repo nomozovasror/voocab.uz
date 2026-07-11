@@ -158,7 +158,7 @@ async def telegram_callback(
     """Complete the handshake. On any failure the browser is bounced back to the
     frontend with ``?login=error`` rather than shown a raw 4xx."""
     failure = RedirectResponse(
-        f"{settings.frontend_url}/auth?login=error",
+        f"{settings.frontend_url}/login?login=error",
         status_code=status.HTTP_302_FOUND,
     )
     failure.delete_cookie(

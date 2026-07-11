@@ -35,6 +35,8 @@ JWKS_URI = f"{ISSUER}/.well-known/jwks.json"
 SCOPE = "openid profile"
 SIGNING_ALGORITHMS = ["RS256"]
 HTTP_TIMEOUT = 10.0
+# Clock-skew tolerance for id_token time claims (iat/nbf/exp), in seconds.
+LEEWAY_SECONDS = 60
 
 # PyJWKClient fetches + caches Telegram's public keys and picks the right one by
 # the token's `kid`. It's module-level so the cache is shared across requests.
@@ -116,6 +118,10 @@ async def verify_id_token(id_token: str, *, nonce: str) -> dict[str, Any]:
         algorithms=SIGNING_ALGORITHMS,
         audience=settings.telegram_bot_id,
         issuer=ISSUER,
+        # Tolerate small clock differences between us and Telegram's issuer so a
+        # token whose iat/nbf is a few seconds ahead of our clock isn't rejected
+        # as "not yet valid". exp still gets the same leeway (negligible).
+        leeway=LEEWAY_SECONDS,
         options={"require": ["exp", "iss", "aud", "sub"]},
     )
     # jwt.decode doesn't check nonce; enforce it ourselves against the value we
