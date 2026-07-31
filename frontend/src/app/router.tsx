@@ -60,6 +60,28 @@ export const router = createBrowserRouter([
               Component: (await import("@/pages/profile/ProfilePage")).default,
             }),
           },
+          {
+            path: "materials",
+            lazy: async () => ({
+              Component: (await import("@/pages/materials/MaterialsPage")).default,
+            }),
+          },
+          {
+            path: "materials/new",
+            lazy: async () => ({
+              Component: (
+                await import("@/pages/materials/MaterialEditorPage")
+              ).default,
+            }),
+          },
+          {
+            path: "materials/:id/edit",
+            lazy: async () => ({
+              Component: (
+                await import("@/pages/materials/MaterialEditorPage")
+              ).default,
+            }),
+          },
         ],
       },
     ],
