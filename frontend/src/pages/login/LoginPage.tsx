@@ -24,7 +24,7 @@ interface FromState {
  */
 export default function LoginPage() {
   const { user, isLoading } = useCurrentUser();
-  const { login } = useAuthActions();
+  const { login, devLogin } = useAuthActions();
   const location = useLocation();
   const [params] = useSearchParams();
   const loginError = params.get("login") === "error";
@@ -65,6 +65,15 @@ export default function LoginPage() {
           <Button onClick={login} size="lg" className="w-full">
             Sign in with Telegram
           </Button>
+          {import.meta.env.DEV && (
+            <Button
+              onClick={() => void devLogin()}
+              variant="outline"
+              className="mt-2 w-full"
+            >
+              Dev login (local)
+            </Button>
+          )}
         </CardContent>
       </Card>
     </div>

@@ -22,9 +22,10 @@ export default defineConfig({
     host: true,
     port: 5173,
     strictPort: true,
-    // Allow serving through a cloudflare quick tunnel (*.trycloudflare.com) so
-    // Telegram's OIDC redirect can reach the dev server over public HTTPS.
-    allowedHosts: ['.trycloudflare.com'],
+    // Allow serving through a cloudflare tunnel so Telegram's OIDC redirect can
+    // reach the dev server over public HTTPS — a quick tunnel (*.trycloudflare.com)
+    // or a stable named tunnel on a voocab.uz subdomain (e.g. dev.voocab.uz).
+    allowedHosts: ['.trycloudflare.com', '.voocab.uz'],
     // Forward API calls to the FastAPI backend during local dev so the
     // frontend can use same-origin `/api/v1` paths (no CORS needed). The proxy
     // runs on this machine, so the backend target stays localhost.

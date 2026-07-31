@@ -27,6 +27,7 @@ from fastapi import (
 )
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+from sqlmodel import select
 
 from app.api.deps import CurrentUser
 from app.core.config import settings
@@ -259,3 +260,38 @@ async def logout() -> Response:
 @router.get("/me", response_model=UserRead)
 async def me(user: CurrentUser) -> User:
     return user
+
+
+# --- Dev only ---------------------------------------------------------------
+# Registered only when explicitly enabled, so it doesn't exist at all in a normal
+# build. It's the single-command local login that removes the tunnel + Telegram
+# round-trip during development.
+DEV_USER_EMAIL = "dev@voocab.local"
+
+if settings.dev_login_enabled:
+    logger.warning(
+        "DEV LOGIN is enabled (POST /api/auth/dev-login). Never enable this in "
+        "production."
+    )
+
+    @router.post("/dev-login", response_model=UserRead)
+    async def dev_login(
+        response: Response,
+        session: Annotated[AsyncSession, Depends(get_session)],
+    ) -> User:
+        """Sign in as a fixed local dev user without Telegram. Hard-refused under
+        any production-like config (secure cookies)."""
+        if not settings.dev_login_enabled or settings.cookie_secure:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+
+        user = (
+            await session.exec(select(User).where(User.email == DEV_USER_EMAIL))
+        ).first()
+        if user is None:
+            user = User(email=DEV_USER_EMAIL, display_name="Dev User")
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+
+        _set_session_cookies(response, str(user.id))
+        return user

@@ -30,5 +30,14 @@ export function useAuthActions() {
     }
   };
 
-  return { login, logout };
+  /** Dev only: passwordless login against the gated backend endpoint. The UI
+   *  only exposes this in Vite dev builds; the backend only serves it when
+   *  DEV_LOGIN_ENABLED (and non-secure cookies). */
+  const devLogin = async () => {
+    await api.post("/api/auth/dev-login");
+    await queryClient.invalidateQueries({ queryKey: AUTH_ME_KEY });
+    navigate("/", { replace: true });
+  };
+
+  return { login, logout, devLogin };
 }
