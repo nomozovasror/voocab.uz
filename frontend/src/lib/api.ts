@@ -42,6 +42,17 @@ export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): voi
   unauthorizedHandler = handler;
 }
 
+// --- Backend-reachability signal --------------------------------------------
+// A network failure (fetch throws) or a 5xx means the backend may be down — as
+// opposed to a 4xx (401/403/404/422), which proves it's alive and answering.
+// The connection layer registers a handler here to kick off a /health probe.
+type BackendErrorHandler = () => void;
+let backendErrorHandler: BackendErrorHandler | null = null;
+
+export function setBackendErrorHandler(handler: BackendErrorHandler | null): void {
+  backendErrorHandler = handler;
+}
+
 export interface RequestOptions extends Omit<RequestInit, "body"> {
   /** JSON-serializable request body; sets Content-Type automatically. */
   json?: unknown;
@@ -87,6 +98,7 @@ async function request<T>(
     });
   } catch {
     // fetch only rejects on network-level failures (offline, DNS, CORS block).
+    backendErrorHandler?.();
     throw new ApiError(0, "Network error. Check your connection and try again.");
   }
 
@@ -107,6 +119,8 @@ async function request<T>(
         : await res.text();
 
   if (!res.ok) {
+    // 5xx → the backend is failing, not just this request. Nudge the health probe.
+    if (res.status >= 500) backendErrorHandler?.();
     const message =
       (isJson && data && typeof data === "object" && "detail" in data
         ? String((data as { detail: unknown }).detail)
