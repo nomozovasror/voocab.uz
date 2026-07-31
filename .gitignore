@@ -18,6 +18,9 @@ venv/
 !.env.development
 .env.*.local
 
+# Local uploaded media (dev fallback when R2 isn't configured)
+backend/media/
+
 # macOS
 .DS_Store
 

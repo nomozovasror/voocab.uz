@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     # Where the callback sends the browser after a successful login.
     frontend_url: str = "http://localhost:5173"
 
+    # --- Dev only: passwordless local login ---
+    # Enables POST /api/auth/dev-login (a test-user session without Telegram) so
+    # local dev needs no tunnel. NEVER set this in production — it's additionally
+    # refused whenever cookie_secure is true (i.e. any HTTPS/prod config).
+    dev_login_enabled: bool = False
+
     # --- CORS ---
     # Origins allowed to call the API with credentials. Accepts a comma-separated
     # string in the env (e.g. "https://voocab.uz,https://www.voocab.uz").
@@ -55,6 +61,26 @@ class Settings(BaseSettings):
     r2_endpoint: str = ""
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
+    # Public base URL that fronts the R2 bucket (r2.dev or a custom domain like
+    # https://media.voocab.uz). Stored audio URLs are built as
+    # ``{r2_public_base_url}/{key}``. Required for uploads when R2 is used.
+    r2_public_base_url: str = ""
+
+    # --- Local media (dev fallback when R2 isn't configured) ---
+    # Uploads land here and are served at ``media_url_prefix``. Relative to the
+    # backend working directory.
+    media_root: str = "media"
+    media_url_prefix: str = "/media"
+
+    @property
+    def use_r2(self) -> bool:
+        """Use R2 when it's fully configured; otherwise fall back to local disk."""
+        return bool(
+            self.r2_bucket
+            and self.r2_endpoint
+            and self.aws_access_key_id
+            and self.aws_secret_access_key
+        )
 
     @field_validator("cors_origins", mode="before")
     @classmethod

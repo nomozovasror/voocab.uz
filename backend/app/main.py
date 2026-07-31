@@ -1,7 +1,11 @@
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.api.auth import router as auth_router
+from app.api.materials import router as materials_router
 from app.core.config import settings
 
 app = FastAPI(title="voocab.uz API")
@@ -19,6 +23,18 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(materials_router)
+
+# In dev (no R2), serve uploaded media off local disk. In prod the R2 public
+# base URL fronts the bucket, so no local mount is needed.
+if not settings.use_r2:
+    media_root = Path(settings.media_root)
+    media_root.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        settings.media_url_prefix,
+        StaticFiles(directory=media_root),
+        name="media",
+    )
 
 
 @app.get("/health")
