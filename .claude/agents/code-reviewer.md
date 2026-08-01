@@ -1,5 +1,5 @@
 ---
-name: reviewer
+name: code-reviewer
 description: Kod o'zgarishlaridan keyin sifat, xavfsizlik va accessibility tekshiruvi uchun ishlating. Faqat o'qiydi — kodni hech qachon o'zgartirmaydi.
 tools: Read, Grep, Glob
 model: sonnet

@@ -1,5 +1,5 @@
 ---
-name: backend
+name: backend-engineer
 description: FastAPI + SQLModel (async) backend ishi uchun ishlating — endpointlar, modellar, baza ulanishi va migratsiyalar. backend/ ostidagi har qanday ish uchun proaktiv ishlating.
 tools: Read, Write, Edit, Glob, Grep, Bash, mcp__context7
 model: sonnet

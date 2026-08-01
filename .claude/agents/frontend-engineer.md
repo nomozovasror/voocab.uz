@@ -1,5 +1,5 @@
 ---
-name: frontend
+name: frontend-engineer
 description: React + TypeScript UI ishi uchun ishlating — shadcn/ui va Tailwind bilan komponent qurish/tahrirlash, theming va accessibility. frontend/ ostidagi har qanday ish uchun proaktiv ishlating.
 tools: Read, Write, Edit, Glob, Grep, Bash, mcp__shadcn, mcp__context7
 model: sonnet
