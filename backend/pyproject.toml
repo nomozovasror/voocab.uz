@@ -17,3 +17,24 @@ dependencies = [
     "sqlmodel>=0.0.39",
     "uvicorn[standard]>=0.34",
 ]
+
+[project.optional-dependencies]
+seed = [
+    "faster-whisper>=1.2.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+# One event loop for the whole test session: the async DB engine's asyncpg
+# connections are bound to whichever loop is running when they're first
+# used, so per-test loops (pytest-asyncio's function-scoped default) break
+# any test that reuses the module-level `engine` across tests.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
