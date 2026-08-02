@@ -66,6 +66,25 @@ class Settings(BaseSettings):
     # ``{r2_public_base_url}/{key}``. Required for uploads when R2 is used.
     r2_public_base_url: str = ""
 
+    # --- Groq (ASR: audio transcription) ---
+    # Bearer token for https://api.groq.com/openai/v1/audio/transcriptions.
+    # Never hardcoded; read from env (GROQ_API_KEY). Empty in dev until a real
+    # key is provisioned — callers/tests must treat that as "not configured".
+    groq_api_key: str = ""
+    # httpx timeout (seconds) for the transcription request. Env-overridable
+    # since larger clips may need more headroom than the default.
+    groq_timeout_s: float = 120.0
+
+    # --- ASR worker (Faza 4: Postgres-backed transcription queue) ---
+    # Retryable failures (network timeout, 408/429/500/502/503/504) retry up
+    # to this many attempts before the blob is marked `failed`.
+    asr_max_attempts: int = 3
+    # How long the worker sleeps between claim attempts when the queue is empty.
+    asr_poll_interval_s: float = 2.0
+    # Exponential backoff base (seconds) after a retryable failure: sleep is
+    # asr_backoff_base_s * 2 ** (attempts - 1).
+    asr_backoff_base_s: float = 2.0
+
     # --- Local media (dev fallback when R2 isn't configured) ---
     # Uploads land here and are served at ``media_url_prefix``. Relative to the
     # backend working directory.

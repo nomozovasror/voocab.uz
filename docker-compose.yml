@@ -24,6 +24,26 @@ services:
     # see backend/.env.example.
     depends_on:
       - db
+    # Auto-recover from a crash (pairs with the worker's startup recover_stale).
+    restart: unless-stopped
+
+  worker:
+    # Same image/codebase as the API, different entrypoint: the Postgres-
+    # backed ASR transcription worker (§9). No ports — it's not an HTTP
+    # service, just a poll loop against audio_blob.transcript_status.
+    build: ./backend
+    command: uv run python -m app.worker
+    volumes:
+      - ./backend:/app
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/app
+    # GROQ_API_KEY (and anything else the worker needs) comes from
+    # backend/.env, bind-mounted the same way as the backend service.
+    depends_on:
+      - db
+    # Auto-recover from a crash; recover_stale() at startup reclaims any blob
+    # left `processing` by the crash.
+    restart: unless-stopped
 
 volumes:
   pgdata:
