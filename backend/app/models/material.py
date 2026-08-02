@@ -15,8 +15,13 @@ class Material(SQLModel, table=True):
     author_id: uuid.UUID = Field(foreign_key="users.id", index=True)
     type: str = Field(default="dictation")
     title: str
-    # Optional because non-audio material types won't have a clip.
-    audio_url: str | None = Field(default=None)
+    # Optional because non-audio material types (grammar/vocab/reading) won't
+    # have a clip. Readiness (pending/processing/ready) is NOT stored here —
+    # it's derived from audio_asset -> audio_blob.transcript_status at read
+    # time, to avoid a duplicated column drifting out of sync.
+    audio_asset_id: uuid.UUID | None = Field(
+        default=None, foreign_key="audio_asset.id", index=True
+    )
     case_sensitive: bool = Field(default=False)
     punctuation_sensitive: bool = Field(default=False)
     visibility: str = Field(default="private")  # "private" | "public"
