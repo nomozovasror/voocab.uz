@@ -44,7 +44,6 @@ async def create_material(
         author_id=author_id,
         type=data.type,
         title=data.title,
-        audio_url=data.audio_url,
         case_sensitive=data.case_sensitive,
         punctuation_sensitive=data.punctuation_sensitive,
         visibility=data.visibility,
@@ -103,8 +102,6 @@ async def update_material(
 ) -> Material:
     if data.title is not None:
         material.title = data.title
-    if data.audio_url is not None:
-        material.audio_url = data.audio_url
     if data.case_sensitive is not None:
         material.case_sensitive = data.case_sensitive
     if data.punctuation_sensitive is not None:

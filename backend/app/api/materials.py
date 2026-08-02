@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 
 from app.api.deps import CurrentUser
 from app.core.database import AsyncSession, get_session
@@ -23,6 +23,7 @@ from app.schemas.material import (
     MaterialUpdate,
     SegmentRead,
 )
+from app.services import audio as audio_service
 from app.services import materials as materials_service
 from app.services import storage
 
@@ -39,7 +40,7 @@ def _base(material: Material) -> dict:
         "author_id": material.author_id,
         "type": material.type,
         "title": material.title,
-        "audio_url": material.audio_url,
+        "audio_asset_id": material.audio_asset_id,
         "case_sensitive": material.case_sensitive,
         "punctuation_sensitive": material.punctuation_sensitive,
         "visibility": material.visibility,
@@ -49,27 +50,75 @@ def _base(material: Material) -> dict:
 
 @router.post("/uploads/audio", response_model=AudioUploadRead)
 async def upload_audio(
+    request: Request,
     user: CurrentUser,
+    session: SessionDep,
     file: UploadFile = File(...),
 ) -> AudioUploadRead:
-    """Store an audio clip and return a URL to reference from a material."""
+    """Ingest an audio clip: hash it, dedup against existing blobs, and claim
+    an owner asset. New bytes land in storage and a fresh ``AudioBlob`` is
+    left ``pending`` for the (Faza 4) transcription worker to pick up — the
+    blob row itself is the queue, there's no separate enqueue step here.
+    """
     ext = Path(file.filename or "").suffix.lower()
     content_type = storage.AUDIO_CONTENT_TYPES.get(ext)
     if content_type is None:
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"Unsupported audio type. Allowed: {', '.join(storage.AUDIO_CONTENT_TYPES)}",
         )
+
+    # Cheap DoS reduction: reject up front from a declared Content-Length
+    # before buffering the body into memory. Not authoritative -- a client
+    # can omit or lie about Content-Length -- so the post-read len(data)
+    # check below remains the real guard.
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > MAX_AUDIO_BYTES:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "Audio exceeds 25 MB",
+                )
+        except ValueError:
+            pass  # malformed header; fall through to the authoritative check
+
     data = await file.read()
     if not data:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty file")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Empty file")
     if len(data) > MAX_AUDIO_BYTES:
         raise HTTPException(
-            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
             "Audio exceeds 25 MB",
         )
-    url = await storage.save(storage.audio_key(ext), data, content_type)
-    return AudioUploadRead(audio_url=url)
+
+    sha256 = audio_service.sha256_hex(data)
+    key = storage.audio_storage_key(sha256, content_type)
+
+    blob, created = await audio_service.get_or_create_blob(
+        session,
+        sha256=sha256,
+        storage_key=key,
+        size_bytes=len(data),
+        mime_type=content_type,
+    )
+    if created:
+        # Only write bytes when we actually created the blob row — a dedup
+        # hit must never rewrite storage (put() is idempotent anyway, but
+        # skipping it entirely avoids the wasted read/hash/upload).
+        await storage.get_storage().put(key, data, content_type)
+
+    asset = await audio_service.get_or_create_asset(session, user.id, blob.id)
+    await session.commit()
+    await session.refresh(blob)
+    await session.refresh(asset)
+
+    return AudioUploadRead(
+        asset_id=asset.id,
+        blob_id=blob.id,
+        sha256=blob.sha256,
+        transcript_status=blob.transcript_status,
+    )
 
 
 @router.post(

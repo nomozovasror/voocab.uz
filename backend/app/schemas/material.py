@@ -48,7 +48,8 @@ class SegmentRead(BaseModel):
 class MaterialCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     type: MaterialType = "dictation"
-    audio_url: str | None = None
+    # NOTE: audio wiring (audio_asset_id) is deferred to a later phase; this
+    # schema doesn't accept audio input yet.
     case_sensitive: bool = False
     punctuation_sensitive: bool = False
     visibility: Visibility = "private"
@@ -67,7 +68,6 @@ class MaterialUpdate(BaseModel):
     """All fields optional. If ``segments`` is provided it replaces the set."""
 
     title: str | None = Field(default=None, min_length=1, max_length=200)
-    audio_url: str | None = None
     case_sensitive: bool | None = None
     punctuation_sensitive: bool | None = None
     visibility: Visibility | None = None
@@ -91,7 +91,7 @@ class MaterialRead(BaseModel):
     author_id: uuid.UUID
     type: str
     title: str
-    audio_url: str | None
+    audio_asset_id: uuid.UUID | None
     case_sensitive: bool
     punctuation_sensitive: bool
     visibility: str
@@ -104,4 +104,7 @@ class MaterialDetail(MaterialRead):
 
 
 class AudioUploadRead(BaseModel):
-    audio_url: str
+    asset_id: uuid.UUID
+    blob_id: uuid.UUID
+    sha256: str
+    transcript_status: str
