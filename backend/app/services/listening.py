@@ -1,0 +1,281 @@
+"""Listening Part-1 form-completion authoring: create/read/update/delete
+Parts, QuestionGroups and their Questions.
+
+Pure data layer — no HTTP. The router (``app/api/listening.py``) handles
+authorization (owner-only) and translates absence into 404/403, plus the
+one-time-use 409 for a duplicate Part ``order_index``.
+
+``QuestionGroup`` + its ``Question`` rows are always written/replaced as one
+atomic unit (§3.6/§5): the questions are never embedded in the group's JSON
+``config`` — they stay normalized rows so each answer is individually
+gradeable and event-sourceable via ``QuestionAttempt`` (Faza 3).
+"""
+
+import uuid
+
+from sqlmodel import select
+
+from app.core.database import AsyncSession
+from app.models.part import Part
+from app.models.question import Question
+from app.models.question_group import QuestionGroup
+from app.schemas.listening import PartCreate, QuestionGroupIn
+
+
+# --- Part ---------------------------------------------------------------
+
+
+async def get_parts(session: AsyncSession, material_id: uuid.UUID) -> list[Part]:
+    return list(
+        (
+            await session.exec(
+                select(Part)
+                .where(Part.material_id == material_id)
+                .order_by(Part.order_index)
+            )
+        ).all()
+    )
+
+
+async def get_part(session: AsyncSession, part_id: uuid.UUID) -> Part | None:
+    return await session.get(Part, part_id)
+
+
+async def create_part(
+    session: AsyncSession, material_id: uuid.UUID, data: PartCreate
+) -> Part:
+    part = Part(
+        material_id=material_id,
+        order_index=data.order_index,
+        title=data.title,
+        audio_start_ms=data.audio_start_ms,
+        audio_end_ms=data.audio_end_ms,
+    )
+    session.add(part)
+    await session.commit()
+    await session.refresh(part)
+    return part
+
+
+async def delete_part(session: AsyncSession, part: Part) -> None:
+    groups = await get_question_groups(session, part.id)
+    for group in groups:
+        for question in await get_questions(session, group.id):
+            await session.delete(question)
+    # Flush the question deletes before the groups, and the groups before the
+    # part: there's no ORM relationship to teach the unit-of-work the FK
+    # order, so without this a parent delete can be issued first and trip the
+    # FK constraint (same pattern as the audio/dictation delete paths).
+    await session.flush()
+    for group in groups:
+        await session.delete(group)
+    await session.flush()
+    await session.delete(part)
+    await session.commit()
+
+
+# --- QuestionGroup + Question ---------------------------------------------
+
+
+async def get_question_groups(
+    session: AsyncSession, part_id: uuid.UUID
+) -> list[QuestionGroup]:
+    return list(
+        (
+            await session.exec(
+                select(QuestionGroup)
+                .where(QuestionGroup.part_id == part_id)
+                .order_by(QuestionGroup.order_index)
+            )
+        ).all()
+    )
+
+
+async def get_question_group(
+    session: AsyncSession, group_id: uuid.UUID
+) -> QuestionGroup | None:
+    return await session.get(QuestionGroup, group_id)
+
+
+async def get_questions(
+    session: AsyncSession, group_id: uuid.UUID
+) -> list[Question]:
+    return list(
+        (
+            await session.exec(
+                select(Question)
+                .where(Question.group_id == group_id)
+                .order_by(Question.number)
+            )
+        ).all()
+    )
+
+
+async def create_question_group(
+    session: AsyncSession, part_id: uuid.UUID, data: QuestionGroupIn
+) -> QuestionGroup:
+    """Create a group and its questions atomically. ``order_index`` is
+    server-derived (append), mirroring how dictation segment order_index is
+    derived from array position rather than trusted from the client."""
+    existing = await get_question_groups(session, part_id)
+    group = QuestionGroup(
+        part_id=part_id,
+        order_index=len(existing),
+        type=data.type,
+        instructions=data.instructions,
+        word_limit=data.word_limit,
+        config=data.config.model_dump(),
+    )
+    session.add(group)
+    await session.flush()  # assign group.id
+    for q in data.questions:
+        session.add(
+            Question(
+                group_id=group.id,
+                number=q.number,
+                correct_answers=q.correct_answers,
+            )
+        )
+    await session.commit()
+    await session.refresh(group)
+    return group
+
+
+async def replace_question_group(
+    session: AsyncSession, group: QuestionGroup, data: QuestionGroupIn
+) -> QuestionGroup:
+    """Full atomic replace of the template + question set (PATCH). Old
+    questions never linger: they're deleted and recreated within the same
+    transaction, mirroring ``_replace_segments`` for dictation."""
+    group.type = data.type
+    group.instructions = data.instructions
+    group.word_limit = data.word_limit
+    group.config = data.config.model_dump()
+    session.add(group)
+
+    for question in await get_questions(session, group.id):
+        await session.delete(question)
+    await session.flush()
+
+    for q in data.questions:
+        session.add(
+            Question(
+                group_id=group.id,
+                number=q.number,
+                correct_answers=q.correct_answers,
+            )
+        )
+    await session.commit()
+    await session.refresh(group)
+    return group
+
+
+async def delete_question_group(session: AsyncSession, group: QuestionGroup) -> None:
+    for question in await get_questions(session, group.id):
+        await session.delete(question)
+    await session.flush()
+    await session.delete(group)
+    await session.commit()
+
+
+async def get_material_questions(
+    session: AsyncSession, material_id: uuid.UUID
+) -> list[Question]:
+    """Every ``Question`` belonging to a material, in the material's display
+    order (part ``order_index`` -> group ``order_index`` -> question
+    ``number``). ``Question.number`` is only unique within its group, not
+    globally, so this traversal order — not a bare ORDER BY number — is what
+    grading (Faza 3) uses to order per-question results and to build the
+    question_id -> correct_answers map."""
+    questions: list[Question] = []
+    for part in await get_parts(session, material_id):
+        for group in await get_question_groups(session, part.id):
+            questions.extend(await get_questions(session, group.id))
+    return questions
+
+
+# --- Consumption read tree (§7, §3.4) ---------------------------------------
+
+
+async def get_take_tree(session: AsyncSession, material_id: uuid.UUID) -> list[dict]:
+    """The student-facing render tree (parts -> question_groups ->
+    questions). Deliberately a SEPARATE function from ``get_author_tree``:
+    this one never reads ``Question.correct_answers`` at all, so there is no
+    code path here — no flag, no branch — that could leak it. Each question
+    dict carries only ``id``/``number``."""
+    tree: list[dict] = []
+    for part in await get_parts(session, material_id):
+        groups: list[dict] = []
+        for group in await get_question_groups(session, part.id):
+            questions = [
+                {"id": question.id, "number": question.number}
+                for question in await get_questions(session, group.id)
+            ]
+            groups.append(
+                {
+                    "id": group.id,
+                    "order_index": group.order_index,
+                    "type": group.type,
+                    "instructions": group.instructions,
+                    "word_limit": group.word_limit,
+                    "config": group.config,
+                    "questions": questions,
+                }
+            )
+        tree.append(
+            {
+                "id": part.id,
+                "order_index": part.order_index,
+                "title": part.title,
+                "audio_start_ms": part.audio_start_ms,
+                "audio_end_ms": part.audio_end_ms,
+                "question_groups": groups,
+            }
+        )
+    return tree
+
+
+# --- Author read tree ------------------------------------------------------
+
+
+async def get_author_tree(
+    session: AsyncSession, material_id: uuid.UUID, *, include_answers: bool
+) -> list[dict]:
+    """The full authoring tree (parts -> question_groups -> questions) for a
+    material, ordered by ``order_index``/``number``. ``correct_answers`` is
+    included in each question dict ONLY when ``include_answers`` is true —
+    callers (the API layer) must gate this on ``material.author_id ==
+    caller.id`` so a non-owner viewing a public material never sees answers
+    (§3.4 applies to every read path, not just /take)."""
+    tree: list[dict] = []
+    for part in await get_parts(session, material_id):
+        groups: list[dict] = []
+        for group in await get_question_groups(session, part.id):
+            questions: list[dict] = []
+            for question in await get_questions(session, group.id):
+                q: dict = {"id": question.id, "number": question.number}
+                if include_answers:
+                    q["correct_answers"] = question.correct_answers
+                questions.append(q)
+            groups.append(
+                {
+                    "id": group.id,
+                    "order_index": group.order_index,
+                    "type": group.type,
+                    "instructions": group.instructions,
+                    "word_limit": group.word_limit,
+                    "config": group.config,
+                    "questions": questions,
+                }
+            )
+        tree.append(
+            {
+                "id": part.id,
+                "order_index": part.order_index,
+                "title": part.title,
+                "audio_start_ms": part.audio_start_ms,
+                "audio_end_ms": part.audio_end_ms,
+                "question_groups": groups,
+            }
+        )
+    return tree

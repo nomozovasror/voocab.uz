@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
 from app.api.deps import CurrentUser
 from app.core.database import AsyncSession, get_session
+from app.models.audio_blob import AudioBlob
 from app.models.material import Material
 from app.schemas.material import (
     AudioUploadRead,
@@ -24,6 +25,7 @@ from app.schemas.material import (
     SegmentRead,
 )
 from app.services import audio as audio_service
+from app.services import listening as listening_service
 from app.services import materials as materials_service
 from app.services import storage
 
@@ -32,6 +34,25 @@ router = APIRouter(prefix="/api", tags=["materials"])
 MAX_AUDIO_BYTES = 25 * 1024 * 1024  # 25 MB
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+
+
+async def _resolve_audio(session: AsyncSession, material: Material) -> dict:
+    """Resolve ``material.audio_asset_id`` (if set) into a playable URL plus
+    the transcript state, for the author view. The consumption ``/take``
+    endpoint (a later phase) will resolve audio the same way."""
+    if material.audio_asset_id is None:
+        return {"audio_url": None, "transcript_status": None, "duration_ms": None}
+    asset = await audio_service.get_asset(session, material.audio_asset_id)
+    if asset is None:
+        # FK-consistent in practice, but degrade gracefully rather than 500.
+        return {"audio_url": None, "transcript_status": None, "duration_ms": None}
+    blob = await session.get(AudioBlob, asset.blob_id)
+    assert blob is not None  # FK-enforced: every asset has a blob
+    return {
+        "audio_url": await storage.get_storage().url(blob.storage_key),
+        "transcript_status": blob.transcript_status,
+        "duration_ms": blob.duration_ms,
+    }
 
 
 def _base(material: Material) -> dict:
@@ -129,10 +150,18 @@ async def create_material(
 ) -> MaterialDetail:
     material = await materials_service.create_material(session, user.id, data)
     segments = await materials_service.get_segments(session, material.id)
+    # Caller is always the owner here (just created the material), so the
+    # (empty, at this point) listening tree may safely include answers.
+    parts = await listening_service.get_author_tree(
+        session, material.id, include_answers=True
+    )
+    audio = await _resolve_audio(session, material)
     return MaterialDetail(
         **_base(material),
         segment_count=len(segments),
         segments=[SegmentRead.model_validate(s, from_attributes=True) for s in segments],
+        parts=parts,
+        **audio,
     )
 
 
@@ -180,10 +209,19 @@ async def get_material(
 ) -> MaterialDetail:
     material = await _load_owned_or_public(session, material_id, user.id)
     segments = await materials_service.get_segments(session, material.id)
+    # §3.4 applies here too: a non-owner viewing a public listening material
+    # must never see correct_answers, even though the take/take-answer flow
+    # itself is out of scope for this phase.
+    parts = await listening_service.get_author_tree(
+        session, material.id, include_answers=material.author_id == user.id
+    )
+    audio = await _resolve_audio(session, material)
     return MaterialDetail(
         **_base(material),
         segment_count=len(segments),
         segments=[SegmentRead.model_validate(s, from_attributes=True) for s in segments],
+        parts=parts,
+        **audio,
     )
 
 
@@ -197,10 +235,16 @@ async def update_material(
     material = await _load_owned(session, material_id, user.id)
     material = await materials_service.update_material(session, material, data)
     segments = await materials_service.get_segments(session, material.id)
+    parts = await listening_service.get_author_tree(
+        session, material.id, include_answers=True
+    )
+    audio = await _resolve_audio(session, material)
     return MaterialDetail(
         **_base(material),
         segment_count=len(segments),
         segments=[SegmentRead.model_validate(s, from_attributes=True) for s in segments],
+        parts=parts,
+        **audio,
     )
 
 

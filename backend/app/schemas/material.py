@@ -12,7 +12,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 Visibility = Literal["private", "public"]
-MaterialType = Literal["dictation"]
+MaterialType = Literal["dictation", "listening"]
 
 
 class SegmentIn(BaseModel):
@@ -48,8 +48,11 @@ class SegmentRead(BaseModel):
 class MaterialCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     type: MaterialType = "dictation"
-    # NOTE: audio wiring (audio_asset_id) is deferred to a later phase; this
-    # schema doesn't accept audio input yet.
+    # The uploaded clip to attach, from a prior POST /api/uploads/audio
+    # (asset_id in that response). Ownership is checked server-side in
+    # app/services/materials.py — a caller can only attach an asset they
+    # themselves own.
+    audio_asset_id: uuid.UUID | None = None
     case_sensitive: bool = False
     punctuation_sensitive: bool = False
     visibility: Visibility = "private"
@@ -68,6 +71,7 @@ class MaterialUpdate(BaseModel):
     """All fields optional. If ``segments`` is provided it replaces the set."""
 
     title: str | None = Field(default=None, min_length=1, max_length=200)
+    audio_asset_id: uuid.UUID | None = None
     case_sensitive: bool | None = None
     punctuation_sensitive: bool | None = None
     visibility: Visibility | None = None
@@ -101,6 +105,18 @@ class MaterialRead(BaseModel):
 
 class MaterialDetail(MaterialRead):
     segments: list[SegmentRead]
+    # Listening authoring tree (parts -> question_groups -> questions). Left
+    # untyped (plain dicts, built by app.services.listening.get_author_tree)
+    # so the caller controls exactly which keys are present per-request --
+    # notably whether each question dict carries "correct_answers" at all,
+    # gated on ownership (§3.4: never leak answers to a non-owner, even here).
+    parts: list[dict] = Field(default_factory=list)
+    # Resolved from audio_asset_id -> AudioAsset -> AudioBlob at read time
+    # (app/api/materials.py) so the Studio player has a real, fetchable URL
+    # rather than just an opaque asset id. Null when no audio is attached.
+    audio_url: str | None = None
+    transcript_status: str | None = None
+    duration_ms: int | None = None
 
 
 class AudioUploadRead(BaseModel):
