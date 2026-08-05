@@ -11,6 +11,10 @@ from app.models.audio_blob import AudioBlob
 from app.models.audio_segment import AudioSegment
 from app.models.auth_identity import AuthIdentity
 from app.models.material import Material
+from app.models.part import Part
+from app.models.question import Question
+from app.models.question_attempt import QuestionAttempt
+from app.models.question_group import QuestionGroup
 from app.models.segment import Segment
 from app.models.segment_attempt import SegmentAttempt
 from app.models.user import User
@@ -25,4 +29,8 @@ __all__ = [
     "AudioBlob",
     "AudioSegment",
     "AudioAsset",
+    "Part",
+    "QuestionGroup",
+    "Question",
+    "QuestionAttempt",
 ]
