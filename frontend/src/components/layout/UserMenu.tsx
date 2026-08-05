@@ -1,4 +1,4 @@
-import { LogOut, User as UserIcon, Library } from "lucide-react";
+import { LogOut, User as UserIcon, Library, Mic } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import {
   DropdownMenu,
@@ -54,6 +54,13 @@ export function UserMenu({ user }: { user: User }) {
         >
           <Library className="size-4" />
           My materials
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={() => navigate("/studio")}
+          className="gap-2"
+        >
+          <Mic className="size-4" />
+          Studio
         </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => void logout()}

@@ -1,5 +1,6 @@
 import { createBrowserRouter } from "react-router-dom";
 import { Layout } from "@/components/layout/Layout";
+import { StudioLayout } from "@/components/studio/StudioLayout";
 import { RequireAuth } from "@/auth/RequireAuth";
 
 /**
@@ -27,12 +28,6 @@ export const router = createBrowserRouter([
         }),
       },
       {
-        path: "listening",
-        lazy: async () => ({
-          Component: (await import("@/pages/listening/ListeningPage")).default,
-        }),
-      },
-      {
         path: "vocabulary",
         lazy: async () => ({
           Component: (await import("@/pages/vocabulary/VocabularyPage")).default,
@@ -48,6 +43,20 @@ export const router = createBrowserRouter([
       {
         element: <RequireAuth />,
         children: [
+          {
+            path: "listening",
+            lazy: async () => ({
+              Component: (await import("@/pages/listening/ListeningPage")).default,
+            }),
+          },
+          {
+            path: "listening/:id",
+            lazy: async () => ({
+              Component: (
+                await import("@/pages/listening/ListeningTakePage")
+              ).default,
+            }),
+          },
           {
             path: "dictation",
             lazy: async () => ({
@@ -79,6 +88,44 @@ export const router = createBrowserRouter([
             lazy: async () => ({
               Component: (
                 await import("@/pages/materials/MaterialEditorPage")
+              ).default,
+            }),
+          },
+        ],
+      },
+    ],
+  },
+  // --- Studio (listening authoring) ---
+  // Own layout/nav (§3.10, §6), but nested under the same <RequireAuth>
+  // session gate as the rest of the protected app.
+  {
+    path: "/studio",
+    element: <RequireAuth />,
+    children: [
+      {
+        element: <StudioLayout />,
+        children: [
+          {
+            index: true,
+            lazy: async () => ({
+              Component: (
+                await import("@/pages/studio/StudioMaterialsPage")
+              ).default,
+            }),
+          },
+          {
+            path: "materials/new",
+            lazy: async () => ({
+              Component: (
+                await import("@/pages/studio/materials/StudioNewMaterialPage")
+              ).default,
+            }),
+          },
+          {
+            path: "materials/:id/edit",
+            lazy: async () => ({
+              Component: (
+                await import("@/pages/studio/materials/StudioMaterialEditorPage")
               ).default,
             }),
           },
