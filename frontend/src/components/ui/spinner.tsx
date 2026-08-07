@@ -1,4 +1,5 @@
 import { Loader2 } from "lucide-react";
+import { LogoLoader } from "@/components/ui/logo-loader";
 import { cn } from "@/lib/utils";
 
 /** Spinning loader icon. */
@@ -11,16 +12,11 @@ export function Spinner({ className }: { className?: string }) {
   );
 }
 
-/** Centered full-section loading state for route/page-level waits. */
-export function PageLoader({ label = "Loading…" }: { label?: string }) {
-  return (
-    <div
-      className="flex min-h-64 flex-col items-center justify-center gap-3 text-muted-foreground"
-      role="status"
-      aria-live="polite"
-    >
-      <Spinner className="size-6" />
-      <span className="text-sm">{label}</span>
-    </div>
-  );
+/**
+ * Centered full-section loading state for route/page-level waits.
+ * Delegates to the animated brand mark — page-scale waits get the logo,
+ * inline ones keep <Spinner>.
+ */
+export function PageLoader({ label }: { label?: string }) {
+  return <LogoLoader label={label ?? null} />;
 }

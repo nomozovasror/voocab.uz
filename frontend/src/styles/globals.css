@@ -313,3 +313,182 @@
 @media (prefers-reduced-motion: reduce) {
   .magic-particle { display: none; }
 }
+
+/* ── Logo animation ───────────────────────────────────────────────────────
+   `loading` runs one sequence per cycle: the mark wipes in left-to-right, a
+   gloss band crosses it, then it wipes out the same way — so the reveal and
+   the shine read as one motion rather than two effects competing.
+   `draw` plays once for splash/first paint. See components/Logo.tsx. */
+.logo-stroke {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.logo-ghost {
+  opacity: 0.16;
+}
+
+/* Shine gradient stops — coloured here so they follow the theme. */
+.logo-shine-edge {
+  stop-color: var(--foreground);
+  stop-opacity: 0;
+}
+.logo-shine-peak {
+  stop-color: var(--foreground);
+  stop-opacity: 0.5;
+}
+
+.logo--loading .logo-strokes {
+  animation: logo-wipe 2.8s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+/* Held off-canvas until the wipe has finished, so the gloss is the finale. */
+.logo--loading .logo-shine {
+  animation: logo-shine 2.8s ease-in-out infinite;
+}
+
+@keyframes logo-wipe {
+  0% { clip-path: inset(0 100% 0 0); }
+  26%, 74% { clip-path: inset(0 0 0 0); }
+  100% { clip-path: inset(0 0 0 100%); }
+}
+
+@keyframes logo-shine {
+  0%, 32% { transform: translateX(0); }
+  64%, 100% { transform: translateX(1240px); }
+}
+
+/* Stroke draw — the outline is written first, then the colour sweeps in
+   behind it. pathLength="1" on each path (see Logo.tsx) means the dash
+   offset runs 1 → 0 regardless of the path's real length. */
+.logo-outline {
+  fill: none;
+  stroke: var(--primary);
+  /* In viewBox units, so it scales with the mark. Small marks need a heavier
+     value or the outline renders sub-pixel and disappears. */
+  stroke-width: var(--logo-stroke-w, 11);
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+}
+
+.logo--stroke .logo-outline {
+  animation: logo-sdraw 2.2s ease-in-out infinite;
+}
+.logo--stroke .logo-outline:nth-of-type(2) {
+  animation-delay: 0.1s;
+}
+.logo--stroke .logo-strokes {
+  animation: logo-sfill 2.2s ease-in-out infinite;
+}
+
+@keyframes logo-sdraw {
+  0% { stroke-dashoffset: 1; opacity: 1; }
+  40% { stroke-dashoffset: 0; opacity: 1; }
+  80% { opacity: 1; }
+  95%, 100% { stroke-dashoffset: 0; opacity: 0; }
+}
+
+@keyframes logo-sfill {
+  0%, 42% { clip-path: inset(0 100% 0 0); opacity: 1; }
+  64%, 82% { clip-path: inset(0 0 0 0); opacity: 1; }
+  95%, 100% { clip-path: inset(0 0 0 0); opacity: 0; }
+}
+
+/* Hover — the header mark redraws itself when the brand link is hovered.
+   Triggered by the svg itself or by any ancestor marked `group` (Tailwind's
+   hover-group class), so hovering the wordmark counts too. */
+.logo--hover {
+  --logo-stroke-w: 26; /* header marks are ~24px; 11 would be sub-pixel */
+}
+
+@media (hover: hover) {
+  .logo--hover:hover .logo-outline,
+  .group:hover .logo--hover .logo-outline {
+    animation: logo-draw-line 1.15s ease-in-out both;
+  }
+  .logo--hover:hover .logo-outline:nth-of-type(2),
+  .group:hover .logo--hover .logo-outline:nth-of-type(2) {
+    animation-delay: 0.1s;
+  }
+  .logo--hover:hover .logo-strokes,
+  .group:hover .logo--hover .logo-strokes {
+    animation: logo-draw-fill 1.15s ease-in-out both;
+  }
+}
+
+/* Keystroke — the two strokes drop in like typed keys, with a spring. Kept
+   alongside `loading` so either can be used per surface. */
+.logo--keystroke .logo-stroke {
+  transform-origin: center bottom;
+  animation: logo-key 1.9s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+}
+.logo--keystroke .logo-stroke:nth-of-type(2) {
+  animation-delay: 0.14s;
+}
+
+@keyframes logo-key {
+  0% { opacity: 0; transform: translateY(-26%) scale(0.9); }
+  18%, 70% { opacity: 1; transform: translateY(0) scale(1); }
+  86%, 100% { opacity: 0; transform: translateY(8%) scale(0.96); }
+}
+
+/* One-shot version of the stroke draw — settles on the solid mark. Used by
+   the splash screen on first entry. */
+/* `both` (not `forwards`): during the start delay the 0% keyframe applies, so
+   the solid mark can't flash before the draw begins. The delay also lets the
+   page finish its first paint — otherwise the opening frames are dropped while
+   the main thread is still busy booting, and the animation appears to start
+   halfway through. */
+.logo--draw .logo-outline {
+  animation: logo-draw-line 1.15s ease-in-out 0.15s both;
+}
+.logo--draw .logo-outline:nth-of-type(2) {
+  animation-delay: 0.25s;
+}
+.logo--draw .logo-strokes {
+  animation: logo-draw-fill 1.15s ease-in-out 0.15s both;
+}
+
+@keyframes logo-draw-line {
+  0% { stroke-dashoffset: 1; opacity: 1; }
+  62% { stroke-dashoffset: 0; opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 0; }
+}
+
+@keyframes logo-draw-fill {
+  0%, 55% { clip-path: inset(0 100% 0 0); }
+  100% { clip-path: inset(0 0 0 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .logo--loading .logo-strokes,
+  .logo--loading .logo-shine,
+  .logo--stroke .logo-strokes,
+  .logo--keystroke .logo-stroke,
+  .logo--hover .logo-strokes,
+  .logo--draw .logo-strokes {
+    animation: none;
+    clip-path: none;
+    opacity: 1;
+    transform: none;
+  }
+  .logo-ghost,
+  .logo-outline { display: none; }
+}
+
+/* Loader fades in only after a beat. A wait that resolves in 150ms should show
+   nothing at all — a loader that flashes and vanishes reads as a glitch. If the
+   component unmounts before the delay elapses, the user never sees it. */
+.loader-deferred {
+  opacity: 0;
+  animation: loader-appear 0.2s ease-out 0.25s forwards;
+}
+
+@keyframes loader-appear {
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loader-deferred { animation-duration: 0.01s; }
+}
