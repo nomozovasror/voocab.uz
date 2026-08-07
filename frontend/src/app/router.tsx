@@ -109,6 +109,14 @@ export const router = createBrowserRouter([
             index: true,
             lazy: async () => ({
               Component: (
+                await import("@/pages/studio/StudioDashboardPage")
+              ).default,
+            }),
+          },
+          {
+            path: "materials",
+            lazy: async () => ({
+              Component: (
                 await import("@/pages/studio/StudioMaterialsPage")
               ).default,
             }),

@@ -41,6 +41,39 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+
+  /* Studio dashboard type scale (7 steps, nothing in between — see
+     src/pages/studio/StudioDashboardPage.tsx). Each generates a `text-*`
+     utility bundling size + line-height + weight so hierarchy stays
+     consistent across cards instead of drifting per component. */
+  --text-h1: clamp(1.35rem, 2.3vw, 1.8rem);
+  --text-h1--line-height: 1.15;
+  --text-h1--font-weight: 600;
+
+  --text-tile: 1.375rem; /* 22px — tile titles */
+  --text-tile--line-height: 1.25;
+  --text-tile--font-weight: 600;
+
+  --text-panel: 1rem; /* 16px — panel headers */
+  --text-panel--line-height: 1.3;
+  --text-panel--font-weight: 600;
+
+  --text-kpi: 1.35rem; /* 22px — header KPI numbers (the page's headline figures) */
+  --text-kpi--line-height: 1;
+  --text-kpi--font-weight: 700;
+
+  --text-stat: 1.0625rem; /* 17px — in-card numeric stats */
+  --text-stat--line-height: 1.15;
+  --text-stat--font-weight: 700;
+
+  --text-body: 0.8125rem; /* 13px */
+  --text-body--line-height: 1.45;
+
+  --text-label: 0.6875rem; /* 11px — labels, links */
+  --text-label--line-height: 1.3;
+
+  --text-micro: 0.625rem; /* 10px — captions, chips */
+  --text-micro--line-height: 1.3;
 }
 
 /* ── Themes ───────────────────────────────────────────────────────────────
@@ -170,4 +203,113 @@
 @keyframes tr-fade-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Magic-Bento card effects ─────────────────────────────────────────────
+   Driven by CSS variables that MagicBento (src/components/ui/magic-bento.tsx)
+   writes on pointermove: --glow-x/--glow-y (cursor position within the card)
+   and --glow-intensity (0…1, falling off with distance). The accent comes from
+   the active theme's --primary, so this recolors with the theme like
+   everything else. */
+.magic-card {
+  position: relative;
+}
+
+/* Inner tint — a soft pool of light under the card's content. */
+.magic-card::before,
+/* Border glow — the same gradient, masked to just the 1px edge. */
+.magic-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: var(--glow-intensity, 0);
+  transition: opacity 0.3s ease-out;
+}
+
+.magic-card::before {
+  background: radial-gradient(
+    280px circle at var(--glow-x, 50%) var(--glow-y, 50%),
+    color-mix(in srgb, var(--primary) 20%, transparent) 0%,
+    transparent 68%
+  );
+}
+
+.magic-card::after {
+  /* Thick rim (not a hairline): the mask cuts a 4px band just inside the
+     radius, so the glow reads as a lit edge rather than an outline. */
+  padding: 4px;
+  background: radial-gradient(
+    240px circle at var(--glow-x, 50%) var(--glow-y, 50%),
+    color-mix(in srgb, var(--primary) 90%, transparent) 0%,
+    color-mix(in srgb, var(--primary) 45%, transparent) 30%,
+    transparent 62%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+
+/* Click ripple, spawned by MagicBento at the pointer. */
+.magic-ripple {
+  position: absolute;
+  width: 0;
+  height: 0;
+  border-radius: 9999px;
+  pointer-events: none;
+  translate: -50% -50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--primary) 35%, transparent) 0%,
+    transparent 70%
+  );
+  animation: magic-ripple 0.6s ease-out forwards;
+}
+
+@keyframes magic-ripple {
+  to {
+    width: 320px;
+    height: 320px;
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .magic-card::before,
+  .magic-card::after {
+    display: none;
+  }
+  .magic-ripple {
+    animation: none;
+  }
+}
+
+/* Drifting motes, spawned on hover by MagicBento. */
+.magic-particle {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  pointer-events: none;
+  opacity: 0;
+  background: var(--primary);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--primary) 70%, transparent);
+  animation: magic-particle var(--dur, 3s) ease-in-out var(--delay, 0s) infinite;
+}
+
+@keyframes magic-particle {
+  0% { opacity: 0; transform: translate(0, 0) scale(0.5); }
+  18% { opacity: 0.95; }
+  55% { opacity: 0.7; transform: translate(var(--dx), var(--dy)) scale(1); }
+  100% { opacity: 0; transform: translate(calc(var(--dx) * 1.7), calc(var(--dy) * 1.7)) scale(0.4); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .magic-particle { display: none; }
 }
