@@ -40,8 +40,8 @@ export function Layout() {
         >
           {/* Brand — the "voocab" wordmark is the Home link. */}
           <div className={cn(pill, "gap-2 justify-self-start")}>
-            <NavLink to="/" className="flex items-center gap-2">
-              <Logo className="size-6" />
+            <NavLink to="/" className="group flex items-center gap-2">
+              <Logo animate="hover" className="size-6" />
               <span className="text-base font-semibold text-foreground">
                 voocab
               </span>

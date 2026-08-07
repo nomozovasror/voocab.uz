@@ -29,8 +29,8 @@ export function StudioLayout() {
       <header className="sticky top-0 z-30 w-full flex-none border-b border-border bg-background/90 backdrop-blur-md">
         <div className="mx-auto flex h-14 w-full max-w-[1500px] items-center gap-4 px-4 sm:px-6">
           <div className="flex items-center gap-2">
-            <NavLink to="/" className="flex items-center gap-2">
-              <Logo className="size-6" />
+            <NavLink to="/" className="group flex items-center gap-2">
+              <Logo animate="hover" className="size-6" />
               <span className="text-body font-semibold text-foreground">
                 voocab
               </span>
