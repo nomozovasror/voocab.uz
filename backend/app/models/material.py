@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime
+from sqlalchemy import Column, DateTime, func
 from sqlmodel import Field, SQLModel
 
 
@@ -28,4 +28,17 @@ class Material(SQLModel, table=True):
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    # Auto-bumped by the DB driver on every UPDATE of this row (SQLAlchemy's
+    # client-side `onupdate`, not just a DDL trigger) -- callers never need
+    # to set it themselves. Powers "Edited X" vs "Created X" in the Studio
+    # activity feed and `recent` ordering.
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        ),
     )
