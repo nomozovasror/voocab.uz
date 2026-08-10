@@ -4,12 +4,10 @@ import { ArrowLeft, Bell } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { UserAvatar } from "@/auth/UserAvatar";
 import { useCurrentUser } from "@/auth/useCurrentUser";
-import { cn } from "@/lib/utils";
-
-const TABS = [
-  { to: "/studio", label: "Dashboard", end: true },
-  { to: "/studio/materials", label: "Materials", end: false },
-];
+import {
+  StudioBreadcrumbProvider,
+  StudioBreadcrumbs,
+} from "@/components/studio/breadcrumbs";
 
 /**
  * Studio's own layout/navigation (brief §3.10 / §10 — authoring lives under
@@ -25,6 +23,7 @@ export function StudioLayout() {
     // h-svh (not min-h-svh): the dashboard is a one-screen app view, so the
     // shell must be *bounded* by the viewport — otherwise its 1fr grid rows
     // grow with their content and the board spills past the fold.
+    <StudioBreadcrumbProvider>
     <div className="flex h-svh flex-col bg-background">
       <header className="sticky top-0 z-30 w-full flex-none border-b border-border bg-background/90 backdrop-blur-md">
         <div className="mx-auto flex h-14 w-full max-w-[1500px] items-center gap-4 px-4 sm:px-6">
@@ -38,25 +37,9 @@ export function StudioLayout() {
             <span className="text-muted-foreground">Studio</span>
           </div>
 
-          <nav className="ml-1 flex items-center gap-1 rounded-full border border-foreground/10 bg-card/60 p-1">
-            {TABS.map((tab) => (
-              <NavLink
-                key={tab.to}
-                to={tab.to}
-                end={tab.end}
-                className={({ isActive }) =>
-                  cn(
-                    "rounded-full px-3 py-1 text-label font-semibold transition-colors",
-                    isActive
-                      ? "bg-primary/15 text-primary"
-                      : "text-muted-foreground hover:text-foreground",
-                  )
-                }
-              >
-                {tab.label}
-              </NavLink>
-            ))}
-          </nav>
+          <span className="h-4 w-px shrink-0 bg-border" aria-hidden />
+          <StudioBreadcrumbs />
+
 
           <div className="ml-auto flex items-center gap-2">
             <button
@@ -97,5 +80,6 @@ export function StudioLayout() {
         </Suspense>
       </main>
     </div>
+    </StudioBreadcrumbProvider>
   );
 }

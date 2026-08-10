@@ -58,6 +58,14 @@ export interface PartCreate {
   audio_end_ms?: number | null;
 }
 
+/** PATCH /api/parts/{id} — all fields optional, adjusts the range later
+ *  without recreating the Part. */
+export interface PartUpdate {
+  title?: string;
+  audio_start_ms?: number | null;
+  audio_end_ms?: number | null;
+}
+
 /** Response shape of POST /api/materials/{id}/parts (PartOut) — no nested
  *  question_groups (empty at creation time); we always refetch the material
  *  tree afterwards rather than hand-merge this into cache. */
@@ -161,4 +169,37 @@ export interface AttemptResult {
   score: number;
   total_questions: number;
   results: QuestionResult[];
+}
+
+// --- Audio asset (transcript source for the editor's left pane) ------------
+
+export interface AudioWord {
+  word: string;
+  start_ms: number;
+  end_ms: number;
+}
+
+export interface AudioSegment {
+  order_index: number;
+  start_ms: number;
+  end_ms: number;
+  text: string;
+  words: AudioWord[];
+}
+
+export type AudioTranscriptStatus = "pending" | "processing" | "ready" | "failed";
+
+/** GET /api/audio-assets/{asset_id}. `segments` populated only once
+ *  `transcript_status === "ready"`; `transcript_error` only once `"failed"`.
+ *  Poll while pending/processing. */
+export interface AudioAssetDetail {
+  asset_id: string;
+  blob_id: string;
+  title: string | null;
+  sha256: string;
+  transcript_status: AudioTranscriptStatus;
+  duration_ms: number | null;
+  created_at: string;
+  transcript_error?: string | null;
+  segments: AudioSegment[];
 }

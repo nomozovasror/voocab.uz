@@ -134,3 +134,21 @@ export function useSubmitAttempt(materialId: string) {
       listeningApi.submitAttempt(materialId, data),
   });
 }
+
+// --- Editor support -----------------------------------------------------
+
+const PENDING_TRANSCRIPT_STATES = new Set(["pending", "processing"]);
+
+/** Polls while the transcript is pending/processing, stops once it settles
+ *  (ready or failed) — the editor's left pane source of segments. */
+export function useAudioAsset(assetId: string | undefined) {
+  return useQuery({
+    queryKey: ["listening-audio-asset", assetId] as const,
+    queryFn: () => listeningApi.audioAssets.get(assetId as string),
+    enabled: !!assetId,
+    refetchInterval: (query) => {
+      const status = query.state.data?.transcript_status;
+      return status && PENDING_TRANSCRIPT_STATES.has(status) ? 3000 : false;
+    },
+  });
+}

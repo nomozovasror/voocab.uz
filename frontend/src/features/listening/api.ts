@@ -3,6 +3,7 @@ import { ApiError, api } from "@/lib/api";
 import type {
   AttemptResult,
   AttemptSubmit,
+  AudioAssetDetail,
   AudioUpload,
   ListeningMaterial,
   ListeningMaterialCreate,
@@ -12,6 +13,7 @@ import type {
   MaterialTake,
   PartCreate,
   PartOut,
+  PartUpdate,
   QuestionGroupIn,
 } from "@/features/listening/types";
 
@@ -67,6 +69,8 @@ export const listeningApi = {
       api.post<PartOut>(`/api/materials/${materialId}/parts`, {
         json: data,
       }),
+    update: (partId: string, data: PartUpdate) =>
+      api.patch<PartOut>(`/api/parts/${partId}`, { json: data }),
     remove: (partId: string) => api.delete<void>(`/api/parts/${partId}`),
   },
 
@@ -94,4 +98,9 @@ export const listeningApi = {
     api.post<AttemptResult>(`/api/materials/${materialId}/attempts`, {
       json: data,
     }),
+
+  // --- Editor support: the transcript source behind an uploaded clip -------
+  audioAssets: {
+    get: (assetId: string) => api.get<AudioAssetDetail>(`/api/audio-assets/${assetId}`),
+  },
 };

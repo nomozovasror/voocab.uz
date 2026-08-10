@@ -485,7 +485,7 @@ export default function StudioDashboardPage() {
             { value: DASH, label: "saves" },
           ]}
           href={
-            (listening?.total ?? 0) > 0 ? "/studio/materials" : "/studio/materials/new"
+            (listening?.total ?? 0) > 0 ? "/studio/listening" : "/studio/listening/new"
           }
           ctaLabel={(listening?.total ?? 0) > 0 ? "Manage" : "Create your first"}
         />

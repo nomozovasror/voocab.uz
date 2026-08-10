@@ -1,0 +1,646 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
+import { Loader2 } from "lucide-react";
+import { useStudioCrumbs } from "@/components/studio/breadcrumbs";
+import { cn } from "@/lib/utils";
+import { toast } from "@/lib/toast";
+import { getErrorMessage } from "@/lib/api";
+import { timeAgo } from "@/lib/time";
+import { listeningApi } from "@/features/listening/api";
+import { useListeningMaterial } from "@/features/listening/queries";
+import {
+  buildTemplate,
+  isGroupPersistable,
+  parseTemplate,
+  type FormRow,
+} from "@/features/listening/template";
+import {
+  AudioEditorPane,
+  type AudioEditorHandle,
+} from "@/features/listening/components/AudioEditorPane";
+import { QuestionFormEditor } from "@/features/listening/components/QuestionFormEditor";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { PartsPicker } from "@/features/listening/components/PartsPicker";
+import type { Visibility } from "@/features/listening/types";
+
+// Parts 2 and 3 (map/plan labelling, MCQ/matching) don't have an authorable
+// question type yet — only form_completion exists. Their questions can still
+// be authored as form completion; the section just carries a note that it's
+// the only type available there.
+const UNSUPPORTED_TYPICAL_TYPE_ORDER_INDICES = new Set([1, 2]);
+const UNSUPPORTED_TYPICAL_TYPE_NOTE =
+  "only form completion is available here — map/plan labelling and multiple choice/matching aren't built yet.";
+
+// The structure is fixed at creation by the picker (§1): a single part
+// (Part 1 or Part 4) trims the shared recording to its range; a full test
+// has no trimming at all — the four parts are purely question groupings
+// over one recording that already runs them in sequence.
+function hasPartRange(parts: PartState[]): boolean {
+  return parts.length === 1;
+}
+
+interface PartState {
+  /** Stable identity for UI + in-flight autosave tracking, independent of
+   *  whether the part has a server id yet. `order_index` is unique per
+   *  material (server-enforced), so it doubles as the key. */
+  key: string;
+  partId: string | null;
+  orderIndex: number;
+  title: string;
+  audioStartMs: number | null;
+  audioEndMs: number | null;
+  groupId: string | null;
+  instructions: string;
+  wordLimit: number | null;
+  rows: FormRow[];
+}
+
+interface EditorState {
+  materialId: string | null;
+  title: string;
+  visibility: Visibility;
+  audioAssetId: string | null;
+  audioUrl: string | null;
+  durationMs: number | null;
+  parts: PartState[];
+}
+
+const EMPTY_STATE: EditorState = {
+  materialId: null,
+  title: "",
+  visibility: "private",
+  audioAssetId: null,
+  audioUrl: null,
+  durationMs: null,
+  parts: [],
+};
+
+const AUTOSAVE_DELAY_MS = 1500;
+
+function emptyRows(): FormRow[] {
+  return [{ label: "", answers: [""] }];
+}
+
+function newPart(orderIndex: number): PartState {
+  return {
+    key: String(orderIndex),
+    partId: null,
+    orderIndex,
+    title: `Part ${orderIndex + 1}`,
+    audioStartMs: null,
+    audioEndMs: null,
+    groupId: null,
+    instructions: "",
+    wordLimit: null,
+    rows: emptyRows(),
+  };
+}
+
+export default function StudioListeningEditorPage() {
+  const { id: routeId } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+
+  const { data: existing, isLoading: hydrating } = useListeningMaterial(routeId);
+  const loadedRef = useRef(false);
+
+  const [state, setState] = useState<EditorState>(() => ({
+    ...EMPTY_STATE,
+    materialId: routeId ?? null,
+  }));
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  const [saving, setSaving] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [badPartKey, setBadPartKey] = useState<string | null>(null);
+  const [badRowIndex, setBadRowIndex] = useState<number | null>(null);
+  // Sections are stacked vertically now (no part switcher) — publish
+  // validation failures scroll the offending section into view instead.
+  const partSectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  // Client-side clamping in AudioEditorPane should make this unreachable in
+  // practice, but if a part-range save error still arrives, never surface
+  // the raw server field name — humanize it and show it right by the part
+  // block instead of the generic top banner (§ review: fix the cause, not
+  // the symptom; no toast system here, that's a separate project task).
+  const partSaveError = useMemo(() => {
+    if (!saveError) return null;
+    return /audio_start_ms|audio_end_ms/i.test(saveError)
+      ? "a part's end must be after its start — adjust the times below."
+      : null;
+  }, [saveError]);
+  // Re-renders every 30s purely so the "saved Xm ago" trace stays fresh
+  // without the author having to do anything.
+  const [, forceTick] = useState(0);
+
+  // Trail is rendered by the layout header. Declared here (before any early
+  // return) so the hook order stays stable across loading/loaded renders.
+  useStudioCrumbs([
+    { label: "listening", to: "/studio/listening" },
+    {
+      label: state.materialId
+        ? state.title.trim() || "untitled listening"
+        : "new",
+    },
+  ]);
+
+  const audioPaneRef = useRef<AudioEditorHandle>(null);
+  const saveTimerRef = useRef<number | undefined>(undefined);
+  const savingRef = useRef(false);
+  const rerunNeededRef = useRef(false);
+
+  const update = useCallback((patch: Partial<EditorState>) => {
+    setState((prev) => ({ ...prev, ...patch }));
+  }, []);
+
+  const updatePart = useCallback((key: string, patch: Partial<PartState>) => {
+    setState((prev) => ({
+      ...prev,
+      parts: prev.parts.map((p) => (p.key === key ? { ...p, ...patch } : p)),
+    }));
+  }, []);
+
+  // --- Hydrate from the author endpoint (existing material only) ----------
+  useEffect(() => {
+    if (!existing || loadedRef.current) return;
+    loadedRef.current = true;
+    const parts: PartState[] = existing.parts.map((p) => {
+      const group = p.question_groups[0];
+      const rows = group ? parseTemplate(group.config.template, group.questions) : emptyRows();
+      return {
+        key: String(p.order_index),
+        partId: p.id,
+        orderIndex: p.order_index,
+        title: p.title,
+        audioStartMs: p.audio_start_ms,
+        audioEndMs: p.audio_end_ms,
+        groupId: group?.id ?? null,
+        instructions: group?.instructions ?? "",
+        wordLimit: group?.word_limit ?? null,
+        rows: rows.length > 0 ? rows : emptyRows(),
+      };
+    });
+    setState({
+      materialId: existing.id,
+      title: existing.title,
+      visibility: existing.visibility,
+      audioAssetId: existing.audio_asset_id,
+      audioUrl: existing.audio_url,
+      durationMs: existing.duration_ms,
+      parts,
+    });
+  }, [existing]);
+
+  // --- Picker (brand-new material only, before any part is chosen). The
+  // structure is fixed from here on — no add/remove-part in the editor. -----
+  const handlePick = (orderIndices: number[]) => {
+    update({ parts: orderIndices.map(newPart) });
+  };
+
+  // --- Autosave -------------------------------------------------------------
+  // ensure material -> for each part, ensure/PATCH it + its question group ->
+  // PATCH material. Each part is saved independently (its own try/catch) so
+  // one part's validation failure never drops another part's edits — errors
+  // are collected per part and surfaced together, naming the part.
+
+  const runSave = useCallback(async () => {
+    if (savingRef.current) {
+      rerunNeededRef.current = true;
+      return;
+    }
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const s = stateRef.current;
+      const effectiveTitle = s.title.trim() || "untitled listening";
+      let materialId = s.materialId;
+
+      if (!materialId) {
+        const created = await listeningApi.materials.create({
+          title: effectiveTitle,
+          type: "listening",
+          visibility: s.visibility,
+          audio_asset_id: s.audioAssetId,
+        });
+        materialId = created.id;
+        update({
+          materialId,
+          audioUrl: created.audio_url,
+          durationMs: created.duration_ms,
+        });
+        navigate(`/studio/listening/${materialId}`, { replace: true });
+      }
+
+      // Re-read after the material-create await: the author may have edited
+      // while it was in flight.
+      const partsSnapshot = stateRef.current.parts;
+      const persisted = new Map<string, { partId: string; groupId: string | null }>();
+      const partErrors: string[] = [];
+
+      for (const part of partsSnapshot) {
+        const label = part.title.trim() || `Part ${part.orderIndex + 1}`;
+        try {
+          let partId = part.partId;
+          if (!partId) {
+            const created = await listeningApi.parts.create(materialId, {
+              order_index: part.orderIndex,
+              title: label,
+              audio_start_ms: part.audioStartMs,
+              audio_end_ms: part.audioEndMs,
+            });
+            partId = created.id;
+          } else {
+            await listeningApi.parts.update(partId, {
+              title: label,
+              audio_start_ms: part.audioStartMs,
+              audio_end_ms: part.audioEndMs,
+            });
+          }
+
+          let groupId = part.groupId;
+          if (isGroupPersistable(part.rows, part.instructions)) {
+            const { template, questions } = buildTemplate(part.rows);
+            const payload = {
+              type: "form_completion" as const,
+              instructions: part.instructions.trim(),
+              word_limit: part.wordLimit,
+              config: { template },
+              questions,
+            };
+            if (!groupId) {
+              const group = await listeningApi.questionGroups.create(partId, payload);
+              groupId = group.id;
+            } else {
+              await listeningApi.questionGroups.update(groupId, payload);
+            }
+          }
+
+          persisted.set(part.key, { partId, groupId });
+        } catch (e) {
+          partErrors.push(`${label}: ${getErrorMessage(e)}`);
+        }
+      }
+
+      // Merge persisted ids back in without clobbering edits made to other
+      // fields (or other parts) while the loop above was awaiting network
+      // calls — only patch what this save round actually touched.
+      setState((prev) => ({
+        ...prev,
+        parts: prev.parts.map((p) => {
+          const ids = persisted.get(p.key);
+          return ids ? { ...p, partId: ids.partId, groupId: ids.groupId } : p;
+        }),
+      }));
+
+      const updated = await listeningApi.materials.update(materialId, {
+        title: effectiveTitle,
+        visibility: s.visibility,
+        audio_asset_id: s.audioAssetId,
+      });
+      update({ audioUrl: updated.audio_url, durationMs: updated.duration_ms });
+
+      setLastSavedAt(new Date());
+      setSaveError(partErrors.length > 0 ? partErrors.join(" · ") : null);
+      void qc.invalidateQueries({ queryKey: ["studio-listening"] });
+      void qc.invalidateQueries({ queryKey: ["studio-stats"] });
+    } catch (e) {
+      setSaveError(getErrorMessage(e));
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+      if (rerunNeededRef.current) {
+        rerunNeededRef.current = false;
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = window.setTimeout(() => void runSave(), 0);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reads live state via stateRef by design
+  }, [navigate, qc, update]);
+
+  const scheduleSave = useCallback(
+    (immediate = false) => {
+      window.clearTimeout(saveTimerRef.current);
+      if (immediate) void runSave();
+      else saveTimerRef.current = window.setTimeout(() => void runSave(), AUTOSAVE_DELAY_MS);
+    },
+    [runSave],
+  );
+
+  // Any edit to persisted fields schedules a debounced save. Skipped while
+  // still hydrating an existing material, and while a brand-new material
+  // hasn't been through the picker yet (nothing to save — no parts).
+  useEffect(() => {
+    if (!loadedRef.current && routeId) return;
+    if (!routeId && state.parts.length === 0) return;
+    scheduleSave(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- state fields are the deps, scheduleSave is stable
+  }, [state.title, state.visibility, state.audioAssetId, state.parts]);
+
+  useEffect(() => () => window.clearTimeout(saveTimerRef.current), []);
+
+  useEffect(() => {
+    const t = window.setInterval(() => forceTick((v) => v + 1), 30_000);
+    return () => window.clearInterval(t);
+  }, []);
+
+  // --- Keyboard: space play/pause (never while typing), ⌘s/Ctrl+s save ----
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      const isTyping =
+        tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable;
+
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        scheduleSave(true);
+        return;
+      }
+      if (e.code === "Space" && !isTyping) {
+        e.preventDefault();
+        audioPaneRef.current?.togglePlay();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [scheduleSave]);
+
+  // --- Actions --------------------------------------------------------------
+
+  const handleUpload = async (file: File) => {
+    setUploading(true);
+    try {
+      const asset = await listeningApi.uploadAudio(file);
+      update({ audioAssetId: asset.asset_id });
+      scheduleSave(true);
+    } catch (e) {
+      toast(getErrorMessage(e));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // Every part that has questions needs instructions + a non-empty answer
+  // per gap; the material needs at least one part with at least one gap.
+  // "Has questions" = the author has touched it (typed instructions or a
+  // label/answer) — an untouched, still-empty part is fine to leave alone.
+  const validateForPublish = (): {
+    ok: boolean;
+    message?: string;
+    badPartKey?: string;
+    badRow?: number;
+  } => {
+    const s = stateRef.current;
+    let anyPartHasGap = false;
+
+    for (const part of s.parts.slice().sort((a, b) => a.orderIndex - b.orderIndex)) {
+      const label = part.title.trim() || `Part ${part.orderIndex + 1}`;
+      const touched =
+        part.instructions.trim() !== "" ||
+        part.rows.some((r) => r.label.trim() !== "" || r.answers.some((a) => a.trim() !== ""));
+      if (!touched) continue;
+
+      if (!part.instructions.trim()) {
+        return { ok: false, message: `${label}: add instructions before publishing.`, badPartKey: part.key };
+      }
+      if (part.rows.length === 0) {
+        return { ok: false, message: `${label}: add at least one field before publishing.`, badPartKey: part.key };
+      }
+      for (let i = 0; i < part.rows.length; i++) {
+        if (!part.rows[i].answers.some((a) => a.trim())) {
+          return {
+            ok: false,
+            message: `${label} — "${part.rows[i].label.trim() || `field ${i + 1}`}" needs at least one accepted answer.`,
+            badPartKey: part.key,
+            badRow: i,
+          };
+        }
+      }
+      anyPartHasGap = true;
+    }
+
+    if (!anyPartHasGap) {
+      return { ok: false, message: "add at least one part with at least one gap before publishing." };
+    }
+    return { ok: true };
+  };
+
+  const handlePublish = () => {
+    const v = validateForPublish();
+    if (!v.ok) {
+      setPublishError(v.message ?? "can't publish yet.");
+      setBadRowIndex(v.badRow ?? null);
+      setBadPartKey(v.badPartKey ?? null);
+      // No part to switch to anymore — everything's on one page, so scroll
+      // the offending section into view instead.
+      if (v.badPartKey) {
+        partSectionRefs.current[v.badPartKey]?.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+      }
+      return;
+    }
+    setPublishError(null);
+    setBadRowIndex(null);
+    setBadPartKey(null);
+    update({ visibility: "public" });
+    scheduleSave(true);
+  };
+
+  const handleDraft = () => {
+    setPublishError(null);
+    setBadRowIndex(null);
+    setBadPartKey(null);
+    update({ visibility: "private" });
+    scheduleSave(true);
+  };
+
+  const hasAudioEverAttached = !!state.audioAssetId;
+  const sortedParts = state.parts.slice().sort((a, b) => a.orderIndex - b.orderIndex);
+  const singlePart = hasPartRange(state.parts) ? state.parts[0] : null;
+  const showPicker = !routeId && state.parts.length === 0;
+
+  if (routeId && hydrating && !loadedRef.current) {
+    return (
+      <div className="mx-auto w-full max-w-[75rem] px-2 py-16 text-center font-mono text-sm text-muted-foreground">
+        <Loader2 className="mx-auto mb-2 size-5 animate-spin" aria-hidden />
+        loading material…
+      </div>
+    );
+  }
+
+  if (showPicker) {
+    return (
+      // Dismissing without choosing means there's nothing to edit, so it
+      // returns to the list rather than leaving an empty editor behind.
+      <Dialog
+        open
+        onOpenChange={(open) => {
+          if (!open) navigate("/studio/listening");
+        }}
+      >
+        <DialogContent className="modal-stagger gap-6 p-6 font-mono duration-200 sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-center text-lg font-medium">
+              New listening material
+            </DialogTitle>
+            <DialogDescription className="text-center text-xs">
+              Which part are you authoring?
+            </DialogDescription>
+          </DialogHeader>
+          <PartsPicker onPick={handlePick} />
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col font-mono">
+      {/* Top bar — title and the actions that apply to it share one line. No
+          rule under it: the layout header already draws one just above, and
+          the audio label's rule follows shortly after. */}
+      <div className="flex flex-none flex-wrap items-center justify-between gap-3 pt-1 pb-2">
+        <input
+          type="text"
+          value={state.title}
+          onChange={(e) => update({ title: e.target.value })}
+          placeholder="untitled listening"
+          aria-label="Material title"
+          className="min-w-0 flex-1 border-b-2 border-transparent bg-transparent pb-1 text-xl font-medium text-foreground placeholder:text-muted-foreground hover:border-border focus:border-primary focus:outline-none"
+        />
+
+        <div className="flex shrink-0 items-center gap-3.5">
+          <span className="text-xs text-muted-foreground">
+            {saving ? "saving…" : lastSavedAt ? `saved ${timeAgo(lastSavedAt.toISOString())}` : ""}
+          </span>
+          <button
+            type="button"
+            onClick={handleDraft}
+            className="text-xs text-muted-foreground hover:text-foreground"
+          >
+            draft
+          </button>
+          <button
+            type="button"
+            onClick={handlePublish}
+            className="rounded-md bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground transition-[filter] hover:brightness-[1.06]"
+          >
+            publish
+          </button>
+        </div>
+      </div>
+
+      {(publishError || (saveError && !partSaveError)) && (
+        <p className="flex-none pb-2 text-xs text-destructive">
+          {publishError ?? saveError}
+        </p>
+      )}
+
+      {/* Panes */}
+      <div className="grid flex-1 grid-cols-1 gap-8 md:grid-cols-[minmax(340px,46%)_1fr]">
+        {/* Sticky, viewport-bounded column: the player stays put while the
+            transcript scrolls inside it (brief §2). The right pane keeps
+            scrolling with the page, however many fields it grows to. */}
+        <div className="min-w-0 md:sticky md:top-4 md:max-h-[calc(100svh-5rem)] md:self-start md:border-r md:border-border md:pr-8">
+          <AudioEditorPane
+            ref={audioPaneRef}
+            audioAssetId={state.audioAssetId}
+            audioUrl={state.audioUrl}
+            durationMsHint={state.durationMs}
+            hasPartRange={!!singlePart}
+            partNumber={singlePart ? singlePart.orderIndex + 1 : null}
+            partAudioStart={singlePart?.audioStartMs ?? null}
+            partAudioEnd={singlePart?.audioEndMs ?? null}
+            onSetPartStart={
+              singlePart
+                ? (ms) => updatePart(singlePart.key, { audioStartMs: Math.round(ms) })
+                : undefined
+            }
+            onSetPartEnd={
+              singlePart
+                ? (ms) => updatePart(singlePart.key, { audioEndMs: Math.round(ms) })
+                : undefined
+            }
+            onResetPart={
+              singlePart
+                ? () => updatePart(singlePart.key, { audioStartMs: null, audioEndMs: null })
+                : undefined
+            }
+            onUpload={handleUpload}
+            uploading={uploading}
+            partError={partSaveError}
+          />
+        </div>
+
+        {/* Questions — one section per part, stacked top to bottom. A
+            single-part material still gets a heading, so the layout reads
+            consistently whether there's one part or four. */}
+        <div className="min-w-0 space-y-8">
+          {sortedParts.map((part) => {
+            const label = part.title.trim() || `Part ${part.orderIndex + 1}`;
+            return (
+              <div
+                key={part.key}
+                ref={(el) => {
+                  partSectionRefs.current[part.key] = el;
+                }}
+              >
+                <div className="mb-3 flex items-center gap-2.5 text-xs tracking-wide text-muted-foreground">
+                  {label}
+                  <span className="h-px flex-1 bg-border" aria-hidden />
+                </div>
+                <QuestionFormEditor
+                  rows={part.rows}
+                  onChange={(rows) => updatePart(part.key, { rows })}
+                  instructions={part.instructions}
+                  onInstructionsChange={(instructions) =>
+                    updatePart(part.key, { instructions })
+                  }
+                  partLabel={label.toLowerCase()}
+                  badRowIndex={badPartKey === part.key ? badRowIndex : null}
+                  disabled={!hasAudioEverAttached}
+                  note={
+                    UNSUPPORTED_TYPICAL_TYPE_ORDER_INDICES.has(part.orderIndex)
+                      ? UNSUPPORTED_TYPICAL_TYPE_NOTE
+                      : undefined
+                  }
+                />
+              </div>
+            );
+          })}
+
+          <div className="flex flex-wrap gap-4 text-[11px] text-muted-foreground">
+            <span className="flex items-center gap-1.5">
+              <kbd className="rounded bg-card px-1.5 py-0.5 font-mono text-foreground">space</kbd>
+              play/pause
+            </span>
+            <span className="flex items-center gap-1.5">
+              <kbd className="rounded bg-card px-1.5 py-0.5 font-mono text-foreground">tab</kbd>
+              next gap
+            </span>
+            <span className="flex items-center gap-1.5">
+              <kbd className={cn("rounded bg-card px-1.5 py-0.5 font-mono text-foreground")}>
+                ⌘s
+              </kbd>
+              save
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

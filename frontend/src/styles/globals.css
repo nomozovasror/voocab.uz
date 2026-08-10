@@ -492,3 +492,49 @@
 @media (prefers-reduced-motion: reduce) {
   .loader-deferred { animation-duration: 0.01s; }
 }
+
+/* Thin, muted scrollbar — used where native scrolling is kept (e.g. the
+   waveform editor's horizontal pan while zoomed in) but shouldn't compete
+   visually with the rest of the token-driven chrome. */
+/* The waveform hides its native scrollbar and draws its own track below the
+   canvas instead (see AudioEditorPane): a native bar renders *inside* the
+   scroller, so it can't be separated from the waveform, restyled fully, or
+   made to appear gracefully when zooming in. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── Modal entrance stagger ───────────────────────────────────────────────
+   Children rise in sequence after the dialog itself scales in, so the panel
+   assembles rather than appearing all at once. Done with keyframes + delays
+   rather than an animation library — the whole effect is an opacity and a
+   translate, which CSS does natively. */
+@keyframes modal-item-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.modal-stagger > * {
+  animation: modal-item-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.modal-stagger > *:nth-child(1) { animation-delay: 0.06s; }
+.modal-stagger > *:nth-child(2) { animation-delay: 0.11s; }
+.modal-stagger > *:nth-child(3) { animation-delay: 0.16s; }
+.modal-stagger > *:nth-child(4) { animation-delay: 0.21s; }
+.modal-stagger > *:nth-child(5) { animation-delay: 0.26s; }
+.modal-stagger > *:nth-child(6) { animation-delay: 0.31s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-stagger > * {
+    animation: none;
+  }
+}

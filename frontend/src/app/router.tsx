@@ -137,6 +137,30 @@ export const router = createBrowserRouter([
               ).default,
             }),
           },
+          {
+            path: "listening",
+            lazy: async () => ({
+              Component: (
+                await import("@/pages/studio/listening/StudioListeningListPage")
+              ).default,
+            }),
+          },
+          {
+            path: "listening/new",
+            lazy: async () => ({
+              Component: (
+                await import("@/pages/studio/listening/StudioListeningEditorPage")
+              ).default,
+            }),
+          },
+          {
+            path: "listening/:id",
+            lazy: async () => ({
+              Component: (
+                await import("@/pages/studio/listening/StudioListeningEditorPage")
+              ).default,
+            }),
+          },
         ],
       },
     ],
