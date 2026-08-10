@@ -392,6 +392,17 @@ export const AudioEditorPane = forwardRef<AudioEditorHandle, AudioEditorPaneProp
       [onSetPartEnd],
     );
 
+    // The wavesurfer instance is built once per audioUrl, so its handlers close
+    // over whatever these were on that render. The page rebuilds onSetPartStart
+    // /onSetPartEnd every render, so reach them through refs — otherwise a
+    // region drag writes through a stale callback.
+    const commitStartRef = useRef(commitPartStart);
+    const commitEndRef = useRef(commitPartEnd);
+    useEffect(() => {
+      commitStartRef.current = commitPartStart;
+      commitEndRef.current = commitPartEnd;
+    }, [commitPartStart, commitPartEnd]);
+
     const flashSnap = useCallback((kind: "silence" | "segment", index: number) => {
       setFlash({ kind, index });
       window.setTimeout(() => setFlash((f) => (f?.kind === kind && f.index === index ? null : f)), 450);
@@ -423,11 +434,59 @@ export const AudioEditorPane = forwardRef<AudioEditorHandle, AudioEditorPaneProp
           flashSnap(candidate.kind, candidate.index);
         });
         region.on("update-end", () => {
-          commitPartStart(region.start * 1000);
-          commitPartEnd(region.end * 1000);
+          commitStartRef.current(region.start * 1000);
+          commitEndRef.current(region.end * 1000);
         });
       },
-      [commitPartEnd, commitPartStart, flashSnap, snapNearest],
+      [flashSnap, snapNearest],
+    );
+
+    /** Writes a newly created region to the part, snapping it first.
+     *
+     *  Drag-selection never emits 'update-end': the plugin builds the region
+     *  internally and only calls saveRegion() on pointerup, so the listeners
+     *  attached at 'region-created' arrive too late to catch the drag that
+     *  created it. Without this the first drag left the fields untouched and
+     *  only a second drag — which resizes the now-existing region, and does
+     *  emit 'update-end' — appeared to work.
+     *
+     *  The guard is the region's own bounds versus the part's, rather than a
+     *  flag saying who created it: addRegion() hydrating saved bounds matches
+     *  and writes nothing, anything else differs and gets committed. */
+    const commitRegionIfChanged = useCallback(
+      (region: Region) => {
+        const knownStart = partStartRef.current;
+        const knownEnd = partEndRef.current;
+        if (knownStart != null || knownEnd != null) {
+          const effStart = knownStart ?? 0;
+          const effEnd = knownEnd ?? durationRef.current;
+          const same =
+            Math.abs(effStart - region.start * 1000) < 20 &&
+            Math.abs(effEnd - region.end * 1000) < 20;
+          if (same) return;
+        }
+
+        let startSec = region.start;
+        let endSec = region.end;
+        if (!altPressedRef.current) {
+          const startSnap = snapNearest(startSec);
+          const endSnap = snapNearest(endSec);
+          const snappedStart = startSnap ? startSnap.ms / 1000 : startSec;
+          const snappedEnd = endSnap ? endSnap.ms / 1000 : endSec;
+          // Snapping both edges toward each other could collapse a short
+          // selection below the minimum — keep the raw bounds if it would.
+          if (snappedEnd - snappedStart >= MIN_PART_LENGTH_SEC) {
+            startSec = snappedStart;
+            endSec = snappedEnd;
+            region.setOptions({ start: startSec, end: endSec });
+            if (startSnap) flashSnap(startSnap.kind, startSnap.index);
+            if (endSnap) flashSnap(endSnap.kind, endSnap.index);
+          }
+        }
+        commitStartRef.current(startSec * 1000);
+        commitEndRef.current(endSec * 1000);
+      },
+      [flashSnap, snapNearest],
     );
 
     const armDragSelection = useCallback((regions: RegionsPluginType) => {
@@ -574,6 +633,7 @@ export const AudioEditorPane = forwardRef<AudioEditorHandle, AudioEditorPaneProp
           attachRegionListeners(region);
           disableDragSelectionRef.current?.();
           disableDragSelectionRef.current = null;
+          commitRegionIfChanged(region);
         });
 
         const ws = WS.create({
