@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 
 from app.api.deps import CurrentUser
 from app.core.database import AsyncSession, get_session
-from app.schemas.studio import StudioStats
+from app.schemas.studio import ListeningList, StudioStats
 from app.services import studio as studio_service
 
 router = APIRouter(prefix="/api", tags=["studio"])
@@ -21,3 +21,11 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 async def get_studio_stats(user: CurrentUser, session: SessionDep) -> StudioStats:
     stats = await studio_service.get_stats(session, user.id)
     return StudioStats(**stats)
+
+
+@router.get("/studio/listening", response_model=ListeningList)
+async def get_studio_listening(
+    user: CurrentUser, session: SessionDep
+) -> ListeningList:
+    data = await studio_service.get_listening_list(session, user.id)
+    return ListeningList(**data)

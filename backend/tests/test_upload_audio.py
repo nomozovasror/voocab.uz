@@ -21,7 +21,7 @@ from app.models.user import User
 from app.services.audio import sha256_hex
 from app.services.storage import audio_storage_key
 
-MAX_AUDIO_BYTES = 25 * 1024 * 1024
+MAX_AUDIO_BYTES = 60 * 1024 * 1024
 
 
 async def _make_user(email: str) -> User:
@@ -191,20 +191,36 @@ async def test_bad_format_is_422_no_rows_created() -> None:
 
 
 @pytest.mark.asyncio
-async def test_oversize_is_422_no_rows_created() -> None:
+async def test_oversize_content_length_header_is_422_no_rows_created() -> None:
+    """Exercises the cheap Content-Length pre-check without constructing a
+    real 60 MB body (slow, memory-hungry): a tiny actual multipart body with
+    a lied-about, over-the-limit Content-Length header must still be
+    rejected -- the pre-check reads the header, not the bytes on the wire."""
     owner = await _make_user("faza7-upload-owner-oversize@example.com")
     token = create_access_token(str(owner.id))
-    payload = b"0" * (MAX_AUDIO_BYTES + 1)
-    sha256 = sha256_hex(payload)
+    small_payload = b"tiny, but the Content-Length header says otherwise"
+    sha256 = sha256_hex(small_payload)
+
+    boundary = "oversizeheadertestboundary"
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="big.mp3"\r\n'
+        f"Content-Type: audio/mpeg\r\n\r\n"
+    ).encode() + small_payload + f"\r\n--{boundary}--\r\n".encode()
 
     try:
         async with _client() as client:
             r = await client.post(
                 "/api/uploads/audio",
-                files={"file": ("big.mp3", payload, "audio/mpeg")},
+                content=body,
+                headers={
+                    "content-type": f"multipart/form-data; boundary={boundary}",
+                    "content-length": str(MAX_AUDIO_BYTES + 1),
+                },
                 cookies={"access_token": token},
             )
         assert r.status_code == 422, r.text
+        assert "60 MB" in r.text
 
         async with async_session_factory() as session:
             blob = (
@@ -213,3 +229,25 @@ async def test_oversize_is_422_no_rows_created() -> None:
             assert blob is None
     finally:
         await _cleanup(sha256, "faza7-upload-owner-oversize@example.com")
+
+
+@pytest.mark.asyncio
+async def test_small_file_still_succeeds_under_new_limit() -> None:
+    """Happy-path guard: raising the cap must not have broken small (well
+    under the limit) uploads."""
+    owner = await _make_user("faza7-upload-owner-smallunderlimit@example.com")
+    token = create_access_token(str(owner.id))
+    payload = f"small file under the 60 MB cap {uuid.uuid4()}".encode()
+    sha256 = sha256_hex(payload)
+
+    try:
+        async with _client() as client:
+            r = await client.post(
+                "/api/uploads/audio",
+                files={"file": ("clip.mp3", payload, "audio/mpeg")},
+                cookies={"access_token": token},
+            )
+        assert r.status_code == 200, r.text
+        assert r.json()["sha256"] == sha256
+    finally:
+        await _cleanup(sha256, "faza7-upload-owner-smallunderlimit@example.com")

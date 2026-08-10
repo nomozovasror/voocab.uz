@@ -31,7 +31,7 @@ from app.services import storage
 
 router = APIRouter(prefix="/api", tags=["materials"])
 
-MAX_AUDIO_BYTES = 25 * 1024 * 1024  # 25 MB
+MAX_AUDIO_BYTES = 60 * 1024 * 1024  # 60 MB
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
@@ -99,7 +99,7 @@ async def upload_audio(
             if int(content_length) > MAX_AUDIO_BYTES:
                 raise HTTPException(
                     status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    "Audio exceeds 25 MB",
+                    "Audio exceeds 60 MB",
                 )
         except ValueError:
             pass  # malformed header; fall through to the authoritative check
@@ -110,7 +110,7 @@ async def upload_audio(
     if len(data) > MAX_AUDIO_BYTES:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Audio exceeds 25 MB",
+            "Audio exceeds 60 MB",
         )
 
     sha256 = audio_service.sha256_hex(data)

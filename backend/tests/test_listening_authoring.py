@@ -402,3 +402,128 @@ async def test_concurrent_duplicate_part_order_index_loser_is_409_not_500() -> N
             assert len(parts) == 1
     finally:
         await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_owner_can_update_part_audio_range() -> None:
+    email = "l8-owner@example.com"
+    owner = await _make_user(email)
+    material = await _make_material(owner.id)
+    token = create_access_token(str(owner.id))
+
+    try:
+        async with _client() as client:
+            r_create = await client.post(
+                f"/api/materials/{material.id}/parts",
+                json={"order_index": 0, "title": "Part 1"},
+                cookies={"access_token": token},
+            )
+            assert r_create.status_code == 201, r_create.text
+            part_id = r_create.json()["id"]
+
+            r_patch = await client.patch(
+                f"/api/parts/{part_id}",
+                json={
+                    "title": "Part 1 (renamed)",
+                    "audio_start_ms": 1000,
+                    "audio_end_ms": 5000,
+                },
+                cookies={"access_token": token},
+            )
+            assert r_patch.status_code == 200, r_patch.text
+            body = r_patch.json()
+            assert body["title"] == "Part 1 (renamed)"
+            assert body["audio_start_ms"] == 1000
+            assert body["audio_end_ms"] == 5000
+
+            # Partial update: only audio_end_ms, validated against the
+            # existing audio_start_ms (1000) still on the row.
+            r_patch2 = await client.patch(
+                f"/api/parts/{part_id}",
+                json={"audio_end_ms": 6000},
+                cookies={"access_token": token},
+            )
+            assert r_patch2.status_code == 200, r_patch2.text
+            assert r_patch2.json()["audio_end_ms"] == 6000
+            assert r_patch2.json()["audio_start_ms"] == 1000
+    finally:
+        await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_non_owner_update_part_is_403() -> None:
+    owner_email = "l9-owner@example.com"
+    intruder_email = "l9-intruder@example.com"
+    owner = await _make_user(owner_email)
+    intruder = await _make_user(intruder_email)
+    material = await _make_material(owner.id)
+    owner_token = create_access_token(str(owner.id))
+    intruder_token = create_access_token(str(intruder.id))
+
+    try:
+        async with _client() as client:
+            r_create = await client.post(
+                f"/api/materials/{material.id}/parts",
+                json={"order_index": 0, "title": "Part 1"},
+                cookies={"access_token": owner_token},
+            )
+            part_id = r_create.json()["id"]
+
+            r_patch = await client.patch(
+                f"/api/parts/{part_id}",
+                json={"title": "Hijacked"},
+                cookies={"access_token": intruder_token},
+            )
+            assert r_patch.status_code == 403, r_patch.text
+    finally:
+        await _cleanup(material.id, owner_email, intruder_email)
+
+
+@pytest.mark.asyncio
+async def test_update_part_end_before_start_is_422() -> None:
+    email = "l10-owner@example.com"
+    owner = await _make_user(email)
+    material = await _make_material(owner.id)
+    token = create_access_token(str(owner.id))
+
+    try:
+        async with _client() as client:
+            r_create = await client.post(
+                f"/api/materials/{material.id}/parts",
+                json={
+                    "order_index": 0,
+                    "title": "Part 1",
+                    "audio_start_ms": 2000,
+                    "audio_end_ms": 8000,
+                },
+                cookies={"access_token": token},
+            )
+            part_id = r_create.json()["id"]
+
+            # Only sending a new start that's >= the existing end (8000).
+            r_patch = await client.patch(
+                f"/api/parts/{part_id}",
+                json={"audio_start_ms": 9000},
+                cookies={"access_token": token},
+            )
+            assert r_patch.status_code == 422, r_patch.text
+    finally:
+        await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_update_unknown_part_is_404() -> None:
+    email = "l11-owner@example.com"
+    owner = await _make_user(email)
+    token = create_access_token(str(owner.id))
+
+    try:
+        async with _client() as client:
+            r_patch = await client.patch(
+                f"/api/parts/{uuid.uuid4()}",
+                json={"title": "Ghost"},
+                cookies={"access_token": token},
+            )
+            assert r_patch.status_code == 404, r_patch.text
+    finally:
+        await _cleanup(uuid.uuid4(), email)

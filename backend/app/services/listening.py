@@ -13,13 +13,14 @@ gradeable and event-sourceable via ``QuestionAttempt`` (Faza 3).
 
 import uuid
 
+from fastapi import HTTPException, status
 from sqlmodel import select
 
 from app.core.database import AsyncSession
 from app.models.part import Part
 from app.models.question import Question
 from app.models.question_group import QuestionGroup
-from app.schemas.listening import PartCreate, QuestionGroupIn
+from app.schemas.listening import PartCreate, PartUpdate, QuestionGroupIn
 
 
 # --- Part ---------------------------------------------------------------
@@ -51,6 +52,37 @@ async def create_part(
         audio_start_ms=data.audio_start_ms,
         audio_end_ms=data.audio_end_ms,
     )
+    session.add(part)
+    await session.commit()
+    await session.refresh(part)
+    return part
+
+
+async def update_part(session: AsyncSession, part: Part, data: PartUpdate) -> Part:
+    """Partial update (title / audio range). Like ``update_material``, a
+    field is only touched when the key is present in the payload -- same
+    "can't yet explicitly clear back to null" limitation as the rest of
+    material authoring. The end>start check runs against the MERGED result
+    (existing DB value for whichever bound wasn't sent), so e.g. sending
+    only a new ``audio_end_ms`` still gets validated against the part's
+    current ``audio_start_ms``."""
+    if data.title is not None:
+        part.title = data.title
+    if data.audio_start_ms is not None:
+        part.audio_start_ms = data.audio_start_ms
+    if data.audio_end_ms is not None:
+        part.audio_end_ms = data.audio_end_ms
+
+    if (
+        part.audio_start_ms is not None
+        and part.audio_end_ms is not None
+        and part.audio_end_ms <= part.audio_start_ms
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "The part's end must come after its start",
+        )
+
     session.add(part)
     await session.commit()
     await session.refresh(part)

@@ -188,6 +188,117 @@ async def _recent(session: AsyncSession, author_id: uuid.UUID) -> list[dict]:
     return recent
 
 
+async def get_listening_list(session: AsyncSession, author_id: uuid.UUID) -> dict:
+    """Row data for the Studio listening list page: one row per the
+    caller's own ``listening`` materials, newest-``updated_at`` first, plus
+    the top-level totals. Every per-row column is either a plain 1:1 join
+    (audio duration/transcript status live directly on Material via
+    audio_asset_id) or one grouped query across ALL rows at once (question
+    type/count, attempts/avg score) -- never one query per material."""
+    base_stmt = (
+        select(Material, AudioBlob.duration_ms, AudioBlob.transcript_status)
+        .select_from(Material)
+        .outerjoin(AudioAsset, Material.audio_asset_id == AudioAsset.id)  # type: ignore[arg-type]
+        .outerjoin(AudioBlob, AudioAsset.blob_id == AudioBlob.id)  # type: ignore[arg-type]
+        .where(Material.author_id == author_id, Material.type == "listening")
+        .order_by(Material.updated_at.desc())  # type: ignore[attr-defined]
+    )
+    rows = (await session.exec(base_stmt)).all()
+    if not rows:
+        return {"total": 0, "duration_ms": 0, "items": []}
+
+    material_ids = [material.id for material, _duration, _status in rows]
+
+    # "first question group by order" = smallest (part.order_index,
+    # group.order_index) per material -- Postgres DISTINCT ON, one query for
+    # every material at once.
+    question_type_by_material: dict[uuid.UUID, str] = dict(
+        (
+            await session.exec(
+                select(Part.material_id, QuestionGroup.type)
+                .select_from(QuestionGroup)
+                .join(Part, QuestionGroup.part_id == Part.id)  # type: ignore[arg-type]
+                .where(Part.material_id.in_(material_ids))  # type: ignore[attr-defined]
+                .order_by(
+                    Part.material_id, Part.order_index, QuestionGroup.order_index
+                )
+                .distinct(Part.material_id)
+            )
+        ).all()
+    )
+
+    question_counts: dict[uuid.UUID, int] = dict(
+        (
+            await session.exec(
+                select(Part.material_id, func.count(Question.id))
+                .select_from(Question)
+                .join(QuestionGroup, Question.group_id == QuestionGroup.id)  # type: ignore[arg-type]
+                .join(Part, QuestionGroup.part_id == Part.id)  # type: ignore[arg-type]
+                .where(Part.material_id.in_(material_ids))  # type: ignore[attr-defined]
+                .group_by(Part.material_id)
+            )
+        ).all()
+    )
+
+    # attempts = submitted count; avg_score_pct = mean(score/total*100) over
+    # submitted attempts with total_questions > 0 (FILTER, not a Python
+    # loop) -- one grouped query covering every material.
+    attempts_stmt = (
+        select(
+            Attempt.material_id,
+            func.count(Attempt.id),
+            func.avg(Attempt.score / Attempt.total_questions * 100.0).filter(
+                Attempt.total_questions > 0
+            ),
+        )
+        .where(
+            Attempt.material_id.in_(material_ids),  # type: ignore[attr-defined]
+            Attempt.status == AttemptStatus.SUBMITTED,
+        )
+        .group_by(Attempt.material_id)
+    )
+    attempts_by_material: dict[uuid.UUID, tuple[int, float | None]] = {
+        mid: (count, avg)
+        for mid, count, avg in (await session.exec(attempts_stmt)).all()
+    }
+
+    # Top-level duration_ms: distinct BY BLOB (not by material, not by
+    # value) among these materials' audio, summed in one query.
+    distinct_blobs = (
+        select(AudioBlob.id, AudioBlob.duration_ms)
+        .select_from(Material)
+        .join(AudioAsset, Material.audio_asset_id == AudioAsset.id)  # type: ignore[arg-type]
+        .join(AudioBlob, AudioAsset.blob_id == AudioBlob.id)  # type: ignore[arg-type]
+        .where(Material.author_id == author_id, Material.type == "listening")
+        .distinct()
+    ).subquery()
+    total_duration_ms = (
+        await session.exec(
+            select(func.coalesce(func.sum(distinct_blobs.c.duration_ms), 0))
+        )
+    ).one()
+
+    items: list[dict] = []
+    for material, duration_ms, transcript_status in rows:
+        attempts_count, avg_score = attempts_by_material.get(material.id, (0, None))
+        items.append(
+            {
+                "id": material.id,
+                "title": material.title,
+                "visibility": material.visibility,
+                "duration_ms": duration_ms,
+                "transcript_status": transcript_status,
+                "question_type": question_type_by_material.get(material.id),
+                "question_count": question_counts.get(material.id, 0),
+                "attempts": attempts_count,
+                "avg_score_pct": round(avg_score, 1) if avg_score is not None else None,
+                "updated_at": material.updated_at,
+            }
+        )
+
+    return {"total": len(rows), "duration_ms": total_duration_ms, "items": items}
+
+
 async def get_stats(session: AsyncSession, author_id: uuid.UUID) -> dict:
     materials_total = await _materials_total(session, author_id)
     content_ms = await _content_ms(session, author_id)

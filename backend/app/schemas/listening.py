@@ -40,8 +40,29 @@ class PartCreate(BaseModel):
             and self.audio_end_ms is not None
             and self.audio_end_ms <= self.audio_start_ms
         ):
-            raise ValueError("audio_end_ms must be greater than audio_start_ms")
+            raise ValueError("The part's end must come after its start")
         return self
+
+
+class PartUpdate(BaseModel):
+    """All fields optional (PATCH). ``audio_end_ms > audio_start_ms`` is
+    validated against the MERGED result (existing + incoming), in
+    app/services/listening.py, since either bound may be omitted here and
+    still need to be checked against the other's existing DB value."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    audio_start_ms: int | None = Field(default=None, ge=0)
+    audio_end_ms: int | None = Field(default=None, ge=0)
+
+    @field_validator("title")
+    @classmethod
+    def _strip_title(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            raise ValueError("title must not be blank")
+        return v
 
 
 class PartOut(BaseModel):

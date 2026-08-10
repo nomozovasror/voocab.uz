@@ -24,6 +24,7 @@ from app.schemas.listening import (
     MaterialTakeOut,
     PartCreate,
     PartOut,
+    PartUpdate,
     QuestionGroupIn,
     QuestionGroupOut,
     QuestionOut,
@@ -117,6 +118,18 @@ async def create_part(
             status.HTTP_409_CONFLICT,
             f"Part order_index {data.order_index} already used for this material",
         )
+    return _part_out(part)
+
+
+@router.patch("/parts/{part_id}", response_model=PartOut)
+async def update_part(
+    part_id: uuid.UUID,
+    data: PartUpdate,
+    user: CurrentUser,
+    session: SessionDep,
+) -> PartOut:
+    part, _material = await _load_owned_part(session, part_id, user.id)
+    part = await listening_service.update_part(session, part, data)
     return _part_out(part)
 
 

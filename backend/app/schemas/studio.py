@@ -35,3 +35,22 @@ class StudioStats(BaseModel):
     completions: int
     by_type: list[ByTypeStat]
     recent: list[RecentMaterial]
+
+
+class ListeningListItem(BaseModel):
+    id: uuid.UUID
+    title: str
+    visibility: str
+    duration_ms: int | None
+    transcript_status: str | None
+    question_type: str | None
+    question_count: int
+    attempts: int
+    avg_score_pct: float | None
+    updated_at: datetime
+
+
+class ListeningList(BaseModel):
+    total: int
+    duration_ms: int
+    items: list[ListeningListItem]
