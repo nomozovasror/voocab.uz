@@ -8,11 +8,14 @@ import {
   Pencil,
   Plus,
   SquareDashed,
+  TimerReset,
   Trash2,
+  TriangleAlert,
   Type,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatClock } from "@/features/studio/format";
 import {
   gapNumbers,
   newId,
@@ -50,6 +53,16 @@ interface FormBuilderProps {
   onChange: (doc: DocBlock[]) => void;
   /** Gap numbers reported as unanswered, highlighted so they're findable. */
   flaggedGaps?: number[];
+  /** Per gap id: whether the answer is actually said inside the seconds the
+   *  author marked, and where it is said instead. */
+  markChecks?: Map<string, { found: boolean; heardAtMs: number | null }>;
+  /** Asks the audio pane for the moment this gap is said. Asynchronous by
+   *  nature: the author may still have to click the line, so the result comes
+   *  back through the callback rather than as a return value. */
+  onMarkAudio?: (
+    answers: string[],
+    apply: (range: { startMs: number; endMs: number }) => void,
+  ) => void;
 }
 
 /** An input that grows with its content, so a gap sits in the sentence
@@ -101,13 +114,21 @@ function AutoInput({
   );
 }
 
-export function FormBuilder({ doc, onChange, flaggedGaps }: FormBuilderProps) {
+export function FormBuilder({
+  doc,
+  onChange,
+  flaggedGaps,
+  markChecks,
+  onMarkAudio,
+}: FormBuilderProps) {
   const numbers = gapNumbers(doc);
   const flagged = new Set(flaggedGaps ?? []);
 
   // Inputs are registered by key so the caret can be placed after a change
   // that rebuilt them — otherwise typing would stop dead the moment a bracket
   // became a chip, or a new row would appear with the focus left behind.
+  const docRef = useRef(doc);
+  docRef.current = doc;
   const inputs = useRef(new Map<string, HTMLInputElement>());
   const pendingFocus = useRef<string | null>(null);
   const register = (key: string) => (el: HTMLInputElement | null) => {
@@ -288,6 +309,34 @@ export function FormBuilder({ doc, onChange, flaggedGaps }: FormBuilderProps) {
     patchLine(blockId, lineId, { ...line, parts });
   };
 
+  /** Reads the document from a ref, not from the closure: marking a gap can
+   *  come back a click or two later, by which time the array this handler was
+   *  built with may be a stale copy — and writing that back would undo
+   *  whatever happened in between. */
+  const patchGap = (
+    blockId: string,
+    lineId: string,
+    partIndex: number,
+    patch: { replayStartMs: number | null; replayEndMs: number | null },
+  ) => {
+    const current = docRef.current;
+    const block = current.find((b) => b.id === blockId);
+    if (!block || block.kind !== "row") return;
+    const line = block.lines.find((l) => l.id === lineId);
+    if (!line) return;
+    const parts = line.parts.map((p, i) =>
+      i === partIndex && p.kind === "gap" ? { ...p, ...patch } : p,
+    );
+    const next = { ...line, parts };
+    onChange(
+      current.map((b) =>
+        b.id === blockId && b.kind === "row"
+          ? { ...b, lines: b.lines.map((l) => (l.id === lineId ? next : l)) }
+          : b,
+      ),
+    );
+  };
+
   const setText = (
     blockId: string,
     lineId: string,
@@ -413,7 +462,10 @@ export function FormBuilder({ doc, onChange, flaggedGaps }: FormBuilderProps) {
       </div>
 
       {/* The sheet. Ruled and boxed like the paper it's copied from. */}
-      <div className="overflow-hidden rounded-lg border border-border bg-card">
+      {/* Deliberately not `overflow-hidden`: a gap's toolbar floats above its
+          row, and clipping to the sheet cut it off. The corners are rounded on
+          the end rows instead, which is all the clipping was doing. */}
+      <div className="rounded-lg border border-border bg-card [&>*:first-child]:rounded-t-lg [&>*:last-child]:rounded-b-lg">
         {doc.map((block, blockIndex) => (
           <div
             key={block.id}
@@ -528,6 +580,26 @@ export function FormBuilder({ doc, onChange, flaggedGaps }: FormBuilderProps) {
                                   }}
                                   registerInput={register}
                                   gapId={part.id}
+                                  replayStartMs={part.replayStartMs ?? null}
+                                  replayEndMs={part.replayEndMs ?? null}
+                                  markCheck={markChecks?.get(part.id)}
+                                  onMark={
+                                    onMarkAudio
+                                      ? () =>
+                                          onMarkAudio(part.answers, (range) =>
+                                            patchGap(block.id, line.id, partIndex, {
+                                              replayStartMs: range.startMs,
+                                              replayEndMs: range.endMs,
+                                            }),
+                                          )
+                                      : undefined
+                                  }
+                                  onClearMark={() =>
+                                    patchGap(block.id, line.id, partIndex, {
+                                      replayStartMs: null,
+                                      replayEndMs: null,
+                                    })
+                                  }
                                   flagged={flagged.has(
                                     numbers.get(part.id) ?? 0,
                                   )}
@@ -683,6 +755,11 @@ function GapChip({
   flagged,
   selected,
   editing,
+  replayStartMs,
+  replayEndMs,
+  markCheck,
+  onMark,
+  onClearMark,
   onSelect,
   onEdit,
   onAnswerChange,
@@ -696,6 +773,11 @@ function GapChip({
   flagged: boolean;
   selected: boolean;
   editing: boolean;
+  replayStartMs: number | null;
+  replayEndMs: number | null;
+  markCheck?: { found: boolean; heardAtMs: number | null };
+  onMark?: () => void;
+  onClearMark: () => void;
   onSelect: () => void;
   onEdit: () => void;
   onAnswerChange: (index: number, value: string) => void;
@@ -704,28 +786,61 @@ function GapChip({
   registerInput: (key: string) => (el: HTMLInputElement | null) => void;
 }) {
   const written = answers.filter((a) => a.trim());
+  const marked = replayStartMs != null;
+  // An answer that isn't said in the marked seconds isn't necessarily wrong —
+  // a spoken number written as digits, a paraphrase, or an ASR mishearing all
+  // do it — so this is a note, never an error that blocks publishing.
+  const mismatch = marked && markCheck?.found === false;
+
+  // A gap is finished in stages, and the colour says which one it's at, so a
+  // form of ten reads at a glance: red needs an answer, grey needs linking to
+  // the audio, amber is linked but the words don't match, green is done.
+  const state = flagged
+    ? "no-answer"
+    : !marked
+      ? "unlinked"
+      : mismatch
+        ? "mismatch"
+        : "done";
+
+  const tone = {
+    "no-answer": {
+      chip: "border-destructive/60 bg-destructive/10",
+      selected: "border-destructive",
+      text: "text-destructive",
+    },
+    unlinked: {
+      chip: "border-border bg-foreground/5",
+      selected: "border-foreground/40",
+      text: "text-muted-foreground",
+    },
+    mismatch: {
+      chip: "border-warning/60 bg-warning/10",
+      selected: "border-warning",
+      text: "text-warning",
+    },
+    done: {
+      chip: "border-success/50 bg-success/10",
+      selected: "border-success",
+      text: "text-success",
+    },
+  }[state];
 
   return (
     <span
       data-gap={gapId}
       className={cn(
         "relative mx-0.5 inline-flex items-baseline rounded border px-1.5 align-baseline transition-colors",
-        flagged
-          ? "border-destructive/60 bg-destructive/10"
-          : "border-primary/30 bg-primary/10",
-        selected && !flagged && "border-primary",
-        selected && flagged && "border-destructive",
-        !editing && "cursor-pointer hover:border-primary/60",
+        tone.chip,
+        selected && tone.selected,
+        !editing && "cursor-pointer hover:brightness-125",
       )}
       onClick={() => {
         if (!editing) onSelect();
       }}
     >
       <span
-        className={cn(
-          "mr-1 text-[10px] font-semibold tabular-nums",
-          flagged ? "text-destructive" : "text-primary",
-        )}
+        className={cn("mr-1 text-[10px] font-semibold tabular-nums", tone.text)}
       >
         {number}.
       </span>
@@ -746,11 +861,7 @@ function GapChip({
               min={2}
               pad={0.5}
               inputRef={registerInput(`answer#${gapId}#${i}`)}
-              className={cn(
-                flagged
-                  ? "text-destructive placeholder:text-destructive/50"
-                  : "text-primary placeholder:text-primary/40",
-              )}
+              className={cn(tone.text, "placeholder:opacity-50")}
             />
           </span>
         ))
@@ -759,44 +870,85 @@ function GapChip({
         // otherwise, every one of them a place to lose an answer to a stray
         // keystroke.
         <span
-          className={cn(
-            "text-sm",
-            flagged ? "text-destructive/70 italic" : "text-primary",
-          )}
+          className={cn("text-sm", tone.text, flagged && "italic opacity-70")}
         >
           {written.length > 0 ? written.join(" / ") : "answer"}
         </span>
       )}
 
+      {marked && !selected && !editing && (
+        <span
+          aria-hidden
+          title={
+            mismatch
+              ? markCheck?.heardAtMs != null
+                ? `Marked here, but the transcript says it at ${formatClock(markCheck.heardAtMs) ?? "0:00"}`
+                : "The answer isn't said in the marked lines"
+              : "Marked in the audio"
+          }
+          className={cn("ml-1 self-center", tone.text, "opacity-70")}
+        >
+          {mismatch ? (
+            <TriangleAlert className="size-3" />
+          ) : (
+            <AudioLines className="size-3" />
+          )}
+        </span>
+      )}
+
       {(selected || editing) && (
-        <span className="absolute right-0 bottom-full z-20 mb-1 flex items-center gap-0.5 rounded-md border border-border bg-card p-0.5 shadow-md">
-          <GapAction
-            label="Edit the accepted answers"
-            onClick={onEdit}
-            active={editing}
-            icon={<Pencil className="size-3" aria-hidden />}
-          />
-          <GapAction
-            label="Accept another answer"
-            onClick={onAddAlt}
-            icon={<Plus className="size-3" aria-hidden />}
-          />
-          {/* Marking where the answer is said needs somewhere to store the
-              timestamp, which the question model doesn't have yet — so the
-              action is shown as not built rather than quietly doing nothing
-              when pressed. */}
-          <GapAction
-            label="Mark where this is said in the audio — not built yet"
-            disabled
-            icon={<AudioLines className="size-3" aria-hidden />}
-          />
-          <span className="mx-0.5 h-4 w-px bg-border" aria-hidden />
-          <GapAction
-            label="Remove this gap"
-            onClick={onRemove}
-            danger
-            icon={<Trash2 className="size-3" aria-hidden />}
-          />
+        <span className="absolute right-0 bottom-full z-30 mb-1 w-max rounded-md border border-border bg-card p-0.5 shadow-md">
+          <span className="flex items-center gap-0.5">
+            <GapAction
+              label="Edit the accepted answers"
+              onClick={onEdit}
+              active={editing}
+              icon={<Pencil className="size-3" aria-hidden />}
+            />
+            <GapAction
+              label="Accept another answer"
+              onClick={onAddAlt}
+              icon={<Plus className="size-3" aria-hidden />}
+            />
+            {/* Marking is only offered once there's audio to mark against;
+                without it the button could only fail. */}
+            <GapAction
+              label={
+                marked
+                  ? `Said at ${formatClock(replayStartMs ?? 0) ?? "0:00"}–${formatClock(replayEndMs ?? 0) ?? "0:00"} — press to re-mark, or clear`
+                  : "Mark where this is said in the recording"
+              }
+              onClick={onMark}
+              active={marked}
+              disabled={!onMark}
+              icon={<AudioLines className="size-3" aria-hidden />}
+            />
+            {marked && (
+              <GapAction
+                label="Clear the audio mark"
+                onClick={onClearMark}
+                icon={<TimerReset className="size-3" aria-hidden />}
+              />
+            )}
+            <span className="mx-0.5 h-4 w-px bg-border" aria-hidden />
+            <GapAction
+              label="Remove this gap"
+              onClick={onRemove}
+              danger
+              icon={<Trash2 className="size-3" aria-hidden />}
+            />
+          </span>
+
+          {/* On its own line under the actions. Sharing their row, it was
+              laid out inside a box the width of the chip and broke to one
+              word per line. */}
+          {mismatch && (
+            <span className="block border-t border-border px-1.5 pt-1 pb-0.5 text-[10px] whitespace-nowrap text-warning">
+              {markCheck?.heardAtMs != null
+                ? `not said here — heard at ${formatClock(markCheck.heardAtMs) ?? "0:00"}`
+                : "not said in the marked lines"}
+            </span>
+          )}
         </span>
       )}
     </span>

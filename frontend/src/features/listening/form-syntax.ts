@@ -169,7 +169,15 @@ export type DocPart =
   /** `id` is what the answers hang off. A gap's *number* comes from its
    *  position, so anything keyed by number would silently reattach every
    *  later answer to the wrong gap the moment one is inserted in the middle. */
-  | { kind: "gap"; id: string; answers: string[] };
+  | {
+      kind: "gap";
+      id: string;
+      answers: string[];
+      /** Where in the recording this answer is said, if the author marked
+       *  it. Travels with the gap for the same reason the answers do. */
+      replayStartMs?: number | null;
+      replayEndMs?: number | null;
+    };
 
 export interface DocLine {
   id: string;
@@ -201,10 +209,16 @@ export function newDoc(): DocBlock[] {
 }
 
 /** Every gap in document order — which is what numbers them. */
-export function docGaps(
-  doc: DocBlock[],
-): { id: string; number: number; answers: string[] }[] {
-  const gaps: { id: string; number: number; answers: string[] }[] = [];
+export interface DocGap {
+  id: string;
+  number: number;
+  answers: string[];
+  replayStartMs?: number | null;
+  replayEndMs?: number | null;
+}
+
+export function docGaps(doc: DocBlock[]): DocGap[] {
+  const gaps: DocGap[] = [];
   for (const block of doc) {
     if (block.kind !== "row") continue;
     for (const line of block.lines) {
@@ -214,6 +228,8 @@ export function docGaps(
             id: part.id,
             number: gaps.length + 1,
             answers: part.answers,
+            replayStartMs: part.replayStartMs,
+            replayEndMs: part.replayEndMs,
           });
         }
       }
@@ -273,6 +289,8 @@ export function docToGroup(doc: DocBlock[]): {
   const questions: QuestionIn[] = docGaps(doc).map((gap) => ({
     number: gap.number,
     correct_answers: gap.answers.map((a) => a.trim()).filter(Boolean),
+    replay_start_ms: gap.replayStartMs ?? null,
+    replay_end_ms: gap.replayEndMs ?? null,
   }));
 
   return { template: lines.join("\n").trim(), questions };
@@ -283,9 +301,7 @@ export function docFromGroup(
   template: string,
   questions: ListeningQuestion[],
 ): DocBlock[] {
-  const answersByNumber = new Map(
-    questions.map((q) => [q.number, q.correct_answers]),
-  );
+  const byNumber = new Map(questions.map((q) => [q.number, q]));
   const doc: DocBlock[] = [];
 
   for (const block of parseTemplateLayout(template)) {
@@ -307,7 +323,9 @@ export function docFromGroup(
             : {
                 kind: "gap" as const,
                 id: newId(),
-                answers: answersByNumber.get(part.number) ?? [],
+                answers: byNumber.get(part.number)?.correct_answers ?? [],
+                replayStartMs: byNumber.get(part.number)?.replay_start_ms ?? null,
+                replayEndMs: byNumber.get(part.number)?.replay_end_ms ?? null,
               },
         ),
       })),
@@ -355,6 +373,24 @@ export function docIssues(doc: DocBlock[]): string[] {
     unanswered.length === 1
       ? `Gap ${unanswered[0]} has no accepted answer yet.`
       : `Gaps ${unanswered.join(", ")} have no accepted answers yet.`,
+  ];
+}
+
+/** What has to be true to publish, over and above being savable: every gap
+ *  must also be linked to the moment it is said. Kept apart from `docIssues`
+ *  so a half-finished draft still autosaves — an author shouldn't have to
+ *  mark the audio before they're allowed to write the next row. */
+export function docPublishIssues(doc: DocBlock[]): string[] {
+  const issues = docIssues(doc);
+  if (issues.length > 0) return issues;
+  const unmarked = docGaps(doc)
+    .filter((g) => g.replayStartMs == null)
+    .map((g) => g.number);
+  if (unmarked.length === 0) return [];
+  return [
+    unmarked.length === 1
+      ? `Gap ${unmarked[0]} isn't linked to the audio yet.`
+      : `Gaps ${unmarked.join(", ")} aren't linked to the audio yet.`,
   ];
 }
 

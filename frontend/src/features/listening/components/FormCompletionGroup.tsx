@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FormLayout } from "@/features/listening/components/FormLayout";
 import { parseTemplateLayout } from "@/features/listening/form-syntax";
@@ -9,6 +10,9 @@ interface FormCompletionGroupProps {
   answers: Record<string, string>;
   onChange: (questionId: string, value: string) => void;
   results?: Record<string, QuestionResult>;
+  /** Replays the moment this answer is said. Only ever called after grading:
+   *  the timings aren't in the take payload until then. */
+  onReplay?: (startMs: number | null, endMs: number | null) => void;
   disabled?: boolean;
 }
 
@@ -17,6 +21,7 @@ export function FormCompletionGroup({
   answers,
   onChange,
   results,
+  onReplay,
   disabled,
 }: FormCompletionGroupProps) {
   const byNumber = useMemo(() => {
@@ -76,6 +81,23 @@ export function FormCompletionGroup({
                   <span className="text-xs text-muted-foreground">
                     (accepted: {result.correct_answers.join(", ")})
                   </span>
+                )}
+                {/* Only where the author marked it — a review that offered
+                    replay on every gap and played the wrong moment on half of
+                    them would be worse than not offering it. */}
+                {graded && onReplay && result.replay_start_ms != null && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onReplay(result.replay_start_ms, result.replay_end_ms)
+                    }
+                    title="Hear where this answer is said"
+                    aria-label={`Hear where answer ${n} is said`}
+                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-primary"
+                  >
+                    <Volume2 className="size-3.5" aria-hidden />
+                    hear it
+                  </button>
                 )}
               </span>
             );

@@ -85,6 +85,11 @@ export interface ListeningQuestion {
   id: string;
   number: number;
   correct_answers?: string[];
+  /** Where in the recording this answer is said. Author-facing only — the
+   *  take tree never carries it, since knowing where to listen is most of
+   *  the question. */
+  replay_start_ms?: number | null;
+  replay_end_ms?: number | null;
 }
 
 export interface ListeningQuestionGroup {
@@ -104,6 +109,8 @@ export interface ListeningQuestionGroup {
 export interface QuestionIn {
   number: number;
   correct_answers: string[];
+  replay_start_ms?: number | null;
+  replay_end_ms?: number | null;
 }
 
 export interface QuestionGroupIn {
@@ -163,6 +170,11 @@ export interface QuestionResult {
   question_id: string;
   is_correct: boolean;
   correct_answers: string[];
+  /** Released with the grading feedback, for the same reason the accepted
+   *  answers are: the attempt is already committed, so pointing at the
+   *  moment in the recording is feedback rather than a hint. */
+  replay_start_ms: number | null;
+  replay_end_ms: number | null;
 }
 
 export interface AttemptResult {
@@ -185,6 +197,9 @@ export interface AudioSegment {
   end_ms: number;
   text: string;
   words: AudioWord[];
+  /** The owner has corrected this line. Its word timings are still the ASR's
+   *  and no longer line up with the text, so word-by-word rendering stops. */
+  edited?: boolean;
 }
 
 export type AudioTranscriptStatus = "pending" | "processing" | "ready" | "failed";

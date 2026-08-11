@@ -1,6 +1,7 @@
 import { apiUrl } from "@/config";
 import { ApiError, api } from "@/lib/api";
 import type {
+  AudioSegment,
   AttemptResult,
   AttemptSubmit,
   AudioAssetDetail,
@@ -102,5 +103,13 @@ export const listeningApi = {
   // --- Editor support: the transcript source behind an uploaded clip -------
   audioAssets: {
     get: (assetId: string) => api.get<AudioAssetDetail>(`/api/audio-assets/${assetId}`),
+    /** Corrects one transcript line for this owner. The recording's ASR rows
+     *  are shared with anyone who uploaded the same bytes and are never
+     *  touched; sending the original text back clears the correction. */
+    updateSegment: (assetId: string, orderIndex: number, text: string) =>
+      api.patch<AudioSegment>(
+        `/api/audio-assets/${assetId}/segments/${orderIndex}`,
+        { json: { text } },
+      ),
   },
 };

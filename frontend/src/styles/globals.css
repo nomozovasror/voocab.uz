@@ -568,3 +568,30 @@
     animation: none;
   }
 }
+
+
+/* ── Transcript line flash ────────────────────────────────────────────────
+   Fires once a jump has landed, to say "here" without leaving a mark. A
+   background pulse rather than a border: the line is already inside a ruled
+   list, and one more outline there reads as a state rather than an event. */
+@keyframes line-flash {
+  0% {
+    background-color: color-mix(in srgb, var(--primary) 30%, transparent);
+  }
+  60% {
+    background-color: color-mix(in srgb, var(--primary) 22%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.line-flash {
+  animation: line-flash 0.9s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .line-flash {
+    animation-duration: 0.01s;
+  }
+}

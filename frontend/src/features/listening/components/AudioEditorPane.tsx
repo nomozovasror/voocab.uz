@@ -1,4 +1,5 @@
 import {
+  Fragment,
   forwardRef,
   memo,
   useCallback,
@@ -17,13 +18,16 @@ import {
   Gauge,
   Info,
   Loader2,
+  MousePointerClick,
   MoveHorizontal,
   Pause,
+  Pencil,
   Play,
   Repeat,
   RotateCcw,
   Scissors,
   Upload,
+  X,
   ZoomIn,
 } from "lucide-react";
 import {
@@ -34,7 +38,10 @@ import {
 import { cn } from "@/lib/utils";
 import { formatClock } from "@/features/studio/format";
 import { mediaUrl } from "@/features/listening/api";
-import { useAudioAsset } from "@/features/listening/queries";
+import {
+  useAudioAsset,
+  useUpdateSegmentText,
+} from "@/features/listening/queries";
 import type { AudioSegment } from "@/features/listening/types";
 // Type-only: erased at compile time, so these never pull the real library
 // into the eager graph — only the `await import(...)` calls below do, and
@@ -60,6 +67,10 @@ const ZOOM_MAX_PX_PER_SEC = 250;
 // Trim view keeps this much audio visible either side of the part, so the
 // author can still see (and adjust against) what falls just outside it.
 const FOCUS_PAD_MS = 5000;
+// How long a mark taken from the playhead runs for. Roughly a spoken phrase:
+// long enough to hear the answer in context, short enough not to give away
+// the next one.
+const DEFAULT_MARK_MS = 4000;
 // The part row's controls are only obvious once someone has used them, so the
 // hint opens itself for the first few materials, then stays behind the ⓘ.
 const HELP_KEY = "voocab:part-range-help";
@@ -181,8 +192,29 @@ function computeSilences(buffer: AudioBuffer): SilenceRun[] {
 
 type SnapCandidate = { ms: number; kind: "silence" | "segment"; index: number };
 
+/** Compare words the way a reader does: without the punctuation stuck to
+ *  them, and without case. */
+function stripWord(word: string): string {
+  return word.toLowerCase().replace(/[^a-z0-9']/g, "");
+}
+
+export interface MarkRange {
+  startMs: number;
+  endMs: number;
+}
+
 export interface AudioEditorHandle {
   togglePlay: () => void;
+  /** What the author is pointing at when they ask to mark where an answer is
+   *  said. A transcript selection is used straight away — the words carry
+   *  exact timings. With nothing selected but a transcript to click, the
+   *  caller puts the pane into picking mode. Only with no transcript at all
+   *  does it fall back to the playhead. */
+  pickTarget: () =>
+    | { kind: "selection"; range: MarkRange }
+    | { kind: "needs-pick" }
+    | { kind: "playhead"; range: MarkRange }
+    | null;
 }
 
 interface AudioEditorPaneProps {
@@ -197,6 +229,24 @@ interface AudioEditorPaneProps {
    *  contains all four parts in sequence, there's nothing to trim, and the
    *  parts are purely question groupings — no region, no range UI at all. */
   hasPartRange: boolean;
+  /** While true the transcript is a target: clicking a line reports it back
+   *  instead of playing from it. */
+  picking?: boolean;
+  onPickSegment?: (range: MarkRange) => void;
+  onCancelPick?: () => void;
+  /** Where answers have been marked, so the transcript can show them. The
+   *  marked seconds are tinted and the answer inside them is picked out —
+   *  found by matching the text, never marked by hand. */
+  marks?: { startMs: number; endMs: number; answers: string[] }[];
+  /** Places the answer is said, found in the transcript, offered while
+   *  picking so the author can take one instead of hunting for it. */
+  suggestions?: {
+    answer: string;
+    startMs: number;
+    endMs: number;
+    wordStartMs: number;
+    context: string;
+  }[];
   /** 1-based, for a single-part material — what the marked range will be
    *  used as. Null for a full test, which has no single part to name. */
   partNumber?: number | null;
@@ -224,6 +274,11 @@ export const AudioEditorPane = forwardRef<
     audioUrl,
     durationMsHint,
     hasPartRange,
+    picking,
+    onPickSegment,
+    onCancelPick,
+    marks,
+    suggestions,
     partNumber,
     partAudioStart,
     partAudioEnd,
@@ -410,9 +465,6 @@ export const AudioEditorPane = forwardRef<
     void ws.play();
   }, []);
 
-  useImperativeHandle(ref, () => ({ togglePlay: togglePlayback }), [
-    togglePlayback,
-  ]);
 
   // --- Clamp before persisting: a part shorter than MIN_PART_LENGTH_MS or
   // an inverted range must never reach the server (§2 — fix the cause).
@@ -443,12 +495,12 @@ export const AudioEditorPane = forwardRef<
   }, [commitPartStart, commitPartEnd]);
 
   const flashSnap = useCallback(
-    (kind: "silence" | "segment", index: number) => {
+    (kind: "silence" | "segment", index: number, ms = 450) => {
       setFlash({ kind, index });
       window.setTimeout(
         () =>
           setFlash((f) => (f?.kind === kind && f.index === index ? null : f)),
-        450,
+        ms,
       );
     },
     [],
@@ -903,6 +955,20 @@ export const AudioEditorPane = forwardRef<
   // playhead: speech has gaps between sentences, and requiring containment
   // left "no current segment" during every pause — which unhighlighted the
   // line and blinked the back button off between chunks.
+  /** Segment order index -> the answers marked over it. Memoised because the
+   *  rows are, and a fresh array per render would defeat that. */
+  const marksBySegment = useMemo(() => {
+    const map = new Map<number, string[]>();
+    if (!marks || marks.length === 0) return map;
+    for (const segment of segments) {
+      const answers = marks
+        .filter((m) => segment.start_ms < m.endMs && segment.end_ms > m.startMs)
+        .flatMap((m) => m.answers);
+      if (answers.length > 0) map.set(segment.order_index, answers);
+    }
+    return map;
+  }, [marks, segments]);
+
   const currentSegmentIndex = useMemo(() => {
     if (!playing && currentMs === 0) return -1;
     let found = -1;
@@ -928,12 +994,66 @@ export const AudioEditorPane = forwardRef<
   }, [segments, currentSegmentIndex, currentMs]);
 
   // --- Follow along: keep the segment being spoken in view ----------------
+  // Correcting a mishearing. Stored against this asset, never the shared
+  // blob — see the endpoint's own note.
+  const [editingSegment, setEditingSegment] = useState<number | null>(null);
+  const updateSegment = useUpdateSegmentText(audioAssetId ?? undefined);
+
   const listRef = useRef<HTMLDivElement>(null);
+  // The range built up in this picking session. Held so a shift-click has
+  // something to extend from, and so the marked lines can be tinted.
+  const [pickRange, setPickRange] = useState<MarkRange | null>(null);
+  const pickRangeRef = useRef<MarkRange | null>(null);
+  const pickingRef = useRef(false);
+  const onPickSegmentRef = useRef(onPickSegment);
+  // Held in a ref because `selectionRange` is declared further down, once the
+  // transcript segments it reads exist.
+  const selectionRangeRef = useRef<(() => MarkRange | null) | null>(null);
+  const shiftHeldRef = useRef(false);
+  useEffect(() => {
+    pickingRef.current = !!picking;
+    onPickSegmentRef.current = onPickSegment;
+    if (!picking) {
+      setPickRange(null);
+      pickRangeRef.current = null;
+    }
+  }, [picking, onPickSegment]);
+
+  useEffect(() => {
+    if (!picking) return;
+    const onKey = (e: KeyboardEvent) => {
+      shiftHeldRef.current = e.shiftKey;
+      if (e.key === "Escape") onCancelPick?.();
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      shiftHeldRef.current = e.shiftKey;
+    };
+    const onDown = (e: MouseEvent) => {
+      shiftHeldRef.current = e.shiftKey;
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("mousedown", onDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("mousedown", onDown, true);
+    };
+  }, [picking, onCancelPick]);
 
   /** Segments are looked up in the DOM by order index rather than kept in a
    *  ref map: the map's entries were rewritten on every timeupdate (the ref
    *  callbacks are recreated each render), which is a lot of churn to carry
    *  for a lookup the DOM already indexes. */
+  /** How far a line sits from the top of the scroll box's content.
+   *
+   *  Measured from the rectangles rather than read off `offsetTop`, which is
+   *  relative to the nearest *positioned* ancestor — that used to be the
+   *  scroll box, then the line grew a `relative` wrapper of its own and every
+   *  offset silently became ~0, so scrolling anywhere landed at the top. */
+  const offsetWithin = (box: HTMLElement, el: HTMLElement): number =>
+    box.scrollTop + (el.getBoundingClientRect().top - box.getBoundingClientRect().top);
+
   const segmentEl = (orderIndex: number | undefined): HTMLElement | null => {
     const box = listRef.current;
     if (!box || orderIndex === undefined) return null;
@@ -1001,7 +1121,10 @@ export const AudioEditorPane = forwardRef<
     const previous =
       i > 0 ? segmentEl(filteredSegments[i - 1].order_index) : null;
 
-    box.scrollTo({ top: (previous ?? el).offsetTop, behavior: "smooth" });
+    box.scrollTo({
+      top: offsetWithin(box, previous ?? el),
+      behavior: "smooth",
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentOrderIndex, filteredSegments]);
 
@@ -1016,6 +1139,33 @@ export const AudioEditorPane = forwardRef<
   // One stable handler for every row, so the memoised rows keep their props.
   const selectSegment = useCallback(
     (segment: AudioSegment) => {
+      // Asked to point at a moment: the click names the line rather than
+      // playing it. Playing here would be the opposite of what was asked.
+      if (pickingRef.current) {
+        // Plain click names the line; shift-click stretches the mark to reach
+        // it. Dragging was the obvious alternative and turned out not to be:
+        // each line is a button, and browsers don't reliably let a selection
+        // be dragged across those.
+        const line = { startMs: segment.start_ms, endMs: segment.end_ms };
+        const held = pickRangeRef.current;
+        const next =
+          shiftHeldRef.current && held
+            ? {
+                startMs: Math.min(held.startMs, line.startMs),
+                endMs: Math.max(held.endMs, line.endMs),
+              }
+            : line;
+        pickRangeRef.current = next;
+        setPickRange(next);
+        // Applied as it goes, so the gap's chip shows the mark while the
+        // author is still deciding whether to extend it.
+        onPickSegmentRef.current?.(next);
+        return;
+      }
+      // Selecting a phrase to mark an answer against is a drag that ends in a
+      // click on this same line. Playing from the top of the line then would
+      // fight the gesture.
+      if (window.getSelection()?.toString().trim()) return;
       // Jumping to a line is also "follow from here".
       setFollow(true);
       void wsRef.current?.play(segment.start_ms / 1000);
@@ -1024,6 +1174,115 @@ export const AudioEditorPane = forwardRef<
   );
 
   const showBackToPlaying = !following && !activeFullyVisible;
+
+  /** Times the current transcript selection against the word timings, so a
+   *  marked range is the words themselves rather than the line holding them.
+   *  Null when nothing inside the transcript is selected. */
+  const selectionRange = useCallback((): MarkRange | null => {
+    const selection = window.getSelection();
+    const picked = selection?.toString().trim().toLowerCase() ?? "";
+
+    if (picked && listRef.current && selection && selection.rangeCount > 0) {
+      // Only a selection inside the transcript counts — text selected
+      // elsewhere on the page has no timing behind it.
+      const range = selection.getRangeAt(0);
+      if (listRef.current.contains(range.commonAncestorContainer)) {
+        const strip = (w: string) => w.toLowerCase().replace(/[^a-z0-9']/g, "");
+        const wanted = new Set(picked.split(/\s+/).map(strip).filter(Boolean));
+        const hits = segments
+          .flatMap((segment) => segment.words)
+          .filter((word) => wanted.has(strip(word.word)));
+        if (hits.length > 0) {
+          return {
+            startMs: Math.min(...hits.map((w) => w.start_ms)),
+            endMs: Math.max(...hits.map((w) => w.end_ms)),
+          };
+        }
+        // Selected text we can't time word-for-word: fall back to the line it
+        // sits in rather than inventing a precision we don't have.
+        const segment = segments.find((sg) =>
+          sg.text.toLowerCase().includes(picked),
+        );
+        if (segment) return { startMs: segment.start_ms, endMs: segment.end_ms };
+      }
+    }
+
+    return null;
+  }, [segments]);
+
+  const pickTarget = useCallback((): ReturnType<
+    AudioEditorHandle["pickTarget"]
+  > => {
+    const fromSelection = selectionRange();
+    if (fromSelection) return { kind: "selection", range: fromSelection };
+    // A transcript to click is a better target than the playhead, so ask for
+    // the click rather than guessing from wherever playback happens to be.
+    if (segments.length > 0) return { kind: "needs-pick" };
+    const ws = wsRef.current;
+    if (!ws) return null;
+    const startMs = Math.round(ws.getCurrentTime() * 1000);
+    return {
+      kind: "playhead",
+      range: { startMs, endMs: startMs + DEFAULT_MARK_MS },
+    };
+  }, [segments, selectionRange]);
+
+  useEffect(() => {
+    selectionRangeRef.current = selectionRange;
+  }, [selectionRange]);
+
+  useImperativeHandle(
+    ref,
+    () => ({ togglePlay: togglePlayback, pickTarget }),
+    [togglePlayback, pickTarget],
+  );
+
+  /** Scrolls the transcript to a moment and flashes the line there. Used by
+   *  the suggestions: they say "look here", and looking is all they do —
+   *  committing the mark stays a deliberate click on the line itself. */
+  const revealAt = useCallback(
+    (ms: number) => {
+      const at = segments.findIndex(
+        (seg) => ms >= seg.start_ms && ms < seg.end_ms,
+      );
+      const target =
+        at >= 0 ? segments[at] : segments.find((seg) => seg.start_ms >= ms);
+      if (!target) return;
+      const box = listRef.current;
+      const el = segmentEl(target.order_index);
+      if (!box || !el) return;
+
+      // Following would drag the pane back to whatever is playing.
+      setFollow(false);
+      const position = filteredSegments.findIndex(
+        (seg) => seg.order_index === target.order_index,
+      );
+      const previous =
+        position > 0
+          ? segmentEl(filteredSegments[position - 1].order_index)
+          : null;
+      box.scrollTo({
+        top: offsetWithin(box, previous ?? el),
+        behavior: "smooth",
+      });
+
+      // Flashed on arrival, not on departure: fired at the same time as the
+      // scroll, the pulse is half over before the line is even in view.
+      // `scrollend` is the exact signal; the timer is there for browsers that
+      // don't send it, and is cleared if it does.
+      const targetIndex = segments.indexOf(target);
+      let fired = false;
+      const flash = () => {
+        if (fired) return;
+        fired = true;
+        box.removeEventListener("scrollend", flash);
+        flashSnap("segment", targetIndex, 900);
+      };
+      box.addEventListener("scrollend", flash, { once: true });
+      window.setTimeout(flash, 600);
+    },
+    [segments, filteredSegments, flashSnap, setFollow],
+  );
 
   const resumeFollowing = () => {
     setFollow(true);
@@ -1486,14 +1745,95 @@ export const AudioEditorPane = forwardRef<
             whether the search box is there. */}
       <div className="relative mt-4 flex min-h-0 flex-1 flex-col">
         {asset?.transcript_status === "ready" && (
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="search transcript…"
-            aria-label="Search transcript"
-            className="mb-2 w-full shrink-0 rounded-md border border-border bg-transparent px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none"
-          />
+          <div className="relative mb-2 shrink-0">
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape" && search) {
+                  e.stopPropagation();
+                  setSearch("");
+                }
+              }}
+              placeholder="search transcript…"
+              aria-label="Search transcript"
+              className="w-full rounded-md border border-border bg-transparent py-1.5 pr-8 pl-3 text-xs text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                title="Clear search"
+                aria-label="Clear search"
+                className="absolute inset-y-0 right-0 flex w-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <X className="size-3.5" aria-hidden />
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Under the search box, directly above the lines it's asking to be
+            clicked — over the search it read as a note about searching. */}
+        {picking && (
+          <div className="mb-2 shrink-0 rounded-md border border-primary/40 bg-primary/10 px-2.5 py-1.5 text-[11px] text-foreground">
+            <div className="flex items-center gap-2">
+              <MousePointerClick
+                className="size-3.5 shrink-0 text-primary"
+                aria-hidden
+              />
+              {pickRange ? (
+                <span className="tabular-nums">
+                  marked {fmt(pickRange.startMs)}–{fmt(pickRange.endMs)} ·
+                  shift-click another line to extend
+                </span>
+              ) : (
+                <span>click the line where this answer is said</span>
+              )}
+              <button
+                type="button"
+                onClick={onCancelPick}
+                className={cn(
+                  "ml-auto rounded px-2 py-0.5 transition-colors",
+                  pickRange
+                    ? "bg-primary/20 text-primary hover:bg-primary/30"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {pickRange ? "done" : "cancel"}
+              </button>
+            </div>
+
+            {/* Offered, never applied on the author's behalf: a word said
+                twice makes the first match the wrong one often enough that
+                the choice has to stay theirs. */}
+            {!pickRange && (suggestions?.length ?? 0) > 0 && (
+              <div className="mt-1.5 border-t border-primary/20 pt-1.5">
+                <span className="text-muted-foreground">
+                  found in the transcript — jump to it, then click the line
+                </span>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {suggestions?.map((s, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      title={s.context}
+                      onClick={() => revealAt(s.wordStartMs)}
+                      className="flex items-center gap-1.5 rounded border border-primary/30 bg-card px-1.5 py-0.5 transition-colors hover:border-primary"
+                    >
+                      <span className="tabular-nums text-primary">
+                        {fmt(s.wordStartMs)}
+                      </span>
+                      <span className="max-w-40 truncate text-muted-foreground">
+                        {s.answer}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         )}
 
         {/* min-h-0 is what actually makes this scroll: a flex child's default
@@ -1508,7 +1848,10 @@ export const AudioEditorPane = forwardRef<
           // is clicked, but that segment's own click handler re-arms following
           // afterwards — pointerdown lands first, click has the last word.
           onPointerDown={onTranscriptInput}
-          className="scrollbar-quiet relative min-h-0 flex-1 overflow-y-auto pr-1 text-sm leading-loose"
+          className={cn(
+            "scrollbar-quiet relative min-h-0 flex-1 overflow-y-auto pr-1 text-sm leading-loose",
+            picking && "cursor-crosshair rounded-md ring-1 ring-primary/40",
+          )}
         >
           {asset === undefined && assetLoading && (
             <p className="text-xs text-muted-foreground">loading transcript…</p>
@@ -1544,6 +1887,24 @@ export const AudioEditorPane = forwardRef<
                   activeWordIndex={
                     trueIndex === currentSegmentIndex ? activeWordIndex : -1
                   }
+                  marked={
+                    !!pickRange &&
+                    seg.start_ms < pickRange.endMs &&
+                    seg.end_ms > pickRange.startMs
+                  }
+                  markedAnswers={marksBySegment.get(seg.order_index)}
+                  editing={editingSegment === seg.order_index}
+                  onEdit={() => setEditingSegment(seg.order_index)}
+                  onEditCancel={() => setEditingSegment(null)}
+                  onEditSave={(text) => {
+                    setEditingSegment(null);
+                    if (text.trim() && text !== seg.text) {
+                      updateSegment.mutate({
+                        orderIndex: seg.order_index,
+                        text,
+                      });
+                    }
+                  }}
                   onSelect={selectSegment}
                 />
               );
@@ -1767,12 +2128,27 @@ const TranscriptSegment = memo(function TranscriptSegment({
   flashed,
   search,
   activeWordIndex,
+  marked,
+  markedAnswers,
+  editing,
+  onEdit,
+  onEditCancel,
+  onEditSave,
   onSelect,
 }: {
   segment: AudioSegment;
   current: boolean;
   flashed: boolean;
   search: string;
+  /** Inside the range being picked right now. */
+  marked: boolean;
+  /** Answers marked over this line, picked out within its text. */
+  markedAnswers?: string[];
+  /** Being corrected right now. */
+  editing: boolean;
+  onEdit: () => void;
+  onEditCancel: () => void;
+  onEditSave: (text: string) => void;
   /** Index into `segment.words` of the word being said, or -1. */
   activeWordIndex: number;
   onSelect: (segment: AudioSegment) => void;
@@ -1785,7 +2161,18 @@ const TranscriptSegment = memo(function TranscriptSegment({
   // being searched: the two highlights mean different things and would fight
   // over the same text. Falls back to the plain line whenever the ASR gave us
   // no word timings for it.
-  if (!q && current && segment.words.length > 0) {
+  // The words of every answer marked over this line, so they can be picked
+  // out wherever they fall in it. Matching the text is the whole trick: the
+  // author marks the seconds, never the word.
+  const answerWords = new Set(
+    (markedAnswers ?? []).flatMap((a) =>
+      a.toLowerCase().split(/\s+/).map(stripWord).filter(Boolean),
+    ),
+  );
+
+  // Word-by-word is dropped on a corrected line: the timings are still the
+  // ASR's and no longer match the words that are there.
+  if (!q && current && !segment.edited && segment.words.length > 0) {
     content = (
       <span className="whitespace-pre-wrap">
         {segment.words.map((w, i) => (
@@ -1793,6 +2180,8 @@ const TranscriptSegment = memo(function TranscriptSegment({
             key={i}
             className={cn(
               "transition-colors duration-150",
+              answerWords.has(stripWord(w.word)) &&
+                "font-semibold text-primary underline decoration-primary/50 underline-offset-4",
               i === activeWordIndex
                 ? "text-primary"
                 : i < activeWordIndex
@@ -1806,6 +2195,23 @@ const TranscriptSegment = memo(function TranscriptSegment({
             {w.word}
           </span>
         ))}
+      </span>
+    );
+  } else if (!q && answerWords.size > 0) {
+    content = (
+      <span className="whitespace-pre-wrap">
+        {text.split(/(\s+)/).map((token, i) =>
+          answerWords.has(stripWord(token)) ? (
+            <span
+              key={i}
+              className="font-semibold text-primary underline decoration-primary/50 underline-offset-4"
+            >
+              {token}
+            </span>
+          ) : (
+            <Fragment key={i}>{token}</Fragment>
+          ),
+        )}
       </span>
     );
   } else if (q) {
@@ -1823,25 +2229,85 @@ const TranscriptSegment = memo(function TranscriptSegment({
     }
   }
 
+  // The ASR mishears, and an author who spots it should be able to fix it —
+  // otherwise every downstream check (does the answer appear here?) inherits
+  // the mistake.
+  if (editing) {
+    return (
+      <div className="flex w-full items-start gap-2.5 rounded-md bg-foreground/6 px-2 py-1">
+        <span className="mt-1.5 shrink-0 text-[11px] tabular-nums text-muted-foreground">
+          {fmt(segment.start_ms)}
+        </span>
+        <textarea
+          autoFocus
+          defaultValue={text}
+          rows={2}
+          aria-label={`Transcript line at ${fmt(segment.start_ms)}`}
+          onBlur={(e) => onEditSave(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              onEditCancel();
+            } else if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              e.currentTarget.blur();
+            }
+          }}
+          className="min-w-0 flex-1 resize-y rounded border border-primary bg-transparent px-1.5 py-0.5 text-sm text-foreground focus:outline-none"
+        />
+      </div>
+    );
+  }
+
   return (
-    <button
-      type="button"
-      data-order={segment.order_index}
-      onClick={() => onSelect(segment)}
+    <div
       className={cn(
-        "flex w-full items-start gap-2.5 rounded-md px-2 py-1 text-left transition-colors hover:bg-foreground/6",
+        "group/line relative flex w-full items-start gap-2.5 rounded-md px-2 py-1 transition-colors hover:bg-foreground/6",
         current && "bg-foreground/6",
-        flashed && "ring-1 ring-primary/60",
+        // Two different things: the faint tint says "an answer is marked
+        // here", the strong one says "this is what you're picking right now".
+        (markedAnswers?.length ?? 0) > 0 && "bg-primary/8",
+        marked && "bg-primary/15",
+        flashed && "line-flash",
       )}
     >
-      <span className="mt-0.5 shrink-0 text-[11px] tabular-nums text-muted-foreground">
-        {fmt(segment.start_ms)}
-      </span>
-      <span
-        className={cn(current ? "text-foreground" : "text-muted-foreground")}
+      <button
+        type="button"
+        data-order={segment.order_index}
+        onClick={() => onSelect(segment)}
+        className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
       >
-        {content}
+        <span className="mt-0.5 shrink-0 text-[11px] tabular-nums text-muted-foreground">
+          {fmt(segment.start_ms)}
+        </span>
+        <span
+          className={cn(current ? "text-foreground" : "text-muted-foreground")}
+        >
+          {content}
+        </span>
+      </button>
+      {/* Tucked into the corner and left grey: it's a footnote about where
+          the text came from, not something to read on the way past. */}
+      {segment.edited && (
+        <span
+          aria-hidden
+          title="You corrected this line"
+          className="pointer-events-none absolute right-2 bottom-0 text-[9px] text-muted-foreground/60"
+        >
+          edited
+        </span>
+      )}
+      <span className="flex shrink-0 items-center gap-1">
+        <button
+          type="button"
+          onClick={onEdit}
+          title="Correct this line"
+          aria-label={`Correct the line at ${fmt(segment.start_ms)}`}
+          className="rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover/line:opacity-100 hover:text-foreground focus-visible:opacity-100"
+        >
+          <Pencil className="size-3" aria-hidden />
+        </button>
       </span>
-    </button>
+    </div>
   );
 });

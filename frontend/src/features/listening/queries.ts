@@ -141,6 +141,19 @@ const PENDING_TRANSCRIPT_STATES = new Set(["pending", "processing"]);
 
 /** Polls while the transcript is pending/processing, stops once it settles
  *  (ready or failed) — the editor's left pane source of segments. */
+export function useUpdateSegmentText(assetId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ orderIndex, text }: { orderIndex: number; text: string }) =>
+      listeningApi.audioAssets.updateSegment(assetId as string, orderIndex, text),
+    onSuccess: () => {
+      void qc.invalidateQueries({
+        queryKey: ["listening-audio-asset", assetId],
+      });
+    },
+  });
+}
+
 export function useAudioAsset(assetId: string | undefined) {
   return useQuery({
     queryKey: ["listening-audio-asset", assetId] as const,

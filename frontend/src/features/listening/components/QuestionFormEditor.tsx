@@ -2,7 +2,11 @@ import { useMemo } from "react";
 import { CircleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FormBuilder } from "@/features/listening/components/FormBuilder";
-import { docGaps, docIssues, isDocEmpty } from "@/features/listening/form-syntax";
+import {
+  docGaps,
+  docPublishIssues,
+  isDocEmpty,
+} from "@/features/listening/form-syntax";
 import type { DocBlock } from "@/features/listening/form-syntax";
 
 interface QuestionFormEditorProps {
@@ -16,6 +20,12 @@ interface QuestionFormEditorProps {
   /** Set while a publish attempt is blocked on this part, so the offending
    *  gaps are marked even if the author hadn't looked yet. */
   showIssues?: boolean;
+  markChecks?: Map<string, { found: boolean; heardAtMs: number | null }>;
+  /** Where in the recording the author is pointing, for marking a gap. */
+  onMarkAudio?: (
+    answers: string[],
+    apply: (range: { startMs: number; endMs: number }) => void,
+  ) => void;
   disabled?: boolean;
   /** Shown under the type chip — e.g. a note that a part's usual question
    *  type (map labelling, MCQ, matching…) isn't built yet and only form
@@ -42,10 +52,12 @@ export function QuestionFormEditor({
   onWordLimitChange,
   partLabel,
   showIssues,
+  markChecks,
+  onMarkAudio,
   disabled,
   note,
 }: QuestionFormEditorProps) {
-  const issues = useMemo(() => docIssues(doc), [doc]);
+  const issues = useMemo(() => docPublishIssues(doc), [doc]);
   const gaps = useMemo(() => docGaps(doc), [doc]);
   const touched = !isDocEmpty(doc);
 
@@ -111,6 +123,8 @@ export function QuestionFormEditor({
         doc={doc}
         onChange={onChange}
         flaggedGaps={showIssues || touched ? flaggedGaps : []}
+        markChecks={markChecks}
+        onMarkAudio={onMarkAudio}
       />
 
       {(showIssues || touched) && issues.length > 0 && (

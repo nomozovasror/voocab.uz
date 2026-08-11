@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { Play, Loader2, RotateCcw, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -51,24 +51,25 @@ export default function ListeningTakePage() {
     return map;
   }, [result]);
 
-  const playPart = (part: TakePart) => {
+  /** Plays a stretch of the recording and stops at its end. Used both for a
+   *  part and, after grading, for replaying the moment a single answer was
+   *  said — the same behaviour either way, so it lives in one place. */
+  const playRange = useCallback((startMs: number | null, endMs: number | null) => {
     const audio = audioRef.current;
     if (!audio) return;
     window.clearTimeout(pauseTimer.current);
-    if (part.audio_start_ms == null) {
-      audio.currentTime = 0;
-      void audio.play();
-      return;
-    }
-    audio.currentTime = part.audio_start_ms / 1000;
+    audio.currentTime = (startMs ?? 0) / 1000;
     void audio.play();
-    if (part.audio_end_ms != null) {
+    if (startMs != null && endMs != null) {
       pauseTimer.current = window.setTimeout(
         () => audio.pause(),
-        Math.max(0, part.audio_end_ms - part.audio_start_ms),
+        Math.max(0, endMs - startMs),
       );
     }
-  };
+  }, []);
+
+  const playPart = (part: TakePart) =>
+    playRange(part.audio_start_ms, part.audio_end_ms);
 
   const onSubmit = () => {
     const payload = {
@@ -188,6 +189,7 @@ export default function ListeningTakePage() {
                       setAnswers((prev) => ({ ...prev, [qid]: value }))
                     }
                     results={resultsByQuestion}
+                    onReplay={playRange}
                     disabled={!!result}
                   />
                 ))}

@@ -8,10 +8,16 @@ import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
 import { timeAgo } from "@/lib/time";
 import { listeningApi } from "@/features/listening/api";
-import { useListeningMaterial } from "@/features/listening/queries";
+import { useAudioAsset, useListeningMaterial } from "@/features/listening/queries";
+import {
+  answerMarks,
+  checkMarks,
+  findAnswerOccurrences,
+  type AnswerOccurrence,
+} from "@/features/listening/marks";
 import {
   docFromGroup,
-  docIssues,
+  docPublishIssues,
   docToGroup,
   isDocEmpty,
   isGroupPersistable,
@@ -21,6 +27,7 @@ import {
 import {
   AudioEditorPane,
   type AudioEditorHandle,
+  type MarkRange,
 } from "@/features/listening/components/AudioEditorPane";
 import { QuestionFormEditor } from "@/features/listening/components/QuestionFormEditor";
 import {
@@ -31,7 +38,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { PartsPicker } from "@/features/listening/components/PartsPicker";
-import type { Visibility } from "@/features/listening/types";
+import type { AudioSegment, Visibility } from "@/features/listening/types";
 
 // Parts 2 and 3 (map/plan labelling, MCQ/matching) don't have an authorable
 // question type yet — only form_completion exists. Their questions can still
@@ -156,6 +163,38 @@ export default function StudioListeningEditorPage() {
   ]);
 
   const audioPaneRef = useRef<AudioEditorHandle>(null);
+  // Marking where an answer is said spans both panes: the gap is in the right
+  // one, the moment is in the left. The page holds the half-finished request
+  // — which gap asked — until the transcript answers it.
+  const [picking, setPicking] = useState(false);
+  const [suggestions, setSuggestions] = useState<AnswerOccurrence[]>([]);
+  const pendingMark = useRef<((range: MarkRange) => void) | null>(null);
+  const transcriptRef = useRef<AudioSegment[]>([]);
+
+  const requestMark = useCallback(
+    (answers: string[], apply: (range: MarkRange) => void) => {
+      const target = audioPaneRef.current?.pickTarget();
+      if (!target) return;
+      if (target.kind === "selection" || target.kind === "playhead") {
+        apply(target.range);
+        return;
+      }
+      pendingMark.current = apply;
+      // The answer is already written down and the transcript already knows
+      // when it was said, so offer the timestamp instead of asking the author
+      // to go and find it. Only ever offered — the wrong line is easy to make
+      // when a word is said twice, so the choice stays theirs.
+      setSuggestions(findAnswerOccurrences(transcriptRef.current, answers));
+      setPicking(true);
+    },
+    [],
+  );
+
+  const cancelMark = useCallback(() => {
+    pendingMark.current = null;
+    setSuggestions([]);
+    setPicking(false);
+  }, []);
   const saveTimerRef = useRef<number | undefined>(undefined);
   const savingRef = useRef(false);
   const rerunNeededRef = useRef(false);
@@ -416,7 +455,7 @@ export default function StudioListeningEditorPage() {
       }
       // The syntax module owns what "complete" means, so the publish gate and
       // the editor's own inline warnings can never disagree.
-      const issues = docIssues(part.doc);
+      const issues = docPublishIssues(part.doc);
       if (issues.length > 0) {
         return {
           ok: false,
@@ -462,6 +501,29 @@ export default function StudioListeningEditorPage() {
   };
 
   const hasAudioEverAttached = !!state.audioAssetId;
+  // The transcript is already loaded for the player; reading it here (the
+  // same cached query) lets the editor say whether each mark actually holds.
+  const { data: audioAsset } = useAudioAsset(state.audioAssetId ?? undefined);
+  const transcriptSegments = useMemo(
+    () => (audioAsset?.transcript_status === "ready" ? audioAsset.segments : []),
+    [audioAsset],
+  );
+  // Read through a ref: the mark request is a callback held across renders,
+  // and a stale transcript would search yesterday's words.
+  transcriptRef.current = transcriptSegments;
+
+  const marksForTranscript = useMemo(
+    () => state.parts.flatMap((part) => answerMarks(part.doc)),
+    [state.parts],
+  );
+  const markChecksByPart = useMemo(() => {
+    const byPart = new Map<string, ReturnType<typeof checkMarks>>();
+    for (const part of state.parts) {
+      byPart.set(part.key, checkMarks(part.doc, transcriptSegments));
+    }
+    return byPart;
+  }, [state.parts, transcriptSegments]);
+
   const sortedParts = state.parts.slice().sort((a, b) => a.orderIndex - b.orderIndex);
   const singlePart = hasPartRange(state.parts) ? state.parts[0] : null;
   const showPicker = !routeId && state.parts.length === 0;
@@ -560,6 +622,16 @@ export default function StudioListeningEditorPage() {
             audioUrl={state.audioUrl}
             durationMsHint={state.durationMs}
             hasPartRange={!!singlePart}
+            picking={picking}
+            onPickSegment={(range) => {
+              // Applied as it goes, and picking stays open: the author may
+              // still shift-click another line to reach the rest of the
+              // phrase, and closing here would make that a fresh start.
+              pendingMark.current?.(range);
+            }}
+            onCancelPick={cancelMark}
+            marks={marksForTranscript}
+            suggestions={suggestions}
             partNumber={singlePart ? singlePart.orderIndex + 1 : null}
             partAudioStart={singlePart?.audioStartMs ?? null}
             partAudioEnd={singlePart?.audioEndMs ?? null}
@@ -617,6 +689,8 @@ export default function StudioListeningEditorPage() {
                   }
                   partLabel={label.toLowerCase()}
                   showIssues={badPartKey === part.key}
+                  markChecks={markChecksByPart.get(part.key)}
+                  onMarkAudio={hasAudioEverAttached ? requestMark : undefined}
                   disabled={!hasAudioEverAttached}
                   note={
                     UNSUPPORTED_TYPICAL_TYPE_ORDER_INDICES.has(part.orderIndex)
