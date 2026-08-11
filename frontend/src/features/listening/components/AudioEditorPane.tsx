@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  memo,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -10,6 +11,8 @@ import {
 import {
   ArrowRightFromLine,
   ArrowRightToLine,
+  ArrowDown,
+  ArrowUp,
   Crosshair,
   Gauge,
   Info,
@@ -256,6 +259,17 @@ export const AudioEditorPane = forwardRef<
   } | null>(null);
   const [search, setSearch] = useState("");
   const [dragOver, setDragOver] = useState(false);
+
+  // Whether the transcript follows playback. Mirrored into a ref because the
+  // wavesurfer handlers read it outside React's render cycle, while the back
+  // button needs a re-render: it stays hidden while following, since following
+  // is already keeping the line in view.
+  const [following, setFollowing] = useState(true);
+  const followRef = useRef(true);
+  const setFollow = useCallback((value: boolean) => {
+    followRef.current = value;
+    setFollowing(value);
+  }, []);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Drives the custom scroll track below the waveform. Fed by wavesurfer's
@@ -382,6 +396,9 @@ export const AudioEditorPane = forwardRef<
       ws.pause();
       return;
     }
+    // Pressing play is the signal that the author wants to follow the audio
+    // again, whatever they scrolled to while it was paused.
+    setFollow(true);
     const region = partRegionRef.current;
     if (region && hasPartRangeRef.current) {
       const t = ws.getCurrentTime();
@@ -754,7 +771,15 @@ export const AudioEditorPane = forwardRef<
       // Enforced here rather than via region.play() because the playhead can
       // also enter the range by seeking or clicking the waveform.
       ws.on("timeupdate", (t) => {
-        setCurrentMs(t * 1000);
+        // Quantised. wavesurfer emits this ~60×/s and every emit re-renders
+        // the transcript; 50ms is the coarsest step that still lands cleanly
+        // inside a spoken word (they run ~250ms and up), so word highlighting
+        // tracks the voice without paying for three quarters of the renders.
+        // Returning `prev` unchanged makes React bail out entirely.
+        setCurrentMs((prev) => {
+          const ms = Math.round(t * 1000);
+          return Math.abs(prev - ms) >= 50 ? ms : prev;
+        });
         const region = partRegionRef.current;
         if (!region || !hasPartRangeRef.current || !ws.isPlaying()) return;
         if (t >= region.end - 0.02) {
@@ -874,21 +899,141 @@ export const AudioEditorPane = forwardRef<
     return segments.filter((s) => s.text.toLowerCase().includes(q));
   }, [segments, search]);
 
+  // The last segment that has started, not the one strictly containing the
+  // playhead: speech has gaps between sentences, and requiring containment
+  // left "no current segment" during every pause — which unhighlighted the
+  // line and blinked the back button off between chunks.
   const currentSegmentIndex = useMemo(() => {
     if (!playing && currentMs === 0) return -1;
-    return segments.findIndex(
-      (s) => currentMs >= s.start_ms && currentMs < s.end_ms,
-    );
+    let found = -1;
+    for (let i = 0; i < segments.length; i++) {
+      if (segments[i].start_ms > currentMs) break;
+      found = i;
+    }
+    return found;
   }, [segments, currentMs, playing]);
+
+  // Which word inside that line is being said. "Last one started", for the
+  // same reason as the line itself: there are gaps between words, and
+  // requiring containment would drop the highlight in every one of them.
+  const activeWordIndex = useMemo(() => {
+    if (currentSegmentIndex < 0) return -1;
+    const words = segments[currentSegmentIndex]?.words ?? [];
+    let found = -1;
+    for (let i = 0; i < words.length; i++) {
+      if (words[i].start_ms > currentMs) break;
+      found = i;
+    }
+    return found;
+  }, [segments, currentSegmentIndex, currentMs]);
+
+  // --- Follow along: keep the segment being spoken in view ----------------
+  const listRef = useRef<HTMLDivElement>(null);
+
+  /** Segments are looked up in the DOM by order index rather than kept in a
+   *  ref map: the map's entries were rewritten on every timeupdate (the ref
+   *  callbacks are recreated each render), which is a lot of churn to carry
+   *  for a lookup the DOM already indexes. */
+  const segmentEl = (orderIndex: number | undefined): HTMLElement | null => {
+    const box = listRef.current;
+    if (!box || orderIndex === undefined) return null;
+    return box.querySelector<HTMLElement>(`[data-order="${orderIndex}"]`);
+  };
+
+  const currentOrderIndex =
+    currentSegmentIndex >= 0
+      ? segments[currentSegmentIndex]?.order_index
+      : undefined;
+
+  // Whether the spoken line is fully inside the pane. Answered by the browser
+  // rather than by comparing rectangles ourselves: an IntersectionObserver
+  // rooted at the scroll box is the one measurement that can't disagree with
+  // what's actually on screen, and it re-fires on its own as the pane scrolls,
+  // so no scroll handler or timing window is involved.
+  const [activeFullyVisible, setActiveFullyVisible] = useState(true);
+  // Which way the spoken line went, so the button points at it. Kept when the
+  // button hides so the icon doesn't flip during the fade out.
+  const [activeDirection, setActiveDirection] = useState<"up" | "down">("up");
+
+  useEffect(() => {
+    const box = listRef.current;
+    const el = segmentEl(currentOrderIndex);
+    if (!box || !el) {
+      setActiveFullyVisible(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setActiveFullyVisible(entry.intersectionRatio >= 0.99);
+        // The observer already hands us both rectangles in the same space,
+        // so the direction costs nothing extra to derive.
+        if (entry.rootBounds) {
+          setActiveDirection(
+            entry.boundingClientRect.top < entry.rootBounds.top ? "up" : "down",
+          );
+        }
+      },
+      { root: box, threshold: [0, 0.5, 0.99, 1] },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentOrderIndex, filteredSegments]);
+
+  // Following stands down on real input, never on scroll events: our own
+  // smooth scroll emits those too, and no timing window reliably separates the
+  // tail of one from the start of the author's. A wheel, a drag, or a key is
+  // unambiguously theirs.
+  const onTranscriptInput = () => setFollow(false);
+
+  const scrollToCurrent = useCallback(() => {
+    const box = listRef.current;
+    const el = segmentEl(currentOrderIndex);
+    if (!box || !el) return;
+
+    // The spoken line sits second from the top: the line before it stays
+    // visible above as context, and everything still to come fills the pane
+    // below. Scrolling to the *previous* segment's offset puts it there
+    // exactly, whatever height either line wrapped to.
+    const i = filteredSegments.findIndex(
+      (s) => s.order_index === currentOrderIndex,
+    );
+    const previous =
+      i > 0 ? segmentEl(filteredSegments[i - 1].order_index) : null;
+
+    box.scrollTo({ top: (previous ?? el).offsetTop, behavior: "smooth" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentOrderIndex, filteredSegments]);
+
+  // Keyed on the spoken line alone: including scrollToCurrent would also fire
+  // this when the search filter changes, dragging the pane around while
+  // someone is typing a query.
+  useEffect(() => {
+    if (followRef.current) scrollToCurrent();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentOrderIndex]);
+
+  // One stable handler for every row, so the memoised rows keep their props.
+  const selectSegment = useCallback(
+    (segment: AudioSegment) => {
+      // Jumping to a line is also "follow from here".
+      setFollow(true);
+      void wsRef.current?.play(segment.start_ms / 1000);
+    },
+    [setFollow],
+  );
+
+  const showBackToPlaying = !following && !activeFullyVisible;
+
+  const resumeFollowing = () => {
+    setFollow(true);
+    scrollToCurrent();
+  };
 
   // --- No audio yet: drag-and-drop upload zone instead of the player -----
   if (!audioUrl) {
     return (
-      <div className="space-y-3">
-        <div className="mb-3 flex items-center gap-2.5 text-xs tracking-wide text-muted-foreground">
-          audio
-          <span className="h-px flex-1 bg-border" aria-hidden />
-        </div>
+      <div>
         <label
           onDragOver={(e) => {
             e.preventDefault();
@@ -945,14 +1090,13 @@ export const AudioEditorPane = forwardRef<
   const hasExplicitRange = partAudioStart != null || partAudioEnd != null;
 
   return (
-    <div>
-      <div className="mb-3 flex items-center gap-2.5 text-xs tracking-wide text-muted-foreground">
-        audio
-        <span className="h-px flex-1 bg-border" aria-hidden />
-        <span className="tabular-nums">{fmt(effectiveDurationMs)}</span>
-      </div>
-
-      <div className="relative rounded-lg bg-card px-4 py-3.5">
+    // A column, so the player keeps its natural height and the transcript
+    // takes whatever is left and scrolls inside it — the page itself no
+    // longer scrolls the player out of reach. The "audio" and "transcript"
+    // rules are gone: the card and the list are already distinct, and the
+    // duration they carried is in the transport.
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="relative shrink-0 rounded-lg bg-card px-4 py-3.5">
         {/* Scroll position doubles as the card's top edge: invisible while
               the whole clip fits, fading in as a moving rule once zooming
               makes there be somewhere to scroll to. */}
@@ -1337,67 +1481,123 @@ export const AudioEditorPane = forwardRef<
         </div>
       </div>
 
-      <div className="mt-5 mb-3 flex items-center gap-2.5 text-xs tracking-wide text-muted-foreground">
-        transcript
-        <span className="h-px flex-1 bg-border" aria-hidden />
-        <span>auto</span>
-      </div>
-
-      {asset?.transcript_status === "ready" && (
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="search transcript…"
-          aria-label="Search transcript"
-          className="mb-3 w-full rounded-md border border-border bg-transparent px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none"
-        />
-      )}
-
-      <div className="text-sm leading-loose">
-        {asset === undefined && assetLoading && (
-          <p className="text-xs text-muted-foreground">loading transcript…</p>
+      {/* The transcript half: search pinned, list scrolling under it. One
+            wrapper owns the gap below the player so it doesn't change with
+            whether the search box is there. */}
+      <div className="relative mt-4 flex min-h-0 flex-1 flex-col">
+        {asset?.transcript_status === "ready" && (
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="search transcript…"
+            aria-label="Search transcript"
+            className="mb-2 w-full shrink-0 rounded-md border border-border bg-transparent px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none"
+          />
         )}
 
-        {failed && (
-          <div className="space-y-1 rounded-md bg-destructive/10 px-3 py-2.5 text-xs text-destructive">
-            <p className="font-medium">transcription failed</p>
-            {asset?.transcript_error && <p>{asset.transcript_error}</p>}
-            <p>replace the audio and try again.</p>
-          </div>
-        )}
-
-        {asset?.transcript_status === "ready" &&
-          filteredSegments.length === 0 && (
-            <p className="text-xs text-muted-foreground">no matches.</p>
+        {/* min-h-0 is what actually makes this scroll: a flex child's default
+              min-height is its content, so without it the list would push the
+              column taller instead of overflowing inside it. */}
+        <div
+          ref={listRef}
+          onWheel={onTranscriptInput}
+          onTouchStart={onTranscriptInput}
+          onKeyDown={onTranscriptInput}
+          // Covers dragging the scrollbar itself. It also fires when a segment
+          // is clicked, but that segment's own click handler re-arms following
+          // afterwards — pointerdown lands first, click has the last word.
+          onPointerDown={onTranscriptInput}
+          className="scrollbar-quiet relative min-h-0 flex-1 overflow-y-auto pr-1 text-sm leading-loose"
+        >
+          {asset === undefined && assetLoading && (
+            <p className="text-xs text-muted-foreground">loading transcript…</p>
           )}
 
-        {asset?.transcript_status === "ready" &&
-          filteredSegments.map((seg) => {
-            const trueIndex = segments.indexOf(seg);
-            return (
-              <TranscriptSegment
-                key={seg.order_index}
-                segment={seg}
-                current={trueIndex === currentSegmentIndex}
-                flashed={flash?.kind === "segment" && flash.index === trueIndex}
-                search={search}
-                onClick={() => void wsRef.current?.play(seg.start_ms / 1000)}
-              />
-            );
-          })}
+          {failed && (
+            <div className="space-y-1 rounded-md bg-destructive/10 px-3 py-2.5 text-xs text-destructive">
+              <p className="font-medium">transcription failed</p>
+              {asset?.transcript_error && <p>{asset.transcript_error}</p>}
+              <p>replace the audio and try again.</p>
+            </div>
+          )}
 
-        {/* No fabricated progress (§2 honesty constraint) — the worker
+          {asset?.transcript_status === "ready" &&
+            filteredSegments.length === 0 && (
+              <p className="text-xs text-muted-foreground">no matches.</p>
+            )}
+
+          {asset?.transcript_status === "ready" &&
+            filteredSegments.map((seg) => {
+              const trueIndex = segments.indexOf(seg);
+              return (
+                <TranscriptSegment
+                  key={seg.order_index}
+                  segment={seg}
+                  current={trueIndex === currentSegmentIndex}
+                  flashed={
+                    flash?.kind === "segment" && flash.index === trueIndex
+                  }
+                  search={search}
+                  // -1 for every other row, so their props stay constant and
+                  // the memo keeps them out of the playback re-render.
+                  activeWordIndex={
+                    trueIndex === currentSegmentIndex ? activeWordIndex : -1
+                  }
+                  onSelect={selectSegment}
+                />
+              );
+            })}
+
+          {/* No fabricated progress (§2 honesty constraint) — the worker
               writes all segments at once, so there's no partial figure to
               show, only that it's in flight and the clip's total length. */}
-        {processing && (
-          <div className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground">
-            <Loader2
-              className="size-3.5 animate-spin text-primary"
-              aria-hidden
-            />
-            transcribing… ({fmt(effectiveDurationMs)} clip)
-          </div>
+          {processing && (
+            <div className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground">
+              <Loader2
+                className="size-3.5 animate-spin text-primary"
+                aria-hidden
+              />
+              transcribing… ({fmt(effectiveDurationMs)} clip)
+            </div>
+          )}
+        </div>
+
+        {/* Shown exactly when the spoken line isn't on screen — scrolled past
+            in either direction, or jumped away from. Floats over the foot of
+            the list rather than taking a row of its own, so the transcript
+            keeps its full height whether or not it's showing.
+
+            Kept mounted and faded rather than added and removed, so it eases
+            out as well as in; an unmounted element has nothing left to
+            animate. It's taken out of the tab order and hidden from screen
+            readers while invisible. */}
+        {currentOrderIndex !== undefined && (
+          <button
+            type="button"
+            onClick={resumeFollowing}
+            aria-hidden={!showBackToPlaying}
+            tabIndex={showBackToPlaying ? 0 : -1}
+            className={cn(
+              "absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-[11px] text-foreground shadow-lg",
+              // `translate`, not `transform`: Tailwind v4's translate-* set
+              // the standalone `translate` property, so a transition listing
+              // only `transform` left the movement instant and just faded the
+              // opacity — which read as the button snapping into place.
+              "transition-[opacity,translate,border-color,color] duration-300 ease-out motion-reduce:transition-none",
+              "hover:border-primary hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+              showBackToPlaying
+                ? "translate-y-0 opacity-100"
+                : "pointer-events-none translate-y-4 opacity-0",
+            )}
+          >
+            {activeDirection === "up" ? (
+              <ArrowUp className="size-3.5 text-primary" aria-hidden />
+            ) : (
+              <ArrowDown className="size-3.5 text-primary" aria-hidden />
+            )}
+            back to playing
+          </button>
         )}
       </div>
     </div>
@@ -1557,23 +1757,58 @@ function TimeField({
   );
 }
 
-function TranscriptSegment({
+/** Memoised: the highlight moves one row at a time, but without this every
+ *  row re-rendered on each playback tick. `onSelect` takes the segment rather
+ *  than being closed over per row, so the prop stays referentially stable and
+ *  the memo actually holds. */
+const TranscriptSegment = memo(function TranscriptSegment({
   segment,
   current,
   flashed,
   search,
-  onClick,
+  activeWordIndex,
+  onSelect,
 }: {
   segment: AudioSegment;
   current: boolean;
   flashed: boolean;
   search: string;
-  onClick: () => void;
+  /** Index into `segment.words` of the word being said, or -1. */
+  activeWordIndex: number;
+  onSelect: (segment: AudioSegment) => void;
 }) {
   const text = segment.text;
   const q = search.trim();
   let content: React.ReactNode = text;
-  if (q) {
+
+  // Word-by-word only on the line being spoken, and only when nothing is
+  // being searched: the two highlights mean different things and would fight
+  // over the same text. Falls back to the plain line whenever the ASR gave us
+  // no word timings for it.
+  if (!q && current && segment.words.length > 0) {
+    content = (
+      <span className="whitespace-pre-wrap">
+        {segment.words.map((w, i) => (
+          <span
+            key={i}
+            className={cn(
+              "transition-colors duration-150",
+              i === activeWordIndex
+                ? "text-primary"
+                : i < activeWordIndex
+                  ? "text-foreground"
+                  : "text-muted-foreground",
+            )}
+          >
+            {/* Whisper usually hands back words with their leading space
+                already attached; add one only when it didn't. */}
+            {i > 0 && !/^\s/.test(w.word) ? " " : ""}
+            {w.word}
+          </span>
+        ))}
+      </span>
+    );
+  } else if (q) {
     const idx = text.toLowerCase().indexOf(q.toLowerCase());
     if (idx >= 0) {
       content = (
@@ -1591,7 +1826,8 @@ function TranscriptSegment({
   return (
     <button
       type="button"
-      onClick={onClick}
+      data-order={segment.order_index}
+      onClick={() => onSelect(segment)}
       className={cn(
         "flex w-full items-start gap-2.5 rounded-md px-2 py-1 text-left transition-colors hover:bg-foreground/6",
         current && "bg-foreground/6",
@@ -1608,4 +1844,4 @@ function TranscriptSegment({
       </span>
     </button>
   );
-}
+});

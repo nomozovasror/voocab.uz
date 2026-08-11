@@ -550,12 +550,18 @@ export default function StudioListeningEditorPage() {
         </p>
       )}
 
-      {/* Panes */}
-      <div className="grid flex-1 grid-cols-1 gap-8 md:grid-cols-[minmax(340px,46%)_1fr]">
-        {/* Sticky, viewport-bounded column: the player stays put while the
-            transcript scrolls inside it (brief §2). The right pane keeps
-            scrolling with the page, however many fields it grows to. */}
-        <div className="min-w-0 md:sticky md:top-4 md:max-h-[calc(100svh-5rem)] md:self-start md:border-r md:border-border md:pr-8">
+      {/* Panes. min-h-0 caps the grid at the height left over from the title
+          bar; without it the row sizes to its tallest child and pushes the
+          editor past the bottom of the screen, which is what put a second
+          scrollbar on the page. */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-8 md:grid-cols-[minmax(340px,46%)_1fr]">
+        {/* The player column fills the grid row rather than a hand-computed
+            slice of the viewport. The old calc() guessed at everything above
+            it — header, padding, title bar — guessed high, and overflowed the
+            page by the difference. `h-full` can't be wrong about it.
+            Only from md up: on a narrow screen the panes stack and the page
+            scrolls normally. */}
+        <div className="min-w-0 md:h-full md:min-h-0 md:border-r md:border-border md:pr-8">
           <AudioEditorPane
             ref={audioPaneRef}
             audioAssetId={state.audioAssetId}
@@ -588,8 +594,11 @@ export default function StudioListeningEditorPage() {
 
         {/* Questions — one section per part, stacked top to bottom. A
             single-part material still gets a heading, so the layout reads
-            consistently whether there's one part or four. */}
-        <div className="min-w-0 space-y-8">
+            consistently whether there's one part or four.
+
+            This pane owns its scroll from md up, so however many parts it
+            grows to it never scrolls the page out from under the player. */}
+        <div className="scrollbar-quiet min-w-0 space-y-8 md:min-h-0 md:overflow-y-auto md:pr-1">
           {sortedParts.map((part) => {
             const label = part.title.trim() || `Part ${part.orderIndex + 1}`;
             return (
