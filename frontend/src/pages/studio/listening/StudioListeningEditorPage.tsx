@@ -10,11 +10,14 @@ import { timeAgo } from "@/lib/time";
 import { listeningApi } from "@/features/listening/api";
 import { useListeningMaterial } from "@/features/listening/queries";
 import {
-  buildTemplate,
+  docFromGroup,
+  docIssues,
+  docToGroup,
+  isDocEmpty,
   isGroupPersistable,
-  parseTemplate,
-  type FormRow,
-} from "@/features/listening/template";
+  newDoc,
+  type DocBlock,
+} from "@/features/listening/form-syntax";
 import {
   AudioEditorPane,
   type AudioEditorHandle,
@@ -59,7 +62,7 @@ interface PartState {
   groupId: string | null;
   instructions: string;
   wordLimit: number | null;
-  rows: FormRow[];
+  doc: DocBlock[];
 }
 
 interface EditorState {
@@ -84,10 +87,6 @@ const EMPTY_STATE: EditorState = {
 
 const AUTOSAVE_DELAY_MS = 1500;
 
-function emptyRows(): FormRow[] {
-  return [{ label: "", answers: [""] }];
-}
-
 function newPart(orderIndex: number): PartState {
   return {
     key: String(orderIndex),
@@ -99,7 +98,7 @@ function newPart(orderIndex: number): PartState {
     groupId: null,
     instructions: "",
     wordLimit: null,
-    rows: emptyRows(),
+    doc: newDoc(),
   };
 }
 
@@ -126,7 +125,6 @@ export default function StudioListeningEditorPage() {
   const [uploading, setUploading] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [badPartKey, setBadPartKey] = useState<string | null>(null);
-  const [badRowIndex, setBadRowIndex] = useState<number | null>(null);
   // Sections are stacked vertically now (no part switcher) — publish
   // validation failures scroll the offending section into view instead.
   const partSectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -179,7 +177,9 @@ export default function StudioListeningEditorPage() {
     loadedRef.current = true;
     const parts: PartState[] = existing.parts.map((p) => {
       const group = p.question_groups[0];
-      const rows = group ? parseTemplate(group.config.template, group.questions) : emptyRows();
+      const doc = group
+        ? docFromGroup(group.config.template, group.questions)
+        : newDoc();
       return {
         key: String(p.order_index),
         partId: p.id,
@@ -190,7 +190,7 @@ export default function StudioListeningEditorPage() {
         groupId: group?.id ?? null,
         instructions: group?.instructions ?? "",
         wordLimit: group?.word_limit ?? null,
-        rows: rows.length > 0 ? rows : emptyRows(),
+        doc,
       };
     });
     setState({
@@ -271,8 +271,8 @@ export default function StudioListeningEditorPage() {
           }
 
           let groupId = part.groupId;
-          if (isGroupPersistable(part.rows, part.instructions)) {
-            const { template, questions } = buildTemplate(part.rows);
+          if (isGroupPersistable(part.doc, part.instructions)) {
+            const { template, questions } = docToGroup(part.doc);
             const payload = {
               type: "form_completion" as const,
               instructions: part.instructions.trim(),
@@ -401,7 +401,6 @@ export default function StudioListeningEditorPage() {
     ok: boolean;
     message?: string;
     badPartKey?: string;
-    badRow?: number;
   } => {
     const s = stateRef.current;
     let anyPartHasGap = false;
@@ -409,25 +408,21 @@ export default function StudioListeningEditorPage() {
     for (const part of s.parts.slice().sort((a, b) => a.orderIndex - b.orderIndex)) {
       const label = part.title.trim() || `Part ${part.orderIndex + 1}`;
       const touched =
-        part.instructions.trim() !== "" ||
-        part.rows.some((r) => r.label.trim() !== "" || r.answers.some((a) => a.trim() !== ""));
+        part.instructions.trim() !== "" || !isDocEmpty(part.doc);
       if (!touched) continue;
 
       if (!part.instructions.trim()) {
         return { ok: false, message: `${label}: add instructions before publishing.`, badPartKey: part.key };
       }
-      if (part.rows.length === 0) {
-        return { ok: false, message: `${label}: add at least one field before publishing.`, badPartKey: part.key };
-      }
-      for (let i = 0; i < part.rows.length; i++) {
-        if (!part.rows[i].answers.some((a) => a.trim())) {
-          return {
-            ok: false,
-            message: `${label} — "${part.rows[i].label.trim() || `field ${i + 1}`}" needs at least one accepted answer.`,
-            badPartKey: part.key,
-            badRow: i,
-          };
-        }
+      // The syntax module owns what "complete" means, so the publish gate and
+      // the editor's own inline warnings can never disagree.
+      const issues = docIssues(part.doc);
+      if (issues.length > 0) {
+        return {
+          ok: false,
+          message: `${label} — ${issues[0]}`,
+          badPartKey: part.key,
+        };
       }
       anyPartHasGap = true;
     }
@@ -442,7 +437,6 @@ export default function StudioListeningEditorPage() {
     const v = validateForPublish();
     if (!v.ok) {
       setPublishError(v.message ?? "can't publish yet.");
-      setBadRowIndex(v.badRow ?? null);
       setBadPartKey(v.badPartKey ?? null);
       // No part to switch to anymore — everything's on one page, so scroll
       // the offending section into view instead.
@@ -455,7 +449,6 @@ export default function StudioListeningEditorPage() {
       return;
     }
     setPublishError(null);
-    setBadRowIndex(null);
     setBadPartKey(null);
     update({ visibility: "public" });
     scheduleSave(true);
@@ -463,7 +456,6 @@ export default function StudioListeningEditorPage() {
 
   const handleDraft = () => {
     setPublishError(null);
-    setBadRowIndex(null);
     setBadPartKey(null);
     update({ visibility: "private" });
     scheduleSave(true);
@@ -613,14 +605,18 @@ export default function StudioListeningEditorPage() {
                   <span className="h-px flex-1 bg-border" aria-hidden />
                 </div>
                 <QuestionFormEditor
-                  rows={part.rows}
-                  onChange={(rows) => updatePart(part.key, { rows })}
+                  doc={part.doc}
+                  onChange={(doc) => updatePart(part.key, { doc })}
                   instructions={part.instructions}
                   onInstructionsChange={(instructions) =>
                     updatePart(part.key, { instructions })
                   }
+                  wordLimit={part.wordLimit}
+                  onWordLimitChange={(wordLimit) =>
+                    updatePart(part.key, { wordLimit })
+                  }
                   partLabel={label.toLowerCase()}
-                  badRowIndex={badPartKey === part.key ? badRowIndex : null}
+                  showIssues={badPartKey === part.key}
                   disabled={!hasAudioEverAttached}
                   note={
                     UNSUPPORTED_TYPICAL_TYPE_ORDER_INDICES.has(part.orderIndex)

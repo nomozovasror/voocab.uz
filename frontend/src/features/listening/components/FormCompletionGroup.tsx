@@ -1,16 +1,8 @@
-import { Fragment, useMemo } from "react";
+import { useMemo } from "react";
 import { cn } from "@/lib/utils";
+import { FormLayout } from "@/features/listening/components/FormLayout";
+import { parseTemplateLayout } from "@/features/listening/form-syntax";
 import type { QuestionResult, TakeQuestionGroup } from "@/features/listening/types";
-
-const TOKEN_RE = /\{\{(\d+)\}\}/g;
-
-/** Split a form-completion template into alternating text/gap-number parts,
- *  e.g. "Name: {{1}}\nPhone: {{2}}" -> ["Name: ", "1", "\nPhone: ", "2", ""].
- *  Whitespace (including newlines) is preserved verbatim by the caller via
- *  `whitespace-pre-wrap` — we don't trim or reflow anything here. */
-function splitTemplate(template: string): string[] {
-  return template.split(TOKEN_RE);
-}
 
 interface FormCompletionGroupProps {
   group: TakeQuestionGroup;
@@ -33,7 +25,12 @@ export function FormCompletionGroup({
     return map;
   }, [group.questions]);
 
-  const parts = useMemo(() => splitTemplate(group.config.template), [group.config.template]);
+  // Same parse the editor previews with, so what the author saw is what the
+  // candidate sits — layout can't drift between the two.
+  const blocks = useMemo(
+    () => parseTemplateLayout(group.config.template),
+    [group.config.template],
+  );
 
   return (
     <div className="space-y-3">
@@ -45,27 +42,25 @@ export function FormCompletionGroup({
         </p>
       )}
 
-      <div className="rounded-lg border border-border bg-background p-4 font-mono text-sm leading-8 whitespace-pre-wrap text-foreground">
-        {parts.map((part, i) => {
-          // Odd indices are the captured {{N}} token numbers (see split regex).
-          if (i % 2 === 1) {
-            const n = Number(part);
+      <div className="rounded-lg border border-border bg-background p-4">
+        <FormLayout
+          blocks={blocks}
+          renderGap={(n) => {
             const question = byNumber.get(n);
-            if (!question) return <Fragment key={i}>{`{{${part}}}`}</Fragment>;
+            // A token with no question behind it can only come from a
+            // template we didn't author; show the gap rather than pretend.
+            if (!question) return <span className="text-muted-foreground">{`{{${n}}}`}</span>;
             const result = results?.[question.id];
             const graded = result !== undefined;
             return (
-              <span key={i} className="inline-flex items-baseline gap-1 align-baseline">
-                <span
-                  aria-hidden
-                  className="text-xs font-semibold text-muted-foreground"
-                >
+              <span className="mx-1 inline-flex items-baseline gap-1 align-baseline">
+                <span aria-hidden className="text-xs font-semibold text-muted-foreground">
                   {n}
                 </span>
                 <input
                   type="text"
                   className={cn(
-                    "mx-0.5 w-32 rounded-md border border-border bg-background px-2 py-0.5 font-sans text-sm text-foreground placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                    "w-32 rounded-md border border-border bg-background px-2 py-0.5 text-sm text-foreground placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
                     graded &&
                       (result.is_correct
                         ? "border-success text-success"
@@ -84,9 +79,8 @@ export function FormCompletionGroup({
                 )}
               </span>
             );
-          }
-          return <Fragment key={i}>{part}</Fragment>;
-        })}
+          }}
+        />
       </div>
     </div>
   );
