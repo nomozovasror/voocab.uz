@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { CircleQuestionMark, Loader2 } from "lucide-react";
 import { useStudioCrumbs } from "@/components/studio/breadcrumbs";
-import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
 import { timeAgo } from "@/lib/time";
@@ -17,6 +16,7 @@ import {
 } from "@/features/listening/marks";
 import {
   docFromGroup,
+  docGaps,
   docPublishIssues,
   docToGroup,
   isDocEmpty,
@@ -30,6 +30,7 @@ import {
   type MarkRange,
 } from "@/features/listening/components/AudioEditorPane";
 import { QuestionFormEditor } from "@/features/listening/components/QuestionFormEditor";
+import { FormHelpCard } from "@/features/listening/components/FormHelpCard";
 import {
   Dialog,
   DialogContent,
@@ -38,7 +39,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { PartsPicker } from "@/features/listening/components/PartsPicker";
-import type { AudioSegment, Visibility } from "@/features/listening/types";
+import { ANSWER_RUBRICS } from "@/features/listening/rubric";
+import type {
+  AnswerRubric,
+  AudioSegment,
+  Visibility,
+} from "@/features/listening/types";
 
 // Parts 2 and 3 (map/plan labelling, MCQ/matching) don't have an authorable
 // question type yet — only form_completion exists. Their questions can still
@@ -69,6 +75,7 @@ interface PartState {
   groupId: string | null;
   instructions: string;
   wordLimit: number | null;
+  rubric: AnswerRubric | null;
   doc: DocBlock[];
 }
 
@@ -105,6 +112,7 @@ function newPart(orderIndex: number): PartState {
     groupId: null,
     instructions: "",
     wordLimit: null,
+    rubric: null,
     doc: newDoc(),
   };
 }
@@ -229,6 +237,7 @@ export default function StudioListeningEditorPage() {
         groupId: group?.id ?? null,
         instructions: group?.instructions ?? "",
         wordLimit: group?.word_limit ?? null,
+        rubric: group?.config.answer_rubric ?? null,
         doc,
       };
     });
@@ -316,7 +325,7 @@ export default function StudioListeningEditorPage() {
               type: "form_completion" as const,
               instructions: part.instructions.trim(),
               word_limit: part.wordLimit,
-              config: { template },
+              config: { template, answer_rubric: part.rubric },
               questions,
             };
             if (!groupId) {
@@ -524,6 +533,50 @@ export default function StudioListeningEditorPage() {
     return byPart;
   }, [state.parts, transcriptSegments]);
 
+  // Gaps with an answer written: the nearest thing to evidence that the
+  // author has understood how this is done, which is when the help retires.
+  const authoredGapCount = useMemo(
+    () =>
+      state.parts.reduce(
+        (total, part) =>
+          total +
+          docGaps(part.doc).filter((g) => g.answers.some((a) => a.trim()))
+            .length,
+        0,
+      ),
+    [state.parts],
+  );
+
+  // The help card lives at the foot of the questions pane and steps aside as
+  // soon as the form is tall enough to reach it: past that point the space is
+  // the author's, and a card floating over their work is in the way.
+  const questionsPaneRef = useRef<HTMLDivElement>(null);
+  const sectionsRef = useRef<HTMLDivElement>(null);
+  const [helpFits, setHelpFits] = useState(true);
+  // Dismissing the card is permanent until asked for again, so there has to be
+  // an "again" — otherwise the × is a one-way door.
+  const [helpForced, setHelpForced] = useState(false);
+
+  useEffect(() => {
+    const pane = questionsPaneRef.current;
+    const sections = sectionsRef.current;
+    if (!pane || !sections) return;
+
+    // ~120px covers the card plus the gap above it. Measuring the card itself
+    // would be circular — it isn't rendered when it doesn't fit.
+    const measure = () =>
+      setHelpFits(
+        pane.clientHeight === 0 ||
+          sections.offsetHeight + 120 <= pane.clientHeight,
+      );
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(pane);
+    observer.observe(sections);
+    return () => observer.disconnect();
+  }, []);
+
   const sortedParts = state.parts.slice().sort((a, b) => a.orderIndex - b.orderIndex);
   const singlePart = hasPartRange(state.parts) ? state.parts[0] : null;
   const showPicker = !routeId && state.parts.length === 0;
@@ -581,6 +634,15 @@ export default function StudioListeningEditorPage() {
           <span className="text-xs text-muted-foreground">
             {saving ? "saving…" : lastSavedAt ? `saved ${timeAgo(lastSavedAt.toISOString())}` : ""}
           </span>
+          <button
+            type="button"
+            onClick={() => setHelpForced((v) => !v)}
+            title="How to build the form"
+            aria-label="How to build the form"
+            className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-foreground"
+          >
+            <CircleQuestionMark className="size-4" aria-hidden />
+          </button>
           <button
             type="button"
             onClick={handleDraft}
@@ -662,7 +724,11 @@ export default function StudioListeningEditorPage() {
 
             This pane owns its scroll from md up, so however many parts it
             grows to it never scrolls the page out from under the player. */}
-        <div className="scrollbar-quiet min-w-0 space-y-8 md:min-h-0 md:overflow-y-auto md:pr-1">
+        <div
+          ref={questionsPaneRef}
+          className="scrollbar-quiet min-w-0 md:flex md:min-h-0 md:flex-col md:overflow-y-auto md:pr-1"
+        >
+          <div ref={sectionsRef} className="space-y-8">
           {sortedParts.map((part) => {
             const label = part.title.trim() || `Part ${part.orderIndex + 1}`;
             return (
@@ -672,10 +738,6 @@ export default function StudioListeningEditorPage() {
                   partSectionRefs.current[part.key] = el;
                 }}
               >
-                <div className="mb-3 flex items-center gap-2.5 text-xs tracking-wide text-muted-foreground">
-                  {label}
-                  <span className="h-px flex-1 bg-border" aria-hidden />
-                </div>
                 <QuestionFormEditor
                   doc={part.doc}
                   onChange={(doc) => updatePart(part.key, { doc })}
@@ -683,11 +745,18 @@ export default function StudioListeningEditorPage() {
                   onInstructionsChange={(instructions) =>
                     updatePart(part.key, { instructions })
                   }
-                  wordLimit={part.wordLimit}
-                  onWordLimitChange={(wordLimit) =>
-                    updatePart(part.key, { wordLimit })
+                  rubric={part.rubric}
+                  onRubricChange={(rubric) =>
+                    updatePart(part.key, {
+                      rubric,
+                      // The old numeric field is kept in step so nothing that
+                      // still reads it starts disagreeing with the sentence.
+                      wordLimit:
+                        ANSWER_RUBRICS.find((r) => r.value === rubric)?.words ??
+                        null,
+                    })
                   }
-                  partLabel={label.toLowerCase()}
+                  partLabel={label}
                   showIssues={badPartKey === part.key}
                   markChecks={markChecksByPart.get(part.key)}
                   onMarkAudio={hasAudioEverAttached ? requestMark : undefined}
@@ -702,22 +771,18 @@ export default function StudioListeningEditorPage() {
             );
           })}
 
-          <div className="flex flex-wrap gap-4 text-[11px] text-muted-foreground">
-            <span className="flex items-center gap-1.5">
-              <kbd className="rounded bg-card px-1.5 py-0.5 font-mono text-foreground">space</kbd>
-              play/pause
-            </span>
-            <span className="flex items-center gap-1.5">
-              <kbd className="rounded bg-card px-1.5 py-0.5 font-mono text-foreground">tab</kbd>
-              next gap
-            </span>
-            <span className="flex items-center gap-1.5">
-              <kbd className={cn("rounded bg-card px-1.5 py-0.5 font-mono text-foreground")}>
-                ⌘s
-              </kbd>
-              save
-            </span>
           </div>
+
+          {/* The little the editor has to teach, at the foot of it, retiring
+              once it's been learned. The keys that used to sit here loose are
+              inside it — one of them, "tab: next gap", was never implemented
+              and is gone rather than restated. */}
+          <FormHelpCard
+            authoredGaps={authoredGapCount}
+            visible={helpFits}
+            forceOpen={helpForced}
+            onDismiss={() => setHelpForced(false)}
+          />
         </div>
       </div>
     </div>

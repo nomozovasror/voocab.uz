@@ -1,21 +1,20 @@
 import { useMemo } from "react";
-import { CircleAlert } from "lucide-react";
+import { ChevronDown, CircleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FormBuilder } from "@/features/listening/components/FormBuilder";
-import {
-  docGaps,
-  docPublishIssues,
-  isDocEmpty,
-} from "@/features/listening/form-syntax";
+import { docGaps, docPublishIssues } from "@/features/listening/form-syntax";
+import { ANSWER_RUBRICS } from "@/features/listening/rubric";
 import type { DocBlock } from "@/features/listening/form-syntax";
+import type { AnswerRubric } from "@/features/listening/types";
 
 interface QuestionFormEditorProps {
   doc: DocBlock[];
   onChange: (doc: DocBlock[]) => void;
   instructions: string;
   onInstructionsChange: (v: string) => void;
-  wordLimit: number | null;
-  onWordLimitChange: (v: number | null) => void;
+  rubric: AnswerRubric | null;
+  onRubricChange: (v: AnswerRubric | null) => void;
+  /** The part this section authors, e.g. "Part 1". */
   partLabel: string;
   /** Set while a publish attempt is blocked on this part, so the offending
    *  gaps are marked even if the author hadn't looked yet. */
@@ -27,29 +26,23 @@ interface QuestionFormEditorProps {
     apply: (range: { startMs: number; endMs: number }) => void,
   ) => void;
   disabled?: boolean;
-  /** Shown under the type chip — e.g. a note that a part's usual question
-   *  type (map labelling, MCQ, matching…) isn't built yet and only form
-   *  completion is available for it. */
+  /** Shown under the header — e.g. a note that a part's usual question type
+   *  (map labelling, MCQ, matching…) isn't built yet and only form completion
+   *  is available for it. */
   note?: string;
 }
 
-/** The rubric on the paper is one of a handful of fixed phrasings, so it's a
- *  choice rather than free text — and the stored value is the number the take
- *  page needs, not the sentence. */
-const WORD_LIMITS: { value: number | null; label: string }[] = [
-  { value: null, label: "no limit" },
-  { value: 1, label: "one word" },
-  { value: 2, label: "two words" },
-  { value: 3, label: "three words" },
-];
+function flaggedGapCount(gaps: { answers: string[] }[]): number {
+  return gaps.filter((g) => !g.answers.some((a) => a.trim())).length;
+}
 
 export function QuestionFormEditor({
   doc,
   onChange,
   instructions,
   onInstructionsChange,
-  wordLimit,
-  onWordLimitChange,
+  rubric,
+  onRubricChange,
   partLabel,
   showIssues,
   markChecks,
@@ -59,7 +52,12 @@ export function QuestionFormEditor({
 }: QuestionFormEditorProps) {
   const issues = useMemo(() => docPublishIssues(doc), [doc]);
   const gaps = useMemo(() => docGaps(doc), [doc]);
-  const touched = !isDocEmpty(doc);
+
+  // "No gaps yet" is true of every form the moment it's begun, so it waits
+  // for a publish attempt. A gap left without an answer is a real mistake and
+  // is called out as soon as it exists.
+  const showsIssues =
+    issues.length > 0 && (showIssues || flaggedGapCount(gaps) > 0);
 
   const flaggedGaps = useMemo(
     () =>
@@ -69,24 +67,28 @@ export function QuestionFormEditor({
 
   return (
     <div className={cn(disabled && "pointer-events-none opacity-40")}>
-      <div className="mb-3.5 flex items-center gap-2.5 text-xs text-muted-foreground">
-        <span className="rounded-full bg-foreground/8 px-2.5 py-0.5 text-foreground">
-          form completion
+      {/* The part leads and the question type follows it. They used to share a
+          line as equals under a rule, which read as two labels rather than a
+          heading — and the rule only repeated a boundary the section spacing
+          already draws. */}
+      <div className="mb-3 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+        <h3 className="text-base font-medium text-foreground">{partLabel}</h3>
+        <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">
+          {gaps.length} {gaps.length === 1 ? "question" : "questions"}
         </span>
-        <span>{partLabel}</span>
-        <span className="ml-auto tabular-nums">
-          {gaps.length} {gaps.length === 1 ? "gap" : "gaps"}
+        <span className="rounded-full bg-primary/12 px-2 py-0.5 text-[11px] text-primary">
+          form completion
         </span>
       </div>
 
       {note && (
-        <p className="mb-3.5 rounded-md bg-foreground/6 px-3 py-2 text-[11px] text-muted-foreground">
+        <p className="mb-3 rounded-md bg-foreground/6 px-3 py-2 text-[11px] text-muted-foreground">
           {note}
         </p>
       )}
 
-      {/* The rubric, laid out the way it sits above the form on the paper:
-          the instruction, then the answer-length limit under it. */}
+      {/* The rubric, in the order it appears on the paper: what to do, then
+          how long an answer may be. */}
       <div className="mb-3 space-y-1.5">
         <input
           type="text"
@@ -96,24 +98,38 @@ export function QuestionFormEditor({
           aria-label="Instructions"
           className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none"
         />
-        <div className="flex items-center gap-2 pl-1 text-[11px] text-muted-foreground">
-          <span>write no more than</span>
-          <select
-            value={wordLimit === null ? "" : String(wordLimit)}
-            onChange={(e) =>
-              onWordLimitChange(e.target.value === "" ? null : Number(e.target.value))
-            }
-            aria-label="Answer length limit"
-            className="rounded border border-border bg-transparent px-1.5 py-0.5 text-foreground focus-visible:border-ring focus-visible:outline-none"
-          >
-            {WORD_LIMITS.map((option) => (
-              <option key={option.label} value={option.value ?? ""}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <span>for each answer</span>
-        </div>
+        <label className="flex flex-wrap items-center gap-2 pl-1 text-xs text-muted-foreground">
+          answer length
+          {/* A native select for the behaviour — keyboard, mobile, no menu to
+              reimplement — with its own chrome stripped and the app's put
+              back, so it stops looking like something the browser drew. The
+              open list itself is the OS's and can't be styled. */}
+          <span className="relative inline-flex items-center">
+            <select
+              value={rubric ?? ""}
+              onChange={(e) =>
+                onRubricChange(
+                  e.target.value === ""
+                    ? null
+                    : (e.target.value as AnswerRubric),
+                )
+              }
+              aria-label="Answer length"
+              className="appearance-none rounded-md border border-border bg-transparent py-1 pr-7 pl-2.5 text-xs text-foreground transition-colors hover:border-foreground/30 focus-visible:border-ring focus-visible:outline-none"
+            >
+              <option value="">not stated</option>
+              {ANSWER_RUBRICS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <ChevronDown
+              aria-hidden
+              className="pointer-events-none absolute right-2 size-3.5 text-muted-foreground"
+            />
+          </span>
+        </label>
       </div>
 
       {/* No separate preview: the builder is already laid out as the form, so
@@ -122,12 +138,12 @@ export function QuestionFormEditor({
       <FormBuilder
         doc={doc}
         onChange={onChange}
-        flaggedGaps={showIssues || touched ? flaggedGaps : []}
+        flaggedGaps={flaggedGaps}
         markChecks={markChecks}
         onMarkAudio={onMarkAudio}
       />
 
-      {(showIssues || touched) && issues.length > 0 && (
+      {showsIssues && (
         <ul className="mt-2 space-y-1">
           {issues.map((issue) => (
             <li

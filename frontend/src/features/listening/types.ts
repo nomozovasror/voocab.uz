@@ -102,7 +102,7 @@ export interface ListeningQuestionGroup {
   type: string;
   instructions: string;
   word_limit: number | null;
-  config: { template: string };
+  config: FormConfig;
   questions: ListeningQuestion[];
 }
 
@@ -113,11 +113,26 @@ export interface QuestionIn {
   replay_end_ms?: number | null;
 }
 
+/** IELTS uses a small closed set of rubrics, varying on two axes: how many
+ *  words, and whether a number counts on its own. */
+export type AnswerRubric =
+  | "one_word"
+  | "one_word_number"
+  | "two_words"
+  | "two_words_number"
+  | "three_words"
+  | "three_words_number";
+
+export interface FormConfig {
+  template: string;
+  answer_rubric?: AnswerRubric | null;
+}
+
 export interface QuestionGroupIn {
   type: QuestionGroupType;
   instructions: string;
   word_limit?: number | null;
-  config: { template: string };
+  config: FormConfig;
   questions: QuestionIn[];
 }
 
@@ -134,7 +149,7 @@ export interface TakeQuestionGroup {
   type: string;
   instructions: string;
   word_limit: number | null;
-  config: { template: string };
+  config: FormConfig;
   questions: TakeQuestion[];
 }
 

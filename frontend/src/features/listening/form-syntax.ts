@@ -363,7 +363,7 @@ export function docToLayout(doc: DocBlock[]): FormBlock[] {
 export function docIssues(doc: DocBlock[]): string[] {
   const gaps = docGaps(doc);
   if (gaps.length === 0) {
-    return ["No gaps yet — select a word in a value and press “blank”."];
+    return ["No questions yet — put an answer in brackets, like [Chinese]."];
   }
   const unanswered = gaps
     .filter((g) => !g.answers.some((a) => a.trim()))
@@ -371,8 +371,8 @@ export function docIssues(doc: DocBlock[]): string[] {
   if (unanswered.length === 0) return [];
   return [
     unanswered.length === 1
-      ? `Gap ${unanswered[0]} has no accepted answer yet.`
-      : `Gaps ${unanswered.join(", ")} have no accepted answers yet.`,
+      ? `Question ${unanswered[0]} has no accepted answer yet.`
+      : `Questions ${unanswered.join(", ")} have no accepted answers yet.`,
   ];
 }
 
@@ -389,8 +389,8 @@ export function docPublishIssues(doc: DocBlock[]): string[] {
   if (unmarked.length === 0) return [];
   return [
     unmarked.length === 1
-      ? `Gap ${unmarked[0]} isn't linked to the audio yet.`
-      : `Gaps ${unmarked.join(", ")} aren't linked to the audio yet.`,
+      ? `Question ${unmarked[0]} isn't linked to the audio yet.`
+      : `Questions ${unmarked.join(", ")} aren't linked to the audio yet.`,
   ];
 }
 
@@ -414,4 +414,75 @@ export function isDocEmpty(doc: DocBlock[]): boolean {
       line.parts.every((p) => p.kind === "text" && p.text.trim() === ""),
     );
   });
+}
+
+
+// ── A line as text, for editing ──────────────────────────────────────────
+
+/**
+ * A value line is edited as plain text and read as chips. Typing into a
+ * contentEditable holding inline chip elements means keeping the DOM and the
+ * model in step on every keystroke, and losing the caret whenever they
+ * disagree; a plain field types natively and wraps natively, and the chips are
+ * rendered from it the moment it loses focus.
+ */
+
+const LINE_GAP_RE = /\[([^\]]*)\]/g;
+
+export function partsToText(parts: DocPart[]): string {
+  return parts
+    .map((part) =>
+      part.kind === "text" ? part.text : `[${part.answers.join(", ")}]`,
+    )
+    .join("");
+}
+
+function sameAnswers(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+/** Parse an edited line back into parts, carrying gaps' identities across.
+ *
+ *  Answers travel in the text, so they can't desync — but a gap's audio mark
+ *  hangs off its id, and that has to survive the author fixing a typo in the
+ *  words around it. A gap is matched to the old one with the same answers
+ *  where there is one, and to the one in the same position otherwise. */
+export function textToParts(text: string, previous: DocPart[]): DocPart[] {
+  const old = previous.filter((p) => p.kind === "gap") as Extract<
+    DocPart,
+    { kind: "gap" }
+  >[];
+  const taken = new Set<number>();
+  const parts: DocPart[] = [];
+  let last = 0;
+  let ordinal = 0;
+
+  for (const match of text.matchAll(LINE_GAP_RE)) {
+    const at = match.index ?? 0;
+    if (at > last) parts.push({ kind: "text", text: text.slice(last, at) });
+
+    const answers = match[1]
+      .split(",")
+      .map((a) => a.trim())
+      .filter(Boolean);
+
+    let reuse = old.findIndex(
+      (g, i) => !taken.has(i) && sameAnswers(g.answers, answers),
+    );
+    if (reuse < 0 && !taken.has(ordinal) && old[ordinal]) reuse = ordinal;
+
+    if (reuse >= 0) {
+      taken.add(reuse);
+      parts.push({ ...old[reuse], answers });
+    } else {
+      parts.push({ kind: "gap", id: newId(), answers });
+    }
+
+    last = at + match[0].length;
+    ordinal += 1;
+  }
+
+  if (last < text.length) parts.push({ kind: "text", text: text.slice(last) });
+  if (parts.length === 0) parts.push({ kind: "text", text: "" });
+  return parts;
 }

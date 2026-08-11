@@ -78,12 +78,28 @@ class PartOut(BaseModel):
 # --- QuestionGroup + Question -------------------------------------------------
 
 
+#: The rubric printed above a completion task. IELTS uses a small closed set
+#: of these, and the two axes that vary — how many words, and whether a number
+#: counts — don't compose into free text an author should be typing by hand.
+#: Kept in ``config`` rather than as a column: it is presentation, and config
+#: is already JSONB, so no migration.
+AnswerRubric = Literal[
+    "one_word",
+    "one_word_number",
+    "two_words",
+    "two_words_number",
+    "three_words",
+    "three_words_number",
+]
+
+
 class QuestionGroupConfig(BaseModel):
     """``form_completion`` presentation payload: the gap-fill template. Gaps
     are ``{{N}}`` tokens, 1-indexed and contiguous — validated against the
     question set on :class:`QuestionGroupIn`."""
 
     template: str
+    answer_rubric: AnswerRubric | None = None
 
     @field_validator("template")
     @classmethod

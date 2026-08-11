@@ -50,7 +50,11 @@ export function FormLayout({ blocks, renderGap, className }: FormLayoutProps) {
 
         return (
           <div key={i} className="flex gap-3 py-0.5">
-            <div className="w-64 shrink-0 text-muted-foreground">
+            {/* Full strength, like the value beside it: on the paper a label
+                is content, not a caption. The column and its rule already
+                separate the two — dimming real text to do that job again cost
+                legibility for nothing. */}
+            <div className="w-64 shrink-0 text-foreground">
               {block.label}
             </div>
             <div className="min-w-0 flex-1 space-y-1">

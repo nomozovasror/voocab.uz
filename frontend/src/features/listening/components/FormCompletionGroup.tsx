@@ -3,6 +3,7 @@ import { Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FormLayout } from "@/features/listening/components/FormLayout";
 import { parseTemplateLayout } from "@/features/listening/form-syntax";
+import { rubricSentence } from "@/features/listening/rubric";
 import type { QuestionResult, TakeQuestionGroup } from "@/features/listening/types";
 
 interface FormCompletionGroupProps {
@@ -24,6 +25,8 @@ export function FormCompletionGroup({
   onReplay,
   disabled,
 }: FormCompletionGroupProps) {
+  const rubric = rubricSentence(group.config.answer_rubric, group.word_limit);
+
   const byNumber = useMemo(() => {
     const map = new Map<number, (typeof group.questions)[number]>();
     for (const q of group.questions) map.set(q.number, q);
@@ -40,12 +43,7 @@ export function FormCompletionGroup({
   return (
     <div className="space-y-3">
       <p className="text-sm text-foreground">{group.instructions}</p>
-      {group.word_limit != null && (
-        <p className="text-xs text-muted-foreground">
-          Write no more than {group.word_limit}{" "}
-          {group.word_limit === 1 ? "word" : "words"} for each answer.
-        </p>
-      )}
+      {rubric && <p className="text-xs text-muted-foreground">{rubric}</p>}
 
       <div className="rounded-lg border border-border bg-background p-4">
         <FormLayout

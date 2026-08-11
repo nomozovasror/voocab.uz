@@ -4,17 +4,24 @@ import {
   ChevronDown,
   ChevronUp,
   CornerDownRight,
+  Ellipsis,
   Heading,
-  Pencil,
   Plus,
   SquareDashed,
   TimerReset,
   Trash2,
-  TriangleAlert,
   Type,
   X,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { ValueField } from "@/features/listening/components/ValueField";
 import { formatClock } from "@/features/studio/format";
 import {
   gapNumbers,
@@ -45,8 +52,7 @@ import {
  * genuinely hard to get right.
  */
 
-/** A completed `[...]` in a value: the author's shorthand for a gap. */
-const BRACKET_RE = /\[([^\]]*)\]/;
+type EditableEl = HTMLElement;
 
 interface FormBuilderProps {
   doc: DocBlock[];
@@ -65,55 +71,6 @@ interface FormBuilderProps {
   ) => void;
 }
 
-/** An input that grows with its content, so a gap sits in the sentence
- *  instead of after a field that runs to the edge. `ch` tracks the digit
- *  width, close enough for a proportional face given the padding. */
-function AutoInput({
-  value,
-  onChange,
-  placeholder,
-  className,
-  min = 6,
-  pad = 1,
-  inputRef,
-  onKeyDown,
-  onSelectCapture,
-  ariaLabel,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  className?: string;
-  min?: number;
-  /** Slack after the text, in ch. The default leaves room for the caret; a
-   *  chip's answer wants almost none, or the gap before its slash reads as a
-   *  hole in the sentence. */
-  pad?: number;
-  inputRef?: (el: HTMLInputElement | null) => void;
-  onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
-  onSelectCapture?: (e: React.SyntheticEvent<HTMLInputElement>) => void;
-  ariaLabel: string;
-}) {
-  const width = Math.max(min, (value.length || (placeholder?.length ?? 0)) + pad);
-  return (
-    <input
-      ref={inputRef}
-      type="text"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      onKeyDown={onKeyDown}
-      onSelect={onSelectCapture}
-      placeholder={placeholder}
-      aria-label={ariaLabel}
-      style={{ width: `${width}ch` }}
-      className={cn(
-        "max-w-full rounded bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none",
-        className,
-      )}
-    />
-  );
-}
-
 export function FormBuilder({
   doc,
   onChange,
@@ -129,9 +86,9 @@ export function FormBuilder({
   // became a chip, or a new row would appear with the focus left behind.
   const docRef = useRef(doc);
   docRef.current = doc;
-  const inputs = useRef(new Map<string, HTMLInputElement>());
+  const inputs = useRef(new Map<string, EditableEl>());
   const pendingFocus = useRef<string | null>(null);
-  const register = (key: string) => (el: HTMLInputElement | null) => {
+  const register = (key: string) => (el: EditableEl | null) => {
     if (el) inputs.current.set(key, el);
     else inputs.current.delete(key);
   };
@@ -143,35 +100,34 @@ export function FormBuilder({
     const el = inputs.current.get(key);
     if (!el) return;
     el.focus();
-    el.setSelectionRange(el.value.length, el.value.length);
+    // A real field puts the caret at the end; the editable value region is
+    // handed to the browser's own placement.
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+      el.setSelectionRange(el.value.length, el.value.length);
+    }
   });
 
   // A gap is selected by clicking it, which is what raises its toolbar. Kept
   // separate from editing so the toolbar can be reached without the answer
   // turning into a field under the pointer.
+  // The word selected in a value right now. Held as the text, not a flag, so
+  // the button can name what it is about to do rather than describe itself.
+  const [selectedText, setSelectedText] = useState("");
+  // Where the author is working, so a new row or section lands next to it
+  // rather than at the far end of the form.
+  const [focusedBlockId, setFocusedBlockId] = useState<string | null>(null);
   const [selectedGap, setSelectedGap] = useState<string | null>(null);
-  const [editingGap, setEditingGap] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!selectedGap && !editingGap) return;
+    if (!selectedGap) return;
     const onDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       if (target?.closest("[data-gap]")) return;
       setSelectedGap(null);
-      setEditingGap(null);
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
-  }, [selectedGap, editingGap]);
-
-  // Where the caret last was, so the toolbar's "blank" knows what to split.
-  const focus = useRef<{
-    blockId: string;
-    lineId: string;
-    partIndex: number;
-    start: number;
-    end: number;
-  } | null>(null);
+  }, [selectedGap]);
 
   const replaceBlock = (id: string, next: DocBlock | null) =>
     onChange(
@@ -199,10 +155,31 @@ export function FormBuilder({
     onChange(next);
   };
 
-  const appendBlock = (block: DocBlock, focusKey?: string) => {
+  /** Adds a block next to the one being worked on, falling back to the end.
+   *  Appending blindly meant a section always arrived at the bottom and had
+   *  to be walked up past every row. */
+  const addBlock = (block: DocBlock, focusKey?: string) => {
     if (focusKey) pendingFocus.current = focusKey;
-    onChange([...doc, block]);
+    const at = doc.findIndex((b) => b.id === focusedBlockId);
+    if (at < 0) {
+      onChange([...doc, block]);
+      return;
+    }
+    const next = doc.slice();
+    next.splice(at + 1, 0, block);
+    onChange(next);
   };
+
+  /** A form has one title and it is the first thing on it, so this goes to
+   *  the top rather than wherever the caret happens to be — which is also the
+   *  answer to "how do I put something above the first row". */
+  const addTitle = () => {
+    const block: DocBlock = { id: newId(), kind: "title", text: "" };
+    pendingFocus.current = `title#${block.id}`;
+    onChange([block, ...doc]);
+  };
+
+  const hasTitle = doc.some((b) => b.kind === "title");
 
   const patchLine = (blockId: string, lineId: string, next: DocLine) =>
     onChange(
@@ -213,171 +190,91 @@ export function FormBuilder({
       ),
     );
 
-  /** Turns the selected word into a gap, the selection becoming its first
-   *  accepted answer — the word an author picks out of the sentence is almost
-   *  always the answer, so it saves retyping it. */
+  /** Wraps the selected word in brackets, which is all a gap is now that a
+   *  value is edited as text. Written through execCommand so the field's own
+   *  undo stack keeps it — replacing the value outright would make it
+   *  unundoable. */
   const makeGap = () => {
-    const at = focus.current;
-    if (!at) return;
-    const block = doc.find((b) => b.id === at.blockId);
-    if (!block || block.kind !== "row") return;
-    const line = block.lines.find((l) => l.id === at.lineId);
-    if (!line) return;
-    const part = line.parts[at.partIndex];
-    if (!part || part.kind !== "text") return;
-
-    // Read the selection off the input itself rather than trusting the last
-    // `select` event: a click elsewhere can leave that snapshot collapsed at
-    // 0, which produced an empty gap with the word stranded beside it.
-    const el = inputs.current.get(`${at.lineId}#${at.partIndex}`);
-    let start = el?.selectionStart ?? at.start;
-    let end = el?.selectionEnd ?? at.end;
-
-    // Nothing selected: the author means "this value is the answer". Taking
-    // the whole field is the only reading that isn't a no-op, and it's what
-    // pressing the button on a finished value plainly looks like it does.
-    if (start === end && part.text.trim()) {
-      start = 0;
-      end = part.text.length;
-    }
-
-    const before = part.text.slice(0, start);
-    const picked = part.text.slice(start, end).trim();
-    const after = part.text.slice(end);
-
-    const parts: DocPart[] = [
-      ...line.parts.slice(0, at.partIndex),
-      { kind: "text", text: before },
-      { kind: "gap", id: newId(), answers: picked ? [picked] : [] },
-      { kind: "text", text: after },
-      ...line.parts.slice(at.partIndex + 1),
-    ];
-    patchLine(at.blockId, at.lineId, { ...line, parts });
+    const picked = window.getSelection()?.toString().trim();
+    if (!picked) return;
+    // Typed rather than assigned: the editable region reads itself back on
+    // input, so an edit it never saw would be invisible to it — and this way
+    // the browser's own undo keeps the change.
+    document.execCommand("insertText", false, `[${picked}]`);
+    setSelectedText("");
   };
 
-  /** Removing a gap stitches the text either side back together, so the
-   *  sentence reads as one field again rather than two stubs. */
-  const removeGap = (blockId: string, lineId: string, partIndex: number) => {
-    const block = doc.find((b) => b.id === blockId);
-    if (!block || block.kind !== "row") return;
-    const line = block.lines.find((l) => l.id === lineId);
-    if (!line) return;
-    const parts = line.parts.slice();
-    const before = parts[partIndex - 1];
-    const after = parts[partIndex + 1];
-    if (before?.kind === "text" && after?.kind === "text") {
-      parts.splice(partIndex - 1, 3, {
-        kind: "text",
-        text: before.text + after.text,
-      });
-    } else {
-      parts.splice(partIndex, 1);
-    }
-    patchLine(blockId, lineId, { ...line, parts });
-  };
-
-  const setAnswer = (
-    blockId: string,
-    lineId: string,
-    partIndex: number,
-    answerIndex: number,
-    value: string,
-  ) => {
-    const block = doc.find((b) => b.id === blockId);
-    if (!block || block.kind !== "row") return;
-    const line = block.lines.find((l) => l.id === lineId);
-    if (!line) return;
-    const parts = line.parts.map((p, i) => {
-      if (i !== partIndex || p.kind !== "gap") return p;
-      const answers = p.answers.length > 0 ? p.answers.slice() : [""];
-      answers[answerIndex] = value;
-      return { ...p, answers };
-    });
-    patchLine(blockId, lineId, { ...line, parts });
-  };
-
-  const addAlt = (blockId: string, lineId: string, partIndex: number) => {
-    const block = doc.find((b) => b.id === blockId);
-    if (!block || block.kind !== "row") return;
-    const line = block.lines.find((l) => l.id === lineId);
-    if (!line) return;
-    const parts = line.parts.map((p, i) =>
-      i === partIndex && p.kind === "gap"
-        ? { ...p, answers: [...(p.answers.length ? p.answers : [""]), ""] }
-        : p,
-    );
-    patchLine(blockId, lineId, { ...line, parts });
-  };
-
-  /** Reads the document from a ref, not from the closure: marking a gap can
-   *  come back a click or two later, by which time the array this handler was
-   *  built with may be a stale copy — and writing that back would undo
-   *  whatever happened in between. */
-  const patchGap = (
-    blockId: string,
-    lineId: string,
-    partIndex: number,
-    patch: { replayStartMs: number | null; replayEndMs: number | null },
-  ) => {
-    const current = docRef.current;
-    const block = current.find((b) => b.id === blockId);
-    if (!block || block.kind !== "row") return;
-    const line = block.lines.find((l) => l.id === lineId);
-    if (!line) return;
-    const parts = line.parts.map((p, i) =>
-      i === partIndex && p.kind === "gap" ? { ...p, ...patch } : p,
-    );
-    const next = { ...line, parts };
+  /** Puts a gap's words back into the sentence. Removing the chip outright
+   *  would take the words with it, and they were the author's text before
+   *  they were an answer. */
+  const unblank = (gapId: string) => {
     onChange(
-      current.map((b) =>
-        b.id === blockId && b.kind === "row"
-          ? { ...b, lines: b.lines.map((l) => (l.id === lineId ? next : l)) }
-          : b,
+      docRef.current.map((b) =>
+        b.kind !== "row"
+          ? b
+          : {
+              ...b,
+              lines: b.lines.map((l) => {
+                if (!l.parts.some((p) => p.kind === "gap" && p.id === gapId)) {
+                  return l;
+                }
+                const flattened = l.parts.map((p) =>
+                  p.kind === "gap" && p.id === gapId
+                    ? { kind: "text" as const, text: p.answers[0] ?? "" }
+                    : p,
+                );
+                // Merge the text either side, so the line reads as one field
+                // again rather than three stubs.
+                const merged: DocPart[] = [];
+                for (const part of flattened) {
+                  const last = merged[merged.length - 1];
+                  if (part.kind === "text" && last?.kind === "text") {
+                    merged[merged.length - 1] = {
+                      kind: "text",
+                      text: last.text + part.text,
+                    };
+                  } else {
+                    merged.push(part);
+                  }
+                }
+                return { ...l, parts: merged };
+              }),
+            },
       ),
     );
   };
 
-  const setText = (
-    blockId: string,
-    lineId: string,
-    partIndex: number,
-    value: string,
+  /** Patches a gap wherever it is, by id. The value cell edits its own parts
+   *  as text, so positions are its business, not this one's — and a mark can
+   *  come back a click or two after it was asked for, by which time they may
+   *  have moved. */
+  const patchGapById = (
+    gapId: string,
+    patch: { replayStartMs: number | null; replayEndMs: number | null },
   ) => {
-    const block = doc.find((b) => b.id === blockId);
-    if (!block || block.kind !== "row") return;
-    const line = block.lines.find((l) => l.id === lineId);
-    if (!line) return;
-
-    // Typing `[Chinese]` — or `[key, keys]` — turns into a gap the moment the
-    // closing bracket lands, and the caret carries on in the text after it.
-    const bracket = BRACKET_RE.exec(value);
-    if (bracket) {
-      const answers = bracket[1]
-        .split(",")
-        .map((a) => a.trim())
-        .filter(Boolean);
-      const parts: DocPart[] = [
-        ...line.parts.slice(0, partIndex),
-        { kind: "text", text: value.slice(0, bracket.index) },
-        { kind: "gap", id: newId(), answers },
-        { kind: "text", text: value.slice(bracket.index + bracket[0].length) },
-        ...line.parts.slice(partIndex + 1),
-      ];
-      pendingFocus.current = `${lineId}#${partIndex + 2}`;
-      patchLine(blockId, lineId, { ...line, parts });
-      return;
-    }
-
-    const parts = line.parts.map((p, i) =>
-      i === partIndex && p.kind === "text" ? { ...p, text: value } : p,
+    onChange(
+      docRef.current.map((b) =>
+        b.kind !== "row"
+          ? b
+          : {
+              ...b,
+              lines: b.lines.map((l) => ({
+                ...l,
+                parts: l.parts.map((p) =>
+                  p.kind === "gap" && p.id === gapId ? { ...p, ...patch } : p,
+                ),
+              })),
+            },
+      ),
     );
-    patchLine(blockId, lineId, { ...line, parts });
   };
 
   const addLine = (blockId: string) => {
     const block = doc.find((b) => b.id === blockId);
     if (!block || block.kind !== "row") return;
-    const line = { ...newTextLine(), bullet: true };
+    // Plain, not bulleted: a second line under a label is often just more of
+    // the same, and an author who wants a dash types one.
+    const line = newTextLine();
     pendingFocus.current = `${line.id}#0`;
     replaceBlock(blockId, { ...block, lines: [...block.lines, line] });
   };
@@ -391,80 +288,34 @@ export function FormBuilder({
     });
   };
 
-  /** Enter carries on down the form the way it does in a spreadsheet: from a
-   *  label into its value, from a value into a fresh row below. */
-  const onLabelKeyDown =
-    (block: Extract<DocBlock, { kind: "row" }>) =>
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key !== "Enter") return;
-      e.preventDefault();
-      pendingFocus.current = `${block.lines[0].id}#0`;
-      onChange(doc.slice());
-    };
-
-  const onValueKeyDown =
-    (blockIndex: number) => (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key !== "Enter") return;
-      e.preventDefault();
-      const row = newRow();
-      insertAfter(blockIndex, row, `label#${row.id}`);
-    };
-
-  const isEmptyStart =
-    doc.length === 1 &&
-    doc[0].kind === "row" &&
-    !doc[0].label &&
-    doc[0].lines.length === 1 &&
-    doc[0].lines[0].parts.every((p) => p.kind === "text" && !p.text);
-
   return (
     <div>
-      {/* The typing route leads, since it's the fast one and the one an author
-          keeps using; the button is the discoverable fallback beside it. */}
-      <div className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-muted-foreground">
-        <span>
-          type{" "}
-          <code className="rounded bg-primary/15 px-1.5 py-0.5 font-mono text-primary">
-            [answer]
-          </code>{" "}
-          where the gap goes
-        </span>
-        <button
-          type="button"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={makeGap}
-          title="Turn the selected word into a gap"
-          className="flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-foreground/8 hover:text-foreground"
-        >
-          <SquareDashed className="size-3.5" aria-hidden />
-          or select a word
-        </button>
+      {/* Nothing above the sheet unless there is something to act on: the
+          bracket rule reads better under the form, next to the buttons that
+          build it, and this slot would otherwise be an empty line. */}
+      {selectedText && (
+        <div className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px]">
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={makeGap}
+            title={`Blank out “${selectedText}” — it becomes the answer`}
+            className="flex max-w-full items-center gap-1.5 rounded-md bg-primary/15 px-2 py-1 text-primary transition-colors hover:bg-primary/25"
+          >
+            <SquareDashed className="size-3.5 shrink-0" aria-hidden />
+            <span className="truncate">blank out “{selectedText}”</span>
+          </button>
+        </div>
+      )}
 
-        <span className="ml-auto flex items-center gap-1">
-          <ToolbarButton
-            onClick={() => appendBlock(newRow(), undefined)}
-            icon={<Plus className="size-3.5" aria-hidden />}
-            label="row"
-          />
-          <ToolbarButton
-            onClick={() =>
-              appendBlock({ id: newId(), kind: "heading", text: "" })
-            }
-            icon={<Heading className="size-3.5" aria-hidden />}
-            label="section"
-          />
-          <ToolbarButton
-            onClick={() => appendBlock({ id: newId(), kind: "title", text: "" })}
-            icon={<Type className="size-3.5" aria-hidden />}
-            label="title"
-          />
-        </span>
-      </div>
-
-      {/* The sheet. Ruled and boxed like the paper it's copied from. */}
       {/* Deliberately not `overflow-hidden`: a gap's toolbar floats above its
           row, and clipping to the sheet cut it off. The corners are rounded on
           the end rows instead, which is all the clipping was doing. */}
+      {/* Full width, ending on the same line as the header and the
+          instructions above it. The row controls live inside it: one small
+          trigger at the row's end costs a corner of the value it may sit over,
+          which is cheaper than a permanently empty lane or a sheet that stops
+          short of everything else. */}
       <div className="rounded-lg border border-border bg-card [&>*:first-child]:rounded-t-lg [&>*:last-child]:rounded-b-lg">
         {doc.map((block, blockIndex) => (
           <div
@@ -476,6 +327,8 @@ export function FormBuilder({
                 {block.kind === "title" && (
                   <input
                     type="text"
+                    ref={register(`title#${block.id}`)}
+                    onFocus={() => setFocusedBlockId(block.id)}
                     value={block.text}
                     onChange={(e) =>
                       replaceBlock(block.id, { ...block, text: e.target.value })
@@ -489,6 +342,8 @@ export function FormBuilder({
                 {block.kind === "heading" && (
                   <input
                     type="text"
+                    ref={register(`heading#${block.id}`)}
+                    onFocus={() => setFocusedBlockId(block.id)}
                     value={block.text}
                     onChange={(e) =>
                       replaceBlock(block.id, { ...block, text: e.target.value })
@@ -500,26 +355,43 @@ export function FormBuilder({
                 )}
 
                 {block.kind === "row" && (
-                  <div className="flex transition-colors group-hover/block:bg-foreground/[0.02]">
-                    <input
-                      type="text"
-                      value={block.label}
-                      ref={register(`label#${block.id}`)}
-                      onChange={(e) =>
-                        replaceBlock(block.id, {
-                          ...block,
-                          label: e.target.value,
-                        })
-                      }
-                      onKeyDown={onLabelKeyDown(block)}
-                      placeholder="Label"
-                      aria-label="Row label"
-                      title={block.label}
-                      className="w-64 shrink-0 bg-transparent px-3 py-1.5 text-sm text-muted-foreground placeholder:text-muted-foreground/50 focus:outline-none"
-                    />
-                    <div className="min-w-0 flex-1 border-l border-border/60 px-3 py-1">
-                      {block.lines.map((line) => (
-                        <div key={line.id} className="flex items-center gap-1">
+                  <div className="transition-colors group-hover/block:bg-foreground/[0.02]">
+                    {/* Each line is its own full-width row rather than a stack
+                        inside the value cell. That puts every line's right
+                        edge on the sheet's edge, so its control can sit in the
+                        gutter beside it instead of on top of the text — and it
+                        runs the rule between the columns down the whole row,
+                        the way the printed table does. */}
+                    {block.lines.map((line, lineIndex) => (
+                      <div key={line.id} className="group/line relative flex">
+                        <div className="w-64 shrink-0">
+                          {lineIndex === 0 && (
+                            <input
+                              type="text"
+                              value={block.label}
+                              ref={register(`label#${block.id}`)}
+                              onChange={(e) =>
+                                replaceBlock(block.id, {
+                                  ...block,
+                                  label: e.target.value,
+                                })
+                              }
+                              onKeyDown={(e) => {
+                                if (e.key !== "Enter") return;
+                                e.preventDefault();
+                                pendingFocus.current = `${block.lines[0].id}#0`;
+                                onChange(doc.slice());
+                              }}
+                              onFocus={() => setFocusedBlockId(block.id)}
+                              placeholder="Label"
+                              aria-label="Row label"
+                              title={block.label}
+                              className="w-full bg-transparent px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none"
+                            />
+                          )}
+                        </div>
+
+                        <div className="flex min-w-0 flex-1 items-center gap-1 border-l border-border/60 px-3 py-1">
                           {line.bullet && (
                             <span
                               aria-hidden
@@ -528,66 +400,39 @@ export function FormBuilder({
                               –
                             </span>
                           )}
-                          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-y-1">
-                            {line.parts.map((part, partIndex) =>
-                              part.kind === "text" ? (
-                                <AutoInput
-                                  key={partIndex}
-                                  value={part.text}
-                                  onChange={(v) =>
-                                    setText(block.id, line.id, partIndex, v)
-                                  }
-                                  placeholder={
-                                    line.parts.length === 1 ? "Value" : ""
-                                  }
-                                  ariaLabel="Value text"
-                                  // An empty segment beside a gap is a place
-                                  // to type, not a field: given a real width
-                                  // it pushed every gap-at-the-start line
-                                  // right, so those rows sat out of line with
-                                  // the plain ones above them.
-                                  min={
-                                    part.text
-                                      ? 2
-                                      : line.parts.length === 1
-                                        ? 8
-                                        : 1
-                                  }
-                                  className="py-0.5 placeholder:text-muted-foreground/50"
-                                  inputRef={register(`${line.id}#${partIndex}`)}
-                                  onKeyDown={onValueKeyDown(blockIndex)}
-                                  onSelectCapture={(e) => {
-                                    const el = e.currentTarget;
-                                    focus.current = {
-                                      blockId: block.id,
-                                      lineId: line.id,
-                                      partIndex,
-                                      start: el.selectionStart ?? 0,
-                                      end: el.selectionEnd ?? 0,
-                                    };
-                                  }}
-                                />
-                              ) : (
-                                <GapChip
-                                  key={partIndex}
-                                  number={numbers.get(part.id) ?? 0}
-                                  selected={selectedGap === part.id}
-                                  editing={editingGap === part.id}
-                                  onSelect={() => setSelectedGap(part.id)}
-                                  onEdit={() => {
-                                    setEditingGap(part.id);
-                                    pendingFocus.current = `answer#${part.id}#0`;
-                                  }}
-                                  registerInput={register}
-                                  gapId={part.id}
-                                  replayStartMs={part.replayStartMs ?? null}
-                                  replayEndMs={part.replayEndMs ?? null}
-                                  markCheck={markChecks?.get(part.id)}
+                          <ValueField
+                            line={line}
+                            numbers={numbers}
+                            flagged={flagged}
+                            markChecks={markChecks}
+                            selectedGap={selectedGap}
+                            onSelectGap={setSelectedGap}
+                            placeholder={lineIndex === 0 ? "Value" : undefined}
+                            onEnter={() => {
+                              const row = newRow();
+                              insertAfter(blockIndex, row, `label#${row.id}`);
+                            }}
+                            registerInput={register(`${line.id}#0`)}
+                            onSelectionChange={setSelectedText}
+                            onChange={(parts) =>
+                              patchLine(block.id, line.id, { ...line, parts })
+                            }
+                            renderGapActions={(gapId) => {
+                              const gap = line.parts.find(
+                                (p) => p.kind === "gap" && p.id === gapId,
+                              );
+                              if (!gap || gap.kind !== "gap") return null;
+                              return (
+                                <GapActions
+                                  gapId={gapId}
+                                  replayStartMs={gap.replayStartMs ?? null}
+                                  replayEndMs={gap.replayEndMs ?? null}
+                                  markCheck={markChecks?.get(gapId)}
                                   onMark={
                                     onMarkAudio
                                       ? () =>
-                                          onMarkAudio(part.answers, (range) =>
-                                            patchGap(block.id, line.id, partIndex, {
+                                          onMarkAudio(gap.answers, (range) =>
+                                            patchGapById(gapId, {
                                               replayStartMs: range.startMs,
                                               replayEndMs: range.endMs,
                                             }),
@@ -595,98 +440,121 @@ export function FormBuilder({
                                       : undefined
                                   }
                                   onClearMark={() =>
-                                    patchGap(block.id, line.id, partIndex, {
+                                    patchGapById(gapId, {
                                       replayStartMs: null,
                                       replayEndMs: null,
                                     })
                                   }
-                                  flagged={flagged.has(
-                                    numbers.get(part.id) ?? 0,
-                                  )}
-                                  answers={
-                                    part.answers.length ? part.answers : [""]
-                                  }
-                                  onAnswerChange={(ai, v) =>
-                                    setAnswer(
-                                      block.id,
-                                      line.id,
-                                      partIndex,
-                                      ai,
-                                      v,
-                                    )
-                                  }
-                                  onAddAlt={() => {
-                                    const count = part.answers.length || 1;
-                                    setEditingGap(part.id);
-                                    pendingFocus.current = `answer#${part.id}#${count}`;
-                                    addAlt(block.id, line.id, partIndex);
-                                  }}
-                                  onRemove={() => {
+                                  onUnblank={() => {
                                     setSelectedGap(null);
-                                    setEditingGap(null);
-                                    removeGap(block.id, line.id, partIndex);
+                                    unblank(gapId);
                                   }}
                                 />
-                              ),
-                            )}
-                          </div>
-                          {block.lines.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => removeLine(block.id, line.id)}
-                              aria-label="Remove line"
-                              title="Remove line"
-                              className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover/block:opacity-100 hover:text-destructive"
-                            >
-                              <X className="size-3" aria-hidden />
-                            </button>
-                          )}
+                              );
+                            }}
+                          />
                         </div>
-                      ))}
-                    </div>
+
+                        {/* Only the added lines carry one: the first line is
+                            the row, and removing that is Delete in the row's
+                            own menu — which also owns this spot. */}
+                        {lineIndex > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => removeLine(block.id, line.id)}
+                            aria-label="Remove line"
+                            title="Remove line"
+                            className="absolute top-1 right-1 flex size-7 items-center justify-center rounded-md bg-card text-muted-foreground opacity-0 shadow-sm transition-opacity group-hover/line:opacity-100 hover:text-destructive focus-visible:opacity-100"
+                          >
+                            <X className="size-3.5" aria-hidden />
+                          </button>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
 
-              {/* Block controls sit outside the sheet's right edge and only
-                  appear on hover: the form should read as a form, not as a
-                  control panel. */}
-              <div className="absolute top-1 right-1 flex shrink-0 items-center gap-0.5 rounded-md bg-card opacity-0 shadow-sm transition-opacity group-focus-within/block:opacity-100 group-hover/block:opacity-100">
-                {block.kind === "row" && (
-                  <RowButton
-                    onClick={() => addLine(block.id)}
-                    label="Add a line under this label"
-                    icon={<CornerDownRight className="size-3" aria-hidden />}
-                  />
-                )}
-                <RowButton
-                  onClick={() => moveBlock(blockIndex, -1)}
-                  label="Move up"
-                  icon={<ChevronUp className="size-3" aria-hidden />}
-                />
-                <RowButton
-                  onClick={() => moveBlock(blockIndex, 1)}
-                  label="Move down"
-                  icon={<ChevronDown className="size-3" aria-hidden />}
-                />
-                <RowButton
-                  onClick={() => replaceBlock(block.id, null)}
-                  label="Delete"
-                  danger
-                  icon={<Trash2 className="size-3" aria-hidden />}
-                />
-              </div>
+              {/* One trigger rather than four buttons: a 36px gutter is what
+                  a row's height affords, and four icons only ever fitted by
+                  sitting on top of the text. */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    title="Row actions"
+                    aria-label="Row actions"
+                    className="absolute top-1 right-1 flex size-7 items-center justify-center rounded-md bg-card text-muted-foreground opacity-0 shadow-sm transition-opacity group-focus-within/block:opacity-100 group-hover/block:opacity-100 hover:text-foreground focus-visible:opacity-100 data-[state=open]:opacity-100"
+                  >
+                    <Ellipsis className="size-4" aria-hidden />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52">
+                  {block.kind === "row" && (
+                    <DropdownMenuItem onClick={() => addLine(block.id)}>
+                      <CornerDownRight aria-hidden />
+                      Add a line under this label
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem
+                    onClick={() => moveBlock(blockIndex, -1)}
+                    disabled={blockIndex === 0}
+                  >
+                    <ChevronUp aria-hidden />
+                    Move up
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => moveBlock(blockIndex, 1)}
+                    disabled={blockIndex === doc.length - 1}
+                  >
+                    <ChevronDown aria-hidden />
+                    Move down
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onClick={() => replaceBlock(block.id, null)}
+                  >
+                    <Trash2 aria-hidden />
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
         ))}
       </div>
 
-      {isEmptyStart && (
-        <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-          Copy the form as it appears on the paper — a label on the left, its
-          value on the right. Press Enter for the next row.
-        </p>
-      )}
+      {/* Under the sheet, where a new row goes. `title` is the exception: a
+          form has one and it belongs at the top, which is also how something
+          gets above the first row. What each does is in the tooltips and in
+          the help card at the foot of the editor — captions alongside them
+          only ever got read once, then sat there. */}
+      <div className="mt-2.5 flex flex-wrap items-center justify-center gap-1.5">
+        <ToolbarButton
+          onClick={() => addBlock(newRow())}
+          icon={<Plus className="size-3.5" aria-hidden />}
+          label="row"
+          title="Add a row after the one you're on"
+        />
+        <ToolbarButton
+          onClick={() => {
+            const block: DocBlock = { id: newId(), kind: "heading", text: "" };
+            addBlock(block, `heading#${block.id}`);
+          }}
+          icon={<Heading className="size-3.5" aria-hidden />}
+          label="section"
+          title="Add a section heading after the row you're on"
+        />
+        {!hasTitle && (
+          <ToolbarButton
+            onClick={addTitle}
+            icon={<Type className="size-3.5" aria-hidden />}
+            label="title"
+            title="Add the form's title at the top"
+          />
+        )}
+      </div>
     </div>
   );
 }
@@ -695,16 +563,19 @@ function ToolbarButton({
   onClick,
   icon,
   label,
+  title,
 }: {
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
+  title?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-foreground/8 hover:text-foreground"
+      title={title}
+      className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/60 hover:bg-foreground/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
     >
       {icon}
       {label}
@@ -712,245 +583,85 @@ function ToolbarButton({
   );
 }
 
-function RowButton({
-  onClick,
-  icon,
-  label,
-  danger,
-}: {
-  onClick: () => void;
-  icon: React.ReactNode;
-  label: string;
-  danger?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={label}
-      aria-label={label}
-      className={cn(
-        "rounded p-1 text-muted-foreground transition-colors hover:bg-foreground/8",
-        danger ? "hover:text-destructive" : "hover:text-foreground",
-      )}
-    >
-      {icon}
-    </button>
-  );
-}
-
-/** A gap: a numbered chip carrying its accepted answers. Clicking it raises
- *  a toolbar rather than putting a caret in it — the actions belong to the
- *  gap as a whole (edit, accept another answer, mark where it's said, remove)
- *  and there are too many of them to hang off the text itself.
- *
- *  The toolbar floats above the chip instead of sitting in the line. Held in
- *  the line it would have to reserve its width even while hidden, leaving a
- *  hole to the right of every gap; given no room at all, the sentence would
- *  jump each time one opened. */
-function GapChip({
+/** A selected gap's actions, floating over it. The chip itself is drawn
+ *  inside the editable text — these are the things that belong to the gap
+ *  rather than to the sentence: where it is said, and putting its words back. */
+function GapActions({
   gapId,
-  number,
-  answers,
-  flagged,
-  selected,
-  editing,
   replayStartMs,
   replayEndMs,
   markCheck,
   onMark,
   onClearMark,
-  onSelect,
-  onEdit,
-  onAnswerChange,
-  onAddAlt,
-  onRemove,
-  registerInput,
+  onUnblank,
 }: {
   gapId: string;
-  number: number;
-  answers: string[];
-  flagged: boolean;
-  selected: boolean;
-  editing: boolean;
   replayStartMs: number | null;
   replayEndMs: number | null;
   markCheck?: { found: boolean; heardAtMs: number | null };
   onMark?: () => void;
   onClearMark: () => void;
-  onSelect: () => void;
-  onEdit: () => void;
-  onAnswerChange: (index: number, value: string) => void;
-  onAddAlt: () => void;
-  onRemove: () => void;
-  registerInput: (key: string) => (el: HTMLInputElement | null) => void;
+  onUnblank: () => void;
 }) {
-  const written = answers.filter((a) => a.trim());
   const marked = replayStartMs != null;
-  // An answer that isn't said in the marked seconds isn't necessarily wrong —
-  // a spoken number written as digits, a paraphrase, or an ASR mishearing all
-  // do it — so this is a note, never an error that blocks publishing.
   const mismatch = marked && markCheck?.found === false;
+  const [position, setPosition] = useState<{
+    left: number;
+    top: number;
+  } | null>(null);
 
-  // A gap is finished in stages, and the colour says which one it's at, so a
-  // form of ten reads at a glance: red needs an answer, grey needs linking to
-  // the audio, amber is linked but the words don't match, green is done.
-  const state = flagged
-    ? "no-answer"
-    : !marked
-      ? "unlinked"
-      : mismatch
-        ? "mismatch"
-        : "done";
+  // Anchored to the chip by measurement rather than by nesting: nothing React
+  // renders may live inside the editable region, or typing near it would
+  // reconcile the text around the caret.
+  useEffect(() => {
+    const chip = document.querySelector<HTMLElement>(`[data-gap="${gapId}"]`);
+    const host = chip?.offsetParent as HTMLElement | null;
+    if (!chip || !host) return;
+    setPosition({ left: chip.offsetLeft, top: chip.offsetTop });
+  }, [gapId]);
 
-  const tone = {
-    "no-answer": {
-      chip: "border-destructive/60 bg-destructive/10",
-      selected: "border-destructive",
-      text: "text-destructive",
-    },
-    unlinked: {
-      chip: "border-border bg-foreground/5",
-      selected: "border-foreground/40",
-      text: "text-muted-foreground",
-    },
-    mismatch: {
-      chip: "border-warning/60 bg-warning/10",
-      selected: "border-warning",
-      text: "text-warning",
-    },
-    done: {
-      chip: "border-success/50 bg-success/10",
-      selected: "border-success",
-      text: "text-success",
-    },
-  }[state];
+  if (!position) return null;
 
   return (
     <span
       data-gap={gapId}
-      className={cn(
-        "relative mx-0.5 inline-flex items-baseline rounded border px-1.5 align-baseline transition-colors",
-        tone.chip,
-        selected && tone.selected,
-        !editing && "cursor-pointer hover:brightness-125",
-      )}
-      onClick={() => {
-        if (!editing) onSelect();
-      }}
+      style={{ left: position.left, top: position.top }}
+      className="absolute z-30 -translate-y-full pb-1"
     >
-      <span
-        className={cn("mr-1 text-[10px] font-semibold tabular-nums", tone.text)}
-      >
-        {number}.
-      </span>
-
-      {editing ? (
-        answers.map((answer, i) => (
-          <span key={i} className="inline-flex items-baseline">
-            {i > 0 && (
-              <span aria-hidden className="px-1 text-muted-foreground">
-                /
-              </span>
-            )}
-            <AutoInput
-              value={answer}
-              onChange={(v) => onAnswerChange(i, v)}
-              placeholder="answer"
-              ariaLabel={`Accepted answer ${i + 1} for gap ${number}`}
-              min={2}
-              pad={0.5}
-              inputRef={registerInput(`answer#${gapId}#${i}`)}
-              className={cn(tone.text, "placeholder:opacity-50")}
-            />
-          </span>
-        ))
-      ) : (
-        // Read-only until asked for: a form of ten gaps is ten live fields
-        // otherwise, every one of them a place to lose an answer to a stray
-        // keystroke.
-        <span
-          className={cn("text-sm", tone.text, flagged && "italic opacity-70")}
-        >
-          {written.length > 0 ? written.join(" / ") : "answer"}
-        </span>
-      )}
-
-      {marked && !selected && !editing && (
-        <span
-          aria-hidden
-          title={
-            mismatch
-              ? markCheck?.heardAtMs != null
-                ? `Marked here, but the transcript says it at ${formatClock(markCheck.heardAtMs) ?? "0:00"}`
-                : "The answer isn't said in the marked lines"
-              : "Marked in the audio"
+      <span className="flex w-max items-center gap-0.5 rounded-md border border-border bg-card p-0.5 shadow-md">
+        <GapAction
+          label={
+            marked
+              ? `Said at ${formatClock(replayStartMs ?? 0) ?? "0:00"}–${formatClock(replayEndMs ?? 0) ?? "0:00"} — press to re-mark`
+              : "Mark where this is said in the recording"
           }
-          className={cn("ml-1 self-center", tone.text, "opacity-70")}
-        >
-          {mismatch ? (
-            <TriangleAlert className="size-3" />
-          ) : (
-            <AudioLines className="size-3" />
-          )}
-        </span>
-      )}
-
-      {(selected || editing) && (
-        <span className="absolute right-0 bottom-full z-30 mb-1 w-max rounded-md border border-border bg-card p-0.5 shadow-md">
-          <span className="flex items-center gap-0.5">
-            <GapAction
-              label="Edit the accepted answers"
-              onClick={onEdit}
-              active={editing}
-              icon={<Pencil className="size-3" aria-hidden />}
-            />
-            <GapAction
-              label="Accept another answer"
-              onClick={onAddAlt}
-              icon={<Plus className="size-3" aria-hidden />}
-            />
-            {/* Marking is only offered once there's audio to mark against;
-                without it the button could only fail. */}
-            <GapAction
-              label={
-                marked
-                  ? `Said at ${formatClock(replayStartMs ?? 0) ?? "0:00"}–${formatClock(replayEndMs ?? 0) ?? "0:00"} — press to re-mark, or clear`
-                  : "Mark where this is said in the recording"
-              }
-              onClick={onMark}
-              active={marked}
-              disabled={!onMark}
-              icon={<AudioLines className="size-3" aria-hidden />}
-            />
-            {marked && (
-              <GapAction
-                label="Clear the audio mark"
-                onClick={onClearMark}
-                icon={<TimerReset className="size-3" aria-hidden />}
-              />
-            )}
-            <span className="mx-0.5 h-4 w-px bg-border" aria-hidden />
-            <GapAction
-              label="Remove this gap"
-              onClick={onRemove}
-              danger
-              icon={<Trash2 className="size-3" aria-hidden />}
-            />
+          onClick={onMark}
+          active={marked}
+          disabled={!onMark}
+          icon={<AudioLines className="size-3" aria-hidden />}
+        />
+        {marked && (
+          <GapAction
+            label="Clear the audio mark"
+            onClick={onClearMark}
+            icon={<TimerReset className="size-3" aria-hidden />}
+          />
+        )}
+        <span className="mx-0.5 h-4 w-px bg-border" aria-hidden />
+        <GapAction
+          label="Put the words back into the sentence"
+          onClick={onUnblank}
+          danger
+          icon={<Trash2 className="size-3" aria-hidden />}
+        />
+        {mismatch && (
+          <span className="border-l border-border px-1.5 text-[10px] whitespace-nowrap text-warning">
+            {markCheck?.heardAtMs != null
+              ? `heard at ${formatClock(markCheck.heardAtMs) ?? "0:00"}`
+              : "not said there"}
           </span>
-
-          {/* On its own line under the actions. Sharing their row, it was
-              laid out inside a box the width of the chip and broke to one
-              word per line. */}
-          {mismatch && (
-            <span className="block border-t border-border px-1.5 pt-1 pb-0.5 text-[10px] whitespace-nowrap text-warning">
-              {markCheck?.heardAtMs != null
-                ? `not said here — heard at ${formatClock(markCheck.heardAtMs) ?? "0:00"}`
-                : "not said in the marked lines"}
-            </span>
-          )}
-        </span>
-      )}
+        )}
+      </span>
     </span>
   );
 }
