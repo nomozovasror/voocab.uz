@@ -18,6 +18,14 @@ class AudioSegmentRead(BaseModel):
     end_ms: int
     text: str
     words: list[WordRead]
+    #: True when the owner has corrected this line. The word timings below are
+    #: still the ASR's and no longer line up with the text, so a caller that
+    #: renders word by word should stop doing so for an edited line.
+    edited: bool = False
+
+
+class SegmentTextUpdate(BaseModel):
+    text: str
 
 
 class AudioAssetRead(BaseModel):

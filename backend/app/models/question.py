@@ -9,9 +9,13 @@ from sqlmodel import Field, SQLModel
 class Question(SQLModel, table=True):
     """One gradeable gap within a :class:`QuestionGroup` (normalized, not
     embedded in the group's JSON config, so each answer stays individually
-    gradeable and event-sourceable). ``replay_start_ms``/``replay_end_ms`` are
-    a future hook (per-question audio replay range) — nullable and unused
-    today."""
+    gradeable and event-sourceable).
+
+    ``replay_start_ms``/``replay_end_ms`` mark where in the recording this
+    answer is said, so a student reviewing a finished attempt can hear the
+    moment they missed. Nullable: an author may never mark it, and a gap with
+    no mark simply offers no replay. Never sent before an attempt is
+    submitted — knowing where to listen is most of the question."""
 
     __tablename__ = "questions"
     __table_args__ = (

@@ -61,7 +61,13 @@ async def _group_out(session: AsyncSession, group: QuestionGroup) -> QuestionGro
         word_limit=group.word_limit,
         config=group.config,
         questions=[
-            QuestionOut(id=q.id, number=q.number, correct_answers=q.correct_answers)
+            QuestionOut(
+                id=q.id,
+                number=q.number,
+                correct_answers=q.correct_answers,
+                replay_start_ms=q.replay_start_ms,
+                replay_end_ms=q.replay_end_ms,
+            )
             for q in questions
         ],
     )

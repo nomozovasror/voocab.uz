@@ -357,3 +357,127 @@ async def test_submit_resumes_existing_in_progress_attempt_no_dupes() -> None:
             assert len(qas) == 5
     finally:
         await _cleanup(material.id, owner_email, student_email)
+
+
+@pytest.mark.asyncio
+async def test_replay_marks_round_trip_and_never_leak_before_submit() -> None:
+    """Where an answer is said is stored per question, comes back to the
+    author, and is withheld from the take response — knowing where to listen
+    is most of the question. It is released with the grading feedback, for the
+    same reason ``correct_answers`` is: the attempt is already committed."""
+    owner_email = "c-replay-owner@example.com"
+    owner = await _make_user(owner_email)
+    material = await _make_material(owner.id)
+    token = create_access_token(str(owner.id))
+
+    try:
+        async with _client() as client:
+            r_part = await client.post(
+                f"/api/materials/{material.id}/parts",
+                json={"order_index": 0, "title": "Part 1"},
+                cookies={"access_token": token},
+            )
+            assert r_part.status_code == 201, r_part.text
+            part_id = r_part.json()["id"]
+
+            r_group = await client.post(
+                f"/api/parts/{part_id}/question-groups",
+                json={
+                    "type": "form_completion",
+                    "instructions": "Complete the form.",
+                    "config": {"template": "Nationality | {{1}}\nJob | {{2}}"},
+                    "questions": [
+                        {
+                            "number": 1,
+                            "correct_answers": ["Chinese"],
+                            "replay_start_ms": 12000,
+                            "replay_end_ms": 14500,
+                        },
+                        # Unmarked: an author may publish without marking any.
+                        {"number": 2, "correct_answers": ["journalist"]},
+                    ],
+                },
+                cookies={"access_token": token},
+            )
+            assert r_group.status_code == 201, r_group.text
+            authored = r_group.json()["questions"]
+            by_number = {q["number"]: q for q in authored}
+            assert by_number[1]["replay_start_ms"] == 12000
+            assert by_number[1]["replay_end_ms"] == 14500
+            assert by_number[2]["replay_start_ms"] is None
+
+            r_take = await client.get(
+                f"/api/materials/{material.id}/take",
+                cookies={"access_token": token},
+            )
+            assert r_take.status_code == 200, r_take.text
+            assert "replay_start_ms" not in r_take.text
+            assert "replay_end_ms" not in r_take.text
+
+            take_questions = r_take.json()["parts"][0]["question_groups"][0]["questions"]
+            r_submit = await client.post(
+                f"/api/materials/{material.id}/attempts",
+                json={
+                    "answers": [
+                        {"question_id": q["id"], "given_answer": "Chinese"}
+                        for q in take_questions
+                    ]
+                },
+                cookies={"access_token": token},
+            )
+            assert r_submit.status_code == 200, r_submit.text
+            results = {r["question_id"]: r for r in r_submit.json()["results"]}
+            marked = results[by_number[1]["id"]]
+            assert marked["replay_start_ms"] == 12000
+            assert marked["replay_end_ms"] == 14500
+            assert results[by_number[2]["id"]]["replay_start_ms"] is None
+    finally:
+        await _cleanup(material.id, owner_email)
+
+
+@pytest.mark.asyncio
+async def test_inverted_replay_range_is_rejected() -> None:
+    """Same rule as a part's range: an end at or before its start is not a
+    range, and is refused rather than stored and puzzled over later."""
+    owner_email = "c-replay-bad@example.com"
+    owner = await _make_user(owner_email)
+    material = await _make_material(owner.id)
+    token = create_access_token(str(owner.id))
+
+    try:
+        async with _client() as client:
+            r_part = await client.post(
+                f"/api/materials/{material.id}/parts",
+                json={"order_index": 0, "title": "Part 1"},
+                cookies={"access_token": token},
+            )
+            part_id = r_part.json()["id"]
+
+            r_group = await client.post(
+                f"/api/parts/{part_id}/question-groups",
+                json={
+                    "type": "form_completion",
+                    "instructions": "Complete the form.",
+                    "config": {"template": "Nationality | {{1}}"},
+                    "questions": [
+                        {
+                            "number": 1,
+                            "correct_answers": ["Chinese"],
+                            "replay_start_ms": 9000,
+                            "replay_end_ms": 9000,
+                        }
+                    ],
+                },
+                cookies={"access_token": token},
+            )
+            assert r_group.status_code == 422, r_group.text
+
+            async with async_session_factory() as session:
+                groups = (
+                    await session.exec(
+                        select(QuestionGroup).where(QuestionGroup.part_id == uuid.UUID(part_id))
+                    )
+                ).all()
+                assert groups == []
+    finally:
+        await _cleanup(material.id, owner_email)

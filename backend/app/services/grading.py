@@ -126,6 +126,8 @@ async def submit_attempt(
                 "question_id": question.id,
                 "is_correct": correct,
                 "correct_answers": question.correct_answers,
+                "replay_start_ms": question.replay_start_ms,
+                "replay_end_ms": question.replay_end_ms,
             }
         )
 

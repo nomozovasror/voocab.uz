@@ -166,6 +166,8 @@ async def create_question_group(
                 group_id=group.id,
                 number=q.number,
                 correct_answers=q.correct_answers,
+                replay_start_ms=q.replay_start_ms,
+                replay_end_ms=q.replay_end_ms,
             )
         )
     await session.commit()
@@ -195,6 +197,8 @@ async def replace_question_group(
                 group_id=group.id,
                 number=q.number,
                 correct_answers=q.correct_answers,
+                replay_start_ms=q.replay_start_ms,
+                replay_end_ms=q.replay_end_ms,
             )
         )
     await session.commit()

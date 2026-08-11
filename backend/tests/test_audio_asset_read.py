@@ -225,3 +225,114 @@ async def test_other_owners_asset_and_nonexistent_asset_are_both_404() -> None:
         await _cleanup(blob_id=blob.id, asset_id=asset.id)
         await _cleanup_user("faza5-owner-real@example.com")
         await _cleanup_user("faza5-owner-other@example.com")
+
+
+@pytest.mark.asyncio
+async def test_transcript_correction_is_per_owner_and_never_touches_the_blob() -> None:
+    """The headline property of storing corrections on the asset: two owners
+    share one blob (that is the whole point of content addressing), so one
+    correcting a line must not rewrite the other's transcript — nor the ASR
+    rows underneath either of them."""
+    a_email = "override-a@example.com"
+    b_email = "override-b@example.com"
+    owner_a = await _make_user(a_email)
+    owner_b = await _make_user(b_email)
+    blob = await _make_blob(transcript_status=TranscriptStatus.READY, duration_ms=2000)
+    await _make_segment(blob.id, 0, text="the cost is fourty pounds")
+    await _make_segment(blob.id, 1, text="second line")
+    asset_a = await _make_asset(owner_a.id, blob.id)
+    asset_b = await _make_asset(owner_b.id, blob.id)
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            token_a = create_access_token(str(owner_a.id))
+            token_b = create_access_token(str(owner_b.id))
+
+            r_patch = await client.patch(
+                f"/api/audio-assets/{asset_a.id}/segments/0",
+                json={"text": "the cost is forty pounds"},
+                cookies={"access_token": token_a},
+            )
+            assert r_patch.status_code == 200, r_patch.text
+            assert r_patch.json()["text"] == "the cost is forty pounds"
+            assert r_patch.json()["edited"] is True
+
+            r_a = await client.get(
+                f"/api/audio-assets/{asset_a.id}", cookies={"access_token": token_a}
+            )
+            segments_a = r_a.json()["segments"]
+            assert segments_a[0]["text"] == "the cost is forty pounds"
+            assert segments_a[0]["edited"] is True
+            assert segments_a[1]["edited"] is False
+
+            # The other owner of the same bytes sees the transcription as it
+            # came out of the ASR.
+            r_b = await client.get(
+                f"/api/audio-assets/{asset_b.id}", cookies={"access_token": token_b}
+            )
+            segments_b = r_b.json()["segments"]
+            assert segments_b[0]["text"] == "the cost is fourty pounds"
+            assert segments_b[0]["edited"] is False
+
+            async with async_session_factory() as session:
+                row = (
+                    await session.exec(
+                        select(AudioSegment)
+                        .where(AudioSegment.blob_id == blob.id)
+                        .where(AudioSegment.order_index == 0)
+                    )
+                ).first()
+                assert row is not None
+                assert row.text == "the cost is fourty pounds"
+
+            # Sending the original text back removes the correction rather
+            # than storing a no-op one.
+            r_undo = await client.patch(
+                f"/api/audio-assets/{asset_a.id}/segments/0",
+                json={"text": "the cost is fourty pounds"},
+                cookies={"access_token": token_a},
+            )
+            assert r_undo.status_code == 200, r_undo.text
+            assert r_undo.json()["edited"] is False
+            async with async_session_factory() as session:
+                refreshed = await session.get(AudioAsset, asset_a.id)
+                assert refreshed is not None
+                assert refreshed.transcript_overrides == {}
+    finally:
+        await _cleanup(asset_id=asset_a.id)
+        await _cleanup(blob_id=blob.id, asset_id=asset_b.id)
+        await _cleanup_user(a_email)
+        await _cleanup_user(b_email)
+
+
+@pytest.mark.asyncio
+async def test_correcting_someone_elses_asset_is_404() -> None:
+    owner_email = "override-owner@example.com"
+    other_email = "override-other@example.com"
+    owner = await _make_user(owner_email)
+    other = await _make_user(other_email)
+    blob = await _make_blob(transcript_status=TranscriptStatus.READY)
+    await _make_segment(blob.id, 0)
+    asset = await _make_asset(owner.id, blob.id)
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            r = await client.patch(
+                f"/api/audio-assets/{asset.id}/segments/0",
+                json={"text": "not mine"},
+                cookies={"access_token": create_access_token(str(other.id))},
+            )
+            assert r.status_code == 404, r.text
+
+            async with async_session_factory() as session:
+                refreshed = await session.get(AudioAsset, asset.id)
+                assert refreshed is not None
+                assert refreshed.transcript_overrides == {}
+    finally:
+        await _cleanup(blob_id=blob.id, asset_id=asset.id)
+        await _cleanup_user(owner_email)
+        await _cleanup_user(other_email)

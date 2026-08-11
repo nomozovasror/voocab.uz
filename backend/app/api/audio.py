@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.api.deps import CurrentUser
 from app.core.database import AsyncSession, get_session
 from app.models.audio_blob import AudioBlob, TranscriptStatus
-from app.schemas.audio import AudioAssetRead, AudioSegmentRead
+from app.schemas.audio import AudioAssetRead, AudioSegmentRead, SegmentTextUpdate
 from app.services import audio as audio_service
 
 router = APIRouter(prefix="/api", tags=["audio"])
@@ -40,7 +40,10 @@ async def get_audio_asset(
     if blob.transcript_status == TranscriptStatus.READY:
         rows = await audio_service.get_asset_segments(session, blob.id)
         segments = [
-            AudioSegmentRead.model_validate(row, from_attributes=True) for row in rows
+            AudioSegmentRead.model_validate(row)
+            for row in audio_service.apply_overrides(
+                rows, asset.transcript_overrides or {}
+            )
         ]
 
     return AudioAssetRead(
@@ -54,3 +57,41 @@ async def get_audio_asset(
         transcript_error=blob.transcript_error,
         segments=segments,
     )
+
+
+@router.patch(
+    "/audio-assets/{asset_id}/segments/{order_index}",
+    response_model=AudioSegmentRead,
+)
+async def update_segment_text(
+    asset_id: uuid.UUID,
+    order_index: int,
+    data: SegmentTextUpdate,
+    user: CurrentUser,
+    session: SessionDep,
+) -> AudioSegmentRead:
+    """Correct one line of the transcript for this owner only.
+
+    The correction is stored on the asset, never on the blob: the blob is
+    content-addressed and shared by everyone who uploaded the same bytes, so
+    writing to it would edit other people's transcripts. Sending the ASR's own
+    text back clears the correction.
+    """
+    asset = await audio_service.get_asset(session, asset_id)
+    if asset is None or asset.owner_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Audio asset not found")
+
+    try:
+        asset = await audio_service.set_segment_override(
+            session, asset, order_index=order_index, text=data.text
+        )
+    except ValueError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Segment not found") from None
+
+    rows = await audio_service.get_asset_segments(session, asset.blob_id)
+    updated = next(
+        row
+        for row in audio_service.apply_overrides(rows, asset.transcript_overrides or {})
+        if row["order_index"] == order_index
+    )
+    return AudioSegmentRead.model_validate(updated)

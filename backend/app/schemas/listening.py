@@ -96,6 +96,20 @@ class QuestionGroupConfig(BaseModel):
 class QuestionIn(BaseModel):
     number: int = Field(ge=1)
     correct_answers: list[str] = Field(min_length=1)
+    #: Where in the recording this answer is said (§ replay). Optional — an
+    #: author can publish without marking any of them.
+    replay_start_ms: int | None = Field(default=None, ge=0)
+    replay_end_ms: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _replay_range_ordered(self) -> "QuestionIn":
+        if (
+            self.replay_start_ms is not None
+            and self.replay_end_ms is not None
+            and self.replay_end_ms <= self.replay_start_ms
+        ):
+            raise ValueError("the replay range's end must come after its start")
+        return self
 
     @field_validator("correct_answers")
     @classmethod
@@ -154,6 +168,8 @@ class QuestionOut(BaseModel):
     id: uuid.UUID
     number: int
     correct_answers: list[str]
+    replay_start_ms: int | None
+    replay_end_ms: int | None
 
 
 class QuestionGroupOut(BaseModel):
@@ -234,6 +250,11 @@ class QuestionResultOut(BaseModel):
     question_id: uuid.UUID
     is_correct: bool
     correct_answers: list[str]
+    #: Safe to send here for the same reason as ``correct_answers``: the
+    #: attempt is already committed, so pointing at the moment in the
+    #: recording is feedback rather than a hint.
+    replay_start_ms: int | None
+    replay_end_ms: int | None
 
 
 class AttemptResultOut(BaseModel):

@@ -152,7 +152,9 @@ async def get_asset(session: AsyncSession, asset_id: uuid.UUID) -> AudioAsset | 
 async def get_asset_segments(
     session: AsyncSession, blob_id: uuid.UUID
 ) -> list[AudioSegment]:
-    """The blob's ASR segments, in playback order."""
+    """The blob's ASR segments, in playback order. Raw — callers wanting what
+    an owner should see must lay their overrides over the top (see
+    :func:`apply_overrides`)."""
     return list(
         (
             await session.exec(
@@ -162,3 +164,63 @@ async def get_asset_segments(
             )
         ).all()
     )
+
+
+def apply_overrides(
+    segments: list[AudioSegment], overrides: dict[str, str]
+) -> list[dict]:
+    """The owner's view of a shared transcript: ASR segments with their
+    corrections laid over the top.
+
+    Returned as plain dicts rather than models — an override is not what is
+    stored on the row, and handing back a mutated ORM object would invite it
+    being flushed back onto the blob every other user shares.
+    """
+    out: list[dict] = []
+    for segment in segments:
+        text = overrides.get(str(segment.order_index))
+        out.append(
+            {
+                "order_index": segment.order_index,
+                "start_ms": segment.start_ms,
+                "end_ms": segment.end_ms,
+                "text": text if text is not None else segment.text,
+                "words": segment.words,
+                "edited": text is not None,
+            }
+        )
+    return out
+
+
+async def set_segment_override(
+    session: AsyncSession,
+    asset: AudioAsset,
+    *,
+    order_index: int,
+    text: str,
+) -> AudioAsset:
+    """Record (or clear) one correction. Text matching the ASR's own is
+    removed rather than stored, so an edit-and-undo leaves no trace and the
+    ``edited`` flag stays honest."""
+    segments = await get_asset_segments(session, asset.blob_id)
+    original = next(
+        (s for s in segments if s.order_index == order_index),
+        None,
+    )
+    if original is None:
+        raise ValueError("no such segment")
+
+    # JSONB is replaced wholesale: SQLAlchemy doesn't track mutations inside
+    # a dict, so patching the existing one in place would never be persisted.
+    overrides = dict(asset.transcript_overrides or {})
+    cleaned = text.strip()
+    if not cleaned or cleaned == original.text.strip():
+        overrides.pop(str(order_index), None)
+    else:
+        overrides[str(order_index)] = cleaned
+
+    asset.transcript_overrides = overrides
+    session.add(asset)
+    await session.commit()
+    await session.refresh(asset)
+    return asset
