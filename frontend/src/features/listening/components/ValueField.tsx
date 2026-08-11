@@ -39,6 +39,10 @@ interface ValueFieldProps {
   onSelectGap?: (gapId: string | null) => void;
   placeholder?: string;
   onEnter?: () => void;
+  /** Shift+Enter: another line under the same label. Handled here because the
+   *  browser's own answer — inserting a <br> — is invisible to the model and
+   *  would vanish on the next repaint. */
+  onShiftEnter?: () => void;
   registerInput?: (el: HTMLElement | null) => void;
   onSelectionChange?: (selected: string) => void;
 }
@@ -186,6 +190,7 @@ export function ValueField({
   onSelectGap,
   placeholder,
   onEnter,
+  onShiftEnter,
   registerInput,
   onSelectionChange,
 }: ValueFieldProps) {
@@ -264,10 +269,10 @@ export function ValueField({
         aria-label="Value"
         onInput={handleInput}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            onEnter?.();
-          }
+          if (e.key !== "Enter") return;
+          e.preventDefault();
+          if (e.shiftKey) onShiftEnter?.();
+          else onEnter?.();
         }}
         onClick={(e) => {
           const chip = (e.target as HTMLElement).closest("[data-gap]");

@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { ChevronDown, CircleAlert } from "lucide-react";
+import { useMemo, useState } from "react";
+import { ChevronDown, CircleAlert, SquareDashed } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FormBuilder } from "@/features/listening/components/FormBuilder";
 import { docGaps, docPublishIssues } from "@/features/listening/form-syntax";
@@ -59,6 +59,21 @@ export function QuestionFormEditor({
   const showsIssues =
     issues.length > 0 && (showIssues || flaggedGapCount(gaps) > 0);
 
+  // What is selected inside a value right now. Held here rather than in the
+  // builder so the offer to turn it into an answer can sit with the rubric,
+  // where the other answer-level settings are.
+  const [selectedText, setSelectedText] = useState("");
+
+  /** Wraps the selection in brackets. Typed through execCommand rather than
+   *  assigned: the value region reads itself back on input, so an edit it
+   *  never saw would be invisible to it — and this way the browser's own undo
+   *  keeps the change. */
+  const markAsAnswer = () => {
+    if (!selectedText) return;
+    document.execCommand("insertText", false, `[${selectedText}]`);
+    setSelectedText("");
+  };
+
   const flaggedGaps = useMemo(
     () =>
       gaps.filter((g) => !g.answers.some((a) => a.trim())).map((g) => g.number),
@@ -77,7 +92,7 @@ export function QuestionFormEditor({
           {gaps.length} {gaps.length === 1 ? "question" : "questions"}
         </span>
         <span className="rounded-full bg-primary/12 px-2 py-0.5 text-[11px] text-primary">
-          form completion
+          Form completion
         </span>
       </div>
 
@@ -98,8 +113,8 @@ export function QuestionFormEditor({
           aria-label="Instructions"
           className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none"
         />
-        <label className="flex flex-wrap items-center gap-2 pl-1 text-xs text-muted-foreground">
-          answer length
+        <label className="flex items-center gap-2 pl-1 text-xs text-muted-foreground">
+          <span className="whitespace-nowrap">Answer length</span>
           {/* A native select for the behaviour — keyboard, mobile, no menu to
               reimplement — with its own chrome stripped and the app's put
               back, so it stops looking like something the browser drew. The
@@ -129,6 +144,22 @@ export function QuestionFormEditor({
               className="pointer-events-none absolute right-2 size-3.5 text-muted-foreground"
             />
           </span>
+
+          {/* Only once a word is selected. The selection is named in the
+              tooltip rather than in the label: spelled out inline, a long
+              phrase pushed this row onto two lines. */}
+          {selectedText && (
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={markAsAnswer}
+              title={`Mark “${selectedText}” as the answer`}
+              className="flex shrink-0 items-center gap-1.5 rounded-md bg-primary/15 px-2 py-1 whitespace-nowrap text-primary transition-colors hover:bg-primary/25"
+            >
+              <SquareDashed className="size-3.5 shrink-0" aria-hidden />
+              Mark as answer
+            </button>
+          )}
         </label>
       </div>
 
@@ -140,6 +171,7 @@ export function QuestionFormEditor({
         onChange={onChange}
         flaggedGaps={flaggedGaps}
         markChecks={markChecks}
+        onSelectionChange={setSelectedText}
         onMarkAudio={onMarkAudio}
       />
 

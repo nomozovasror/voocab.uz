@@ -207,8 +207,17 @@ export default function StudioListeningEditorPage() {
   const savingRef = useRef(false);
   const rerunNeededRef = useRef(false);
 
+  /** Returns the previous state untouched when the patch changes nothing, so
+   *  React bails out of the render. Autosave writes what it just persisted
+   *  back into state, and a new object every time — even an identical one —
+   *  re-fires the effect that schedules the save. */
   const update = useCallback((patch: Partial<EditorState>) => {
-    setState((prev) => ({ ...prev, ...patch }));
+    setState((prev) => {
+      const changed = (Object.keys(patch) as (keyof EditorState)[]).some(
+        (key) => prev[key] !== patch[key],
+      );
+      return changed ? { ...prev, ...patch } : prev;
+    });
   }, []);
 
   const updatePart = useCallback((key: string, patch: Partial<PartState>) => {
@@ -345,13 +354,21 @@ export default function StudioListeningEditorPage() {
       // Merge persisted ids back in without clobbering edits made to other
       // fields (or other parts) while the loop above was awaiting network
       // calls — only patch what this save round actually touched.
-      setState((prev) => ({
-        ...prev,
-        parts: prev.parts.map((p) => {
+      // Rebuilt only if an id actually arrived. Rebuilding regardless handed
+      // back a new parts array on every save, and the autosave effect watches
+      // that array — so each save scheduled the next one and the editor
+      // PATCHed in a loop for as long as it was open.
+      setState((prev) => {
+        let changed = false;
+        const parts = prev.parts.map((p) => {
           const ids = persisted.get(p.key);
-          return ids ? { ...p, partId: ids.partId, groupId: ids.groupId } : p;
-        }),
-      }));
+          if (!ids) return p;
+          if (p.partId === ids.partId && p.groupId === ids.groupId) return p;
+          changed = true;
+          return { ...p, partId: ids.partId, groupId: ids.groupId };
+        });
+        return changed ? { ...prev, parts } : prev;
+      });
 
       const updated = await listeningApi.materials.update(materialId, {
         title: effectiveTitle,

@@ -7,7 +7,6 @@ import {
   Ellipsis,
   Heading,
   Plus,
-  SquareDashed,
   TimerReset,
   Trash2,
   Type,
@@ -18,6 +17,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
@@ -62,6 +62,9 @@ interface FormBuilderProps {
   /** Per gap id: whether the answer is actually said inside the seconds the
    *  author marked, and where it is said instead. */
   markChecks?: Map<string, { found: boolean; heardAtMs: number | null }>;
+  /** Reports what is selected inside a value, so the rubric row above can
+   *  offer to turn it into an answer. */
+  onSelectionChange?: (selected: string) => void;
   /** Asks the audio pane for the moment this gap is said. Asynchronous by
    *  nature: the author may still have to click the line, so the result comes
    *  back through the callback rather than as a return value. */
@@ -76,6 +79,7 @@ export function FormBuilder({
   onChange,
   flaggedGaps,
   markChecks,
+  onSelectionChange,
   onMarkAudio,
 }: FormBuilderProps) {
   const numbers = gapNumbers(doc);
@@ -112,7 +116,6 @@ export function FormBuilder({
   // turning into a field under the pointer.
   // The word selected in a value right now. Held as the text, not a flag, so
   // the button can name what it is about to do rather than describe itself.
-  const [selectedText, setSelectedText] = useState("");
   // Where the author is working, so a new row or section lands next to it
   // rather than at the far end of the form.
   const [focusedBlockId, setFocusedBlockId] = useState<string | null>(null);
@@ -189,20 +192,6 @@ export function FormBuilder({
           : b,
       ),
     );
-
-  /** Wraps the selected word in brackets, which is all a gap is now that a
-   *  value is edited as text. Written through execCommand so the field's own
-   *  undo stack keeps it — replacing the value outright would make it
-   *  unundoable. */
-  const makeGap = () => {
-    const picked = window.getSelection()?.toString().trim();
-    if (!picked) return;
-    // Typed rather than assigned: the editable region reads itself back on
-    // input, so an edit it never saw would be invisible to it — and this way
-    // the browser's own undo keeps the change.
-    document.execCommand("insertText", false, `[${picked}]`);
-    setSelectedText("");
-  };
 
   /** Puts a gap's words back into the sentence. Removing the chip outright
    *  would take the words with it, and they were the author's text before
@@ -290,27 +279,6 @@ export function FormBuilder({
 
   return (
     <div>
-      {/* Nothing above the sheet unless there is something to act on: the
-          bracket rule reads better under the form, next to the buttons that
-          build it, and this slot would otherwise be an empty line. */}
-      {selectedText && (
-        <div className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px]">
-          <button
-            type="button"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={makeGap}
-            title={`Blank out “${selectedText}” — it becomes the answer`}
-            className="flex max-w-full items-center gap-1.5 rounded-md bg-primary/15 px-2 py-1 text-primary transition-colors hover:bg-primary/25"
-          >
-            <SquareDashed className="size-3.5 shrink-0" aria-hidden />
-            <span className="truncate">blank out “{selectedText}”</span>
-          </button>
-        </div>
-      )}
-
-      {/* Deliberately not `overflow-hidden`: a gap's toolbar floats above its
-          row, and clipping to the sheet cut it off. The corners are rounded on
-          the end rows instead, which is all the clipping was doing. */}
       {/* Full width, ending on the same line as the header and the
           instructions above it. The row controls live inside it: one small
           trigger at the row's end costs a corner of the value it may sit over,
@@ -412,8 +380,9 @@ export function FormBuilder({
                               const row = newRow();
                               insertAfter(blockIndex, row, `label#${row.id}`);
                             }}
+                            onShiftEnter={() => addLine(block.id)}
                             registerInput={register(`${line.id}#0`)}
-                            onSelectionChange={setSelectedText}
+                            onSelectionChange={onSelectionChange}
                             onChange={(parts) =>
                               patchLine(block.id, line.id, { ...line, parts })
                             }
@@ -484,7 +453,10 @@ export function FormBuilder({
                     type="button"
                     title="Row actions"
                     aria-label="Row actions"
-                    className="absolute top-1 right-1 flex size-7 items-center justify-center rounded-md bg-card text-muted-foreground opacity-0 shadow-sm transition-opacity group-focus-within/block:opacity-100 group-hover/block:opacity-100 hover:text-foreground focus-visible:opacity-100 data-[state=open]:opacity-100"
+                    // Hover only, plus its own focus: `group-focus-within`
+                    // meant it appeared the moment the value beside it was
+                    // typed into, sitting on the words being written.
+                    className="absolute top-1 right-1 flex size-7 items-center justify-center rounded-md bg-card text-muted-foreground opacity-0 shadow-sm transition-opacity group-hover/block:opacity-100 hover:text-foreground focus-visible:opacity-100 data-[state=open]:opacity-100"
                   >
                     <Ellipsis className="size-4" aria-hidden />
                   </button>
@@ -493,7 +465,8 @@ export function FormBuilder({
                   {block.kind === "row" && (
                     <DropdownMenuItem onClick={() => addLine(block.id)}>
                       <CornerDownRight aria-hidden />
-                      Add a line under this label
+                      Add line
+                      <DropdownMenuShortcut>⇧↵</DropdownMenuShortcut>
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuItem
