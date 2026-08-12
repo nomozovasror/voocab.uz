@@ -8,6 +8,10 @@ import {
   StudioBreadcrumbProvider,
   StudioBreadcrumbs,
 } from "@/components/studio/breadcrumbs";
+import {
+  StudioHeaderSlotProvider,
+  useHeaderSlotTargets,
+} from "@/components/studio/header-slots";
 
 /**
  * Studio's own layout/navigation (brief §3.10 / §10 — authoring lives under
@@ -16,14 +20,27 @@ import {
  * top bar with tabs + a way back to the main app.
  */
 export function StudioLayout() {
+  return (
+    <StudioBreadcrumbProvider>
+      <StudioHeaderSlotProvider>
+        <StudioShell />
+      </StudioHeaderSlotProvider>
+    </StudioBreadcrumbProvider>
+  );
+}
+
+/** Inside both providers, so the header can read whether the page has taken
+ *  either of its slots over. */
+function StudioShell() {
   const { user } = useCurrentUser();
   const navigate = useNavigate();
+  const { setLeadEl, setActionsEl, leadTaken, actionsTaken } =
+    useHeaderSlotTargets();
 
   return (
     // h-svh (not min-h-svh): the dashboard is a one-screen app view, so the
     // shell must be *bounded* by the viewport — otherwise its 1fr grid rows
     // grow with their content and the board spills past the fold.
-    <StudioBreadcrumbProvider>
     <div className="flex h-svh flex-col bg-background">
       <header className="sticky top-0 z-30 w-full flex-none border-b border-border bg-background/90 backdrop-blur-md">
         <div className="mx-auto flex h-14 w-full max-w-[1500px] items-center gap-4 px-4 sm:px-6">
@@ -38,31 +55,40 @@ export function StudioLayout() {
           </div>
 
           <span className="h-4 w-px shrink-0 bg-border" aria-hidden />
-          <StudioBreadcrumbs />
 
+          {/* The page's slot comes first and the default steps aside when it
+              is filled — an editor puts the material's title here, which is
+              the same thing the trail's last crumb was repeating. */}
+          <div ref={setLeadEl} className="flex min-w-0 flex-1 items-center" />
+          {!leadTaken && <StudioBreadcrumbs />}
 
           <div className="ml-auto flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => navigate("/")}
-              aria-label="Back to app"
-              title="Back to app"
-              className="flex size-7 items-center justify-center rounded-full border border-foreground/10 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-            >
-              <ArrowLeft className="size-3.5" />
-            </button>
-            <button
-              type="button"
-              aria-label="Notifications"
-              title="Notifications"
-              className="flex size-7 items-center justify-center rounded-full border border-foreground/10 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-            >
-              <Bell className="size-3.5" />
-            </button>
-            {user && (
-              <NavLink to="/profile" aria-label="Account">
-                <UserAvatar user={user} className="size-7 text-xs" />
-              </NavLink>
+            <div ref={setActionsEl} className="flex items-center gap-2" />
+            {!actionsTaken && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => navigate("/")}
+                  aria-label="Back to app"
+                  title="Back to app"
+                  className="flex size-7 items-center justify-center rounded-full border border-foreground/10 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  <ArrowLeft className="size-3.5" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Notifications"
+                  title="Notifications"
+                  className="flex size-7 items-center justify-center rounded-full border border-foreground/10 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  <Bell className="size-3.5" />
+                </button>
+                {user && (
+                  <NavLink to="/profile" aria-label="Account">
+                    <UserAvatar user={user} className="size-7 text-xs" />
+                  </NavLink>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -80,6 +106,5 @@ export function StudioLayout() {
         </Suspense>
       </main>
     </div>
-    </StudioBreadcrumbProvider>
   );
 }
