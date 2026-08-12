@@ -12,6 +12,10 @@ export interface ListeningMaterial {
   punctuation_sensitive: boolean;
   visibility: Visibility;
   created_at: string;
+  /** Bumped by every authoring write to this material or anything under it.
+   *  Sent back in `X-Material-Version` on a write to be told (409) when
+   *  someone else has changed it in the meantime. */
+  version: number;
   segment_count: number;
 }
 

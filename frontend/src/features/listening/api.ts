@@ -1,5 +1,6 @@
 import { apiUrl } from "@/config";
 import { ApiError, api } from "@/lib/api";
+import type { RequestOptions } from "@/lib/api";
 import type {
   AudioSegment,
   AttemptResult,
@@ -60,32 +61,43 @@ export const listeningApi = {
     get: (id: string) => api.get<ListeningMaterialDetail>(`/api/materials/${id}`),
     create: (data: ListeningMaterialCreate) =>
       api.post<ListeningMaterialDetail>("/api/materials", { json: data }),
-    update: (id: string, data: ListeningMaterialUpdate) =>
-      api.patch<ListeningMaterialDetail>(`/api/materials/${id}`, { json: data }),
+    update: (
+      id: string,
+      data: ListeningMaterialUpdate,
+      opts?: RequestOptions,
+    ) =>
+      api.patch<ListeningMaterialDetail>(`/api/materials/${id}`, {
+        ...opts,
+        json: data,
+      }),
     remove: (id: string) => api.delete<void>(`/api/materials/${id}`),
   },
 
   parts: {
-    create: (materialId: string, data: PartCreate) =>
+    create: (materialId: string, data: PartCreate, opts?: RequestOptions) =>
       api.post<PartOut>(`/api/materials/${materialId}/parts`, {
+        ...opts,
         json: data,
       }),
-    update: (partId: string, data: PartUpdate) =>
-      api.patch<PartOut>(`/api/parts/${partId}`, { json: data }),
-    remove: (partId: string) => api.delete<void>(`/api/parts/${partId}`),
+    update: (partId: string, data: PartUpdate, opts?: RequestOptions) =>
+      api.patch<PartOut>(`/api/parts/${partId}`, { ...opts, json: data }),
+    remove: (partId: string, opts?: RequestOptions) =>
+      api.delete<void>(`/api/parts/${partId}`, opts),
   },
 
   questionGroups: {
-    create: (partId: string, data: QuestionGroupIn) =>
+    create: (partId: string, data: QuestionGroupIn, opts?: RequestOptions) =>
       api.post<ListeningQuestionGroup>(`/api/parts/${partId}/question-groups`, {
+        ...opts,
         json: data,
       }),
-    update: (groupId: string, data: QuestionGroupIn) =>
+    update: (groupId: string, data: QuestionGroupIn, opts?: RequestOptions) =>
       api.patch<ListeningQuestionGroup>(`/api/question-groups/${groupId}`, {
+        ...opts,
         json: data,
       }),
-    remove: (groupId: string) =>
-      api.delete<void>(`/api/question-groups/${groupId}`),
+    remove: (groupId: string, opts?: RequestOptions) =>
+      api.delete<void>(`/api/question-groups/${groupId}`, opts),
   },
 
   // --- Consumption (§8): the ONLY read path the take/practice UI may use.

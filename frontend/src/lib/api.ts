@@ -64,6 +64,13 @@ export interface RequestOptions extends Omit<RequestInit, "body"> {
    * probe (`/auth/me`), which is exactly how we detect a logged-out user.
    */
   expected401?: boolean;
+  /**
+   * Called with the response headers before the body is read, for the few
+   * endpoints that answer out of band — the material editor reads the
+   * material's new version back from `X-Material-Version` this way rather
+   * than every authoring response having to carry it in its body.
+   */
+  onHeaders?: (headers: Headers) => void;
 }
 
 function buildUrl(path: string, params?: RequestOptions["params"]): string {
@@ -81,7 +88,7 @@ function buildUrl(path: string, params?: RequestOptions["params"]): string {
 async function request<T>(
   method: string,
   path: string,
-  { json, params, headers, expected401, ...init }: RequestOptions = {},
+  { json, params, headers, expected401, onHeaders, ...init }: RequestOptions = {},
 ): Promise<T> {
   let res: Response;
   try {
@@ -101,6 +108,8 @@ async function request<T>(
     backendErrorHandler?.();
     throw new ApiError(0, "Network error. Check your connection and try again.");
   }
+
+  onHeaders?.(res.headers);
 
   if (res.status === 401) {
     if (expected401) return null as T;
