@@ -86,6 +86,24 @@ async def _cleanup(material_id: uuid.UUID, *emails: str) -> None:
         await session.commit()
 
 
+async def _make_public(material_id: uuid.UUID) -> None:
+    """Flip the material to public directly, after the API seeding is done.
+
+    Authoring writes re-check the publishing requirements and demote a public
+    material that no longer meets them, so a fixture that starts public and
+    then has parts POSTed into it is private again by the time the test runs.
+    These tests are about consumption and authorization, not about the
+    publishing rules — those have their own tests — so they set the flag they
+    need rather than build a material that satisfies every requirement.
+    """
+    async with async_session_factory() as session:
+        material = await session.get(Material, material_id)
+        assert material is not None
+        material.visibility = "public"
+        session.add(material)
+        await session.commit()
+
+
 def _client() -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
@@ -289,7 +307,7 @@ async def test_author_get_includes_answers_non_owner_get_does_not() -> None:
     viewer_email = "l5-viewer@example.com"
     owner = await _make_user(owner_email)
     viewer = await _make_user(viewer_email)
-    material = await _make_material(owner.id, visibility="public")
+    material = await _make_material(owner.id)
     owner_token = create_access_token(str(owner.id))
     viewer_token = create_access_token(str(viewer.id))
 
@@ -313,6 +331,9 @@ async def test_author_get_includes_answers_non_owner_get_does_not() -> None:
                 },
                 cookies={"access_token": owner_token},
             )
+            # Public only once the seeding is done — an authoring write to a
+            # public material re-checks it and would put it back to draft.
+            await _make_public(material.id)
 
             r_owner_get = await client.get(
                 f"/api/materials/{material.id}", cookies={"access_token": owner_token}
@@ -446,6 +467,29 @@ async def test_owner_can_update_part_audio_range() -> None:
             assert r_patch2.status_code == 200, r_patch2.text
             assert r_patch2.json()["audio_end_ms"] == 6000
             assert r_patch2.json()["audio_start_ms"] == 1000
+
+            # Explicit nulls clear the range — the part goes back to the
+            # whole recording. "Absent" and "sent as null" are different
+            # requests: reading null as absent left a trimmed part with no
+            # way back, since resetting is exactly what sends nulls.
+            r_reset = await client.patch(
+                f"/api/parts/{part_id}",
+                json={"audio_start_ms": None, "audio_end_ms": None},
+                cookies={"access_token": token},
+            )
+            assert r_reset.status_code == 200, r_reset.text
+            assert r_reset.json()["audio_start_ms"] is None
+            assert r_reset.json()["audio_end_ms"] is None
+            # The title wasn't in the body, so it stayed as it was.
+            assert r_reset.json()["title"] == "Part 1 (renamed)"
+
+            # And it really is on the row, not just in the response.
+            r_read = await client.get(
+                f"/api/materials/{material.id}", cookies={"access_token": token}
+            )
+            part = r_read.json()["parts"][0]
+            assert part["audio_start_ms"] is None
+            assert part["audio_end_ms"] is None
     finally:
         await _cleanup(material.id, email)
 

@@ -60,18 +60,28 @@ async def create_part(
 
 
 async def update_part(session: AsyncSession, part: Part, data: PartUpdate) -> Part:
-    """Partial update (title / audio range). Like ``update_material``, a
-    field is only touched when the key is present in the payload -- same
-    "can't yet explicitly clear back to null" limitation as the rest of
-    material authoring. The end>start check runs against the MERGED result
-    (existing DB value for whichever bound wasn't sent), so e.g. sending
-    only a new ``audio_end_ms`` still gets validated against the part's
-    current ``audio_start_ms``."""
+    """Partial update (title / audio range).
+
+    A field is touched only when the key is actually present in the request
+    body -- "absent" and "sent as null" are different requests, and telling
+    them apart is what lets a range be cleared. Treating null as absent (the
+    obvious reading of ``if data.audio_start_ms is not None``) meant a part
+    trimmed to a range could never be widened back to the whole recording:
+    the editor sent nulls, the server ignored them, and the old range came
+    back on the next reload with no error anywhere.
+
+    The title is the exception: it is not nullable on the row, so a null
+    there is nothing to apply rather than a request to clear it.
+
+    The end>start check runs against the MERGED result (existing DB value for
+    whichever bound wasn't sent), so e.g. sending only a new ``audio_end_ms``
+    still gets validated against the part's current ``audio_start_ms``."""
+    sent = data.model_fields_set
     if data.title is not None:
         part.title = data.title
-    if data.audio_start_ms is not None:
+    if "audio_start_ms" in sent:
         part.audio_start_ms = data.audio_start_ms
-    if data.audio_end_ms is not None:
+    if "audio_end_ms" in sent:
         part.audio_end_ms = data.audio_end_ms
 
     if (
