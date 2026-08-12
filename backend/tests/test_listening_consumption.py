@@ -34,7 +34,7 @@ async def _make_user(email: str) -> User:
         return user
 
 
-async def _make_material(author_id: uuid.UUID, *, visibility: str = "public") -> Material:
+async def _make_material(author_id: uuid.UUID, *, visibility: str = "private") -> Material:
     async with async_session_factory() as session:
         material = Material(
             author_id=author_id,
@@ -108,6 +108,25 @@ def _client() -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
 
+async def _make_public(material_id: uuid.UUID) -> None:
+    """Flip the material to public directly, after the API seeding is done.
+
+    Authoring writes re-check the publishing requirements and demote a public
+    material that no longer meets them, so a fixture that starts public and
+    then has parts POSTed into it is private again by the time the test runs.
+    These tests are about consumption and authorization, not about the
+    publishing rules — those have their own tests — so they set the flag they
+    need rather than build a material that satisfies every requirement.
+    """
+    async with async_session_factory() as session:
+        material = await session.get(Material, material_id)
+        assert material is not None
+        material.visibility = "public"
+        session.add(material)
+        await session.commit()
+
+
+
 async def _seed_group(
     client: httpx.AsyncClient, token: str, material_id: uuid.UUID
 ) -> tuple[uuid.UUID, list[dict]]:
@@ -141,6 +160,7 @@ async def _seed_group(
         cookies={"access_token": token},
     )
     assert r_group.status_code == 201, r_group.text
+    await _make_public(material_id)
     return part_id, r_group.json()["questions"]
 
 

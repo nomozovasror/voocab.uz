@@ -18,6 +18,7 @@ from app.api.materials import (
     _load_owned_or_public,
     _resolve_audio,
     claim_material_version,
+    settle_visibility,
 )
 from app.core.database import AsyncSession, get_session
 from app.models.material import Material
@@ -132,6 +133,7 @@ async def create_part(
             status.HTTP_409_CONFLICT,
             f"Part order_index {data.order_index} already used for this material",
         )
+    await settle_visibility(response, session, material)
     return _part_out(part)
 
 
@@ -147,6 +149,7 @@ async def update_part(
     part, material = await _load_owned_part(session, part_id, user.id)
     claim_material_version(request, response, session, material)
     part = await listening_service.update_part(session, part, data)
+    await settle_visibility(response, session, material)
     return _part_out(part)
 
 
@@ -161,6 +164,7 @@ async def delete_part(
     part, material = await _load_owned_part(session, part_id, user.id)
     claim_material_version(request, response, session, material)
     await listening_service.delete_part(session, part)
+    await settle_visibility(response, session, material)
 
 
 @router.post(
@@ -189,6 +193,7 @@ async def create_question_group(
             status.HTTP_409_CONFLICT,
             "Question group order_index conflict for this part — retry",
         )
+    await settle_visibility(response, session, material)
     return await _group_out(session, group)
 
 
@@ -204,6 +209,7 @@ async def update_question_group(
     group, _part, material = await _load_owned_group(session, group_id, user.id)
     claim_material_version(request, response, session, material)
     group = await listening_service.replace_question_group(session, group, data)
+    await settle_visibility(response, session, material)
     return await _group_out(session, group)
 
 
@@ -218,6 +224,7 @@ async def delete_question_group(
     group, _part, material = await _load_owned_group(session, group_id, user.id)
     claim_material_version(request, response, session, material)
     await listening_service.delete_question_group(session, group)
+    await settle_visibility(response, session, material)
 
 
 # --- Consumption (§7) -------------------------------------------------------

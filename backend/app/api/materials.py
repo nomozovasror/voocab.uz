@@ -36,6 +36,7 @@ from app.schemas.material import (
 from app.services import audio as audio_service
 from app.services import listening as listening_service
 from app.services import materials as materials_service
+from app.services import publishing as publishing_service
 from app.services import storage
 
 router = APIRouter(prefix="/api", tags=["materials"])
@@ -158,6 +159,15 @@ async def upload_audio(
 async def create_material(
     data: MaterialCreate, user: CurrentUser, session: SessionDep
 ) -> MaterialDetail:
+    # A brand-new material has no audio and no questions, so it could never
+    # meet the requirements — but the field was there to be set, and saying
+    # so plainly beats creating something public and demoting it a moment
+    # later.
+    if data.visibility == "public":
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Create the material first, then publish it once it's ready.",
+        )
     material = await materials_service.create_material(session, user.id, data)
     segments = await materials_service.get_segments(session, material.id)
     # Caller is always the owner here (just created the material), so the
@@ -253,6 +263,30 @@ def claim_material_version(
     response.headers[MATERIAL_VERSION_HEADER] = str(material.version)
 
 
+MATERIAL_VISIBILITY_HEADER = "X-Material-Visibility"
+
+
+async def settle_visibility(
+    response: Response, session: AsyncSession, material: Material
+) -> None:
+    """Run after an authoring write: a public material that no longer meets
+    the publishing requirements goes back to draft.
+
+    Authors edit published work, and an edit can genuinely break it — empty
+    the form, drop the audio mark off an answer. Refusing the edit would be
+    the wrong trade (it is their material, and half-finished is a normal
+    state to pass through); leaving it public would put something unusable in
+    front of learners. So the edit stands and the material stops being
+    public.
+
+    The outcome rides back in a header for the editor to react to — the same
+    trick as the version, and for the same reason: not every authoring
+    response is shaped to carry it in the body.
+    """
+    if await publishing_service.demote_if_unpublishable(session, material):
+        response.headers[MATERIAL_VISIBILITY_HEADER] = material.visibility
+
+
 @router.get("/materials/{material_id}", response_model=MaterialDetail)
 async def get_material(
     material_id: uuid.UUID, user: CurrentUser, session: SessionDep
@@ -286,7 +320,18 @@ async def update_material(
 ) -> MaterialDetail:
     material = await _load_owned(session, material_id, user.id)
     claim_material_version(request, response, session, material)
+    # Checked before the write, against the material as it stands: going
+    # public is the one change to refuse rather than accept and undo, since
+    # the whole point is that nobody else sees it until it holds up.
+    if data.visibility == "public" and material.visibility != "public":
+        blockers = await publishing_service.publish_blockers(session, material)
+        if blockers:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "This material isn't ready to be public — " + " ".join(blockers),
+            )
     material = await materials_service.update_material(session, material, data)
+    await settle_visibility(response, session, material)
     segments = await materials_service.get_segments(session, material.id)
     parts = await listening_service.get_author_tree(
         session, material.id, include_answers=True

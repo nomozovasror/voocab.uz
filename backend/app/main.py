@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.audio import router as audio_router
 from app.api.auth import router as auth_router
 from app.api.listening import router as listening_router
-from app.api.materials import MATERIAL_VERSION_HEADER
+from app.api.materials import MATERIAL_VERSION_HEADER, MATERIAL_VISIBILITY_HEADER
 from app.api.materials import router as materials_router
 from app.api.studio import router as studio_router
 from app.core.config import settings
@@ -28,7 +28,7 @@ app.add_middleware(
     # frontend needs to READ has to be named here as well, or the browser
     # hands JavaScript a null for it and the editor silently loses track of
     # the material version it is meant to be checking against.
-    expose_headers=[MATERIAL_VERSION_HEADER],
+    expose_headers=[MATERIAL_VERSION_HEADER, MATERIAL_VISIBILITY_HEADER],
 )
 
 app.include_router(auth_router)
