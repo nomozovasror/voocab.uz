@@ -4,7 +4,7 @@ import { Loader2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageLoader } from "@/components/ui/spinner";
-import { cn } from "@/lib/utils";
+import { PublishControl } from "@/components/studio/PublishControl";
 import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
 import { listeningApi, mediaUrl } from "@/features/listening/api";
@@ -49,8 +49,11 @@ export default function StudioMaterialEditorPage() {
       return;
     }
     setMetaError(null);
+    // Visibility is not saved here any more — publishing is its own action,
+    // with its own requirements, and folding it into "save" meant a title
+    // edit could quietly carry a publish along with it.
     updateMut.mutate(
-      { title: title.trim(), visibility },
+      { title: title.trim() },
       { onError: (e) => toast(getErrorMessage(e)) },
     );
   };
@@ -96,26 +99,13 @@ export default function StudioMaterialEditorPage() {
             />
           </div>
 
-          <div className="space-y-1.5">
-            <span className="text-sm font-medium text-foreground">Visibility</span>
-            <div className="flex gap-1 rounded-md border border-border p-1">
-              {(["private", "public"] as const).map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => setVisibility(v)}
-                  className={cn(
-                    "rounded px-3 py-1 text-sm capitalize transition-colors",
-                    visibility === v
-                      ? "bg-primary/10 text-primary"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {v}
-                </button>
-              ))}
-            </div>
-          </div>
+          <PublishControl
+            visibility={visibility}
+            onChange={async (next) => {
+              await updateMut.mutateAsync({ visibility: next });
+              setVisibility(next);
+            }}
+          />
 
           {metaError && <p className="text-sm text-destructive">{metaError}</p>}
 

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageLoader } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
+import { PublishControl } from "@/components/studio/PublishControl";
 import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
 import { materialsApi, mediaUrl } from "@/features/materials/api";
@@ -130,7 +131,6 @@ export default function MaterialEditorPage() {
       audio_url: audioUrl,
       case_sensitive: caseSensitive,
       punctuation_sensitive: punctuationSensitive,
-      visibility,
       segments: segments.map((s) => ({
         start_ms: s.start_ms,
         end_ms: s.end_ms,
@@ -169,27 +169,15 @@ export default function MaterialEditorPage() {
           </div>
 
           <div className="flex flex-wrap gap-4">
-            <div className="space-y-1.5">
-              <span className="text-sm font-medium text-foreground">
-                Visibility
-              </span>
-              <div className="flex gap-1 rounded-md border border-border p-1">
-                {(["private", "public"] as const).map((v) => (
-                  <button
-                    key={v}
-                    onClick={() => setVisibility(v)}
-                    className={cn(
-                      "rounded px-3 py-1 text-sm capitalize transition-colors",
-                      visibility === v
-                        ? "bg-primary/10 text-primary"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {v}
-                  </button>
-                ))}
-              </div>
-            </div>
+            {isEdit && (
+              <PublishControl
+                visibility={visibility}
+                onChange={async (next) => {
+                  await updateMut.mutateAsync({ visibility: next });
+                  setVisibility(next);
+                }}
+              />
+            )}
 
             <label className="flex items-center gap-2 text-sm text-foreground">
               <input

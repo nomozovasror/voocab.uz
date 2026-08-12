@@ -1,8 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { CircleQuestionMark, Loader2 } from "lucide-react";
-import { useStudioCrumbs } from "@/components/studio/breadcrumbs";
+import { ArrowLeft, CircleQuestionMark, Loader2 } from "lucide-react";
+import { useStudioHeader } from "@/components/studio/header-slots";
+import { PublishCelebration } from "@/components/studio/PublishCelebration";
+import {
+  publishMilestone,
+  type PublishMilestone,
+} from "@/features/studio/milestones";
+import {
+  PublishBar,
+  type PublishRequirement,
+} from "@/features/listening/components/PublishBar";
 import { dismissToast, toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { ApiError, getErrorMessage } from "@/lib/api";
@@ -207,7 +216,11 @@ export default function StudioListeningEditorPage() {
   const [unsavedParts, setUnsavedParts] = useState<string[]>([]);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  // The server's own refusal, which can name things the local checklist
+  // can't know about. Shown on the publish button's list.
   const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishing, setPublishing] = useState(false);
+  const [milestone, setMilestone] = useState<PublishMilestone | null>(null);
   const [badPartKey, setBadPartKey] = useState<string | null>(null);
   // Sections are stacked vertically now (no part switcher) — publish
   // validation failures scroll the offending section into view instead.
@@ -228,16 +241,10 @@ export default function StudioListeningEditorPage() {
   // without the author having to do anything.
   const [, forceTick] = useState(0);
 
-  // Trail is rendered by the layout header. Declared here (before any early
-  // return) so the hook order stays stable across loading/loaded renders.
-  useStudioCrumbs([
-    { label: "listening", to: "/studio/listening" },
-    {
-      label: state.materialId
-        ? state.title.trim() || "untitled listening"
-        : "new",
-    },
-  ]);
+  // This page fills the header itself rather than leaving a trail there.
+  // Claimed here — before any early return — so the hook order stays stable
+  // across the loading and loaded renders.
+  const Header = useStudioHeader(["lead", "actions"]);
 
   const audioPaneRef = useRef<AudioEditorHandle>(null);
   // Marking where an answer is said spans both panes: the gap is in the right
@@ -289,6 +296,8 @@ export default function StudioListeningEditorPage() {
   // point — two windows open on the same material autosave over each other
   // otherwise, and the loser finds their work gone with nothing to explain it.
   const versionRef = useRef<number | null>(null);
+  /** Set by a write whose reply says the material has gone back to draft. */
+  const demotedRef = useRef(false);
   // Both, because the save loop reads it synchronously and the banner renders
   // from it.
   const conflictRef = useRef(false);
@@ -303,6 +312,13 @@ export default function StudioListeningEditorPage() {
       onHeaders: (h: Headers) => {
         const next = h.get("X-Material-Version");
         if (next) versionRef.current = Number(next);
+        // The server re-checks a public material after every write and puts
+        // it back to draft when an edit leaves it unpublishable. Noted here
+        // and acted on once the round is over, so the author isn't told
+        // three times for one save.
+        if (h.get("X-Material-Visibility") === "private") {
+          demotedRef.current = true;
+        }
       },
     }),
     [],
@@ -427,14 +443,47 @@ export default function StudioListeningEditorPage() {
   // one part's validation failure never drops another part's edits — errors
   // are collected per part and surfaced together, naming the part.
 
+  /** Whether anything differs from what the server last accepted. Opening a
+   *  material lands in state like any other change, so without this the
+   *  editor started a save round on arrival — sending nothing, thanks to the
+   *  per-resource comparison, but still flashing "saving…" and stamping
+   *  "saved just now" over a material nobody had touched. */
+  const hasUnsentChanges = useCallback(() => {
+    const s = stateRef.current;
+    if (!s.materialId) return true;
+    if (
+      materialSignature(
+        s.title.trim() || "untitled listening",
+        s.visibility,
+        s.audioAssetId,
+      ) !== sentRef.current.material
+    ) {
+      return true;
+    }
+    return s.parts.some((part) => {
+      if (!part.partId) return true;
+      if (JSON.stringify(partPayload(part)) !== sentRef.current.parts.get(part.key)) {
+        return true;
+      }
+      const forGroup = groupPayload(part);
+      if (forGroup) {
+        return JSON.stringify(forGroup) !== sentRef.current.groups.get(part.key);
+      }
+      return Boolean(part.groupId) && isDocEmpty(part.doc);
+    });
+  }, []);
+
   const doSave = useCallback(async (): Promise<boolean> => {
     // A conflict is not something to retry into: the material on the server
     // is no longer the one this editor was built from, so every further save
     // would be refused, and forcing them through would overwrite whatever the
     // other window wrote. Autosave stops until the page is reloaded.
     if (conflictRef.current) return false;
-    savingRef.current = true;
     pendingRef.current = false;
+    // Nothing to do is a successful save, silently: no request, no spinner,
+    // and no claim about when the material was last written.
+    if (!hasUnsentChanges()) return true;
+    savingRef.current = true;
     setSaving(true);
     let sentAnything = false;
     try {
@@ -600,7 +649,22 @@ export default function StudioListeningEditorPage() {
         update({ audioUrl: updated.audio_url, durationMs: updated.duration_ms });
       }
 
-      setLastSavedAt(new Date());
+      // Only when a write actually went out. A round that found nothing to
+      // send hasn't saved anything, and saying it has is how the editor came
+      // to greet every author with "saved just now".
+      if (sentAnything) setLastSavedAt(new Date());
+      if (demotedRef.current) {
+        demotedRef.current = false;
+        update({ visibility: "private" });
+        toast({
+          id: SAVE_TOAST_ID,
+          title: "Back to draft",
+          message:
+            "That edit left the material unpublishable, so it isn't public any more. Publish again once it's complete.",
+          kind: "warning",
+          duration: 0,
+        });
+      }
       setUnsavedParts(partsUnsaved);
       setSaveError(partErrors.length > 0 ? partErrors.join(" · ") : null);
       // Only clears a failure that is now untrue. Dismissing unconditionally
@@ -622,6 +686,27 @@ export default function StudioListeningEditorPage() {
     } catch (e) {
       setSaveError(getErrorMessage(e));
       errorToastRef.current = true;
+      if (
+        e instanceof ApiError &&
+        e.status === 422 &&
+        stateRef.current.visibility === "public"
+      ) {
+        // The server keeps the publishing requirements and refused. Held on
+        // to, "public" would be re-sent every round for the same refusal, so
+        // the editor goes back to what the material actually is and passes
+        // the server's reasons on — they are more complete than the local
+        // check, which is the point of having them there.
+        update({ visibility: "private" });
+        setPublishError(e.message);
+        toast({
+          id: SAVE_TOAST_ID,
+          title: "Not published",
+          message: e.message,
+          kind: "warning",
+          duration: 0,
+        });
+        return false;
+      }
       if (e instanceof ApiError && e.status === 409) {
         conflictRef.current = true;
         setConflict(true);
@@ -658,7 +743,7 @@ export default function StudioListeningEditorPage() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reads live state via stateRef by design
-  }, [navigate, qc, update, commit]);
+  }, [navigate, qc, update, commit, hasUnsentChanges]);
 
   /** One save at a time. A caller who arrives mid-save gets the promise of
    *  the one already running: its outcome is what "did my click land"
@@ -696,6 +781,10 @@ export default function StudioListeningEditorPage() {
   useEffect(() => {
     if (!loadedRef.current && routeId) return;
     if (!routeId && state.parts.length === 0) return;
+    // Something changed, so the server's last refusal may no longer be true.
+    // Left standing it would keep the publish button on the checklist for
+    // the rest of the session.
+    setPublishError(null);
     scheduleSave(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- state fields are the deps, scheduleSave is stable
   }, [state.title, state.visibility, state.audioAssetId, state.parts]);
@@ -780,6 +869,18 @@ export default function StudioListeningEditorPage() {
     const s = stateRef.current;
     let anyPartHasGap = false;
 
+    // The same requirements the server keeps (app/services/publishing.py).
+    // Checked here too so the author hears it from the page they are on,
+    // pointing at the part that needs work — but the server is the authority,
+    // and its refusal is what actually holds.
+    const title = s.title.trim();
+    if (!title || title.toLowerCase() === "untitled listening") {
+      return { ok: false, message: "give the material a title before publishing." };
+    }
+    if (!s.audioAssetId) {
+      return { ok: false, message: "add the audio recording before publishing." };
+    }
+
     for (const part of s.parts.slice().sort((a, b) => a.orderIndex - b.orderIndex)) {
       const label = part.title.trim() || `Part ${part.orderIndex + 1}`;
       const touched =
@@ -815,43 +916,62 @@ export default function StudioListeningEditorPage() {
   const handlePublish = async () => {
     const v = validateForPublish();
     if (!v.ok) {
-      const message = v.message ?? "can't publish yet.";
-      setPublishError(message);
+      // The checklist in the publish button has already said this; all that
+      // is left is to take the author to the part that needs the work.
       setBadPartKey(v.badPartKey ?? null);
-      // No part to switch to anymore — everything's on one page, so scroll
-      // the offending section into view instead.
       if (v.badPartKey) {
         partSectionRefs.current[v.badPartKey]?.scrollIntoView({
           behavior: "smooth",
           block: "center",
         });
       }
-      toast({
-        id: SAVE_TOAST_ID,
-        title: "Not published",
-        message,
-        kind: "warning",
-      });
       return;
     }
     setPublishError(null);
     setBadPartKey(null);
+    setPublishing(true);
     update({ visibility: "public" });
-    if (await scheduleSave(true)) {
-      toast({
-        id: SAVE_TOAST_ID,
-        title: "Published",
-        message: "Anyone with the link can take this material now.",
-        kind: "success",
-      });
+    const ok = await scheduleSave(true);
+    setPublishing(false);
+    if (!ok) return;
+
+    // How many the author has out there now. Counted here rather than tracked
+    // as it goes: it is one request, only at the moment of publishing, and it
+    // can't drift from the truth the way a running total would. When the
+    // achievements section arrives this is the number it will own.
+    let milestone: PublishMilestone | null = null;
+    try {
+      const mine = await listeningApi.materials.list("mine");
+      milestone = publishMilestone(
+        mine.filter((m) => m.visibility === "public").length,
+      );
+    } catch {
+      // The material is published either way; missing the count is not worth
+      // telling the author about.
     }
+
+    if (milestone) {
+      setMilestone(milestone);
+      return;
+    }
+    // Every other publish gets an ordinary confirmation. Confetti on all of
+    // them would stop meaning anything by the third.
+    toast({
+      id: SAVE_TOAST_ID,
+      title: "Published",
+      message: "Anyone with the link can take this material now.",
+      kind: "success",
+    });
   };
 
   const handleDraft = async () => {
     setPublishError(null);
     setBadPartKey(null);
+    setPublishing(true);
     update({ visibility: "private" });
-    if (await scheduleSave(true)) {
+    const ok = await scheduleSave(true);
+    setPublishing(false);
+    if (ok) {
       toast({
         id: SAVE_TOAST_ID,
         title: "Back to draft",
@@ -860,6 +980,49 @@ export default function StudioListeningEditorPage() {
       });
     }
   };
+
+  /** The publishing requirements as a checklist, so they can be seen before
+   *  the button is pressed rather than reported one at a time afterwards.
+   *  Same rules as validateForPublish and as the server's publish_blockers —
+   *  this is the reading of them the author actually looks at. */
+  const publishRequirements = useMemo((): PublishRequirement[] => {
+    const title = state.title.trim();
+    const gaps = state.parts.flatMap((part) => docGaps(part.doc));
+    const answered = gaps.filter((g) => g.answers.some((a) => a.trim()));
+    const unmarked = answered.filter((g) => g.replayStartMs == null);
+    const partsMissingInstructions = state.parts
+      .filter((part) => docGaps(part.doc).length > 0 && !part.instructions.trim())
+      .map((part) => partLabel(part));
+
+    return [
+      {
+        label: "Give it a title",
+        done: !!title && title.toLowerCase() !== "untitled listening",
+      },
+      { label: "Add the recording", done: !!state.audioAssetId },
+      {
+        label: "Write the instructions",
+        done: partsMissingInstructions.length === 0,
+        detail: partsMissingInstructions.join(", "),
+      },
+      { label: "Add at least one question", done: gaps.length > 0 },
+      {
+        label: "Answer every question",
+        done: gaps.length > 0 && answered.length === gaps.length,
+        detail:
+          gaps.length > answered.length
+            ? `${gaps.length - answered.length} still empty`
+            : undefined,
+      },
+      {
+        label: "Link every answer to the audio",
+        done: answered.length > 0 && unmarked.length === 0,
+        detail: unmarked.length
+          ? `${unmarked.length} not linked yet`
+          : undefined,
+      },
+    ];
+  }, [state.title, state.audioAssetId, state.parts]);
 
   const hasAudioEverAttached = !!state.audioAssetId;
   // The transcript is already loaded for the player; reading it here (the
@@ -969,64 +1132,83 @@ export default function StudioListeningEditorPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col font-mono">
+      {milestone && state.materialId && (
+        <PublishCelebration
+          milestone={milestone}
+          materialTitle={state.title.trim() || "Untitled"}
+          url={`${window.location.origin}/listening/${state.materialId}`}
+          onClose={() => setMilestone(null)}
+        />
+      )}
+
       {/* Top bar — title and the actions that apply to it share one line. No
           rule under it: the layout header already draws one just above, and
           the audio label's rule follows shortly after. */}
-      <div className="flex flex-none flex-wrap items-center justify-between gap-3 pt-1 pb-2">
+      {/* Title and actions live in the app header, not on the page. They are
+          what this screen is about — the title was also the last breadcrumb,
+          said twice — and a publish button that scrolls away with the form is
+          a publish button you have to go looking for. */}
+      <Header.Lead>
+        {/* The way back, as the same round icon button the header already
+            uses on its other side, rather than a word in a trail. It leaves
+            the title as the only text here, which is what this screen is
+            about. */}
+        <Link
+          to="/studio/listening"
+          aria-label="Back to listening materials"
+          title="Back to listening materials"
+          className="mr-2 flex size-7 shrink-0 items-center justify-center rounded-full border border-foreground/10 text-muted-foreground transition-colors hover:border-foreground/20 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          <ArrowLeft className="size-3.5" aria-hidden />
+        </Link>
         <input
           type="text"
           value={state.title}
           onChange={(e) => update({ title: e.target.value })}
           placeholder="untitled listening"
           aria-label="Material title"
-          className="min-w-0 flex-1 border-b-2 border-transparent bg-transparent pb-1 text-xl font-medium text-foreground placeholder:text-muted-foreground hover:border-border focus:border-primary focus:outline-none"
+          className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 py-1 text-sm font-medium text-foreground placeholder:text-muted-foreground hover:border-border focus:border-ring focus:outline-none"
         />
+      </Header.Lead>
 
-        <div className="flex shrink-0 items-center gap-3.5">
-          {/* "saved" has to mean it. A part whose questions the API refused
-              is called out here rather than folded into a timestamp that
-              says everything is safely stored. */}
-          <span
-            className={cn(
-              "text-xs",
-              !saving && unsavedParts.length > 0
-                ? "text-warning"
-                : "text-muted-foreground",
-            )}
-          >
-            {saving
-              ? "saving…"
-              : unsavedParts.length > 0
-                ? `${unsavedParts.join(", ")} not saved — finish the answers`
-                : lastSavedAt
-                  ? `saved ${timeAgo(lastSavedAt.toISOString())}`
-                  : ""}
-          </span>
-          <button
-            type="button"
-            onClick={() => setHelpForced((v) => !v)}
-            title="How to build the form"
-            aria-label="How to build the form"
-            className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-foreground"
-          >
-            <CircleQuestionMark className="size-4" aria-hidden />
-          </button>
-          <button
-            type="button"
-            onClick={handleDraft}
-            className="text-xs text-muted-foreground hover:text-foreground"
-          >
-            draft
-          </button>
-          <button
-            type="button"
-            onClick={handlePublish}
-            className="rounded-md bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground transition-[filter] hover:brightness-[1.06]"
-          >
-            publish
-          </button>
-        </div>
-      </div>
+      <Header.Actions>
+        {/* "saved" has to mean it. A part whose questions the API refused is
+            called out here rather than folded into a timestamp that says
+            everything is safely stored. */}
+        <span
+          className={cn(
+            "hidden text-xs sm:inline",
+            !saving && unsavedParts.length > 0
+              ? "text-warning"
+              : "text-muted-foreground",
+          )}
+        >
+          {saving
+            ? "saving…"
+            : unsavedParts.length > 0
+              ? `${unsavedParts.join(", ")} not saved`
+              : lastSavedAt
+                ? `saved ${timeAgo(lastSavedAt.toISOString())}`
+                : ""}
+        </span>
+        <button
+          type="button"
+          onClick={() => setHelpForced((v) => !v)}
+          title="How to build the form"
+          aria-label="How to build the form"
+          className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-foreground"
+        >
+          <CircleQuestionMark className="size-4" aria-hidden />
+        </button>
+        <PublishBar
+          visibility={state.visibility}
+          requirements={publishRequirements}
+          refusal={publishError}
+          busy={publishing}
+          onPublish={() => void handlePublish()}
+          onUnpublish={() => void handleDraft()}
+        />
+      </Header.Actions>
 
       {/* A conflict outlives any toast and stops autosave for good, so it gets
           a place on the page rather than a message that scrolls away. */}
@@ -1043,12 +1225,6 @@ export default function StudioListeningEditorPage() {
           </button>{" "}
           to pick up the latest version. Copy anything you typed since first.
         </div>
-      )}
-
-      {!conflict && (publishError || (saveError && !partSaveError)) && (
-        <p className="flex-none pb-2 text-xs text-destructive">
-          {publishError ?? saveError}
-        </p>
       )}
 
       {/* Panes. min-h-0 caps the grid at the height left over from the title

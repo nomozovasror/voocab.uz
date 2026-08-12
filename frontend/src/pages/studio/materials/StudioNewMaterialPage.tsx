@@ -3,12 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { Loader2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
 import { listeningApi } from "@/features/listening/api";
 import { useCreateListeningMaterial } from "@/features/listening/queries";
-import type { Visibility } from "@/features/listening/types";
 
 const inputCls =
   "w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none";
@@ -18,7 +16,6 @@ export default function StudioNewMaterialPage() {
   const createMut = useCreateListeningMaterial();
 
   const [title, setTitle] = useState("");
-  const [visibility, setVisibility] = useState<Visibility>("private");
   const [audioAssetId, setAudioAssetId] = useState<string | null>(null);
   const [audioFileName, setAudioFileName] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -47,7 +44,6 @@ export default function StudioNewMaterialPage() {
       {
         title: title.trim(),
         type: "listening",
-        visibility,
         audio_asset_id: audioAssetId,
       },
       {
@@ -79,26 +75,6 @@ export default function StudioNewMaterialPage() {
             />
           </div>
 
-          <div className="space-y-1.5">
-            <span className="text-sm font-medium text-foreground">Visibility</span>
-            <div className="flex gap-1 rounded-md border border-border p-1">
-              {(["private", "public"] as const).map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => setVisibility(v)}
-                  className={cn(
-                    "rounded px-3 py-1 text-sm capitalize transition-colors",
-                    visibility === v
-                      ? "bg-primary/10 text-primary"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {v}
-                </button>
-              ))}
-            </div>
-          </div>
         </CardContent>
       </Card>
 

@@ -205,6 +205,13 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* The publish moment's panel: rises into place with a touch of overshoot, so
+   it arrives rather than appears. See PublishCelebration. */
+@keyframes celebrate {
+  from { opacity: 0; transform: translateY(12px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
 /* ── Magic-Bento card effects ─────────────────────────────────────────────
    Driven by CSS variables that MagicBento (src/components/ui/magic-bento.tsx)
    writes on pointermove: --glow-x/--glow-y (cursor position within the card)
