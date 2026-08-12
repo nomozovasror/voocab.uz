@@ -436,6 +436,108 @@ async def test_replay_marks_round_trip_and_never_leak_before_submit() -> None:
 
 
 @pytest.mark.asyncio
+async def test_editing_a_group_after_an_attempt_keeps_question_ids() -> None:
+    """The editor autosaves the whole group, so a material anyone has ever
+    answered used to fail every save: replacing the group deleted questions
+    that ``question_attempts`` still pointed at, and the FK refused. A
+    question that survives an edit must keep its id — that is what makes the
+    save legal and what keeps the learner's answers attached to it."""
+    owner_email = "c-edit-owner@example.com"
+    student_email = "c-edit-student@example.com"
+    owner = await _make_user(owner_email)
+    student = await _make_user(student_email)
+    material = await _make_material(owner.id)
+    owner_token = create_access_token(str(owner.id))
+    student_token = create_access_token(str(student.id))
+
+    try:
+        async with _client() as client:
+            part_id, questions = await _seed_group(client, owner_token, material.id)
+            by_number = {q["number"]: q["id"] for q in questions}
+
+            r_submit = await client.post(
+                f"/api/materials/{material.id}/attempts",
+                json={
+                    "answers": [
+                        {"question_id": by_number[1], "given_answer": "colour"},
+                        {"question_id": by_number[5], "given_answer": "photography"},
+                    ]
+                },
+                cookies={"access_token": student_token},
+            )
+            assert r_submit.status_code == 200, r_submit.text
+
+            async with async_session_factory() as session:
+                group_id = (
+                    await session.exec(
+                        select(QuestionGroup).where(
+                            QuestionGroup.part_id == uuid.UUID(part_id)
+                        )
+                    )
+                ).all()[0].id
+
+            # The edit the author actually makes: a corrected answer, a new
+            # mark, one gap dropped from the end.
+            r_patch = await client.patch(
+                f"/api/question-groups/{group_id}",
+                json={
+                    "type": "form_completion",
+                    "instructions": "Complete the form below.",
+                    "config": {"template": "1: {{1}}\n2: {{2}}\n3: {{3}}\n4: {{4}}"},
+                    "questions": [
+                        {
+                            "number": 1,
+                            "correct_answers": ["colour"],
+                            "replay_start_ms": 8000,
+                            "replay_end_ms": 9500,
+                        },
+                        {"number": 2, "correct_answers": ["colour", "color"]},
+                        {"number": 3, "correct_answers": ["blue sky"]},
+                        {"number": 4, "correct_answers": ["photograph"]},
+                    ],
+                },
+                cookies={"access_token": owner_token},
+            )
+            assert r_patch.status_code == 200, r_patch.text
+
+            edited = {q["number"]: q for q in r_patch.json()["questions"]}
+            assert len(edited) == 4
+            # Same rows, not lookalikes: an id that changed would mean the
+            # question was recreated and the attempt detached from it.
+            assert edited[1]["id"] == by_number[1]
+            assert edited[4]["id"] == by_number[4]
+            assert edited[1]["replay_start_ms"] == 8000
+            assert edited[4]["correct_answers"] == ["photograph"]
+
+        async with async_session_factory() as session:
+            attempt = (
+                await session.exec(
+                    select(Attempt).where(
+                        Attempt.material_id == material.id,
+                        Attempt.user_id == student.id,
+                    )
+                )
+            ).all()[0]
+            qas = (
+                await session.exec(
+                    select(QuestionAttempt).where(
+                        QuestionAttempt.attempt_id == attempt.id
+                    )
+                )
+            ).all()
+            # Grading records one row per question in the material, so the
+            # attempt started with five. The four surviving questions keep
+            # theirs; only the detail for the deleted gap 5 went with it, and
+            # the attempt keeps its own score either way.
+            assert {qa.question_id for qa in qas} == {
+                uuid.UUID(by_number[n]) for n in (1, 2, 3, 4)
+            }
+            assert attempt.score == 2
+    finally:
+        await _cleanup(material.id, owner_email, student_email)
+
+
+@pytest.mark.asyncio
 async def test_inverted_replay_range_is_rejected() -> None:
     """Same rule as a part's range: an end at or before its start is not a
     range, and is refused rather than stored and puzzled over later."""

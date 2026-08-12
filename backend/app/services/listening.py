@@ -19,6 +19,7 @@ from sqlmodel import select
 from app.core.database import AsyncSession
 from app.models.part import Part
 from app.models.question import Question
+from app.models.question_attempt import QuestionAttempt
 from app.models.question_group import QuestionGroup
 from app.schemas.listening import PartCreate, PartUpdate, QuestionGroupIn
 
@@ -89,11 +90,48 @@ async def update_part(session: AsyncSession, part: Part, data: PartUpdate) -> Pa
     return part
 
 
+async def _remove_questions(
+    session: AsyncSession, questions: list[Question]
+) -> None:
+    """Delete questions along with the per-question attempt rows pointing at
+    them.
+
+    ``question_attempts.question_id`` is a plain FK with no ON DELETE, so a
+    question anyone has ever answered cannot simply be dropped — the delete
+    raises a ForeignKeyViolation and the whole request 500s. That is not a
+    theoretical case: the editor autosaves the whole group, so a single test
+    attempt used to make every subsequent save fail.
+
+    Losing a gap costs its per-question detail, but not the attempt itself:
+    ``attempts`` carries its own ``score``/``total_questions``, so the record
+    that someone sat this material — and how they did — survives. Callers
+    reach here only for questions that are genuinely going away; a question
+    that merely changed is updated in place (see ``replace_question_group``)
+    and keeps everything.
+    """
+    if not questions:
+        return
+    ids = [question.id for question in questions]
+    attempts = (
+        await session.exec(
+            select(QuestionAttempt).where(QuestionAttempt.question_id.in_(ids))  # type: ignore[attr-defined]
+        )
+    ).all()
+    # Loaded and deleted one by one rather than in a bulk DELETE: these rows
+    # may already be in the session's identity map, and a bulk statement
+    # leaves those copies behind as live objects pointing at rows that are
+    # gone.
+    for attempt in attempts:
+        await session.delete(attempt)
+    await session.flush()
+    for question in questions:
+        await session.delete(question)
+
+
 async def delete_part(session: AsyncSession, part: Part) -> None:
     groups = await get_question_groups(session, part.id)
     for group in groups:
-        for question in await get_questions(session, group.id):
-            await session.delete(question)
+        await _remove_questions(session, await get_questions(session, group.id))
     # Flush the question deletes before the groups, and the groups before the
     # part: there's no ORM relationship to teach the unit-of-work the FK
     # order, so without this a parent delete can be issued first and trip the
@@ -178,37 +216,52 @@ async def create_question_group(
 async def replace_question_group(
     session: AsyncSession, group: QuestionGroup, data: QuestionGroupIn
 ) -> QuestionGroup:
-    """Full atomic replace of the template + question set (PATCH). Old
-    questions never linger: they're deleted and recreated within the same
-    transaction, mirroring ``_replace_segments`` for dictation."""
+    """Full atomic replace of the template + question set (PATCH).
+
+    The question set is reconciled BY NUMBER rather than wiped and recreated:
+    number 3 that survives the edit stays the same row, with the same id.
+    Recreating it looked equivalent — the tree that comes back is identical —
+    but a ``Question`` is referenced by ``QuestionAttempt``, so dropping it
+    both broke the FK (the editor autosaves, so one attempt was enough to
+    make every later save 500) and, had it been allowed to cascade, would
+    have thrown away the record of what learners answered every time the
+    author touched a comma.
+
+    Only numbers that disappear from the payload are removed, and that path
+    goes through ``_remove_questions`` for the attempts they leave behind."""
     group.type = data.type
     group.instructions = data.instructions
     group.word_limit = data.word_limit
     group.config = data.config.model_dump()
     session.add(group)
 
-    for question in await get_questions(session, group.id):
-        await session.delete(question)
+    existing = {q.number: q for q in await get_questions(session, group.id)}
+    incoming = {q.number for q in data.questions}
+
+    # Removals first, and flushed: a question's attempt rows have to go
+    # before the question, and the question before the group's new rows are
+    # written, or the unit of work is free to order those statements the
+    # other way round and trip the FK it was ordered around.
+    await _remove_questions(
+        session, [q for number, q in existing.items() if number not in incoming]
+    )
     await session.flush()
 
     for q in data.questions:
-        session.add(
-            Question(
-                group_id=group.id,
-                number=q.number,
-                correct_answers=q.correct_answers,
-                replay_start_ms=q.replay_start_ms,
-                replay_end_ms=q.replay_end_ms,
-            )
-        )
+        question = existing.get(q.number)
+        if question is None:
+            question = Question(group_id=group.id, number=q.number, correct_answers=[])
+        question.correct_answers = q.correct_answers
+        question.replay_start_ms = q.replay_start_ms
+        question.replay_end_ms = q.replay_end_ms
+        session.add(question)
     await session.commit()
     await session.refresh(group)
     return group
 
 
 async def delete_question_group(session: AsyncSession, group: QuestionGroup) -> None:
-    for question in await get_questions(session, group.id):
-        await session.delete(question)
+    await _remove_questions(session, await get_questions(session, group.id))
     await session.flush()
     await session.delete(group)
     await session.commit()
@@ -289,7 +342,17 @@ async def get_author_tree(
         for group in await get_question_groups(session, part.id):
             questions: list[dict] = []
             for question in await get_questions(session, group.id):
-                q: dict = {"id": question.id, "number": question.number}
+                q: dict = {
+                    "id": question.id,
+                    "number": question.number,
+                    # Where the answer is said. Author-facing only — this tree
+                    # is gated on ownership by the caller, and the take tree
+                    # (get_take_tree) is a separate function that never sees
+                    # these. Left out here, reopening a material lost every
+                    # mark, and the next autosave wrote the loss back.
+                    "replay_start_ms": question.replay_start_ms,
+                    "replay_end_ms": question.replay_end_ms,
+                }
                 if include_answers:
                     q["correct_answers"] = question.correct_answers
                 questions.append(q)
