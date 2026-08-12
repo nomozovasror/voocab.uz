@@ -17,6 +17,7 @@ from sqlmodel import select
 from app.core.database import AsyncSession
 from app.models.material import Material
 from app.models.segment import Segment
+from app.models.segment_attempt import SegmentAttempt
 from app.schemas.material import MaterialCreate, MaterialUpdate, SegmentIn
 from app.services import audio as audio_service
 
@@ -37,26 +38,81 @@ async def _check_owned_audio_asset(
         )
 
 
+async def _remove_segments(session: AsyncSession, segments: list[Segment]) -> None:
+    """Delete segments along with the per-segment attempt rows pointing at
+    them.
+
+    ``segment_attempts.segment_id`` is a plain FK with no ON DELETE, so a
+    segment anyone has ever practised cannot simply be dropped — the delete
+    raises a ForeignKeyViolation and the whole request 500s. What is lost is
+    the word-level detail of a segment that no longer exists; the attempt
+    itself keeps its own ``score``, so the record that someone worked through
+    this material survives. (Same reasoning, and the same shape, as
+    ``listening._remove_questions``.)
+    """
+    if not segments:
+        return
+    ids = [segment.id for segment in segments]
+    attempts = (
+        await session.exec(
+            select(SegmentAttempt).where(SegmentAttempt.segment_id.in_(ids))  # type: ignore[attr-defined]
+        )
+    ).all()
+    for attempt in attempts:
+        await session.delete(attempt)
+    await session.flush()
+    for segment in segments:
+        await session.delete(segment)
+
+
 async def _replace_segments(
     session: AsyncSession, material_id: uuid.UUID, segments: list[SegmentIn]
 ) -> None:
-    existing = (
-        await session.exec(
-            select(Segment).where(Segment.material_id == material_id)
-        )
-    ).all()
-    for seg in existing:
-        await session.delete(seg)
+    """Reconcile the segment set BY POSITION rather than wiping and
+    recreating it. Segment 3 that survives an edit stays the same row, with
+    the same id: it is what ``SegmentAttempt`` points at, so recreating it
+    both broke the FK — an edit to a material anyone had practised failed
+    outright — and would have thrown away what learners typed every time the
+    author fixed a comma. Only positions that fall off the end are removed,
+    and those go through ``_remove_segments`` for the attempts they leave
+    behind."""
+    existing = {
+        segment.order_index: segment
+        for segment in (
+            await session.exec(
+                select(Segment).where(Segment.material_id == material_id)
+            )
+        ).all()
+    }
+
+    # Removals first, and flushed: an attempt row has to go before its
+    # segment, or the unit of work is free to order the statements the other
+    # way round and trip the FK this is ordered around.
+    await _remove_segments(
+        session,
+        [
+            segment
+            for order_index, segment in existing.items()
+            if order_index >= len(segments)
+        ],
+    )
+    await session.flush()
+
     for i, seg in enumerate(segments):
-        session.add(
-            Segment(
+        segment = existing.get(i)
+        if segment is None:
+            segment = Segment(
                 material_id=material_id,
                 order_index=i,
                 start_ms=seg.start_ms,
                 end_ms=seg.end_ms,
                 reference_text=seg.reference_text,
             )
-        )
+        else:
+            segment.start_ms = seg.start_ms
+            segment.end_ms = seg.end_ms
+            segment.reference_text = seg.reference_text
+        session.add(segment)
 
 
 async def create_material(
@@ -147,8 +203,7 @@ async def update_material(
 
 
 async def delete_material(session: AsyncSession, material: Material) -> None:
-    for seg in await get_segments(session, material.id):
-        await session.delete(seg)
+    await _remove_segments(session, await get_segments(session, material.id))
     # Flush the segment deletes before removing the parent: there's no ORM
     # relationship to teach the unit-of-work the FK order, so without this the
     # material delete can be issued first and trip the FK constraint.
