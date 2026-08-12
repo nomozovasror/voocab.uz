@@ -3,13 +3,14 @@ import { ChevronDown, CircleAlert, SquareDashed } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FormBuilder } from "@/features/listening/components/FormBuilder";
 import { docGaps, docPublishIssues } from "@/features/listening/form-syntax";
-import { ANSWER_RUBRICS } from "@/features/listening/rubric";
+import { ANSWER_RUBRICS, deriveRubric } from "@/features/listening/rubric";
 import type { DocBlock } from "@/features/listening/form-syntax";
 import type { AnswerRubric } from "@/features/listening/types";
 
 interface QuestionFormEditorProps {
   doc: DocBlock[];
-  onChange: (doc: DocBlock[]) => void;
+  /** Applied against the latest document — see FormBuilder's note. */
+  onChange: (edit: (current: DocBlock[]) => DocBlock[]) => void;
   instructions: string;
   onInstructionsChange: (v: string) => void;
   rubric: AnswerRubric | null;
@@ -74,6 +75,12 @@ export function QuestionFormEditor({
     setSelectedText("");
   };
 
+  // What the answers imply, offered as the default. Left on "auto" it is what
+  // gets stored — the take page can't work it out for itself, since it never
+  // sees the answers.
+  const derived = useMemo(() => deriveRubric(doc), [doc]);
+  const derivedLabel = ANSWER_RUBRICS.find((r) => r.value === derived)?.label;
+
   const flaggedGaps = useMemo(
     () =>
       gaps.filter((g) => !g.answers.some((a) => a.trim())).map((g) => g.number),
@@ -132,7 +139,9 @@ export function QuestionFormEditor({
               aria-label="Answer length"
               className="appearance-none rounded-md border border-border bg-transparent py-1 pr-7 pl-2.5 text-xs text-foreground transition-colors hover:border-foreground/30 focus-visible:border-ring focus-visible:outline-none"
             >
-              <option value="">not stated</option>
+              <option value="">
+              {derivedLabel ? `auto — ${derivedLabel}` : "auto"}
+            </option>
               {ANSWER_RUBRICS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}

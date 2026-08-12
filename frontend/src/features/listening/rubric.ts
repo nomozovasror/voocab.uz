@@ -1,3 +1,4 @@
+import { docGaps, type DocBlock } from "@/features/listening/form-syntax";
 import type { AnswerRubric } from "@/features/listening/types";
 
 /**
@@ -68,4 +69,45 @@ export function rubricSentence(
     return `Write no more than ${wordLimit} ${wordLimit === 1 ? "word" : "words"} for each answer.`;
   }
   return null;
+}
+
+
+/** A token that is only digits and the punctuation that goes with them — a
+ *  date, a price, a room number. The rubric counts these separately from
+ *  words, which is what "AND/OR A NUMBER" means. */
+function isNumeric(token: string): boolean {
+  return /\d/.test(token) && !/[a-z]/i.test(token);
+}
+
+/**
+ * The rubric the answers themselves imply: the longest answer decides how
+ * many words are allowed, and any digit anywhere decides whether a number is
+ * allowed on top of them.
+ *
+ * Offered as the default, never forced. The rubric is a limit on what the
+ * candidate may write, not a description of the answer key — a real paper
+ * often says "NO MORE THAN TWO WORDS" where every answer happens to be one —
+ * so an author reproducing that paper has to be able to say so.
+ */
+export function deriveRubric(doc: DocBlock[]): AnswerRubric | null {
+  const answers = docGaps(doc)
+    .flatMap((gap) => gap.answers)
+    .map((a) => a.trim())
+    .filter(Boolean);
+  if (answers.length === 0) return null;
+
+  let words = 1;
+  let hasNumber = false;
+
+  for (const answer of answers) {
+    const tokens = answer.split(/\s+/).filter(Boolean);
+    const numeric = tokens.filter(isNumeric);
+    if (numeric.length > 0) hasNumber = true;
+    // Numbers don't count against the word allowance — that is the whole
+    // point of the "and/or a number" wording.
+    words = Math.max(words, Math.min(3, tokens.length - numeric.length || 1));
+  }
+
+  const key = ["", "one_word", "two_words", "three_words"][words];
+  return (hasNumber ? `${key}_number` : key) as AnswerRubric;
 }

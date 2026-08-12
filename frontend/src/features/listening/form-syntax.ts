@@ -39,6 +39,9 @@ export type FormBlock =
   | { kind: "title"; text: string }
   | { kind: "heading"; text: string }
   | { kind: "row"; label: string; lines: FormLine[] }
+  /** A rule across the form. On the printed page these separate groups of
+   *  fields rather than every row, so they are placed, never implied. */
+  | { kind: "divider" }
   | { kind: "space" };
 
 // ── Escaping ─────────────────────────────────────────────────────────────
@@ -110,6 +113,11 @@ function parseBlocks(
     }
 
     const trimmed = line.trim();
+    if (/^-{3,}$/.test(trimmed)) {
+      openRow = null;
+      blocks.push({ kind: "divider" });
+      continue;
+    }
     if (trimmed.startsWith("## ")) {
       openRow = null;
       blocks.push({
@@ -188,6 +196,7 @@ export interface DocLine {
 export type DocBlock =
   | { id: string; kind: "title"; text: string }
   | { id: string; kind: "heading"; text: string }
+  | { id: string; kind: "divider" }
   | { id: string; kind: "row"; label: string; lines: DocLine[] };
 
 let idCounter = 0;
@@ -263,6 +272,10 @@ export function docToGroup(doc: DocBlock[]): {
 
   const lines: string[] = [];
   for (const block of doc) {
+    if (block.kind === "divider") {
+      lines.push("---");
+      continue;
+    }
     if (block.kind === "title") {
       lines.push(`# ${escapePipes(block.text)}`, "");
       continue;
@@ -306,6 +319,10 @@ export function docFromGroup(
 
   for (const block of parseTemplateLayout(template)) {
     if (block.kind === "space") continue;
+    if (block.kind === "divider") {
+      doc.push({ id: newId(), kind: "divider" });
+      continue;
+    }
     if (block.kind === "title" || block.kind === "heading") {
       doc.push({ id: newId(), kind: block.kind, text: block.text });
       continue;
@@ -339,8 +356,10 @@ export function docFromGroup(
 export function docToLayout(doc: DocBlock[]): FormBlock[] {
   const numbers = gapNumbers(doc);
   return doc.map((block) =>
-    block.kind === "row"
-      ? {
+    block.kind === "divider"
+      ? { kind: "divider" as const }
+      : block.kind === "row"
+        ? {
           kind: "row" as const,
           label: block.label,
           lines: block.lines.map((line) => ({
@@ -408,6 +427,7 @@ export function isGroupPersistable(
 /** Whether the author has put anything of their own in yet. */
 export function isDocEmpty(doc: DocBlock[]): boolean {
   return doc.every((block) => {
+    if (block.kind === "divider") return true;
     if (block.kind !== "row") return block.text.trim() === "";
     if (block.label.trim()) return false;
     return block.lines.every((line) =>

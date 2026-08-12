@@ -14,7 +14,6 @@ import {
   ArrowRightToLine,
   ArrowDown,
   ArrowUp,
-  Crosshair,
   Gauge,
   Info,
   Loader2,
@@ -946,10 +945,21 @@ export const AudioEditorPane = forwardRef<
 
   const segments = useMemo(() => asset?.segments ?? [], [asset]);
   const filteredSegments = useMemo(() => {
-    if (!search.trim()) return segments;
+    let visible = segments;
+
+    // Trim view narrows the transcript to the part, the same way it narrows
+    // the waveform: outside the marked seconds nothing belongs to this part,
+    // so it is neither worth reading nor worth marking an answer against.
+    if (focused && partAudioStart != null && partAudioEnd != null) {
+      visible = visible.filter(
+        (s) => s.start_ms < partAudioEnd && s.end_ms > partAudioStart,
+      );
+    }
+
     const q = search.trim().toLowerCase();
-    return segments.filter((s) => s.text.toLowerCase().includes(q));
-  }, [segments, search]);
+    if (!q) return visible;
+    return visible.filter((s) => s.text.toLowerCase().includes(q));
+  }, [segments, search, focused, partAudioStart, partAudioEnd]);
 
   // The last segment that has started, not the one strictly containing the
   // playhead: speech has gaps between sentences, and requiring containment
@@ -1605,9 +1615,10 @@ export const AudioEditorPane = forwardRef<
                       time in directly if you already know it.
                     </HelpRow>
                     <HelpRow
-                      icon={<Crosshair className="size-3.5" aria-hidden />}
+                      icon={<ArrowRightToLine className="size-3.5" aria-hidden />}
                     >
-                      Sets that edge to wherever playback has reached.
+                      The button beside each one sets that edge to wherever
+                      playback has reached.
                     </HelpRow>
                     <HelpRow
                       icon={<Scissors className="size-3.5" aria-hidden />}
@@ -1849,8 +1860,17 @@ export const AudioEditorPane = forwardRef<
           // afterwards — pointerdown lands first, click has the last word.
           onPointerDown={onTranscriptInput}
           className={cn(
-            "scrollbar-quiet relative min-h-0 flex-1 overflow-y-auto pr-1 text-sm leading-loose",
-            picking && "cursor-crosshair rounded-md ring-1 ring-primary/40",
+            // `leading-loose` set wrapped lines within one line of speech as
+            // far apart as two separate ones, so a long line read as several.
+            // Relaxed keeps them together while the rows' own padding still
+            // separates one line of speech from the next.
+            "scrollbar-quiet relative min-h-0 flex-1 overflow-y-auto pr-1 text-[15px] leading-relaxed",
+            // `select-none` while picking: shift-click is how a mark is
+            // stretched over several lines, and shift-click is also how a
+            // browser extends a text selection — so every extension came with
+            // the transcript turning blue behind it.
+            picking &&
+              "cursor-crosshair rounded-md ring-1 ring-primary/40 select-none",
           )}
         >
           {asset === undefined && assetLoading && (
@@ -2039,15 +2059,15 @@ function RangeField({
   onCommit: (ms: number) => void;
   onPlayhead: () => void;
   label: string;
-  /** Marks which edge this is: |→ opens the range, →| closes it. The words
-   *  "start"/"end" said the same thing in twice the height, and the icons
-   *  read left-to-right the way the timeline does. */
+  /** Marks which edge this is: |→ opens the range, →| closes it, read
+   *  left-to-right the way the timeline does. It rides on the button rather
+   *  than sitting in the field: the button is the thing that acts on that
+   *  edge, and the field then holds nothing but the time. */
   icon: React.ReactNode;
 }) {
   return (
     <span className="flex h-7 shrink-0 items-stretch overflow-hidden rounded-md border border-border/80 focus-within:border-primary">
-      <label className="flex cursor-text items-center gap-1.5 pl-2 text-muted-foreground">
-        {icon}
+      <label className="flex cursor-text items-center pl-2 text-muted-foreground">
         <TimeField ms={ms} onCommit={onCommit} label={label} bare />
       </label>
       <button
@@ -2057,7 +2077,7 @@ function RangeField({
         aria-label={`${label} at playhead`}
         className="flex w-8 shrink-0 items-center justify-center border-l border-border/80 bg-foreground/8 text-muted-foreground transition-colors hover:bg-primary/15 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
       >
-        <Crosshair className="size-3.5" aria-hidden />
+        {icon}
       </button>
     </span>
   );
@@ -2261,8 +2281,18 @@ const TranscriptSegment = memo(function TranscriptSegment({
 
   return (
     <div
+      data-order={segment.order_index}
+      role="button"
+      tabIndex={0}
+      onClick={() => onSelect(segment)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect(segment);
+        }
+      }}
       className={cn(
-        "group/line relative flex w-full items-start gap-2.5 rounded-md px-2 py-1 transition-colors hover:bg-foreground/6",
+        "group/line relative flex w-full cursor-pointer items-start gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-foreground/6",
         current && "bg-foreground/6",
         // Two different things: the faint tint says "an answer is marked
         // here", the strong one says "this is what you're picking right now".
@@ -2271,39 +2301,32 @@ const TranscriptSegment = memo(function TranscriptSegment({
         flashed && "line-flash",
       )}
     >
-      <button
-        type="button"
-        data-order={segment.order_index}
-        onClick={() => onSelect(segment)}
-        className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
-      >
-        <span className="mt-0.5 shrink-0 text-[11px] tabular-nums text-muted-foreground">
-          {fmt(segment.start_ms)}
-        </span>
-        <span
-          className={cn(current ? "text-foreground" : "text-muted-foreground")}
-        >
-          {content}
-        </span>
-      </button>
-      {/* Tucked into the corner and left grey: it's a footnote about where
-          the text came from, not something to read on the way past. */}
-      {segment.edited && (
-        <span
-          aria-hidden
-          title="You corrected this line"
-          className="pointer-events-none absolute right-2 bottom-0 text-[9px] text-muted-foreground/60"
-        >
-          edited
-        </span>
-      )}
-      <span className="flex shrink-0 items-center gap-1">
+      <span className="mt-1 shrink-0 text-xs tabular-nums text-muted-foreground">
+        {fmt(segment.start_ms)}
+      </span>
+      <span className={cn(current ? "text-foreground" : "text-muted-foreground")}>
+        {content}
+        {/* Both of these follow the last word rather than sitting in a column
+            of their own. Held in the row as flex siblings they reserved their
+            width whether or not they were showing, and every line ended in a
+            band of empty space. */}
+        {segment.edited && (
+          <span
+            title="You corrected this line"
+            className="ml-1.5 align-baseline text-[9px] text-muted-foreground/60"
+          >
+            edited
+          </span>
+        )}
         <button
           type="button"
-          onClick={onEdit}
+          onClick={(e) => {
+            e.stopPropagation();
+            onEdit();
+          }}
           title="Correct this line"
           aria-label={`Correct the line at ${fmt(segment.start_ms)}`}
-          className="rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover/line:opacity-100 hover:text-foreground focus-visible:opacity-100"
+          className="ml-1 hidden translate-y-0.5 rounded p-0.5 text-muted-foreground group-hover/line:inline-flex group-focus-within/line:inline-flex hover:text-foreground"
         >
           <Pencil className="size-3" aria-hidden />
         </button>

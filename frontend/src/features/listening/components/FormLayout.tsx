@@ -29,6 +29,12 @@ export function FormLayout({ blocks, renderGap, className }: FormLayoutProps) {
           return <div key={i} className="h-3" aria-hidden />;
         }
 
+        if (block.kind === "divider") {
+          return (
+            <div key={i} className="my-2 h-px bg-border" role="separator" />
+          );
+        }
+
         if (block.kind === "title") {
           return (
             <h3

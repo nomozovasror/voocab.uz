@@ -59,19 +59,29 @@ function nodeText(node: ChildNode): string {
   return node.textContent ?? "";
 }
 
-function readDom(root: HTMLElement): { text: string; hasRawGap: boolean } {
+function readDom(root: HTMLElement): {
+  text: string;
+  hasRawGap: boolean;
+  hasStrayNode: boolean;
+} {
   let text = "";
   let hasRawGap = false;
+  let hasStrayNode = false;
+
   for (const node of Array.from(root.childNodes)) {
-    if (
-      node.nodeType === Node.TEXT_NODE &&
-      RAW_GAP_RE.test(node.textContent ?? "")
-    ) {
-      hasRawGap = true;
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (RAW_GAP_RE.test(node.textContent ?? "")) hasRawGap = true;
+    } else if (!(node instanceof HTMLElement && node.dataset.gap)) {
+      // Anything the browser put here of its own accord: a <br> left behind
+      // when the text before a chip is deleted, a <div> from a paste. The
+      // model can't see them — they carry no text — so they sit in the DOM
+      // breaking the line while nothing upstream knows why.
+      hasStrayNode = true;
     }
     text += nodeText(node);
   }
-  return { text, hasRawGap };
+
+  return { text, hasRawGap, hasStrayNode };
 }
 
 function caretOffset(root: HTMLElement): number {
@@ -231,13 +241,14 @@ export function ValueField({
   const handleInput = () => {
     const root = rootRef.current;
     if (!root) return;
-    const { text, hasRawGap } = readDom(root);
+    const { text, hasRawGap, hasStrayNode } = readDom(root);
     const parts = textToParts(text, partsRef.current);
 
-    if (hasRawGap) {
-      // A bracket was completed. The caret is noted, and the signature is
-      // left stale on purpose so the effect above repaints the region with a
-      // chip in place of the text — then puts the caret back just past it.
+    if (hasRawGap || hasStrayNode) {
+      // A bracket was completed, or the browser left something of its own
+      // behind. Either way the DOM and the model have parted company: the
+      // caret is noted and the signature left stale on purpose, so the effect
+      // above repaints from the model and puts the caret back where it was.
       caretRef.current = caretOffset(root);
     } else {
       // Ordinary typing: the DOM already shows exactly this, so the effect is
@@ -268,6 +279,18 @@ export function ValueField({
         role="textbox"
         aria-label="Value"
         onInput={handleInput}
+        onPaste={(e) => {
+          // Paste as text. A contentEditable takes whatever HTML the
+          // clipboard holds — the source's font, colour, links and all — and
+          // that styling then rides along into the stored template. Newlines
+          // collapse to spaces: a value is one line, and pasted ones would
+          // otherwise arrive as <div>s the model can't read back.
+          e.preventDefault();
+          const text = e.clipboardData
+            .getData("text/plain")
+            .replace(/\s*\n\s*/g, " ");
+          if (text) document.execCommand("insertText", false, text);
+        }}
         onKeyDown={(e) => {
           if (e.key !== "Enter") return;
           e.preventDefault();

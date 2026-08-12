@@ -53,7 +53,12 @@ export function answerMarks(doc: DocBlock[]): AnswerMark[] {
   });
 }
 
-/** The words spoken between two timestamps, as one normalized string. Word
+/** How much of a line must fall inside the range before the whole line counts
+ *  as spoken in it. A range is usually drawn around a line, so most of one
+ *  being inside means all of it is. */
+const MOSTLY_INSIDE = 0.6;
+
+/** What is spoken between two timestamps, as one normalized string. Word
  *  timings are used where the ASR gave them, since a segment can be much
  *  longer than the mark and would make almost any mark look correct. */
 function spokenBetween(
@@ -61,19 +66,31 @@ function spokenBetween(
   startMs: number,
   endMs: number,
 ): string {
-  const words: string[] = [];
+  const spoken: string[] = [];
+
   for (const segment of segments) {
-    if (segment.end_ms <= startMs || segment.start_ms >= endMs) continue;
-    if (segment.words.length > 0) {
-      for (const word of segment.words) {
-        const middle = (word.start_ms + word.end_ms) / 2;
-        if (middle >= startMs && middle <= endMs) words.push(word.word);
-      }
-    } else {
-      words.push(segment.text);
+    const overlap =
+      Math.min(endMs, segment.end_ms) - Math.max(startMs, segment.start_ms);
+    if (overlap <= 0) continue;
+
+    const length = Math.max(1, segment.end_ms - segment.start_ms);
+    // A line mostly inside the range is taken whole, from its own text. Word
+    // timings are the ASR's and can fall short of it — a word at the very end
+    // of a line gets bucketed into the next one — and a check built only on
+    // them called a correct mark wrong, then pointed at the line it was
+    // already on.
+    if (overlap / length >= MOSTLY_INSIDE || segment.words.length === 0) {
+      spoken.push(segment.text);
+      continue;
+    }
+
+    for (const word of segment.words) {
+      const middle = (word.start_ms + word.end_ms) / 2;
+      if (middle >= startMs && middle <= endMs) spoken.push(word.word);
     }
   }
-  return normalize(words.join(" "));
+
+  return normalize(spoken.join(" "));
 }
 
 /** Where an answer is first heard in the whole recording, or null. */
@@ -107,13 +124,23 @@ export function checkMarks(
       const needle = normalize(answer);
       return needle.length > 0 && spoken.includes(needle);
     });
+    const heardAtMs = found
+      ? null
+      : (mark.answers
+          .map((a) => firstHeardAt(segments, a))
+          .find((ms) => ms != null) ?? null);
+
     checks.set(mark.gapId, {
       found,
-      heardAtMs: found
-        ? null
-        : (mark.answers
-            .map((a) => firstHeardAt(segments, a))
-            .find((ms) => ms != null) ?? null),
+      // Never point at somewhere inside the mark itself: "not said here —
+      // heard at 1:22" when 1:22 is the marked line reads as a contradiction,
+      // and is one.
+      heardAtMs:
+        heardAtMs != null &&
+        heardAtMs >= mark.startMs &&
+        heardAtMs <= mark.endMs
+          ? null
+          : heardAtMs,
     });
   }
   return checks;

@@ -3,8 +3,9 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { CircleQuestionMark, Loader2 } from "lucide-react";
 import { useStudioCrumbs } from "@/components/studio/breadcrumbs";
-import { toast } from "@/lib/toast";
-import { getErrorMessage } from "@/lib/api";
+import { dismissToast, toast } from "@/lib/toast";
+import { cn } from "@/lib/utils";
+import { ApiError, getErrorMessage } from "@/lib/api";
 import { timeAgo } from "@/lib/time";
 import { listeningApi } from "@/features/listening/api";
 import { useAudioAsset, useListeningMaterial } from "@/features/listening/queries";
@@ -39,10 +40,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { PartsPicker } from "@/features/listening/components/PartsPicker";
-import { ANSWER_RUBRICS } from "@/features/listening/rubric";
+import { ANSWER_RUBRICS, deriveRubric } from "@/features/listening/rubric";
 import type {
   AnswerRubric,
   AudioSegment,
+  QuestionGroupIn,
   Visibility,
 } from "@/features/listening/types";
 
@@ -100,6 +102,59 @@ const EMPTY_STATE: EditorState = {
 };
 
 const AUTOSAVE_DELAY_MS = 1500;
+/** One toast for the state of saving, replaced rather than repeated. */
+const SAVE_TOAST_ID = "listening-editor-save";
+
+// What gets sent for each resource, in one place. Hydration records these as
+// "already on the server" and the save round compares against that record, so
+// the two must build byte-identical payloads — computing them separately is
+// how the comparison would quietly start reporting a difference on every
+// round and send everything anyway.
+
+function materialSignature(
+  title: string,
+  visibility: Visibility,
+  audioAssetId: string | null,
+): string {
+  return JSON.stringify([title, visibility, audioAssetId]);
+}
+
+function partLabel(part: PartState): string {
+  return part.title.trim() || `Part ${part.orderIndex + 1}`;
+}
+
+/** Concrete rather than `PartUpdate`: with every field optional, a spread of
+ *  it can't stand in for the create payload, which requires the title. */
+function partPayload(part: PartState): {
+  title: string;
+  audio_start_ms: number | null;
+  audio_end_ms: number | null;
+} {
+  return {
+    title: partLabel(part),
+    audio_start_ms: part.audioStartMs,
+    audio_end_ms: part.audioEndMs,
+  };
+}
+
+/** The group payload, or null when there is nothing the API would accept —
+ *  no instructions, or a gap still without an answer. */
+function groupPayload(part: PartState): QuestionGroupIn | null {
+  if (!isGroupPersistable(part.doc, part.instructions)) return null;
+  const { template, questions } = docToGroup(part.doc);
+  return {
+    type: "form_completion",
+    instructions: part.instructions.trim(),
+    word_limit: part.wordLimit,
+    config: {
+      template,
+      // Left on auto, the rubric the answers imply is stored: the take page
+      // has no answers to work it out from.
+      answer_rubric: part.rubric ?? deriveRubric(part.doc),
+    },
+    questions,
+  };
+}
 
 function newPart(orderIndex: number): PartState {
   return {
@@ -129,13 +184,27 @@ export default function StudioListeningEditorPage() {
     ...EMPTY_STATE,
     materialId: routeId ?? null,
   }));
+  // What the save loop reads — never `state` itself, and never a render
+  // behind it. A save started from an event handler (publish, an upload
+  // finishing, ⌘S) runs before React has committed the edit that triggered
+  // it, so a ref filled in from an effect still held the previous values:
+  // publish saved `private`, an upload saved no audio, and both only came
+  // right 1.5s later when the debounce caught up. Every write goes through
+  // `commit`, which moves the ref first and the render after.
   const stateRef = useRef(state);
-  useEffect(() => {
-    stateRef.current = state;
-  }, [state]);
+  const commit = useCallback((edit: (prev: EditorState) => EditorState) => {
+    const next = edit(stateRef.current);
+    // Returning the same object is how a no-op edit says so — React bails
+    // out of the render, which is what keeps autosave from re-triggering
+    // itself when it writes back what it just persisted.
+    if (next === stateRef.current) return;
+    stateRef.current = next;
+    setState(next);
+  }, []);
 
   const [saving, setSaving] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [unsavedParts, setUnsavedParts] = useState<string[]>([]);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
@@ -206,26 +275,90 @@ export default function StudioListeningEditorPage() {
   const saveTimerRef = useRef<number | undefined>(undefined);
   const savingRef = useRef(false);
   const rerunNeededRef = useRef(false);
+  /** An edit is waiting out the debounce. Together with the two refs above,
+   *  this is "the server does not have everything yet". */
+  const pendingRef = useRef(false);
+  const mountedRef = useRef(true);
+  const inFlightRef = useRef<Promise<boolean> | null>(null);
+  /** Whether the toast currently under SAVE_TOAST_ID is a failure of ours. */
+  const errorToastRef = useRef(false);
+
+  // --- Optimistic concurrency ---------------------------------------------
+  // The material's version as this editor last saw it. Sent with every write;
+  // the server answers 409 if the material has moved on, which is the whole
+  // point — two windows open on the same material autosave over each other
+  // otherwise, and the loser finds their work gone with nothing to explain it.
+  const versionRef = useRef<number | null>(null);
+  // Both, because the save loop reads it synchronously and the banner renders
+  // from it.
+  const conflictRef = useRef(false);
+  const [conflict, setConflict] = useState(false);
+  /** Request options carrying the version out and reading the new one back. */
+  const versioned = useCallback(
+    () => ({
+      headers:
+        versionRef.current == null
+          ? undefined
+          : { "X-Material-Version": String(versionRef.current) },
+      onHeaders: (h: Headers) => {
+        const next = h.get("X-Material-Version");
+        if (next) versionRef.current = Number(next);
+      },
+    }),
+    [],
+  );
+  /** What the server last accepted, per resource. A save round compares
+   *  against these and sends only what differs — a form edit is one request,
+   *  not one per part plus the material. */
+  const sentRef = useRef({
+    material: "",
+    parts: new Map<string, string>(),
+    groups: new Map<string, string>(),
+  });
+  const hasPendingWork = () =>
+    pendingRef.current || savingRef.current || rerunNeededRef.current;
 
   /** Returns the previous state untouched when the patch changes nothing, so
    *  React bails out of the render. Autosave writes what it just persisted
    *  back into state, and a new object every time — even an identical one —
    *  re-fires the effect that schedules the save. */
-  const update = useCallback((patch: Partial<EditorState>) => {
-    setState((prev) => {
-      const changed = (Object.keys(patch) as (keyof EditorState)[]).some(
-        (key) => prev[key] !== patch[key],
-      );
-      return changed ? { ...prev, ...patch } : prev;
-    });
-  }, []);
+  const update = useCallback(
+    (patch: Partial<EditorState>) => {
+      commit((prev) => {
+        const changed = (Object.keys(patch) as (keyof EditorState)[]).some(
+          (key) => prev[key] !== patch[key],
+        );
+        return changed ? { ...prev, ...patch } : prev;
+      });
+    },
+    [commit],
+  );
 
-  const updatePart = useCallback((key: string, patch: Partial<PartState>) => {
-    setState((prev) => ({
-      ...prev,
-      parts: prev.parts.map((p) => (p.key === key ? { ...p, ...patch } : p)),
-    }));
-  }, []);
+  const updatePart = useCallback(
+    (key: string, patch: Partial<PartState>) => {
+      commit((prev) => ({
+        ...prev,
+        parts: prev.parts.map((p) => (p.key === key ? { ...p, ...patch } : p)),
+      }));
+    },
+    [commit],
+  );
+
+  /** Applies an edit to a part's form against the freshest copy of it. The
+   *  editor hands over the change rather than the result, so two edits landing
+   *  between renders can't overwrite each other — which they did when Enter
+   *  was held down: rows that had just been deleted came back. */
+  const editPartDoc = useCallback(
+    (key: string, edit: (current: DocBlock[]) => DocBlock[]) => {
+      commit((prev) => ({
+        ...prev,
+        parts: prev.parts.map((p) =>
+          p.key === key ? { ...p, doc: edit(p.doc) } : p,
+        ),
+      }));
+    },
+    [commit],
+  );
 
   // --- Hydrate from the author endpoint (existing material only) ----------
   useEffect(() => {
@@ -250,7 +383,28 @@ export default function StudioListeningEditorPage() {
         doc,
       };
     });
-    setState({
+    versionRef.current = existing.version;
+    // Everything just loaded is, by definition, what the server has. Recording
+    // it here is what stops merely opening a material from PATCHing all of it
+    // straight back: hydration lands in state, the autosave effect sees the
+    // change and schedules a round like any other edit.
+    sentRef.current = {
+      material: materialSignature(
+        existing.title,
+        existing.visibility,
+        existing.audio_asset_id,
+      ),
+      parts: new Map(
+        parts.map((p) => [p.key, JSON.stringify(partPayload(p))]),
+      ),
+      groups: new Map(
+        parts.flatMap((p) => {
+          const forGroup = p.groupId ? groupPayload(p) : null;
+          return forGroup ? [[p.key, JSON.stringify(forGroup)] as const] : [];
+        }),
+      ),
+    };
+    commit(() => ({
       materialId: existing.id,
       title: existing.title,
       visibility: existing.visibility,
@@ -258,8 +412,8 @@ export default function StudioListeningEditorPage() {
       audioUrl: existing.audio_url,
       durationMs: existing.duration_ms,
       parts,
-    });
-  }, [existing]);
+    }));
+  }, [existing, commit]);
 
   // --- Picker (brand-new material only, before any part is chosen). The
   // structure is fixed from here on — no add/remove-part in the editor. -----
@@ -273,13 +427,16 @@ export default function StudioListeningEditorPage() {
   // one part's validation failure never drops another part's edits — errors
   // are collected per part and surfaced together, naming the part.
 
-  const runSave = useCallback(async () => {
-    if (savingRef.current) {
-      rerunNeededRef.current = true;
-      return;
-    }
+  const doSave = useCallback(async (): Promise<boolean> => {
+    // A conflict is not something to retry into: the material on the server
+    // is no longer the one this editor was built from, so every further save
+    // would be refused, and forcing them through would overwrite whatever the
+    // other window wrote. Autosave stops until the page is reloaded.
+    if (conflictRef.current) return false;
     savingRef.current = true;
+    pendingRef.current = false;
     setSaving(true);
+    let sentAnything = false;
     try {
       const s = stateRef.current;
       const effectiveTitle = s.title.trim() || "untitled listening";
@@ -292,13 +449,32 @@ export default function StudioListeningEditorPage() {
           visibility: s.visibility,
           audio_asset_id: s.audioAssetId,
         });
+        sentAnything = true;
         materialId = created.id;
+        versionRef.current = created.version;
+        // This editor is now the material's source of truth. Without saying
+        // so, the route change below started a fetch of what was just
+        // created, and hydration — still thinking it had never run — replaced
+        // everything typed since with the server's copy. A title edited in
+        // the seconds after creation simply reverted. It also gated autosave
+        // off, so nothing typed in that window was saved at all.
+        loadedRef.current = true;
+        sentRef.current.material = materialSignature(
+          effectiveTitle,
+          s.visibility,
+          s.audioAssetId,
+        );
         update({
           materialId,
           audioUrl: created.audio_url,
           durationMs: created.duration_ms,
         });
-        navigate(`/studio/listening/${materialId}`, { replace: true });
+        // Not when this save is the one flushing on the way out: the editor
+        // is already gone, and pushing it a url would fight whatever the
+        // author navigated to.
+        if (mountedRef.current) {
+          navigate(`/studio/listening/${materialId}`, { replace: true });
+        }
       }
 
       // Re-read after the material-create await: the author may have edited
@@ -306,43 +482,71 @@ export default function StudioListeningEditorPage() {
       const partsSnapshot = stateRef.current.parts;
       const persisted = new Map<string, { partId: string; groupId: string | null }>();
       const partErrors: string[] = [];
+      // Parts holding questions the server can't be given yet — a gap with no
+      // answer typed in, or missing instructions, both of which the API
+      // rejects outright. Collected so the status line can stop claiming the
+      // material is saved when part of it isn't.
+      const partsUnsaved: string[] = [];
 
       for (const part of partsSnapshot) {
-        const label = part.title.trim() || `Part ${part.orderIndex + 1}`;
+        const label = partLabel(part);
         try {
+          const forPart = partPayload(part);
+          const partSignature = JSON.stringify(forPart);
+
           let partId = part.partId;
           if (!partId) {
-            const created = await listeningApi.parts.create(materialId, {
-              order_index: part.orderIndex,
-              title: label,
-              audio_start_ms: part.audioStartMs,
-              audio_end_ms: part.audioEndMs,
-            });
+            const created = await listeningApi.parts.create(
+              materialId,
+              { order_index: part.orderIndex, ...forPart },
+              versioned(),
+            );
             partId = created.id;
-          } else {
-            await listeningApi.parts.update(partId, {
-              title: label,
-              audio_start_ms: part.audioStartMs,
-              audio_end_ms: part.audioEndMs,
-            });
+            sentAnything = true;
+            sentRef.current.parts.set(part.key, partSignature);
+          } else if (sentRef.current.parts.get(part.key) !== partSignature) {
+            // Only when it actually differs from what was last accepted.
+            // Every round used to PATCH every part and every group whatever
+            // had changed, so typing one letter into a form sent three
+            // requests — one of them the whole question set.
+            await listeningApi.parts.update(partId, forPart, versioned());
+            sentAnything = true;
+            sentRef.current.parts.set(part.key, partSignature);
           }
 
           let groupId = part.groupId;
-          if (isGroupPersistable(part.doc, part.instructions)) {
-            const { template, questions } = docToGroup(part.doc);
-            const payload = {
-              type: "form_completion" as const,
-              instructions: part.instructions.trim(),
-              word_limit: part.wordLimit,
-              config: { template, answer_rubric: part.rubric },
-              questions,
-            };
+          const forGroup = groupPayload(part);
+          if (forGroup) {
+            const groupSignature = JSON.stringify(forGroup);
             if (!groupId) {
-              const group = await listeningApi.questionGroups.create(partId, payload);
+              const group = await listeningApi.questionGroups.create(
+                partId,
+                forGroup,
+                versioned(),
+              );
               groupId = group.id;
-            } else {
-              await listeningApi.questionGroups.update(groupId, payload);
+              sentAnything = true;
+              sentRef.current.groups.set(part.key, groupSignature);
+            } else if (sentRef.current.groups.get(part.key) !== groupSignature) {
+              await listeningApi.questionGroups.update(
+                groupId,
+                forGroup,
+                versioned(),
+              );
+              sentAnything = true;
+              sentRef.current.groups.set(part.key, groupSignature);
             }
+          } else if (groupId && isDocEmpty(part.doc)) {
+            // The form has been cleared. A group can't exist server-side with
+            // no questions, so clearing it means deleting it — skipping the
+            // write instead left the old questions in the database, and they
+            // came back the next time the material was opened.
+            await listeningApi.questionGroups.remove(groupId, versioned());
+            groupId = null;
+            sentAnything = true;
+            sentRef.current.groups.delete(part.key);
+          } else if (docGaps(part.doc).length > 0) {
+            partsUnsaved.push(label);
           }
 
           persisted.set(part.key, { partId, groupId });
@@ -358,7 +562,7 @@ export default function StudioListeningEditorPage() {
       // back a new parts array on every save, and the autosave effect watches
       // that array — so each save scheduled the next one and the editor
       // PATCHed in a loop for as long as it was open.
-      setState((prev) => {
+      commit((prev) => {
         let changed = false;
         const parts = prev.parts.map((p) => {
           const ids = persisted.get(p.key);
@@ -370,39 +574,121 @@ export default function StudioListeningEditorPage() {
         return changed ? { ...prev, parts } : prev;
       });
 
-      const updated = await listeningApi.materials.update(materialId, {
-        title: effectiveTitle,
-        visibility: s.visibility,
-        audio_asset_id: s.audioAssetId,
-      });
-      update({ audioUrl: updated.audio_url, durationMs: updated.duration_ms });
+      // Read once more rather than reuse the opening snapshot: the loop above
+      // awaited a request per part, and clicking publish during a save is
+      // ordinary. Taken from the snapshot, that click was written a whole
+      // debounce later — or not at all, if the author left first.
+      const latest = stateRef.current;
+      const materialTitle = latest.title.trim() || "untitled listening";
+      const materialSig = materialSignature(
+        materialTitle,
+        latest.visibility,
+        latest.audioAssetId,
+      );
+      if (materialSig !== sentRef.current.material) {
+        const updated = await listeningApi.materials.update(
+          materialId,
+          {
+            title: materialTitle,
+            visibility: latest.visibility,
+            audio_asset_id: latest.audioAssetId,
+          },
+          versioned(),
+        );
+        sentAnything = true;
+        sentRef.current.material = materialSig;
+        update({ audioUrl: updated.audio_url, durationMs: updated.duration_ms });
+      }
 
       setLastSavedAt(new Date());
+      setUnsavedParts(partsUnsaved);
       setSaveError(partErrors.length > 0 ? partErrors.join(" · ") : null);
-      void qc.invalidateQueries({ queryKey: ["studio-listening"] });
-      void qc.invalidateQueries({ queryKey: ["studio-stats"] });
+      // Only clears a failure that is now untrue. Dismissing unconditionally
+      // meant the next save round — which runs a second after a publish and
+      // usually has nothing to send — took the "Published" toast down with
+      // it, since both share the id.
+      if (errorToastRef.current) {
+        errorToastRef.current = false;
+        dismissToast(SAVE_TOAST_ID);
+      }
+      // Only when something actually moved. The studio list and the dashboard
+      // counters don't change because a save round ran and found nothing to
+      // do.
+      if (sentAnything) {
+        void qc.invalidateQueries({ queryKey: ["studio-listening"] });
+        void qc.invalidateQueries({ queryKey: ["studio-stats"] });
+      }
+      return partErrors.length === 0;
     } catch (e) {
       setSaveError(getErrorMessage(e));
+      errorToastRef.current = true;
+      if (e instanceof ApiError && e.status === 409) {
+        conflictRef.current = true;
+        setConflict(true);
+        toast({
+          id: SAVE_TOAST_ID,
+          title: "Someone else edited this material",
+          message:
+            "Your changes since then aren't saved. Reload to pick up the latest version.",
+          kind: "warning",
+          duration: 0,
+          action: { label: "Reload", onClick: () => window.location.reload() },
+        });
+        return false;
+      }
+      // The banner under the title bar is easy to miss while looking at the
+      // form, and a save that failed is the one thing here worth
+      // interrupting for. One id, so a run of failures replaces itself
+      // rather than stacking a toast every debounce.
+      toast({
+        id: SAVE_TOAST_ID,
+        title: "Not saved",
+        message: getErrorMessage(e),
+        kind: "error",
+        duration: 0,
+      });
+      return false;
     } finally {
       savingRef.current = false;
       setSaving(false);
       if (rerunNeededRef.current) {
         rerunNeededRef.current = false;
         window.clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = window.setTimeout(() => void runSave(), 0);
+        saveTimerRef.current = window.setTimeout(() => void runSaveRef.current(), 0);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reads live state via stateRef by design
-  }, [navigate, qc, update]);
+  }, [navigate, qc, update, commit]);
+
+  /** One save at a time. A caller who arrives mid-save gets the promise of
+   *  the one already running: its outcome is what "did my click land"
+   *  means here, and the rerun queued in the `finally` above carries
+   *  whatever it was too late to include. */
+  const runSave = useCallback((): Promise<boolean> => {
+    if (savingRef.current) {
+      rerunNeededRef.current = true;
+      return inFlightRef.current ?? Promise.resolve(false);
+    }
+    const promise = doSave();
+    inFlightRef.current = promise;
+    return promise;
+  }, [doSave]);
 
   const scheduleSave = useCallback(
-    (immediate = false) => {
+    (immediate = false): Promise<boolean> => {
       window.clearTimeout(saveTimerRef.current);
-      if (immediate) void runSave();
-      else saveTimerRef.current = window.setTimeout(() => void runSave(), AUTOSAVE_DELAY_MS);
+      if (immediate) return runSave();
+      pendingRef.current = true;
+      saveTimerRef.current = window.setTimeout(() => void runSave(), AUTOSAVE_DELAY_MS);
+      return Promise.resolve(true);
     },
     [runSave],
   );
+
+  // Held in a ref so the unmount flush below can stay on an empty dependency
+  // list and still call the current one.
+  const runSaveRef = useRef(runSave);
+  runSaveRef.current = runSave;
 
   // Any edit to persisted fields schedules a debounced save. Skipped while
   // still hydrating an existing material, and while a brand-new material
@@ -414,7 +700,31 @@ export default function StudioListeningEditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- state fields are the deps, scheduleSave is stable
   }, [state.title, state.visibility, state.audioAssetId, state.parts]);
 
-  useEffect(() => () => window.clearTimeout(saveTimerRef.current), []);
+  // Leaving mid-debounce used to drop the edit: the timer was cleared on the
+  // way out and nothing took its place, so up to a second and a half of
+  // typing went with it. Now the pending save is flushed instead, and closing
+  // the tab outright — where there is no time to flush anything — is
+  // challenged by the browser.
+  useEffect(() => {
+    // Set on the way in, not just cleared on the way out: StrictMode mounts,
+    // tears down and mounts again in development, and a flag only ever
+    // cleared would stay false for the rest of the session — taking the
+    // post-create navigate below with it.
+    mountedRef.current = true;
+
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!hasPendingWork()) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      window.clearTimeout(saveTimerRef.current);
+      mountedRef.current = false;
+      if (pendingRef.current) void runSaveRef.current();
+    };
+  }, []);
 
   useEffect(() => {
     const t = window.setInterval(() => forceTick((v) => v + 1), 30_000);
@@ -498,10 +808,15 @@ export default function StudioListeningEditorPage() {
     return { ok: true };
   };
 
-  const handlePublish = () => {
+  // Publishing is the one deliberate, consequential thing on this page, and
+  // it used to happen in silence — the only sign was a "saved" timestamp that
+  // ticks over on its own anyway. Both directions now say what they did, and
+  // both wait for the save rather than announcing an outcome they don't have.
+  const handlePublish = async () => {
     const v = validateForPublish();
     if (!v.ok) {
-      setPublishError(v.message ?? "can't publish yet.");
+      const message = v.message ?? "can't publish yet.";
+      setPublishError(message);
       setBadPartKey(v.badPartKey ?? null);
       // No part to switch to anymore — everything's on one page, so scroll
       // the offending section into view instead.
@@ -511,19 +826,39 @@ export default function StudioListeningEditorPage() {
           block: "center",
         });
       }
+      toast({
+        id: SAVE_TOAST_ID,
+        title: "Not published",
+        message,
+        kind: "warning",
+      });
       return;
     }
     setPublishError(null);
     setBadPartKey(null);
     update({ visibility: "public" });
-    scheduleSave(true);
+    if (await scheduleSave(true)) {
+      toast({
+        id: SAVE_TOAST_ID,
+        title: "Published",
+        message: "Anyone with the link can take this material now.",
+        kind: "success",
+      });
+    }
   };
 
-  const handleDraft = () => {
+  const handleDraft = async () => {
     setPublishError(null);
     setBadPartKey(null);
     update({ visibility: "private" });
-    scheduleSave(true);
+    if (await scheduleSave(true)) {
+      toast({
+        id: SAVE_TOAST_ID,
+        title: "Back to draft",
+        message: "Only you can see this material now.",
+        kind: "info",
+      });
+    }
   };
 
   const hasAudioEverAttached = !!state.audioAssetId;
@@ -648,8 +983,24 @@ export default function StudioListeningEditorPage() {
         />
 
         <div className="flex shrink-0 items-center gap-3.5">
-          <span className="text-xs text-muted-foreground">
-            {saving ? "saving…" : lastSavedAt ? `saved ${timeAgo(lastSavedAt.toISOString())}` : ""}
+          {/* "saved" has to mean it. A part whose questions the API refused
+              is called out here rather than folded into a timestamp that
+              says everything is safely stored. */}
+          <span
+            className={cn(
+              "text-xs",
+              !saving && unsavedParts.length > 0
+                ? "text-warning"
+                : "text-muted-foreground",
+            )}
+          >
+            {saving
+              ? "saving…"
+              : unsavedParts.length > 0
+                ? `${unsavedParts.join(", ")} not saved — finish the answers`
+                : lastSavedAt
+                  ? `saved ${timeAgo(lastSavedAt.toISOString())}`
+                  : ""}
           </span>
           <button
             type="button"
@@ -677,7 +1028,24 @@ export default function StudioListeningEditorPage() {
         </div>
       </div>
 
-      {(publishError || (saveError && !partSaveError)) && (
+      {/* A conflict outlives any toast and stops autosave for good, so it gets
+          a place on the page rather than a message that scrolls away. */}
+      {conflict && (
+        <div className="flex-none pb-2 text-xs text-warning">
+          This material was edited in another window. Nothing is being saved
+          from here any more —{" "}
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="underline underline-offset-2 hover:text-foreground"
+          >
+            reload
+          </button>{" "}
+          to pick up the latest version. Copy anything you typed since first.
+        </div>
+      )}
+
+      {!conflict && (publishError || (saveError && !partSaveError)) && (
         <p className="flex-none pb-2 text-xs text-destructive">
           {publishError ?? saveError}
         </p>
@@ -687,14 +1055,14 @@ export default function StudioListeningEditorPage() {
           bar; without it the row sizes to its tallest child and pushes the
           editor past the bottom of the screen, which is what put a second
           scrollbar on the page. */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-8 md:grid-cols-[minmax(340px,46%)_1fr]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-5 md:grid-cols-[minmax(340px,46%)_1fr]">
         {/* The player column fills the grid row rather than a hand-computed
             slice of the viewport. The old calc() guessed at everything above
             it — header, padding, title bar — guessed high, and overflowed the
             page by the difference. `h-full` can't be wrong about it.
             Only from md up: on a narrow screen the panes stack and the page
             scrolls normally. */}
-        <div className="min-w-0 md:h-full md:min-h-0 md:border-r md:border-border md:pr-8">
+        <div className="min-w-0 md:h-full md:min-h-0 md:border-r md:border-border md:pr-5">
           <AudioEditorPane
             ref={audioPaneRef}
             audioAssetId={state.audioAssetId}
@@ -757,7 +1125,7 @@ export default function StudioListeningEditorPage() {
               >
                 <QuestionFormEditor
                   doc={part.doc}
-                  onChange={(doc) => updatePart(part.key, { doc })}
+                  onChange={(edit) => editPartDoc(part.key, edit)}
                   instructions={part.instructions}
                   onInstructionsChange={(instructions) =>
                     updatePart(part.key, { instructions })

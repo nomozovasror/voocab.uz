@@ -6,10 +6,11 @@ import {
   CornerDownRight,
   Ellipsis,
   Heading,
+  Minus,
   Plus,
-  TimerReset,
   Trash2,
   Type,
+  Undo2,
   X,
 } from "lucide-react";
 import {
@@ -56,7 +57,11 @@ type EditableEl = HTMLElement;
 
 interface FormBuilderProps {
   doc: DocBlock[];
-  onChange: (doc: DocBlock[]) => void;
+  /** Applied against the latest document, not the one this render was built
+   *  from. Two structural edits can land between renders — Enter held down is
+   *  enough — and a handler that computed from its own snapshot wrote the
+   *  older one back, resurrecting deleted rows and duplicating live ones. */
+  onChange: (edit: (current: DocBlock[]) => DocBlock[]) => void;
   /** Gap numbers reported as unanswered, highlighted so they're findable. */
   flaggedGaps?: number[];
   /** Per gap id: whether the answer is actually said inside the seconds the
@@ -88,8 +93,6 @@ export function FormBuilder({
   // Inputs are registered by key so the caret can be placed after a change
   // that rebuilt them — otherwise typing would stop dead the moment a bracket
   // became a chip, or a new row would appear with the focus left behind.
-  const docRef = useRef(doc);
-  docRef.current = doc;
   const inputs = useRef(new Map<string, EditableEl>());
   const pendingFocus = useRef<string | null>(null);
   const register = (key: string) => (el: EditableEl | null) => {
@@ -116,9 +119,6 @@ export function FormBuilder({
   // turning into a field under the pointer.
   // The word selected in a value right now. Held as the text, not a flag, so
   // the button can name what it is about to do rather than describe itself.
-  // Where the author is working, so a new row or section lands next to it
-  // rather than at the far end of the form.
-  const [focusedBlockId, setFocusedBlockId] = useState<string | null>(null);
   const [selectedGap, setSelectedGap] = useState<string | null>(null);
 
   useEffect(() => {
@@ -133,44 +133,44 @@ export function FormBuilder({
   }, [selectedGap]);
 
   const replaceBlock = (id: string, next: DocBlock | null) =>
-    onChange(
+    onChange((current) =>
       next
-        ? doc.map((b) => (b.id === id ? next : b))
-        : doc.filter((b) => b.id !== id),
+        ? current.map((b) => (b.id === id ? next : b))
+        : current.filter((b) => b.id !== id),
     );
 
-  const moveBlock = (index: number, delta: number) => {
-    const to = index + delta;
-    if (to < 0 || to >= doc.length) return;
-    const next = doc.slice();
-    const [moved] = next.splice(index, 1);
-    next.splice(to, 0, moved);
-    onChange(next);
-  };
+  const moveBlock = (id: string, delta: number) =>
+    onChange((current) => {
+      const index = current.findIndex((b) => b.id === id);
+      const to = index + delta;
+      if (index < 0 || to < 0 || to >= current.length) return current;
+      const next = current.slice();
+      const [moved] = next.splice(index, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
 
   /** New blocks land after the block being worked on, not at the very end —
    *  a form is built top to bottom, and having to drag every new row up from
    *  the bottom would undo the point of the button. */
-  const insertAfter = (index: number, block: DocBlock, focusKey?: string) => {
-    const next = doc.slice();
-    next.splice(index + 1, 0, block);
+  const insertAfter = (afterId: string, block: DocBlock, focusKey?: string) => {
     if (focusKey) pendingFocus.current = focusKey;
-    onChange(next);
+    onChange((current) => {
+      const index = current.findIndex((b) => b.id === afterId);
+      const next = current.slice();
+      next.splice(index < 0 ? current.length : index + 1, 0, block);
+      return next;
+    });
   };
 
-  /** Adds a block next to the one being worked on, falling back to the end.
-   *  Appending blindly meant a section always arrived at the bottom and had
-   *  to be walked up past every row. */
+  /** Adds a block at the end. It used to land after whichever block was
+   *  being worked on, which sounds helpful and isn't: a divider has nothing
+   *  to focus, so it never became "current", and every row added after one
+   *  went above it. A form is built top to bottom, so the end is both where
+   *  the next thing goes and the only place that needs no explaining. */
   const addBlock = (block: DocBlock, focusKey?: string) => {
     if (focusKey) pendingFocus.current = focusKey;
-    const at = doc.findIndex((b) => b.id === focusedBlockId);
-    if (at < 0) {
-      onChange([...doc, block]);
-      return;
-    }
-    const next = doc.slice();
-    next.splice(at + 1, 0, block);
-    onChange(next);
+    onChange((current) => [...current, block]);
   };
 
   /** A form has one title and it is the first thing on it, so this goes to
@@ -179,14 +179,14 @@ export function FormBuilder({
   const addTitle = () => {
     const block: DocBlock = { id: newId(), kind: "title", text: "" };
     pendingFocus.current = `title#${block.id}`;
-    onChange([block, ...doc]);
+    onChange((current) => [block, ...current]);
   };
 
   const hasTitle = doc.some((b) => b.kind === "title");
 
   const patchLine = (blockId: string, lineId: string, next: DocLine) =>
-    onChange(
-      doc.map((b) =>
+    onChange((current) =>
+      current.map((b) =>
         b.id === blockId && b.kind === "row"
           ? { ...b, lines: b.lines.map((l) => (l.id === lineId ? next : l)) }
           : b,
@@ -197,8 +197,8 @@ export function FormBuilder({
    *  would take the words with it, and they were the author's text before
    *  they were an answer. */
   const unblank = (gapId: string) => {
-    onChange(
-      docRef.current.map((b) =>
+    onChange((current) =>
+      current.map((b) =>
         b.kind !== "row"
           ? b
           : {
@@ -241,8 +241,8 @@ export function FormBuilder({
     gapId: string,
     patch: { replayStartMs: number | null; replayEndMs: number | null },
   ) => {
-    onChange(
-      docRef.current.map((b) =>
+    onChange((current) =>
+      current.map((b) =>
         b.kind !== "row"
           ? b
           : {
@@ -286,17 +286,43 @@ export function FormBuilder({
           short of everything else. */}
       <div className="rounded-lg border border-border bg-card [&>*:first-child]:rounded-t-lg [&>*:last-child]:rounded-b-lg">
         {doc.map((block, blockIndex) => (
-          <div
-            key={block.id}
-            className="group/block relative border-b border-border/60 last:border-b-0"
-          >
+          <div key={block.id} className="group/block relative">
             <div className="flex items-start">
               <div className="min-w-0 flex-1">
+                {block.kind === "divider" && (
+                  // A plain rule until it's reached for. Its controls sit on
+                  // the line itself rather than behind a menu: there are only
+                  // three, and a rule has nothing else to say — a trigger
+                  // would be one more thing to open to find that out.
+                  <div className="relative px-3">
+                    <div className="h-px bg-border" role="separator" />
+                    <span className="absolute top-1/2 right-3 flex -translate-y-1/2 items-center gap-0.5 rounded bg-card pl-1.5 opacity-0 transition-opacity group-focus-within/block:opacity-100 group-hover/block:opacity-100">
+                      <RuleButton
+                        label="Move up"
+                        onClick={() => moveBlock(block.id, -1)}
+                        disabled={blockIndex === 0}
+                        icon={<ChevronUp className="size-3.5" aria-hidden />}
+                      />
+                      <RuleButton
+                        label="Move down"
+                        onClick={() => moveBlock(block.id, 1)}
+                        disabled={blockIndex === doc.length - 1}
+                        icon={<ChevronDown className="size-3.5" aria-hidden />}
+                      />
+                      <RuleButton
+                        label="Remove this rule"
+                        onClick={() => replaceBlock(block.id, null)}
+                        danger
+                        icon={<X className="size-3.5" aria-hidden />}
+                      />
+                    </span>
+                  </div>
+                )}
+
                 {block.kind === "title" && (
                   <input
                     type="text"
                     ref={register(`title#${block.id}`)}
-                    onFocus={() => setFocusedBlockId(block.id)}
                     value={block.text}
                     onChange={(e) =>
                       replaceBlock(block.id, { ...block, text: e.target.value })
@@ -311,7 +337,6 @@ export function FormBuilder({
                   <input
                     type="text"
                     ref={register(`heading#${block.id}`)}
-                    onFocus={() => setFocusedBlockId(block.id)}
                     value={block.text}
                     onChange={(e) =>
                       replaceBlock(block.id, { ...block, text: e.target.value })
@@ -348,13 +373,18 @@ export function FormBuilder({
                                 if (e.key !== "Enter") return;
                                 e.preventDefault();
                                 pendingFocus.current = `${block.lines[0].id}#0`;
-                                onChange(doc.slice());
+                                // No edit — the pendingFocus effect just
+                                // needs a render to move into the value.
+                                onChange((current) => [...current]);
                               }}
-                              onFocus={() => setFocusedBlockId(block.id)}
                               placeholder="Label"
                               aria-label="Row label"
                               title={block.label}
-                              className="w-full bg-transparent px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none"
+                              // The same line box as the value beside it
+                              // (leading-7 + py-1): the two columns
+                              // read as one line, so a half-step
+                              // between them shows.
+                              className="w-full bg-transparent px-3 py-1 text-sm leading-7 text-foreground placeholder:text-muted-foreground/50 focus:outline-none"
                             />
                           )}
                         </div>
@@ -378,7 +408,7 @@ export function FormBuilder({
                             placeholder={lineIndex === 0 ? "Value" : undefined}
                             onEnter={() => {
                               const row = newRow();
-                              insertAfter(blockIndex, row, `label#${row.id}`);
+                              insertAfter(block.id, row, `label#${row.id}`);
                             }}
                             onShiftEnter={() => addLine(block.id)}
                             registerInput={register(`${line.id}#0`)}
@@ -447,52 +477,54 @@ export function FormBuilder({
               {/* One trigger rather than four buttons: a 36px gutter is what
                   a row's height affords, and four icons only ever fitted by
                   sitting on top of the text. */}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    title="Row actions"
-                    aria-label="Row actions"
-                    // Hover only, plus its own focus: `group-focus-within`
-                    // meant it appeared the moment the value beside it was
-                    // typed into, sitting on the words being written.
-                    className="absolute top-1 right-1 flex size-7 items-center justify-center rounded-md bg-card text-muted-foreground opacity-0 shadow-sm transition-opacity group-hover/block:opacity-100 hover:text-foreground focus-visible:opacity-100 data-[state=open]:opacity-100"
-                  >
-                    <Ellipsis className="size-4" aria-hidden />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-52">
-                  {block.kind === "row" && (
-                    <DropdownMenuItem onClick={() => addLine(block.id)}>
-                      <CornerDownRight aria-hidden />
-                      Add line
-                      <DropdownMenuShortcut>⇧↵</DropdownMenuShortcut>
+              {block.kind !== "divider" && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      title="Row actions"
+                      aria-label="Row actions"
+                      // Hover only, plus its own focus: `group-focus-within`
+                      // meant it appeared the moment the value beside it was
+                      // typed into, sitting on the words being written.
+                      className="absolute top-1 right-1 flex size-7 items-center justify-center rounded-md bg-card text-muted-foreground opacity-0 shadow-sm transition-opacity group-hover/block:opacity-100 hover:text-foreground focus-visible:opacity-100 data-[state=open]:opacity-100"
+                    >
+                      <Ellipsis className="size-4" aria-hidden />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-52">
+                    {block.kind === "row" && (
+                      <DropdownMenuItem onClick={() => addLine(block.id)}>
+                        <CornerDownRight aria-hidden />
+                        Add line
+                        <DropdownMenuShortcut>⇧↵</DropdownMenuShortcut>
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuItem
+                      onClick={() => moveBlock(block.id, -1)}
+                      disabled={blockIndex === 0}
+                    >
+                      <ChevronUp aria-hidden />
+                      Move up
                     </DropdownMenuItem>
-                  )}
-                  <DropdownMenuItem
-                    onClick={() => moveBlock(blockIndex, -1)}
-                    disabled={blockIndex === 0}
-                  >
-                    <ChevronUp aria-hidden />
-                    Move up
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => moveBlock(blockIndex, 1)}
-                    disabled={blockIndex === doc.length - 1}
-                  >
-                    <ChevronDown aria-hidden />
-                    Move down
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    variant="destructive"
-                    onClick={() => replaceBlock(block.id, null)}
-                  >
-                    <Trash2 aria-hidden />
-                    Delete
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+                    <DropdownMenuItem
+                      onClick={() => moveBlock(block.id, 1)}
+                      disabled={blockIndex === doc.length - 1}
+                    >
+                      <ChevronDown aria-hidden />
+                      Move down
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onClick={() => replaceBlock(block.id, null)}
+                    >
+                      <Trash2 aria-hidden />
+                      Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
             </div>
           </div>
         ))}
@@ -505,10 +537,13 @@ export function FormBuilder({
           only ever got read once, then sat there. */}
       <div className="mt-2.5 flex flex-wrap items-center justify-center gap-1.5">
         <ToolbarButton
-          onClick={() => addBlock(newRow())}
+          onClick={() => {
+            const row = newRow();
+            addBlock(row, `label#${row.id}`);
+          }}
           icon={<Plus className="size-3.5" aria-hidden />}
           label="row"
-          title="Add a row after the one you're on"
+          title="Add a row at the end"
         />
         <ToolbarButton
           onClick={() => {
@@ -517,7 +552,16 @@ export function FormBuilder({
           }}
           icon={<Heading className="size-3.5" aria-hidden />}
           label="section"
-          title="Add a section heading after the row you're on"
+          title="Add a section heading at the end"
+        />
+        <ToolbarButton
+          onClick={() => {
+            const block: DocBlock = { id: newId(), kind: "divider" };
+            addBlock(block);
+          }}
+          icon={<Minus className="size-3.5" aria-hidden />}
+          label="divider"
+          title="Add a rule at the end"
         />
         {!hasTitle && (
           <ToolbarButton
@@ -529,6 +573,39 @@ export function FormBuilder({
         )}
       </div>
     </div>
+  );
+}
+
+/** One of the rule's own controls: small, quiet, and on the line. */
+function RuleButton({
+  label,
+  onClick,
+  icon,
+  danger,
+  disabled,
+}: {
+  label: string;
+  onClick: () => void;
+  icon: React.ReactNode;
+  danger?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+      aria-label={label}
+      className={cn(
+        "flex size-6 items-center justify-center rounded text-muted-foreground transition-colors disabled:opacity-30",
+        danger
+          ? "hover:bg-foreground/8 hover:text-destructive"
+          : "hover:bg-foreground/8 hover:text-foreground",
+      )}
+    >
+      {icon}
+    </button>
   );
 }
 
@@ -601,7 +678,7 @@ function GapActions({
       style={{ left: position.left, top: position.top }}
       className="absolute z-30 -translate-y-full pb-1"
     >
-      <span className="flex w-max items-center gap-0.5 rounded-md border border-border bg-card p-0.5 shadow-md">
+      <span className="flex w-max items-center gap-1 rounded-lg border border-border bg-card p-1 shadow-lg">
         <GapAction
           label={
             marked
@@ -617,18 +694,18 @@ function GapActions({
           <GapAction
             label="Clear the audio mark"
             onClick={onClearMark}
-            icon={<TimerReset className="size-3" aria-hidden />}
+            icon={<Undo2 className="size-4" aria-hidden />}
           />
         )}
-        <span className="mx-0.5 h-4 w-px bg-border" aria-hidden />
+        <span className="mx-0.5 h-5 w-px bg-border" aria-hidden />
         <GapAction
           label="Put the words back into the sentence"
           onClick={onUnblank}
           danger
-          icon={<Trash2 className="size-3" aria-hidden />}
+          icon={<Trash2 className="size-4" aria-hidden />}
         />
         {mismatch && (
-          <span className="border-l border-border px-1.5 text-[10px] whitespace-nowrap text-warning">
+          <span className="border-l border-border px-2 text-[11px] whitespace-nowrap text-warning">
             {markCheck?.heardAtMs != null
               ? `heard at ${formatClock(markCheck.heardAtMs) ?? "0:00"}`
               : "not said there"}
@@ -662,7 +739,7 @@ function GapAction({
       title={label}
       aria-label={label}
       className={cn(
-        "rounded p-1 transition-colors",
+        "flex size-8 items-center justify-center rounded-md transition-colors",
         active && "bg-primary/15 text-primary",
         !active && "text-muted-foreground",
         disabled
