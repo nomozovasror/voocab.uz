@@ -9,11 +9,16 @@ persist the group and its questions atomically (validation happens in
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentUser
-from app.api.materials import _load_owned, _load_owned_or_public, _resolve_audio
+from app.api.materials import (
+    _load_owned,
+    _load_owned_or_public,
+    _resolve_audio,
+    claim_material_version,
+)
 from app.core.database import AsyncSession, get_session
 from app.models.material import Material
 from app.models.part import Part
@@ -103,8 +108,11 @@ async def create_part(
     data: PartCreate,
     user: CurrentUser,
     session: SessionDep,
+    request: Request,
+    response: Response,
 ) -> PartOut:
-    await _load_owned(session, material_id, user.id)
+    material = await _load_owned(session, material_id, user.id)
+    claim_material_version(request, response, session, material)
     # Fast-path pre-check: cheap, and covers the common (non-racing) case
     # with a clean error before touching the DB constraint at all.
     existing = await listening_service.get_parts(session, material_id)
@@ -133,17 +141,25 @@ async def update_part(
     data: PartUpdate,
     user: CurrentUser,
     session: SessionDep,
+    request: Request,
+    response: Response,
 ) -> PartOut:
-    part, _material = await _load_owned_part(session, part_id, user.id)
+    part, material = await _load_owned_part(session, part_id, user.id)
+    claim_material_version(request, response, session, material)
     part = await listening_service.update_part(session, part, data)
     return _part_out(part)
 
 
 @router.delete("/parts/{part_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_part(
-    part_id: uuid.UUID, user: CurrentUser, session: SessionDep
+    part_id: uuid.UUID,
+    user: CurrentUser,
+    session: SessionDep,
+    request: Request,
+    response: Response,
 ) -> None:
-    part, _material = await _load_owned_part(session, part_id, user.id)
+    part, material = await _load_owned_part(session, part_id, user.id)
+    claim_material_version(request, response, session, material)
     await listening_service.delete_part(session, part)
 
 
@@ -157,8 +173,11 @@ async def create_question_group(
     data: QuestionGroupIn,
     user: CurrentUser,
     session: SessionDep,
+    request: Request,
+    response: Response,
 ) -> QuestionGroupOut:
-    await _load_owned_part(session, part_id, user.id)
+    _part, material = await _load_owned_part(session, part_id, user.id)
+    claim_material_version(request, response, session, material)
     try:
         group = await listening_service.create_question_group(session, part_id, data)
     except IntegrityError:
@@ -179,17 +198,25 @@ async def update_question_group(
     data: QuestionGroupIn,
     user: CurrentUser,
     session: SessionDep,
+    request: Request,
+    response: Response,
 ) -> QuestionGroupOut:
-    group, _part, _material = await _load_owned_group(session, group_id, user.id)
+    group, _part, material = await _load_owned_group(session, group_id, user.id)
+    claim_material_version(request, response, session, material)
     group = await listening_service.replace_question_group(session, group, data)
     return await _group_out(session, group)
 
 
 @router.delete("/question-groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_question_group(
-    group_id: uuid.UUID, user: CurrentUser, session: SessionDep
+    group_id: uuid.UUID,
+    user: CurrentUser,
+    session: SessionDep,
+    request: Request,
+    response: Response,
 ) -> None:
-    group, _part, _material = await _load_owned_group(session, group_id, user.id)
+    group, _part, material = await _load_owned_group(session, group_id, user.id)
+    claim_material_version(request, response, session, material)
     await listening_service.delete_question_group(session, group)
 
 

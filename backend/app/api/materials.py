@@ -10,7 +10,16 @@ import uuid
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 
 from app.api.deps import CurrentUser
 from app.core.database import AsyncSession, get_session
@@ -66,6 +75,7 @@ def _base(material: Material) -> dict:
         "punctuation_sensitive": material.punctuation_sensitive,
         "visibility": material.visibility,
         "created_at": material.created_at,
+        "version": material.version,
     }
 
 
@@ -203,6 +213,46 @@ async def _load_owned(
     return material
 
 
+MATERIAL_VERSION_HEADER = "X-Material-Version"
+
+
+def claim_material_version(
+    request: Request,
+    response: Response,
+    session: AsyncSession,
+    material: Material,
+) -> None:
+    """Optimistic concurrency for one authoring write.
+
+    Editors autosave, so two windows open on the same material used to
+    overwrite each other with no sign either way: whoever typed last won, and
+    the other author's work was simply gone the next time they reloaded.
+
+    A caller that sends ``X-Material-Version`` with the version it loaded is
+    told (409) when the material has moved on since, instead of writing over
+    whatever moved it. Sending the header is optional — omit it and the old
+    last-write-wins behaviour is unchanged, which is what keeps every other
+    client and the whole existing test suite working.
+
+    The bump rides along in the caller's transaction rather than committing
+    on its own: the service function called next is what commits, so the
+    version and the change it stands for land together or not at all. The new
+    value goes back in the same header so the client can carry on without a
+    re-read.
+    """
+    sent = request.headers.get(MATERIAL_VERSION_HEADER)
+    if sent is not None and sent.strip() != str(material.version):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This material was changed somewhere else — reload to get the "
+            "latest version before editing further.",
+        )
+
+    material.version += 1
+    session.add(material)
+    response.headers[MATERIAL_VERSION_HEADER] = str(material.version)
+
+
 @router.get("/materials/{material_id}", response_model=MaterialDetail)
 async def get_material(
     material_id: uuid.UUID, user: CurrentUser, session: SessionDep
@@ -231,8 +281,11 @@ async def update_material(
     data: MaterialUpdate,
     user: CurrentUser,
     session: SessionDep,
+    request: Request,
+    response: Response,
 ) -> MaterialDetail:
     material = await _load_owned(session, material_id, user.id)
+    claim_material_version(request, response, session, material)
     material = await materials_service.update_material(session, material, data)
     segments = await materials_service.get_segments(session, material.id)
     parts = await listening_service.get_author_tree(

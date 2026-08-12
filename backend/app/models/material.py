@@ -25,6 +25,17 @@ class Material(SQLModel, table=True):
     case_sensitive: bool = Field(default=False)
     punctuation_sensitive: bool = Field(default=False)
     visibility: str = Field(default="private")  # "private" | "public"
+    # Bumped by every authoring write to the material OR to anything under it
+    # — a part, a question group, a question. The material is what an author
+    # edits; parts and groups are pieces of it, so one counter over the whole
+    # tree is what an editor can meaningfully check against.
+    #
+    # A client that sends the version it loaded gets a 409 when the material
+    # has moved on since (see app/api/materials.py), which is how two windows
+    # open on the same material stop silently overwriting each other. Sending
+    # it is optional: a caller that doesn't simply keeps the old last-write-
+    # wins behaviour.
+    version: int = Field(default=1, nullable=False)
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False),

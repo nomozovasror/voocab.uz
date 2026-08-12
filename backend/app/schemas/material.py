@@ -100,6 +100,10 @@ class MaterialRead(BaseModel):
     punctuation_sensitive: bool
     visibility: str
     created_at: datetime
+    #: Bumped by every authoring write to this material or anything under it.
+    #: Send it back in ``X-Material-Version`` on a write to be told (409) when
+    #: someone else has changed the material in the meantime.
+    version: int
     segment_count: int
 
 
