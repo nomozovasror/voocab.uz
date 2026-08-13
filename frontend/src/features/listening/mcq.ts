@@ -315,12 +315,26 @@ export function isChoiceGroupEmpty(questions: ChoiceQuestion[]): boolean {
   );
 }
 
-/** The answer as it reads, for the line under a question. */
-export function answerSummary(question: ChoiceQuestion): string {
+/** The answer as it reads, for the line under a question.
+ *
+ *  Where the group asks for more than one, an unfinished key says how far
+ *  off it is rather than what it has so far: "1 of 2 marked" is the thing
+ *  the author needs to act on, and "answer: a" beside a question that wants
+ *  two reads as finished. Once it is finished, the letters are what matter
+ *  again. Both live on this one line — the count used to have a row of its
+ *  own above the options, which said the same thing twice in two places. */
+export function answerSummary(
+  question: ChoiceQuestion,
+  wanted = DEFAULT_ANSWERS_PER_QUESTION,
+): string {
   const letters = question.options
     .map((option, index) => (question.correct.includes(option.id) ? optionLetter(index) : null))
     .filter((letter): letter is string => letter !== null);
-  if (letters.length === 0) return "no answer marked";
+  if (letters.length !== wanted) {
+    return wanted === 1
+      ? "no answer marked"
+      : `${letters.length} of ${wanted} marked`;
+  }
   return letters.length === 1
     ? `answer: ${letters[0]}`
     : `answers: ${letters.join(", ")}`;

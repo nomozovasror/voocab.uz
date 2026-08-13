@@ -2,7 +2,10 @@ import { useEffect, useRef } from "react";
 import { CornerUpLeft, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ToolbarButton } from "@/features/listening/components/BuilderTools";
-import { questionNumbers } from "@/features/listening/numbering";
+import {
+  questionNumbers,
+  questionNumbersShort,
+} from "@/features/listening/numbering";
 import {
   addOption,
   answerSummary,
@@ -210,17 +213,7 @@ function QuestionBlock({
     document.execCommand("insertText", false, transcriptSelection);
   };
 
-  // Progress towards what the group asks for, and only where there is
-  // progress to make: in an ordinary single-answer group the marker itself
-  // already says everything, and "1 of 1" beside every question would be
-  // noise on every line.
-  const tally =
-    wanted > 1 ? `${question.correct.length} of ${wanted} marked` : null;
-
-  // The number gutter is wider when a question owns a range ("23 and 24"),
-  // and everything under the prompt lines up with the prompt either way.
-  const gutter = wanted > 1 ? "w-16" : "w-6";
-  const indent = wanted > 1 ? "pl-[4.5rem]" : "pl-8";
+  const settled = question.correct.length === wanted;
 
   return (
     <div
@@ -229,16 +222,11 @@ function QuestionBlock({
         flagged && "bg-destructive/5",
       )}
     >
-      <div className="flex items-baseline gap-2">
+      <div className="flex items-center gap-2">
         {/* The numbers this question occupies, not its position in the list:
-            a "choose two" is printed as "23 and 24" and takes both. */}
-        <span
-          className={cn(
-            "shrink-0 text-xs tabular-nums text-muted-foreground",
-            gutter,
-          )}
-        >
-          {questionNumbers(number, wanted)}.
+            a "choose two" is printed as "23–24" and takes both. */}
+        <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
+          {questionNumbersShort(number, wanted)}.
         </span>
         <input
           type="text"
@@ -248,37 +236,29 @@ function QuestionBlock({
           onFocus={remember}
           placeholder="question text"
           aria-label={`Question ${questionNumbers(number, wanted)}`}
-          className="min-w-0 flex-1 border-b border-transparent bg-transparent pr-7 pb-0.5 text-sm text-foreground placeholder:text-muted-foreground/50 hover:border-border focus:border-primary focus:outline-none"
+          className="min-w-0 flex-1 border-b border-transparent bg-transparent pb-0.5 text-base text-foreground placeholder:text-muted-foreground/50 hover:border-border focus:border-primary focus:outline-none"
         />
+        {/* In the flow rather than floating over the input's right edge,
+            where it sat on top of whatever had been typed. Its space is held
+            whether or not it is showing, so nothing shifts on hover. */}
         {onRemove && (
           <button
             type="button"
             onClick={onRemove}
             aria-label={`Remove question ${questionNumbers(number, wanted)}`}
             title="Remove this question"
-            className="absolute top-2 right-2 flex size-7 items-center justify-center rounded-md bg-card text-muted-foreground opacity-0 shadow-sm transition-opacity group-hover/question:opacity-100 hover:text-destructive focus-visible:opacity-100"
+            className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover/question:opacity-100 hover:text-destructive focus-visible:opacity-100"
           >
-            <X className="size-3.5" aria-hidden />
+            <X className="size-4" aria-hidden />
           </button>
         )}
       </div>
 
-      {tally && (
-        <div className={cn("mt-1", indent)}>
-          <span
-            className={cn(
-              "text-[11px]",
-              question.correct.length === wanted
-                ? "text-muted-foreground"
-                : "text-warning",
-            )}
-          >
-            {tally}
-          </span>
-        </div>
-      )}
-
-      <ul className={cn("mt-1.5 space-y-0.5", indent)}>
+      {/* Flush left, under the number rather than under the prompt: the
+          letters are what the candidate reads down, and indenting them to
+          the question text pushed the whole answer key into the middle of
+          the card. */}
+      <ul className="mt-2 space-y-1">
         {question.options.map((option, index) => {
           const letter = optionLetter(index);
           const correct = question.correct.includes(option.id);
@@ -297,7 +277,7 @@ function QuestionBlock({
                   correct ? "Correct — press to unmark" : "Mark as correct"
                 }
                 className={cn(
-                  "flex size-5 shrink-0 items-center justify-center border text-[11px] font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                  "flex size-6 shrink-0 items-center justify-center border text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
                   // Round for one answer, square for several: the same shapes
                   // the candidate will be given, so the author is looking at
                   // the question rather than at a setting.
@@ -322,7 +302,7 @@ function QuestionBlock({
                 }}
                 placeholder="option"
                 aria-label={`Option ${letter} of question ${number}`}
-                className="min-w-0 flex-1 border-b border-transparent bg-transparent pb-0.5 text-sm text-foreground placeholder:text-muted-foreground/50 hover:border-border focus:border-primary focus:outline-none"
+                className="min-w-0 flex-1 border-b border-transparent bg-transparent pb-0.5 text-base text-foreground placeholder:text-muted-foreground/50 hover:border-border focus:border-primary focus:outline-none"
               />
               {/* Two is the fewest a question can have; below that there is
                   nothing to choose between. */}
@@ -340,21 +320,33 @@ function QuestionBlock({
             </li>
           );
         })}
+        {/* The next option, drawn as one: same row, same marker size, same
+            place for the text. Dashed rather than solid, and the label says
+            what pressing it does — a lettered box that looked exactly like
+            the others would read as an option someone forgot to fill in. */}
+        <li>
+          <button
+            type="button"
+            onClick={onAddOption}
+            title="Add an option"
+            className="group/add flex w-full items-center gap-2 text-left"
+          >
+            <span
+              className={cn(
+                "flex size-6 shrink-0 items-center justify-center border border-dashed border-border text-muted-foreground transition-colors group-hover/add:border-primary group-hover/add:text-primary",
+                wanted === 1 ? "rounded-full" : "rounded-[4px]",
+              )}
+            >
+              <Plus className="size-3.5" aria-hidden />
+            </span>
+            <span className="text-base text-muted-foreground/60 transition-colors group-hover/add:text-foreground">
+              add an option
+            </span>
+          </button>
+        </li>
       </ul>
 
-      <div
-        className={cn(
-          "mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1",
-          indent,
-        )}
-      >
-        <button
-          type="button"
-          onClick={onAddOption}
-          className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
-        >
-          + option
-        </button>
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
 
         {/* Only once there is something to take. Shown always it would be a
             disabled control on every question, explaining itself to nobody. */}
@@ -373,15 +365,21 @@ function QuestionBlock({
           </button>
         )}
 
+        {/* The one place the answer is reported. A group asking for two
+            says how far off it is here rather than in a row of its own
+            above the options, which was the same fact in two places and in
+            the wrong one. */}
         <span
           className={cn(
             "ml-auto text-[11px] tabular-nums",
-            question.correct.length > 0
+            settled
               ? "text-success"
-              : "text-muted-foreground/70",
+              : question.correct.length > 0
+                ? "text-warning"
+                : "text-muted-foreground/70",
           )}
         >
-          {answerSummary(question)}
+          {answerSummary(question, wanted)}
         </span>
       </div>
     </div>

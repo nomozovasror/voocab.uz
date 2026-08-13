@@ -42,11 +42,21 @@ export function questionRangeLabel(offset: number, span: number): string {
   return first === last ? `Question ${first}` : `Questions ${first}–${last}`;
 }
 
-/** The numbers one question occupies, as they are printed beside it: "23",
- *  "23 and 24", or "23–25". Two are joined by "and" rather than a dash,
- *  which is how Cambridge prints a pair and how anyone reads one. */
+/** The numbers one question occupies, written out: "23", "23 and 24", or
+ *  "23–25". Two are joined by "and" rather than a dash, which is how
+ *  Cambridge prints a pair and how anyone reads one aloud. For prose — a
+ *  warning that names the question, a heading above it. */
 export function questionNumbers(start: number, span: number): string {
   if (span <= 1) return String(start);
   const last = start + span - 1;
   return span === 2 ? `${start} and ${last}` : `${start}–${last}`;
+}
+
+/** The same numbers in the margin beside a question: "23", "23–24". A dash
+ *  throughout, because this one is read as a label rather than as a
+ *  sentence, and "23 and 24." in a gutter costs half again the width to say
+ *  the same thing. */
+export function questionNumbersShort(start: number, span: number): string {
+  if (span <= 1) return String(start);
+  return `${start}–${start + span - 1}`;
 }

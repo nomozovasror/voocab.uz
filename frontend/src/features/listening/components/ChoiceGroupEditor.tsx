@@ -115,7 +115,10 @@ export function ChoiceGroupEditor({
         canMoveDown={canMoveDown}
       />
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
+      {/* Both are the same statement — what the candidate is told to do —
+          so they sit on one line, the same height, and the count reads as
+          part of the instruction rather than as a stray setting beside it. */}
+      <div className="mb-3 flex flex-wrap items-stretch gap-2">
         <input
           type="text"
           value={instructions}
@@ -126,7 +129,7 @@ export function ChoiceGroupEditor({
               : `Choose ${WORD[answersPerQuestion] ?? answersPerQuestion} letters, A–E.`
           }
           aria-label="Instructions"
-          className="min-w-0 flex-1 rounded-md border border-border bg-transparent px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none"
+          className="h-10 min-w-0 flex-1 rounded-md border border-border bg-transparent px-3 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none"
         />
         <AnswerCount
           value={answersPerQuestion}
@@ -168,7 +171,11 @@ const WORD: Record<number, string> = { 2: "TWO", 3: "THREE" };
  *
  *  Numbers rather than "one / several", because "several" is not what the
  *  paper says and not what the candidate needs: the instruction line names a
- *  number, and so does the count of checkboxes they are allowed to tick. */
+ *  number, and so does the count of checkboxes they are allowed to tick.
+ *
+ *  The word sits inside the same border as the numbers rather than floating
+ *  to their left, where it belonged to nothing and left the pair looking
+ *  like two controls that had drifted together. */
 function AnswerCount({
   value,
   onChange,
@@ -177,35 +184,33 @@ function AnswerCount({
   onChange: (v: number) => void;
 }) {
   return (
-    <span className="flex shrink-0 items-center gap-1.5">
-      <span className="text-[11px] text-muted-foreground">answers</span>
-      <span
-        role="group"
-        aria-label="Answers per question"
-        className="inline-flex items-center rounded-md border border-border p-0.5"
-      >
-        {ANSWER_COUNTS.map((count) => (
-          <button
-            key={count}
-            type="button"
-            onClick={() => onChange(count)}
-            aria-pressed={value === count}
-            title={
-              count === 1
-                ? "One correct answer per question"
-                : `${count} correct answers per question, all of which must be picked`
-            }
-            className={cn(
-              "rounded px-2 py-0.5 text-[11px] tabular-nums transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-              value === count
-                ? "bg-primary/15 text-primary"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {count}
-          </button>
-        ))}
-      </span>
-    </span>
+    <div
+      role="group"
+      aria-label="Answers per question"
+      className="flex h-10 shrink-0 items-center gap-1 rounded-md border border-border pr-1 pl-3"
+    >
+      <span className="mr-1 text-xs text-muted-foreground">answers</span>
+      {ANSWER_COUNTS.map((count) => (
+        <button
+          key={count}
+          type="button"
+          onClick={() => onChange(count)}
+          aria-pressed={value === count}
+          title={
+            count === 1
+              ? "One correct answer per question"
+              : `${count} correct answers per question, all of which must be picked`
+          }
+          className={cn(
+            "flex size-8 items-center justify-center rounded text-sm tabular-nums transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+            value === count
+              ? "bg-primary/15 font-medium text-primary"
+              : "text-muted-foreground hover:bg-foreground/6 hover:text-foreground",
+          )}
+        >
+          {count}
+        </button>
+      ))}
+    </div>
   );
 }
