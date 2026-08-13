@@ -357,28 +357,15 @@ function QuestionBlock({
                 aria-label={`Option ${letter} of question ${number}`}
                 className="min-w-0 flex-1 border-b border-transparent bg-transparent pb-0.5 text-base text-foreground placeholder:text-muted-foreground/50 hover:border-border focus:border-primary focus:outline-none"
               />
-              {/* When the answer is given, read out at the end of the row.
-                  Not a control: it was settled by the press that made this
-                  the answer, and there is nothing here to press that the
-                  letter doesn't already do.
-
-                  A right option with no time is a state only work from
-                  before this could be in — those get the word instead, and
-                  pressing the letter twice puts it right. */}
-              {correct && (
-                <span
-                  className={cn(
-                    "shrink-0 text-xs tabular-nums",
-                    marked ? "text-primary" : "text-warning",
-                  )}
-                >
-                  {marked ? formatClock(option.replayStartMs ?? 0) : "unlinked"}
-                </span>
-              )}
-
               {/* Two is the fewest a question can have; below that there is
                   nothing to choose between. Its space is held either way, so
-                  the times above stay in one column. */}
+                  nothing shifts when it appears on hover.
+
+                  Inboard of the time rather than outside it. It is a control
+                  and the time is content — and the summary at the foot of
+                  the card ("answers: b, c") is content too, so putting the
+                  button last left the times a slot short of the edge and out
+                  of line with the thing they belong beside. */}
               <span className="flex size-6 shrink-0 items-center justify-center">
                 {question.options.length > 2 && (
                   <button
@@ -391,6 +378,32 @@ function QuestionBlock({
                     <X className="size-3.5" aria-hidden />
                   </button>
                 )}
+              </span>
+
+              {/* When the answer is given, read out at the card's edge. Not a
+                  control: it was settled by the press that made this the
+                  answer, and there is nothing here to press that the letter
+                  doesn't already do. A fixed width so the button to its left
+                  keeps its own column on the rows that have no time.
+
+                  A right option with no time can only come from work made
+                  before marking and linking became one press. It shows the
+                  shape of a time it hasn't got, in warning colour, so the
+                  column stays true and the gap is still obvious; pressing
+                  the letter twice fills it in. */}
+              <span
+                title={
+                  correct && !marked
+                    ? "Not linked to the audio — press the letter twice to set it"
+                    : undefined
+                }
+                className={cn(
+                  "w-12 shrink-0 text-right text-xs tabular-nums",
+                  marked ? "text-primary" : "text-warning",
+                )}
+              >
+                {correct &&
+                  (marked ? formatClock(option.replayStartMs ?? 0) : "--:--")}
               </span>
             </li>
           );
