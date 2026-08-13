@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, CircleQuestionMark, Loader2 } from "lucide-react";
+import { ArrowLeft, CircleQuestionMark, Loader2, Trash2 } from "lucide-react";
 import { useStudioHeader } from "@/components/studio/header-slots";
+import { DeleteMaterialDialog } from "@/components/studio/DeleteMaterialDialog";
 import { PublishCelebration } from "@/components/studio/PublishCelebration";
 import {
   publishMilestone,
@@ -17,7 +18,11 @@ import { cn } from "@/lib/utils";
 import { ApiError, getErrorMessage } from "@/lib/api";
 import { timeAgo } from "@/lib/time";
 import { listeningApi } from "@/features/listening/api";
-import { useAudioAsset, useListeningMaterial } from "@/features/listening/queries";
+import {
+  useAudioAsset,
+  useDeleteListeningMaterial,
+  useListeningMaterial,
+} from "@/features/listening/queries";
 import {
   answerMarks,
   checkMarks,
@@ -68,6 +73,7 @@ import {
 } from "@/components/ui/dialog";
 import { PartsPicker } from "@/features/listening/components/PartsPicker";
 import { ANSWER_RUBRICS, deriveRubric } from "@/features/listening/rubric";
+import type { StudioListeningList } from "@/features/studio/types";
 import type {
   AnswerRubric,
   AudioSegment,
@@ -443,6 +449,9 @@ export default function StudioListeningEditorPage() {
   // from it.
   const conflictRef = useRef(false);
   const [conflict, setConflict] = useState(false);
+  /** The author has deleted this material. A ref, not state: the save loop
+   *  and the unmount flush both read it synchronously, on the way out. */
+  const deletedRef = useRef(false);
   /** Request options carrying the version out and reading the new one back. */
   const versioned = useCallback(
     () => ({
@@ -776,6 +785,11 @@ export default function StudioListeningEditorPage() {
     // would be refused, and forcing them through would overwrite whatever the
     // other window wrote. Autosave stops until the page is reloaded.
     if (conflictRef.current) return false;
+    // Nor is a material the author has just deleted. Leaving mid-debounce
+    // flushes the pending save on the way out, which would have gone to a
+    // material that no longer exists and greeted them on the list with a
+    // "not saved" toast about work they threw away on purpose.
+    if (deletedRef.current) return false;
     pendingRef.current = false;
     // Nothing to do is a successful save, silently: no request, no spinner,
     // and no claim about when the material was last written.
@@ -1385,6 +1399,59 @@ export default function StudioListeningEditorPage() {
     }
   };
 
+  // --- Deleting the material ------------------------------------------------
+
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const deleteMaterial = useDeleteListeningMaterial();
+
+  /** How many people have sat this, if anything already knows.
+   *
+   *  Read out of the studio list's cache rather than subscribed to: an editor
+   *  that subscribed would refetch that whole list after every save, since
+   *  every save invalidates it. An author who arrived from the list — nearly
+   *  all of them — gets the real number; anyone else gets a warning that
+   *  names attempts without counting them. */
+  const attemptsOnRecord = (): number | null => {
+    if (!state.materialId) return null;
+    const list = qc.getQueryData<StudioListeningList>(["studio-listening"]);
+    return (
+      list?.items.find((item) => item.id === state.materialId)?.attempts ?? null
+    );
+  };
+
+  const handleDelete = () => {
+    if (!state.materialId) return;
+    // Stop the save loop before the request, not after: the round already in
+    // flight is writing to something that is about to stop existing, and the
+    // debounce would flush again on the way out.
+    deletedRef.current = true;
+    pendingRef.current = false;
+    window.clearTimeout(saveTimerRef.current);
+
+    deleteMaterial.mutate(state.materialId, {
+      onSuccess: () => {
+        setConfirmingDelete(false);
+        navigate("/studio/listening");
+        toast({
+          id: SAVE_TOAST_ID,
+          title: "Deleted",
+          message: `“${state.title.trim() || "untitled listening"}” is gone.`,
+          kind: "info",
+        });
+      },
+      onError: (e) => {
+        // It still exists, so the editor goes back to being its editor.
+        deletedRef.current = false;
+        toast({
+          id: SAVE_TOAST_ID,
+          title: "Not deleted",
+          message: getErrorMessage(e),
+          kind: "error",
+        });
+      },
+    });
+  };
+
   /** The publishing requirements as a checklist, so they can be seen before
    *  the button is pressed rather than reported one at a time afterwards.
    *  Same rules as validateForPublish and as the server's publish_blockers —
@@ -1606,6 +1673,25 @@ export default function StudioListeningEditorPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col font-mono">
+      <DeleteMaterialDialog
+        material={
+          confirmingDelete
+            ? {
+                title: state.title.trim() || "untitled listening",
+                visibility: state.visibility,
+                questionCount: run.reduce(
+                  (total, { group }) => total + groupQuestionCount(group),
+                  0,
+                ),
+                attempts: attemptsOnRecord(),
+              }
+            : null
+        }
+        onCancel={() => setConfirmingDelete(false)}
+        onConfirm={handleDelete}
+        deleting={deleteMaterial.isPending}
+      />
+
       {milestone && state.materialId && (
         <PublishCelebration
           milestone={milestone}
@@ -1674,6 +1760,21 @@ export default function StudioListeningEditorPage() {
         >
           <CircleQuestionMark className="size-4" aria-hidden />
         </button>
+        {/* Only once there is something to delete: a material that has never
+            been saved is thrown away by leaving the page. Quiet until
+            reached for, and it turns red only under the pointer — it sits a
+            few pixels from publish. */}
+        {state.materialId && (
+          <button
+            type="button"
+            onClick={() => setConfirmingDelete(true)}
+            title="Delete this material"
+            aria-label="Delete this material"
+            className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+          >
+            <Trash2 className="size-4" aria-hidden />
+          </button>
+        )}
         <PublishBar
           visibility={state.visibility}
           requirements={publishRequirements}

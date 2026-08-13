@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useStudioCrumbs } from "@/components/studio/breadcrumbs";
 import { cn } from "@/lib/utils";
 import { getErrorMessage } from "@/lib/api";
+import { toast } from "@/lib/toast";
 import { formatClock, formatHours, formatQuestionType } from "@/features/studio/format";
+import { DeleteMaterialDialog } from "@/components/studio/DeleteMaterialDialog";
 import { useStudioListening } from "@/features/studio/queries";
+import { useDeleteListeningMaterial } from "@/features/listening/queries";
 import type { StudioListeningItem } from "@/features/studio/types";
 
 const DASH = "—"; // "no data yet" marker — never a fabricated 0
@@ -31,6 +35,9 @@ function KeyboardHints() {
       </span>
       <span className="flex items-center gap-1.5">
         <Kbd>↵</Kbd> open
+      </span>
+      <span className="flex items-center gap-1.5">
+        <Kbd>⌫</Kbd> delete
       </span>
     </div>
   );
@@ -112,9 +119,10 @@ interface RowProps {
   selected: boolean;
   innerRef: (el: HTMLAnchorElement | null) => void;
   onFocus: () => void;
+  onDelete: () => void;
 }
 
-function ListeningRow({ item, selected, innerRef, onFocus }: RowProps) {
+function ListeningRow({ item, selected, innerRef, onFocus, onDelete }: RowProps) {
   const processing =
     item.transcript_status === "pending" || item.transcript_status === "processing";
   const attemptsDisplay = processing || item.attempts === 0 ? DASH : String(item.attempts);
@@ -122,48 +130,64 @@ function ListeningRow({ item, selected, innerRef, onFocus }: RowProps) {
     processing || item.avg_score_pct == null ? DASH : `${Math.round(item.avg_score_pct)}%`;
 
   return (
-    <Link
-      ref={innerRef}
-      to={`/studio/listening/${item.id}`}
-      onFocus={onFocus}
-      className={cn(
-        "flex items-center gap-4 rounded-lg bg-card/70 px-5 py-4 transition-colors duration-150",
-        "hover:bg-card focus-visible:bg-card focus-visible:outline-none",
-        selected && "ring-1 ring-primary/60",
-      )}
-    >
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-foreground">{item.title}</div>
-        <div className="mt-0.5 truncate text-xs tabular-nums text-muted-foreground">
-          {buildMeta(item)}
-        </div>
-      </div>
-      <StatusPill item={item} />
-      <div className="flex shrink-0 gap-5">
-        <div className="text-center">
-          <div
-            className={cn(
-              "text-base font-medium tabular-nums",
-              attemptsDisplay === DASH ? "text-muted-foreground" : "text-foreground",
-            )}
-          >
-            {attemptsDisplay}
+    // The delete control is a sibling of the link rather than inside it: a
+    // button nested in an anchor is neither valid nor clickable without
+    // fighting the navigation. It sits over the row's right edge, which the
+    // link leaves clear for it.
+    <div className="group/row relative">
+      <Link
+        ref={innerRef}
+        to={`/studio/listening/${item.id}`}
+        onFocus={onFocus}
+        className={cn(
+          "flex items-center gap-4 rounded-lg bg-card/70 py-4 pr-14 pl-5 transition-colors duration-150",
+          "hover:bg-card focus-visible:bg-card focus-visible:outline-none",
+          selected && "ring-1 ring-primary/60",
+        )}
+      >
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-foreground">{item.title}</div>
+          <div className="mt-0.5 truncate text-xs tabular-nums text-muted-foreground">
+            {buildMeta(item)}
           </div>
-          <div className="text-[11px] text-muted-foreground">attempts</div>
         </div>
-        <div className="text-center">
-          <div
-            className={cn(
-              "text-base font-medium tabular-nums",
-              avgDisplay === DASH ? "text-muted-foreground" : "text-foreground",
-            )}
-          >
-            {avgDisplay}
+        <StatusPill item={item} />
+        <div className="flex shrink-0 gap-5">
+          <div className="text-center">
+            <div
+              className={cn(
+                "text-base font-medium tabular-nums",
+                attemptsDisplay === DASH ? "text-muted-foreground" : "text-foreground",
+              )}
+            >
+              {attemptsDisplay}
+            </div>
+            <div className="text-[11px] text-muted-foreground">attempts</div>
           </div>
-          <div className="text-[11px] text-muted-foreground">avg score</div>
+          <div className="text-center">
+            <div
+              className={cn(
+                "text-base font-medium tabular-nums",
+                avgDisplay === DASH ? "text-muted-foreground" : "text-foreground",
+              )}
+            >
+              {avgDisplay}
+            </div>
+            <div className="text-[11px] text-muted-foreground">avg score</div>
+          </div>
         </div>
-      </div>
-    </Link>
+      </Link>
+
+      <button
+        type="button"
+        onClick={onDelete}
+        aria-label={`Delete ${item.title}`}
+        title="Delete this material"
+        className="absolute top-1/2 right-3 flex size-8 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover/row:opacity-100 hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      >
+        <Trash2 className="size-4" aria-hidden />
+      </button>
+    </div>
   );
 }
 
@@ -194,6 +218,34 @@ export default function StudioListeningListPage() {
   const { data, isLoading, isError, error, refetch } = useStudioListening();
   const navigate = useNavigate();
 
+  // The material the author has asked to delete, held whole rather than by
+  // id so the dialog can say what goes with it — and keep saying it while
+  // the dialog closes over a row that has already gone.
+  const [pendingDelete, setPendingDelete] = useState<StudioListeningItem | null>(
+    null,
+  );
+  const deleteMaterial = useDeleteListeningMaterial();
+
+  const confirmDelete = () => {
+    if (!pendingDelete) return;
+    const { id, title } = pendingDelete;
+    deleteMaterial.mutate(id, {
+      onSuccess: () => {
+        setPendingDelete(null);
+        // The rows below have shifted up by one, so the highlight would land
+        // on a material the author never chose.
+        setSelectedIndex(null);
+        toast({ title: "Deleted", message: `“${title}” is gone.`, kind: "info" });
+      },
+      onError: (e) => {
+        // The dialog stays open on failure: it is where the button that
+        // failed is, and closing it would leave the author guessing whether
+        // anything happened.
+        toast({ title: "Not deleted", message: getErrorMessage(e), kind: "error" });
+      },
+    });
+  };
+
   const items = useMemo(() => data?.items ?? [], [data]);
   const totalTiles = 1 + items.length; // create tile + rows
   const isEmpty = !isLoading && !isError && (data?.total ?? 0) === 0;
@@ -219,6 +271,10 @@ export default function StudioListeningListPage() {
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (target?.isContentEditable) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // The confirm dialog holds the screen, and these listen at the window:
+      // without this, "n" would navigate away from an open dialog and Enter
+      // would open whichever row was highlighted behind it.
+      if (pendingDelete) return;
 
       if (e.key === "n" || e.key === "N") {
         e.preventDefault();
@@ -227,6 +283,19 @@ export default function StudioListeningListPage() {
       }
 
       if (isLoading || isError || totalTiles === 0) return;
+
+      if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        // Only ever opens the question — the answer stays a deliberate
+        // click, so a stray keypress can't delete anything. The selection is
+        // read from the closure rather than out of a state updater: an
+        // updater has to be pure, and this one would be opening a dialog
+        // from inside it.
+        if (selectedIndex !== null && selectedIndex > 0) {
+          setPendingDelete(items[selectedIndex - 1]);
+        }
+        return;
+      }
 
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -254,7 +323,7 @@ export default function StudioListeningListPage() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isLoading, isError, totalTiles, navigate, hrefAt]);
+  }, [isLoading, isError, totalTiles, navigate, hrefAt, pendingDelete, items, selectedIndex]);
 
   return (
     <div className="mx-auto w-full max-w-[56.25rem] font-mono">
@@ -326,12 +395,27 @@ export default function StudioListeningListPage() {
               selected={selectedIndex === i + 1}
               innerRef={(el) => (tileRefs.current[i + 1] = el)}
               onFocus={() => setSelectedIndex(i + 1)}
+              onDelete={() => setPendingDelete(item)}
             />
           ))}
         </div>
       )}
 
       <KeyboardHints />
+
+      <DeleteMaterialDialog
+        material={
+          pendingDelete && {
+            title: pendingDelete.title,
+            visibility: pendingDelete.visibility,
+            questionCount: pendingDelete.question_count,
+            attempts: pendingDelete.attempts,
+          }
+        }
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={confirmDelete}
+        deleting={deleteMaterial.isPending}
+      />
     </div>
   );
 }

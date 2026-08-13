@@ -53,11 +53,24 @@ export function useUpdateListeningMaterial(id: string) {
   });
 }
 
+/** Deletes a material and everything under it — parts, questions, and the
+ *  attempts anyone has made on it (app/services/materials.py). Irreversible,
+ *  so callers ask first.
+ *
+ *  The studio's own two views are invalidated alongside the materials list:
+ *  a deleted material is one fewer row in the listening list and a different
+ *  set of counters on the dashboard, and neither is derived from the list
+ *  this hook's key covers. */
 export function useDeleteListeningMaterial() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => listeningApi.materials.remove(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: MATERIALS_KEY }),
+    onSuccess: (_result, id) => {
+      qc.removeQueries({ queryKey: materialDetailKey(id) });
+      void qc.invalidateQueries({ queryKey: MATERIALS_KEY });
+      void qc.invalidateQueries({ queryKey: ["studio-listening"] });
+      void qc.invalidateQueries({ queryKey: ["studio-stats"] });
+    },
   });
 }
 
