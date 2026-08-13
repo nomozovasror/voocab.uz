@@ -101,6 +101,57 @@ function zoomToSlider(px: number, minPx: number): number {
 // colors, a live CSS reference works and needs no manual re-resolution.
 const REGION_COLOR = "color-mix(in srgb, var(--primary) 18%, transparent)";
 
+/** How long a decode may take before the pane stops claiming to be working
+ *  on it. Generous: this is a whole file being decoded in the browser, and a
+ *  long recording on a slow machine is not a failure. */
+const DECODE_TIMEOUT_MS = 45_000;
+
+/** A decode that never finished — which is not the same as one that failed,
+ *  and is not said as though it were.
+ *
+ *  Everything wavesurfer reports goes through `playbackFailure` below, and
+ *  that is a diagnosis. This one is a guess: the only thing actually known
+ *  is that nothing came back. A codec the browser can't decode is the likely
+ *  cause and worth naming, but a slow machine, a suspended audio context or
+ *  a stalled fetch all look identical from here — which is why nothing is
+ *  reported upward from it and publishing is not held on it. Saying
+ *  something wrong costs a confused author; blocking publishing on
+ *  something wrong costs them a material they can't ship. */
+function stalledDecode(): string {
+  return (
+    "This recording hasn't finished loading. It may be in a format this " +
+    "browser can't decode — if it doesn't appear, export it as MP3, or as " +
+    "an .m4a with AAC audio, and replace it above."
+  );
+}
+
+/** What the browser said it couldn't do, said back in words an author can
+ *  act on.
+ *
+ *  The media pipeline reports things like
+ *  "PipelineStatus::DEMUXER_ERROR_NO_SUPPORTED_STREAMS: FFmpegDemuxer: no
+ *  supported streams", which is true and useless: it names neither what is
+ *  wrong with the file nor what would fix it. Nearly always it is a codec
+ *  this browser doesn't decode — Apple Lossless in an .m4a is the one that
+ *  reaches us — and the fix is to re-export.
+ *
+ *  Uploads are screened for this now (services/audio_codec.py), so a new
+ *  recording shouldn't get this far. It stays because the screen fails open
+ *  on containers it can't read, and because materials attached before it
+ *  existed are still out there. */
+function playbackFailure(message?: string): string {
+  const undecodable =
+    !message ||
+    /no supported streams|DEMUXER|DECODER|not supported|unsupported/i.test(
+      message,
+    );
+  return undecodable
+    ? "This browser can't play this recording — its audio is in a format " +
+        "browsers don't decode. Export it as MP3, or as an .m4a with AAC " +
+        "audio, and replace it above."
+    : `${message} — try replacing the file.`;
+}
+
 function fmt(ms: number): string {
   return formatClock(ms) ?? "0:00";
 }
@@ -265,6 +316,11 @@ interface AudioEditorPaneProps {
   onResetPart?: () => void;
   onUpload: (file: File) => void;
   uploading: boolean;
+  /** Whether this browser could decode the recording, once it has tried.
+   *  The page holds publishing on it: an author who can't hear the audio
+   *  can't have checked their answers against it, and a candidate would meet
+   *  the same silence. Null while nothing has been attempted. */
+  onPlayable?: (playable: boolean) => void;
   /** A save error already known to be about the part's range, humanized by
    *  the page — rendered inline in the part block, never the raw server
    *  string. */
@@ -294,6 +350,7 @@ export const AudioEditorPane = forwardRef<
     onUpload,
     uploading,
     partError,
+    onPlayable,
   },
   ref,
 ) {
@@ -306,6 +363,10 @@ export const AudioEditorPane = forwardRef<
   const [ready, setReady] = useState(false);
   const [decoding, setDecoding] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Through a ref: the decode effect must not re-run — and re-decode the
+  // whole file — because the page passed down a fresh closure.
+  const onPlayableRef = useRef(onPlayable);
+  onPlayableRef.current = onPlayable;
   const [currentMs, setCurrentMs] = useState(0);
   const [durationMs, setDurationMs] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -713,6 +774,7 @@ export const AudioEditorPane = forwardRef<
   useEffect(() => {
     if (!audioUrl || !containerRef.current) return;
     let disposed = false;
+    let decodeTimer: number | undefined;
     setReady(false);
     setDecoding(true);
     setLoadError(null);
@@ -770,8 +832,14 @@ export const AudioEditorPane = forwardRef<
 
       ws.on("ready", (durationSec) => {
         if (disposed) return;
+        window.clearTimeout(decodeTimer);
+        // Cleared, not just ignored: the watchdog may have given up on a
+        // file that was only slow, and the pane shouldn't keep an obituary
+        // over a waveform that has since arrived.
+        setLoadError(null);
         setReady(true);
         setDecoding(false);
+        onPlayableRef.current?.(true);
         setDurationMs(durationSec * 1000);
         // Fit-to-width by default — a fixed px/sec floor means a 30-minute
         // file opens unusable (a few hundred px for the whole clip). Zoom
@@ -851,13 +919,37 @@ export const AudioEditorPane = forwardRef<
       });
       ws.on("error", (err) => {
         if (disposed) return;
-        setLoadError(err?.message || "couldn't decode this audio.");
+        window.clearTimeout(decodeTimer);
+        setLoadError(playbackFailure(err?.message));
         setDecoding(false);
+        onPlayableRef.current?.(false);
       });
+
+      // A file this browser can't decode — Apple Lossless in an .m4a is the
+      // one that reaches us — takes wavesurfer nowhere at all: it raises no
+      // `error`, and its load settles neither way. The pane sat on "decoding
+      // waveform…" for good, which reads as "still working" rather than
+      // "this will never work".
+      //
+      // (Loading it ourselves to catch the rejection was tried and made it
+      // worse: taking `url` out of create so `load()` could be awaited left
+      // ordinary files decoding forever too.)
+      //
+      // So this only says that nothing came back, which is the only thing it
+      // knows. Deliberately not wired to `onPlayable`: a decode can stall for
+      // reasons that have nothing to do with the file, and a publish blocked
+      // on a guess is worse than a waveform that never drew.
+      decodeTimer = window.setTimeout(() => {
+        if (disposed) return;
+        setLoadError(stalledDecode());
+        setDecoding(false);
+      }, DECODE_TIMEOUT_MS);
+
     })();
 
     return () => {
       disposed = true;
+      window.clearTimeout(decodeTimer);
       disableDragSelectionRef.current?.();
       disableDragSelectionRef.current = null;
       wsRef.current?.destroy();
@@ -1392,8 +1484,8 @@ export const AudioEditorPane = forwardRef<
             </div>
           )}
           {loadError && (
-            <div className="absolute inset-0 z-20 flex items-center justify-center bg-card px-3 text-center text-xs text-destructive">
-              {loadError} — try replacing the file.
+            <div className="absolute inset-0 z-20 flex items-center justify-center bg-card px-3 text-center text-xs leading-relaxed text-destructive">
+              {loadError}
             </div>
           )}
         </div>

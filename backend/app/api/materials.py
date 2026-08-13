@@ -34,6 +34,7 @@ from app.schemas.material import (
     SegmentRead,
 )
 from app.services import audio as audio_service
+from app.services import audio_codec
 from app.services import listening as listening_service
 from app.services import materials as materials_service
 from app.services import publishing as publishing_service
@@ -123,6 +124,14 @@ async def upload_audio(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "Audio exceeds 60 MB",
         )
+
+    # The extension named a container; this asks what is inside it. Refused
+    # here rather than discovered in the editor: the file transcribes either
+    # way, so a material built on one browsers can't decode looks finished
+    # right up until someone presses play (services/audio_codec.py).
+    unplayable = audio_codec.unplayable_reason(ext, data)
+    if unplayable is not None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, unplayable)
 
     sha256 = audio_service.sha256_hex(data)
     key = storage.audio_storage_key(sha256, content_type)

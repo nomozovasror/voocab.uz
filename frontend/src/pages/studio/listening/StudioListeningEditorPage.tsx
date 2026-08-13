@@ -385,6 +385,18 @@ export default function StudioListeningEditorPage() {
   const [unsavedGroups, setUnsavedGroups] = useState<string[]>([]);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  /** Whether this browser managed to decode the recording. Null until it has
+   *  tried, so nothing is claimed either way while the waveform is loading.
+   *
+   *  This is the one publishing requirement the server cannot keep, because
+   *  it is a fact about the browser rather than about the material — which
+   *  is why uploads are screened for it instead (services/audio_codec.py),
+   *  and why this is here for the recordings attached before that screen
+   *  existed rather than as the defence. */
+  const [audioPlayable, setAudioPlayable] = useState<boolean | null>(null);
+  /** Why the last upload was refused, for the opening sequence to show where
+   *  the author is actually looking. */
+  const [uploadError, setUploadError] = useState<string | null>(null);
   // The server's own refusal, which can name things the local checklist
   // can't know about. Shown on the publish button's list.
   const [publishError, setPublishError] = useState<string | null>(null);
@@ -1309,11 +1321,19 @@ export default function StudioListeningEditorPage() {
 
   const handleUpload = async (file: File) => {
     setUploading(true);
+    setUploadError(null);
     try {
       const asset = await listeningApi.uploadAudio(file);
       update({ audioAssetId: asset.asset_id });
       scheduleSave(true);
     } catch (e) {
+      // Both, and for different readers. The toast is for the editor, where
+      // replacing the audio is one thing among many on a busy page. The
+      // state is for the opening sequence, where the dialog is all there is
+      // — a refusal that explains itself and then fades is a refusal the
+      // author never read, and this one is worth reading: it says which
+      // format to re-export as.
+      setUploadError(getErrorMessage(e));
       toast(getErrorMessage(e));
     } finally {
       setUploading(false);
@@ -1342,6 +1362,18 @@ export default function StudioListeningEditorPage() {
     }
     if (!s.audioAssetId) {
       return { ok: false, message: "add the audio recording before publishing." };
+    }
+    // The one check here the server has no way to repeat: whether the
+    // recording decoded is a fact about this browser. An author who can't
+    // hear it hasn't checked an answer against it, and a candidate would
+    // meet the same silence.
+    if (audioPlayable === false) {
+      return {
+        ok: false,
+        message:
+          "this browser can't play the recording — export it as MP3 or AAC " +
+          "and replace it before publishing.",
+      };
     }
 
     for (const { part, group, startNumber } of groupRun(s.parts)) {
@@ -1555,7 +1587,18 @@ export default function StudioListeningEditorPage() {
         label: "Give it a title",
         done: !!title && title.toLowerCase() !== "untitled listening",
       },
-      { label: "Add the recording", done: !!state.audioAssetId },
+      {
+        // One line rather than two: "add the recording" and "make it one
+        // that plays" are the same requirement met to different degrees, and
+        // a checklist that lists both is a checklist an author reads as
+        // longer than it is.
+        label: "Add the recording",
+        done: !!state.audioAssetId && audioPlayable !== false,
+        detail:
+          audioPlayable === false
+            ? "this browser can't play it — export it as MP3 or AAC"
+            : undefined,
+      },
       {
         label: "Write the instructions",
         done: missingInstructions.length === 0,
@@ -1599,7 +1642,7 @@ export default function StudioListeningEditorPage() {
     }
 
     return requirements;
-  }, [state.title, state.audioAssetId, state.parts]);
+  }, [state.title, state.audioAssetId, state.parts, audioPlayable]);
 
   const hasAudioEverAttached = !!state.audioAssetId;
   // The transcript is already loaded for the player; reading it here (the
@@ -1981,7 +2024,7 @@ export default function StudioListeningEditorPage() {
             // either — unless it failed, in which case the target goes live
             // again rather than spinning forever over an error.
             attaching={!!state.audioAssetId && !state.audioUrl && !saveError}
-            error={saveError}
+            error={uploadError ?? saveError}
             recording={
               state.audioUrl
                 ? {
@@ -2046,6 +2089,7 @@ export default function StudioListeningEditorPage() {
             }
             onUpload={handleUpload}
             uploading={uploading}
+            onPlayable={setAudioPlayable}
             partError={partSaveError}
           />
         </div>
