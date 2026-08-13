@@ -43,6 +43,7 @@ import {
 import {
   choiceIssues,
   choiceMarks,
+  choicePublishIssues,
   choiceQuestionsFromApi,
   choiceQuestionsToApi,
   fitAnswerKeys,
@@ -1395,7 +1396,7 @@ export default function StudioListeningEditorPage() {
         group.type === "form_completion"
           ? docPublishIssues(group.doc, startNumber - 1)[0]
           : group.type === "multiple_choice"
-            ? choiceIssues(
+            ? choicePublishIssues(
                 group.questions,
                 startNumber - 1,
                 group.answersPerQuestion,
@@ -1627,18 +1628,29 @@ export default function StudioListeningEditorPage() {
       detail: missingAnswers > 0 ? `${missingAnswers} still empty` : undefined,
     });
 
-    // Gaps only, and only where there are gaps: a choice question is answered
-    // from the whole of what was said rather than from one phrase in it, so
-    // there is often no single moment to point a reviewer at. Listed for a
-    // material that can't fail it, it would be a requirement that never goes
-    // green however finished the material is.
-    if (gaps.length > 0) {
+    // Both kinds, because the answer to either is said somewhere. What
+    // differs is only whether the words match: a gap's answer is spoken as
+    // written, a choice question's is usually implied by a sentence that
+    // uses none of the option's words — but there is still a sentence, and
+    // it is what a learner who got it wrong is sent back to.
+    //
+    // Still only where there is something to link: listed for an empty
+    // material it would be a requirement that never goes green.
+    const unlinked =
+      unmarked.length +
+      choiceGroups.reduce(
+        (total, { group }) =>
+          total +
+          (group.type === "multiple_choice"
+            ? group.questions.filter((q) => q.replayStartMs == null).length
+            : 0),
+        0,
+      );
+    if (totalQuestions > 0) {
       requirements.push({
         label: "Link every answer to the audio",
-        done: answered.length > 0 && unmarked.length === 0,
-        detail: unmarked.length
-          ? `${unmarked.length} not linked yet`
-          : undefined,
+        done: unlinked === 0,
+        detail: unlinked > 0 ? `${unlinked} not linked yet` : undefined,
       });
     }
 

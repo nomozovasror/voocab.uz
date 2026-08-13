@@ -390,10 +390,12 @@ function QuestionBlock({
           </button>
 
           {/* Where the answer is said, for the learner to be sent back to
-              after they get it wrong. Never required — a choice question is
-              often answered from the whole of what was said rather than one
-              phrase in it — so this is quiet until there is something to
-              show, and says the time once there is. */}
+              after they get it wrong. Required to publish, so an unlinked
+              question wears it in warning colour rather than hiding until
+              hovered — a requirement nobody can see until they reach for it
+              is one they meet at the publish button instead.
+              It goes quiet once there is a time to show: done is not a
+              thing to keep shouting about. */}
           <span className="ml-auto flex shrink-0 items-center gap-0.5">
             {onMark && (
               <button
@@ -411,11 +413,11 @@ function QuestionBlock({
                   "flex items-center gap-1 rounded px-1.5 py-0.5 text-xs tabular-nums transition-colors",
                   marked
                     ? "text-primary hover:bg-primary/10"
-                    : "text-muted-foreground/60 opacity-0 group-hover/question:opacity-100 hover:text-foreground focus-visible:opacity-100",
+                    : "text-warning hover:bg-warning/10",
                 )}
               >
                 <AudioLines className="size-3" aria-hidden />
-                {marked && formatClock(question.replayStartMs ?? 0)}
+                {marked ? formatClock(question.replayStartMs ?? 0) : "link"}
               </button>
             )}
             {marked && (

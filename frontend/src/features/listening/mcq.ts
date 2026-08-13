@@ -253,7 +253,7 @@ export interface ChoiceIssue {
   /** Which half of the work is missing — writing the question, or deciding
    *  the answer. The publish checklist counts them separately, since they
    *  are two different things to go and do. */
-  kind: "prompt" | "options" | "answer";
+  kind: "prompt" | "options" | "answer" | "link";
   /** Named and complete: "Questions 5 and 6 have 1 of 2 answers marked."
    *  For anywhere the question isn't in front of the reader — the publish
    *  refusal, a count in the checklist. */
@@ -389,6 +389,48 @@ export function choiceMarks(
         startMs: question.replayStartMs,
         endMs: question.replayEndMs,
         answers,
+      },
+    ];
+  });
+}
+
+/** What has to be true to publish, over and above being finished: every
+ *  question must also be linked to the moment its answer is given.
+ *
+ *  Kept apart from `choiceIssues` for the same reason the form keeps
+ *  `docPublishIssues` apart from `docIssues` — an author shouldn't be nagged
+ *  about marking the audio before they have written the question.
+ *
+ *  The link is required even though the answer is rarely said in the words
+ *  the option uses. It is always said SOMEWHERE: a choice question is
+ *  answered by some sentence in the recording, even when it is answered by
+ *  implication, and that sentence is what a learner needs sending back to.
+ *  What isn't required is that the marked seconds contain the option's text
+ *  — for a gap a mismatch is worth a quiet warning, for a choice question it
+ *  would fire on nearly every correctly marked one. */
+export function choicePublishIssues(
+  questions: ChoiceQuestion[],
+  offset = 0,
+  wanted = DEFAULT_ANSWERS_PER_QUESTION,
+): ChoiceIssue[] {
+  const issues = choiceIssues(questions, offset, wanted);
+  if (issues.length > 0) return issues;
+
+  return questions.flatMap((question, index) => {
+    if (question.replayStartMs != null) return [];
+    const number = offset + index * wanted + 1;
+    const named =
+      wanted > 1
+        ? `Questions ${questionNumbers(number, wanted)}`
+        : `Question ${number}`;
+    return [
+      {
+        questionId: question.id,
+        number,
+        kind: "link" as const,
+        detail: "Not linked to the audio yet.",
+        selfEvident: true,
+        message: `${named} ${wanted > 1 ? "aren't" : "isn't"} linked to the audio yet.`,
       },
     ];
   });

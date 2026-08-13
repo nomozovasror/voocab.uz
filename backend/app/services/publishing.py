@@ -136,10 +136,18 @@ def _choice_blockers(
     """What a multiple-choice group still needs. ``wanted`` is how many
     letters the group tells the candidate to pick.
 
-    Being linked to the audio isn't among them, unlike a gap: a choice
-    question is answered from the whole of what was said rather than from one
-    phrase in it, so there is often no single moment to point a reviewer at,
-    and requiring one would be asking the author to invent it."""
+    Being linked to the audio IS among them, as it is for a gap. This was
+    once left out on the reasoning that a choice question is answered from
+    the whole of what was said rather than from one phrase in it — but that
+    conflates two things. The option's wording is rarely spoken; the answer
+    always is. Some sentence in the recording is what makes b right rather
+    than a, even where it does so by implication, and that sentence is what
+    a learner who got it wrong needs sending back to.
+
+    What is not required is that the marked seconds contain the option's
+    text. For a gap, a mismatch there earns a quiet warning in the editor
+    (features/listening/marks.ts); for a choice question it would fire on
+    nearly every correctly marked one, so nothing checks it."""
     blockers: list[str] = []
 
     def numbers(matching) -> list[int]:
@@ -184,6 +192,10 @@ def _choice_blockers(
             blockers.append(
                 f"{label}: {_numbers(short)} without {wanted} answers marked."
             )
+
+    unlinked = numbers(lambda q: q.replay_start_ms is None)
+    if unlinked:
+        blockers.append(f"{label}: {_numbers(unlinked)} not linked to the audio.")
 
     return blockers
 

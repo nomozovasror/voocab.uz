@@ -981,9 +981,11 @@ async def test_publishing_names_what_a_choice_group_still_needs() -> None:
             # Third and fourth on the page, not first and second of the group.
             assert "Question 4 is without any question text" in reasons
             assert "Question 3 is without a correct answer" in reasons
-            # A choice question is answered from the whole of what was said,
-            # so it is never asked to be linked to a moment.
-            assert "not linked to the audio" not in reasons
+            # Linked to the audio like a gap. The option's wording is
+            # rarely spoken, but the answer always is: some sentence makes b
+            # right rather than a, and that is what a learner who got it
+            # wrong is sent back to.
+            assert "Questions 3, 4 are not linked to the audio" in reasons
 
             # A "choose two" group wants exactly two marked on every question,
             # not merely one — the candidate is told to pick two, so a key of
