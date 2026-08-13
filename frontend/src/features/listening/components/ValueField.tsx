@@ -44,7 +44,6 @@ interface ValueFieldProps {
    *  would vanish on the next repaint. */
   onShiftEnter?: () => void;
   registerInput?: (el: HTMLElement | null) => void;
-  onSelectionChange?: (selected: string) => void;
 }
 
 // ── DOM <-> text ─────────────────────────────────────────────────────────
@@ -202,7 +201,6 @@ export function ValueField({
   onEnter,
   onShiftEnter,
   registerInput,
-  onSelectionChange,
 }: ValueFieldProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const partsRef = useRef<DocPart[]>(line.parts);
@@ -301,12 +299,6 @@ export function ValueField({
           const chip = (e.target as HTMLElement).closest("[data-gap]");
           onSelectGap?.(chip ? ((chip as HTMLElement).dataset.gap ?? null) : null);
         }}
-        onKeyUp={() =>
-          onSelectionChange?.(window.getSelection()?.toString().trim() ?? "")
-        }
-        onMouseUp={() =>
-          onSelectionChange?.(window.getSelection()?.toString().trim() ?? "")
-        }
         className="min-h-8 w-full text-base leading-8 break-words whitespace-pre-wrap text-foreground focus:outline-none"
       />
 

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, CircleAlert, SquareDashed } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FormBuilder } from "@/features/listening/components/FormBuilder";
@@ -41,6 +41,18 @@ function flaggedGapCount(gaps: { answers: string[] }[]): number {
   return gaps.filter((g) => !g.answers.some((a) => a.trim())).length;
 }
 
+/** The syntax itself, drawn rather than described. The sentence around it
+ *  is what an author reads once; the brackets are what they have to
+ *  remember, so they get the weight — the same tint a gap wears in the form
+ *  below, which is what they turn into. */
+function Brackets({ children }: { children?: React.ReactNode }) {
+  return (
+    <span className="rounded bg-primary/12 px-1 font-semibold text-primary">
+      [{children}]
+    </span>
+  );
+}
+
 export function QuestionFormEditor({
   doc,
   onChange,
@@ -77,6 +89,29 @@ export function QuestionFormEditor({
   // builder so the offer to turn it into an answer can sit with the rubric,
   // where the other answer-level settings are.
   const [selectedText, setSelectedText] = useState("");
+  const formRef = useRef<HTMLDivElement>(null);
+
+  // Watched on the document rather than reported by the field the selection
+  // is in. A field only hears its own mouseup and keyup, so clicking away —
+  // onto the transcript, onto another question, anywhere at all — collapsed
+  // the selection without telling anyone, and the offer to mark it stayed on
+  // screen pointing at nothing. `selectionchange` fires wherever it happens.
+  useEffect(() => {
+    const onSelectionChange = () => {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+        setSelectedText("");
+        return;
+      }
+      const inside = formRef.current?.contains(
+        selection.getRangeAt(0).commonAncestorContainer,
+      );
+      setSelectedText(inside ? selection.toString().trim() : "");
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () =>
+      document.removeEventListener("selectionchange", onSelectionChange);
+  }, []);
 
   /** Wraps the selection in brackets. Typed through execCommand rather than
    *  assigned: the value region reads itself back on input, so an edit it
@@ -184,8 +219,11 @@ export function QuestionFormEditor({
               Mark as answer
             </button>
           ) : (
-            <span className="min-w-0 truncate text-muted-foreground/70">
-              Write the answers in [] like [red, blue]
+            <span className="flex min-w-0 items-center gap-1.5 truncate text-muted-foreground">
+              Write the answer in
+              <Brackets />
+              like
+              <Brackets>red, blue</Brackets>
             </span>
           )}
         </label>
@@ -194,16 +232,17 @@ export function QuestionFormEditor({
       {/* No separate preview: the builder is already laid out as the form, so
           a second copy below it would only be somewhere for the two to
           disagree. */}
-      <FormBuilder
-        doc={doc}
-        onChange={onChange}
-        numberOffset={offset}
-        flaggedGaps={flaggedGaps}
-        markChecks={markChecks}
-        onSelectionChange={setSelectedText}
-        onMarkAudio={onMarkAudio}
-        extraTools={extraTools}
-      />
+      <div ref={formRef}>
+        <FormBuilder
+          doc={doc}
+          onChange={onChange}
+          numberOffset={offset}
+          flaggedGaps={flaggedGaps}
+          markChecks={markChecks}
+          onMarkAudio={onMarkAudio}
+          extraTools={extraTools}
+        />
+      </div>
 
       {showsIssues && (
         <ul className="mt-2 space-y-1">

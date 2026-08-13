@@ -75,7 +75,6 @@ interface FormBuilderProps {
   markChecks?: Map<string, { found: boolean; heardAtMs: number | null }>;
   /** Reports what is selected inside a value, so the rubric row above can
    *  offer to turn it into an answer. */
-  onSelectionChange?: (selected: string) => void;
   /** Asks the audio pane for the moment this gap is said. Asynchronous by
    *  nature: the author may still have to click the line, so the result comes
    *  back through the callback rather than as a return value. */
@@ -95,7 +94,6 @@ export function FormBuilder({
   numberOffset = 0,
   flaggedGaps,
   markChecks,
-  onSelectionChange,
   onMarkAudio,
   extraTools,
 }: FormBuilderProps) {
@@ -426,7 +424,6 @@ export function FormBuilder({
                             }}
                             onShiftEnter={() => addLine(block.id)}
                             registerInput={register(`${line.id}#0`)}
-                            onSelectionChange={onSelectionChange}
                             onChange={(parts) =>
                               patchLine(block.id, line.id, { ...line, parts })
                             }
