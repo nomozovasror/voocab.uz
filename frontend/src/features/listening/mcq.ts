@@ -240,7 +240,26 @@ export interface ChoiceIssue {
    *  the answer. The publish checklist counts them separately, since they
    *  are two different things to go and do. */
   kind: "prompt" | "options" | "answer";
+  /** Named and complete: "Questions 5 and 6 have 1 of 2 answers marked."
+   *  For anywhere the question isn't in front of the reader — the publish
+   *  refusal, a count in the checklist. */
   message: string;
+  /** The same thing said on the question itself, where naming it would be
+   *  telling the author which question they are looking at. A whole sentence
+   *  rather than a clause to hang off `message`: "Questions 3 and 4 need"
+   *  and "This question needs" don't take the same verb, and building one
+   *  out of the other produced exactly that. */
+  detail: string;
+  /** Whether the card already shows this without being told.
+   *
+   *  An empty prompt is an empty field; an empty option is an empty field; a
+   *  short answer key is what the answer line at the foot of the card
+   *  already reads out. Printing a sentence beside any of them is one more
+   *  thing to read that says what is plainly there — the flagged tint is
+   *  enough to say which question. What is NOT self-evident is a rule: that
+   *  a question wanting two answers needs more than two options to choose
+   *  between. That one gets words. */
+  selfEvident: boolean;
 }
 
 /** What is missing, phrased for the author. `offset` is how many questions
@@ -271,31 +290,55 @@ export function choiceIssues(
     // the count of whatever is being complained about.
     const has = wanted > 1 ? "have" : "has";
     const needs = wanted > 1 ? "need" : "needs";
-    const add = (kind: ChoiceIssue["kind"], message: string) =>
-      issues.push({ questionId: question.id, number, kind, message });
+    const add = (
+      kind: ChoiceIssue["kind"],
+      said: string,
+      detail: string,
+      selfEvident = true,
+    ) =>
+      issues.push({
+        questionId: question.id,
+        number,
+        kind,
+        detail,
+        selfEvident,
+        message: `${named} ${said}`,
+      });
 
     if (!question.prompt.trim()) {
-      add("prompt", `${named} ${has} no question text yet.`);
+      add("prompt", `${has} no question text yet.`, "No question text yet.");
       return;
     }
     // Always more options than answers: "choose two of these two" is not a
     // question, and the same rule the server publishes by.
     const minimum = Math.max(2, wanted + 1);
     if (question.options.length < minimum) {
-      add("options", `${named} ${needs} at least ${minimum} options.`);
+      add(
+        "options",
+        `${needs} at least ${minimum} options.`,
+        `A question wanting ${wanted} answers needs at least ${minimum} ` +
+          "options to choose between.",
+        false,
+      );
       return;
     }
     if (question.options.some((option) => !option.text.trim())) {
-      add("options", `${named} ${has} an option with nothing in it.`);
+      add(
+        "options",
+        `${has} an option with nothing in it.`,
+        "An option has nothing in it.",
+      );
       return;
     }
     if (question.correct.length !== wanted) {
       add(
         "answer",
         wanted === 1
-          ? `${named} has no correct answer marked.`
-          : `${named} ${has} ${question.correct.length} of ${wanted} ` +
-            "answers marked.",
+          ? "has no correct answer marked."
+          : `${has} ${question.correct.length} of ${wanted} answers marked.`,
+        wanted === 1
+          ? "No correct answer marked."
+          : `${question.correct.length} of ${wanted} answers marked.`,
       );
     }
   });

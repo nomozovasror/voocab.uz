@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { CornerUpLeft, Plus, X } from "lucide-react";
+import { CircleAlert, CornerUpLeft, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ToolbarButton } from "@/features/listening/components/BuilderTools";
 import {
@@ -15,6 +15,7 @@ import {
   patchOption,
   removeOption,
   toggleCorrect,
+  type ChoiceIssue,
   type ChoiceQuestion,
 } from "@/features/listening/mcq";
 
@@ -49,9 +50,9 @@ interface ChoiceBuilderProps {
   startNumber: number;
   /** How many options each question wants marked — the group's setting. */
   wanted: number;
-  /** Question ids with something still missing, flagged so the block can be
-   *  found without reading the list underneath. */
-  flagged?: Set<string>;
+  /** The one thing still missing from each question, by question id. Shown
+   *  on the question it is about. */
+  issues?: Map<string, ChoiceIssue>;
   /** The phrase currently selected in the transcript, if any — offered as
    *  something to drop into a question or an option. */
   transcriptSelection?: string;
@@ -63,7 +64,7 @@ export function ChoiceBuilder({
   onChange,
   startNumber,
   wanted,
-  flagged,
+  issues,
   transcriptSelection,
   extraTools,
 }: ChoiceBuilderProps) {
@@ -119,7 +120,7 @@ export function ChoiceBuilder({
             question={question}
             number={startNumber + index * wanted}
             wanted={wanted}
-            flagged={flagged?.has(question.id)}
+            issue={issues?.get(question.id)}
             transcriptSelection={transcriptSelection}
             register={register}
             // The only question in a group can't be removed: a group with no
@@ -169,7 +170,7 @@ interface QuestionBlockProps {
   question: ChoiceQuestion;
   number: number;
   wanted: number;
-  flagged?: boolean;
+  issue?: ChoiceIssue;
   transcriptSelection?: string;
   register: (key: string) => (el: HTMLInputElement | null) => void;
   onRemove?: () => void;
@@ -184,7 +185,7 @@ function QuestionBlock({
   question,
   number,
   wanted,
-  flagged,
+  issue,
   transcriptSelection,
   register,
   onRemove,
@@ -219,7 +220,7 @@ function QuestionBlock({
     <div
       className={cn(
         "group/question relative px-3 py-2.5 transition-colors",
-        flagged && "bg-destructive/5",
+        issue && "bg-destructive/5",
       )}
     >
       <div className="flex items-center gap-2">
@@ -347,20 +348,37 @@ function QuestionBlock({
             </span>
           </button>
 
+          {/* Already the report for an unfinished key — "1 of 2 marked" is
+              the whole of what an issue about the answer would say — so a
+              flagged one is coloured rather than described again. */}
           <span
             className={cn(
               "ml-auto shrink-0 text-xs tabular-nums",
-              settled
-                ? "text-success"
-                : question.correct.length > 0
-                  ? "text-warning"
-                  : "text-muted-foreground/70",
+              issue?.kind === "answer"
+                ? "text-destructive"
+                : settled
+                  ? "text-success"
+                  : question.correct.length > 0
+                    ? "text-warning"
+                    : "text-muted-foreground/70",
             )}
           >
             {answerSummary(question, wanted)}
           </span>
         </li>
       </ul>
+
+      {/* What the card can't already show — see `selfEvident`. On the
+          question rather than under the group's toolbar, which is where the
+          whole list used to sit: further from question 1 than anything else
+          on screen, and naming the question because from down there it had
+          to. */}
+      {issue && !issue.selfEvident && (
+        <p className="mt-2 flex items-start gap-1.5 text-xs text-destructive">
+          <CircleAlert className="mt-0.5 size-3 shrink-0" aria-hidden />
+          {issue.detail}
+        </p>
+      )}
 
       {/* Only once there is something to take, so most questions end at the
           options and this row isn't there at all. */}

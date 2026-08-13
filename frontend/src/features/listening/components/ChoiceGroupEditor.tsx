@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import { CircleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ChoiceBuilder } from "@/features/listening/components/ChoiceBuilder";
 import { GroupHeader } from "@/features/listening/components/GroupHeader";
@@ -91,8 +90,13 @@ export function ChoiceGroupEditor({
     return issues.filter((issue) => started.has(issue.questionId));
   }, [issues, questions, showIssues]);
 
-  const flagged = useMemo(
-    () => new Set(shown.map((issue) => issue.questionId)),
+  /** The one thing wrong with each question, by question. Handed down to be
+   *  shown ON the question rather than listed under the group: the list sat
+   *  below the builder's toolbar, which put "Question 1 has an option with
+   *  nothing in it" further from question 1 than anything else on screen,
+   *  and named the question because from down there it had to. */
+  const issueByQuestion = useMemo(
+    () => new Map(shown.map((issue) => [issue.questionId, issue])),
     [shown],
   );
 
@@ -142,24 +146,11 @@ export function ChoiceGroupEditor({
         onChange={onChange}
         startNumber={startNumber}
         wanted={answersPerQuestion}
-        flagged={flagged}
+        issues={issueByQuestion}
         transcriptSelection={transcriptSelection}
         extraTools={extraTools}
       />
 
-      {shown.length > 0 && (
-        <ul className="mt-2 space-y-1">
-          {shown.map((issue) => (
-            <li
-              key={issue.questionId}
-              className="flex items-start gap-1.5 text-xs text-destructive"
-            >
-              <CircleAlert className="mt-0.5 size-3 shrink-0" aria-hidden />
-              {issue.message}
-            </li>
-          ))}
-        </ul>
-      )}
     </div>
   );
 }
