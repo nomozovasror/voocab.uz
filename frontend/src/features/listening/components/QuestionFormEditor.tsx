@@ -219,11 +219,15 @@ export function QuestionFormEditor({
               Mark as answer
             </button>
           ) : (
-            <span className="flex min-w-0 items-center gap-1.5 truncate text-muted-foreground">
+            <span className="flex min-w-0 items-center gap-1.5 truncate text-foreground">
               Write the answer in
               <Brackets />
               like
-              <Brackets>red, blue</Brackets>
+              {/* A number and its spelling rather than two colours: variants
+                  are mostly here because the recording says "ten" and the
+                  answer sheet takes 10, which is the case an author meets on
+                  their first form. */}
+              <Brackets>10, ten</Brackets>
             </span>
           )}
         </label>
