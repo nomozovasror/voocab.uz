@@ -4,7 +4,6 @@ import {
   CircleAlert,
   CornerUpLeft,
   Plus,
-  Undo2,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -152,15 +151,6 @@ export function ChoiceBuilder({
                     )
                 : undefined
             }
-            onClearOptionMark={(optionId) =>
-              patchQuestion(question.id, (q) =>
-                editOption(q, optionId, (option) => ({
-                  ...option,
-                  replayStartMs: null,
-                  replayEndMs: null,
-                })),
-              )
-            }
             transcriptSelection={transcriptSelection}
             register={register}
             // The only question in a group can't be removed: a group with no
@@ -211,8 +201,11 @@ interface QuestionBlockProps {
   number: number;
   wanted: number;
   issue?: ChoiceIssue;
+  /** Marking where this option's answer is given. There is no clearing to
+   *  go with it: the link is required to publish, so "no mark" is not a
+   *  state an author means to return to, and marking a different line is
+   *  how a mark in the wrong place gets fixed. */
   onMarkOption?: (optionId: string, phrase: string) => void;
-  onClearOptionMark: (optionId: string) => void;
   transcriptSelection?: string;
   register: (key: string) => (el: HTMLInputElement | null) => void;
   onRemove?: () => void;
@@ -229,7 +222,6 @@ function QuestionBlock({
   wanted,
   issue,
   onMarkOption,
-  onClearOptionMark,
   transcriptSelection,
   register,
   onRemove,
@@ -335,6 +327,49 @@ function QuestionBlock({
               >
                 {letter}
               </button>
+              {/* Where THIS answer is given. On the option because that is
+                  what an answer is here: a "choose two" is answered twice,
+                  in two places that are rarely near each other, and a mark
+                  on the question could only ever point at the first.
+
+                  In a fixed slot between the letter and the text, so the
+                  marks make a column instead of floating wherever the row
+                  happens to leave them. Both states are the same width —
+                  "0:50" and "link" are four characters — so nothing shifts
+                  when one is filled in. The slot is there on every row,
+                  including the options that can't have one, which is what
+                  keeps the text starting in the same place.
+
+                  Only the options that are answers get a control. A
+                  distractor has no moment, and offering to mark one would be
+                  offering to record where the wrong answer wasn't given. */}
+              <span className="flex w-16 shrink-0 items-center">
+                {correct && onMarkOption && (
+                  <button
+                    type="button"
+                    onClick={() => onMarkOption(option.id, option.text.trim())}
+                    title={
+                      marked
+                        ? `Said at ${formatClock(option.replayStartMs ?? 0) ?? "0:00"}–${formatClock(option.replayEndMs ?? 0) ?? "0:00"} — press to mark it somewhere else`
+                        : `Mark where ${letter} is given in the recording`
+                    }
+                    aria-label={
+                      marked
+                        ? `Re-mark where option ${letter} is given`
+                        : `Mark where option ${letter} is given`
+                    }
+                    className={cn(
+                      "flex items-center gap-1 rounded px-1.5 py-0.5 text-xs tabular-nums transition-colors",
+                      marked
+                        ? "text-primary hover:bg-primary/10"
+                        : "text-warning hover:bg-warning/10",
+                    )}
+                  >
+                    <AudioLines className="size-3 shrink-0" aria-hidden />
+                    {marked ? formatClock(option.replayStartMs ?? 0) : "link"}
+                  </button>
+                )}
+              </span>
               <input
                 type="text"
                 ref={register(`option#${option.id}`)}
@@ -350,53 +385,6 @@ function QuestionBlock({
                 aria-label={`Option ${letter} of question ${number}`}
                 className="min-w-0 flex-1 border-b border-transparent bg-transparent pb-0.5 text-base text-foreground placeholder:text-muted-foreground/50 hover:border-border focus:border-primary focus:outline-none"
               />
-              {/* Where THIS answer is given. On the option because that is
-                  what an answer is here: a "choose two" is answered twice,
-                  in two places that are rarely near each other, and a mark
-                  on the question could only ever point at the first.
-
-                  Only on the options that are answers. A distractor has no
-                  moment, and offering to mark one would be offering to
-                  record where the wrong answer wasn't given. */}
-              {correct && onMarkOption && (
-                <span className="flex shrink-0 items-center gap-0.5">
-                  <button
-                    type="button"
-                    onClick={() => onMarkOption(option.id, option.text.trim())}
-                    title={
-                      marked
-                        ? `Said at ${formatClock(option.replayStartMs ?? 0) ?? "0:00"}–${formatClock(option.replayEndMs ?? 0) ?? "0:00"} — press to re-mark`
-                        : `Mark where ${letter} is given in the recording`
-                    }
-                    aria-label={
-                      marked
-                        ? `Re-mark where option ${letter} is given`
-                        : `Mark where option ${letter} is given`
-                    }
-                    className={cn(
-                      "flex items-center gap-1 rounded px-1.5 py-0.5 text-xs tabular-nums transition-colors",
-                      marked
-                        ? "text-primary hover:bg-primary/10"
-                        : "text-warning hover:bg-warning/10",
-                    )}
-                  >
-                    <AudioLines className="size-3" aria-hidden />
-                    {marked ? formatClock(option.replayStartMs ?? 0) : "link"}
-                  </button>
-                  {marked && (
-                    <button
-                      type="button"
-                      onClick={() => onClearOptionMark(option.id)}
-                      title="Clear the audio mark"
-                      aria-label={`Clear the audio mark on option ${letter}`}
-                      className="flex size-5 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover/option:opacity-100 hover:text-destructive focus-visible:opacity-100"
-                    >
-                      <Undo2 className="size-3" aria-hidden />
-                    </button>
-                  )}
-                </span>
-              )}
-
               {/* Two is the fewest a question can have; below that there is
                   nothing to choose between. */}
               {question.options.length > 2 && (
@@ -435,6 +423,9 @@ function QuestionBlock({
             >
               <Plus className="size-3" aria-hidden />
             </span>
+            {/* The mark column, empty — so this label starts where the
+                options' text does rather than a slot to the left of it. */}
+            <span className="w-16 shrink-0" aria-hidden />
             <span className="text-sm text-muted-foreground/60 transition-colors group-hover/add:text-foreground">
               add an option
             </span>
