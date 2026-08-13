@@ -15,11 +15,14 @@ from sqlalchemy import func
 from sqlmodel import select
 
 from app.core.database import AsyncSession
+from app.models.attempt import Attempt
 from app.models.material import Material
+from app.models.question_attempt import QuestionAttempt
 from app.models.segment import Segment
 from app.models.segment_attempt import SegmentAttempt
 from app.schemas.material import MaterialCreate, MaterialUpdate, SegmentIn
 from app.services import audio as audio_service
+from app.services import listening as listening_service
 
 
 async def _check_owned_audio_asset(
@@ -202,11 +205,65 @@ async def update_material(
     return material
 
 
+async def _remove_attempts(session: AsyncSession, material_id: uuid.UUID) -> None:
+    """The material's attempts, with the per-segment and per-question detail
+    hanging off them.
+
+    ``attempts.material_id`` is a plain FK with no ON DELETE, like every other
+    FK here, so a material anyone has ever sat could not be deleted at all —
+    the statement raised a ForeignKeyViolation and the request 500'd, with
+    nothing in the response to say that having been practised was the reason.
+
+    Unlike ``_remove_segments``, nothing survives this and nothing should:
+    an attempt's score is a score *at* a material, and the material is going.
+    Keeping the rows would leave a learner with results pointing at nothing.
+    """
+    attempts = (
+        await session.exec(select(Attempt).where(Attempt.material_id == material_id))
+    ).all()
+    if not attempts:
+        return
+
+    ids = [attempt.id for attempt in attempts]
+    # By attempt, not by segment/question: those are cleared further down as
+    # their own parents go, and a row is only reachable through one of the
+    # two — but which one depends on the material's type, and this way the
+    # order holds without asking.
+    for row in (
+        await session.exec(
+            select(SegmentAttempt).where(SegmentAttempt.attempt_id.in_(ids))  # type: ignore[attr-defined]
+        )
+    ).all():
+        await session.delete(row)
+    for row in (
+        await session.exec(
+            select(QuestionAttempt).where(QuestionAttempt.attempt_id.in_(ids))  # type: ignore[attr-defined]
+        )
+    ).all():
+        await session.delete(row)
+    await session.flush()
+
+    for attempt in attempts:
+        await session.delete(attempt)
+    await session.flush()
+
+
 async def delete_material(session: AsyncSession, material: Material) -> None:
+    """Delete a material and everything that points at it: its attempts, its
+    listening parts (with their groups and questions), and its dictation
+    segments.
+
+    All of it, whichever type the material is — a listening material has no
+    segments and a dictation one has no parts, so the unused half is a query
+    that finds nothing rather than a branch on ``material.type`` that could
+    be forgotten when a third type arrives.
+
+    Children before parents, flushed between: there's no ORM relationship to
+    teach the unit-of-work the FK order, so without this the material delete
+    can be issued first and trip the constraint."""
+    await _remove_attempts(session, material.id)
+    await listening_service.remove_material_parts(session, material.id)
     await _remove_segments(session, await get_segments(session, material.id))
-    # Flush the segment deletes before removing the parent: there's no ORM
-    # relationship to teach the unit-of-work the FK order, so without this the
-    # material delete can be issued first and trip the FK constraint.
     await session.flush()
     await session.delete(material)
     await session.commit()

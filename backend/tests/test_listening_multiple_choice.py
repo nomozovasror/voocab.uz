@@ -513,6 +513,77 @@ async def test_changing_a_group_type_replaces_its_questions_outright() -> None:
 
 
 @pytest.mark.asyncio
+async def test_deleting_a_material_takes_everything_pointing_at_it() -> None:
+    """Including the attempts. Every FK into a material is a plain one with
+    no ON DELETE, so anything left behind isn't an orphan — it's a 500."""
+    owner_email = "mcq10-owner@example.com"
+    student_email = "mcq10-student@example.com"
+    owner = await _make_user(owner_email)
+    student = await _make_user(student_email)
+    material = await _make_material(owner.id)
+    owner_token = create_access_token(str(owner.id))
+    student_token = create_access_token(str(student.id))
+
+    try:
+        async with _client() as client:
+            part_id = await _seed_part(client, owner_token, material.id)
+            r = await client.post(
+                f"/api/parts/{part_id}/question-groups",
+                json=_choice_group(FINISHED_QUESTIONS),
+                cookies={"access_token": owner_token},
+            )
+            assert r.status_code == 201, r.text
+            question_id = r.json()["questions"][0]["id"]
+            await _make_public(material.id)
+
+            r_attempt = await client.post(
+                f"/api/materials/{material.id}/attempts",
+                json={
+                    "answers": [
+                        {"question_id": question_id, "given_answer": "b"}
+                    ]
+                },
+                cookies={"access_token": student_token},
+            )
+            assert r_attempt.status_code == 200, r_attempt.text
+
+            # This used to 500: the material had been sat, and nothing cleared
+            # the attempt rows pointing at it.
+            r_delete = await client.delete(
+                f"/api/materials/{material.id}",
+                cookies={"access_token": owner_token},
+            )
+            assert r_delete.status_code == 204, r_delete.text
+
+            async with async_session_factory() as session:
+                assert await session.get(Material, material.id) is None
+                assert (
+                    await session.exec(
+                        select(Attempt).where(Attempt.material_id == material.id)
+                    )
+                ).all() == []
+                assert (
+                    await session.exec(
+                        select(Part).where(Part.material_id == material.id)
+                    )
+                ).all() == []
+                assert (
+                    await session.exec(
+                        select(Question).where(Question.id == question_id)
+                    )
+                ).all() == []
+                assert (
+                    await session.exec(
+                        select(QuestionAttempt).where(
+                            QuestionAttempt.question_id == question_id
+                        )
+                    )
+                ).all() == []
+    finally:
+        await _cleanup(material.id, owner_email, student_email)
+
+
+@pytest.mark.asyncio
 async def test_deleting_a_part_takes_groups_of_both_types_with_it() -> None:
     email = "mcq9-owner@example.com"
     owner = await _make_user(email)

@@ -143,20 +143,41 @@ async def _remove_questions(
         await session.delete(question)
 
 
-async def delete_part(session: AsyncSession, part: Part) -> None:
+async def _remove_part(session: AsyncSession, part: Part) -> None:
+    """A part, its groups and their questions — without committing, so this
+    can be one step of a larger transaction (deleting the whole material is
+    the other caller).
+
+    Flush the question deletes before the groups, and the groups before the
+    part: there's no ORM relationship to teach the unit-of-work the FK order,
+    so without this a parent delete can be issued first and trip the FK
+    constraint (same pattern as the audio/dictation delete paths)."""
     groups = await get_question_groups(session, part.id)
     for group in groups:
         await _remove_questions(session, await get_questions(session, group.id))
-    # Flush the question deletes before the groups, and the groups before the
-    # part: there's no ORM relationship to teach the unit-of-work the FK
-    # order, so without this a parent delete can be issued first and trip the
-    # FK constraint (same pattern as the audio/dictation delete paths).
     await session.flush()
     for group in groups:
         await session.delete(group)
     await session.flush()
     await session.delete(part)
+
+
+async def delete_part(session: AsyncSession, part: Part) -> None:
+    await _remove_part(session, part)
     await session.commit()
+
+
+async def remove_material_parts(
+    session: AsyncSession, material_id: uuid.UUID
+) -> None:
+    """Every part of a material and everything under it, without committing.
+
+    For the material delete (``app/services/materials.py``), which has more to
+    do in the same transaction — nothing pointing at a material may outlive
+    it, and ``parts.material_id`` is a plain FK with no ON DELETE."""
+    for part in await get_parts(session, material_id):
+        await _remove_part(session, part)
+    await session.flush()
 
 
 # --- QuestionGroup + Question ---------------------------------------------
