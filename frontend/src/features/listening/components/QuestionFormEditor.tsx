@@ -163,10 +163,16 @@ export function QuestionFormEditor({
             />
           </span>
 
-          {/* Only once a word is selected. The selection is named in the
-              tooltip rather than in the label: spelled out inline, a long
-              phrase pushed this row onto two lines. */}
-          {selectedText && (
+          {/* One place, two things, never both. With a word selected it is
+              the button that acts on it; without one it is the sentence that
+              explains how to do the same thing by typing. They are the two
+              halves of the same instruction, so they take turns rather than
+              sit side by side — and the row never grows a second line.
+
+              The selection is named in the tooltip rather than in the label:
+              spelled out inline, a long phrase pushed this row onto two
+              lines. */}
+          {selectedText ? (
             <button
               type="button"
               onMouseDown={(e) => e.preventDefault()}
@@ -177,6 +183,10 @@ export function QuestionFormEditor({
               <SquareDashed className="size-3.5 shrink-0" aria-hidden />
               Mark as answer
             </button>
+          ) : (
+            <span className="min-w-0 truncate text-muted-foreground/70">
+              Write the answers in [] like [red, blue]
+            </span>
           )}
         </label>
       </div>

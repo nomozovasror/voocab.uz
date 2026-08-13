@@ -366,7 +366,7 @@ function QuestionBlock({
                   the card ("answers: b, c") is content too, so putting the
                   button last left the times a slot short of the edge and out
                   of line with the thing they belong beside. */}
-              <span className="flex size-6 shrink-0 items-center justify-center">
+              <span className="-mr-1.5 flex size-6 shrink-0 items-center justify-center">
                 {question.options.length > 2 && (
                   <button
                     type="button"
