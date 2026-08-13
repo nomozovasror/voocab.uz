@@ -368,6 +368,66 @@ async def test_an_unfinished_question_is_saved_and_an_incoherent_one_is_not() ->
 
 
 @pytest.mark.asyncio
+async def test_where_a_choice_answer_is_said_round_trips_but_never_reaches_take() -> None:
+    """Marking the moment is optional for a choice question — publishing
+    never asks for it — but an author who has one should keep it, and the
+    learner should get it back with their result.
+
+    Not before, though: where the answer is said is most of the question."""
+    email = "mcq-replay-owner@example.com"
+    owner = await _make_user(email)
+    material = await _make_material(owner.id)
+    token = create_access_token(str(owner.id))
+
+    try:
+        async with _client() as client:
+            part_id = await _seed_part(client, token, material.id)
+            r = await client.post(
+                f"/api/parts/{part_id}/question-groups",
+                json=_choice_group(
+                    [
+                        {
+                            **FINISHED_QUESTIONS[0],
+                            "replay_start_ms": 12_000,
+                            "replay_end_ms": 15_500,
+                        }
+                    ]
+                ),
+                cookies={"access_token": token},
+            )
+            assert r.status_code == 201, r.text
+            question_id = r.json()["questions"][0]["id"]
+            assert r.json()["questions"][0]["replay_start_ms"] == 12_000
+
+            # Reopened by the editor, which is what it is stored for.
+            r_author = await client.get(
+                f"/api/materials/{material.id}", cookies={"access_token": token}
+            )
+            question = r_author.json()["parts"][0]["question_groups"][0]["questions"][0]
+            assert question["replay_start_ms"] == 12_000
+            assert question["replay_end_ms"] == 15_500
+
+            await _make_public(material.id)
+            r_take = await client.get(
+                f"/api/materials/{material.id}/take",
+                cookies={"access_token": token},
+            )
+            assert "replay_start_ms" not in r_take.text
+
+            # And handed over with the marking, which is when it stops being
+            # a clue and starts being the explanation.
+            r_attempt = await client.post(
+                f"/api/materials/{material.id}/attempts",
+                json={"answers": [{"question_id": question_id, "given_answer": "a"}]},
+                cookies={"access_token": token},
+            )
+            assert r_attempt.status_code == 200, r_attempt.text
+            assert r_attempt.json()["results"][0]["replay_start_ms"] == 12_000
+    finally:
+        await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
 async def test_a_group_that_is_only_a_type_survives_being_saved() -> None:
     """The earliest thing an author settles about a group is what kind of
     questions it holds — before the instructions, before a single question.

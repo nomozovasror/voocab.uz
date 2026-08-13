@@ -1,3 +1,4 @@
+import { Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { optionLetter } from "@/features/listening/mcq";
 import { questionNumbers } from "@/features/listening/numbering";
@@ -33,6 +34,9 @@ interface ChoiceGroupProps {
   /** The number this group's first question carries on the page. */
   startNumber: number;
   results?: Record<string, QuestionResult>;
+  /** Playing back the moment the answer is given, once the attempt has been
+   *  marked. Only where the author marked one — see below. */
+  onReplay?: (startMs: number | null, endMs: number | null) => void;
   disabled?: boolean;
 }
 
@@ -51,6 +55,7 @@ export function ChoiceGroup({
   onChange,
   startNumber,
   results,
+  onReplay,
   disabled,
 }: ChoiceGroupProps) {
   return (
@@ -73,6 +78,7 @@ export function ChoiceGroup({
               onChange(question.id, [...letters].join(","))
             }
             result={results?.[question.id]}
+            onReplay={onReplay}
             disabled={disabled}
           />
         ))}
@@ -86,6 +92,7 @@ function ChoiceQuestion({
   chosen,
   onChange,
   result,
+  onReplay,
   disabled,
 }: {
   question: TakeQuestion;
@@ -93,6 +100,7 @@ function ChoiceQuestion({
   chosen: Set<string>;
   onChange: (letters: string[]) => void;
   result?: QuestionResult;
+  onReplay?: (startMs: number | null, endMs: number | null) => void;
   disabled?: boolean;
 }) {
   const options = question.options ?? [];
@@ -197,6 +205,24 @@ function ChoiceQuestion({
           </label>
         );
       })}
+
+      {/* Only where the author marked one. A choice question is often
+          answered from the whole of what was said rather than from one
+          phrase in it, so most of them will never have a moment to point at
+          — and a "hear it" that played the wrong seconds would be worse
+          than no "hear it" at all. */}
+      {graded && onReplay && result.replay_start_ms != null && (
+        <button
+          type="button"
+          onClick={() => onReplay(result.replay_start_ms, result.replay_end_ms)}
+          title="Hear where this answer is given"
+          aria-label={`Hear where the answer to question ${number} is given`}
+          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-primary"
+        >
+          <Volume2 className="size-3.5" aria-hidden />
+          hear it
+        </button>
+      )}
     </fieldset>
   );
 }

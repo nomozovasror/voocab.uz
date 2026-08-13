@@ -229,7 +229,11 @@ export default function ListeningTakePage() {
                   // this build doesn't know about is better shown as its
                   // template than left out of the paper entirely.
                   return group.type === "multiple_choice" ? (
-                    <ChoiceGroup key={group.id} {...shared} />
+                    <ChoiceGroup
+                      key={group.id}
+                      {...shared}
+                      onReplay={playRange}
+                    />
                   ) : (
                     <FormCompletionGroup
                       key={group.id}

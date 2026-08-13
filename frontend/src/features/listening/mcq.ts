@@ -58,6 +58,14 @@ export interface ChoiceQuestion {
   /** Which options are right, by option id. How many there should be is the
    *  group's `answersPerQuestion`, not anything held here. */
   correct: string[];
+  /** Where in the recording the answer is given, if the author has marked
+   *  it. Optional here in a way it isn't for a gap: a choice question is
+   *  often answered from the whole of what was said rather than from one
+   *  phrase in it, so publishing never asks for this
+   *  (services/publishing.py). Where there IS a moment, it is worth having —
+   *  it is what a learner gets back with their result. */
+  replayStartMs: number | null;
+  replayEndMs: number | null;
 }
 
 /** What a group asks for when it hasn't said. One is the ordinary
@@ -84,6 +92,8 @@ export function newChoiceQuestion(): ChoiceQuestion {
     prompt: "",
     options: Array.from({ length: STARTING_OPTIONS }, () => newOption()),
     correct: [],
+    replayStartMs: null,
+    replayEndMs: null,
   };
 }
 
@@ -194,6 +204,8 @@ export function choiceQuestionsToApi(
       correct_answers: question.options
         .filter((o) => question.correct.includes(o.id))
         .map((o) => letterOf.get(o.id) as string),
+      replay_start_ms: question.replayStartMs,
+      replay_end_ms: question.replayEndMs,
     };
   });
 }
@@ -221,6 +233,8 @@ export function choiceQuestionsFromApi(
         correct: options
           .filter((_option, index) => key.has(optionLetter(index)))
           .map((option) => option.id),
+        replayStartMs: question.replay_start_ms ?? null,
+        replayEndMs: question.replay_end_ms ?? null,
       };
     });
   return restored.length > 0 ? restored : newChoiceQuestions();
@@ -344,6 +358,40 @@ export function choiceIssues(
   });
 
   return issues;
+}
+
+/** What this question's answer sounds like: the text of the options that are
+ *  right. It is what the transcript is searched for when offering the author
+ *  a moment to mark, and what a mark is checked against afterwards — the
+ *  letters mean nothing to a recording. */
+export function answerPhrases(question: ChoiceQuestion): string[] {
+  return question.options
+    .filter((option) => question.correct.includes(option.id))
+    .map((option) => option.text.trim())
+    .filter(Boolean);
+}
+
+/** Every choice question the author has marked, in the shape the transcript
+ *  pane highlights from. The same thing `answerMarks` does for gaps; kept
+ *  here because what counts as "the answer" differs — a gap's is what may be
+ *  typed, a choice question's is what the right options say. */
+export function choiceMarks(
+  questions: ChoiceQuestion[],
+): { startMs: number; endMs: number; answers: string[] }[] {
+  return questions.flatMap((question) => {
+    if (question.replayStartMs == null || question.replayEndMs == null) {
+      return [];
+    }
+    const answers = answerPhrases(question);
+    if (answers.length === 0) return [];
+    return [
+      {
+        startMs: question.replayStartMs,
+        endMs: question.replayEndMs,
+        answers,
+      },
+    ];
+  });
 }
 
 /** Whether the author has put anything of their own in yet. An untouched

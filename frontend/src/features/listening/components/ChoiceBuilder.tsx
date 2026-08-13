@@ -1,6 +1,14 @@
 import { useEffect, useRef } from "react";
-import { CircleAlert, CornerUpLeft, Plus, X } from "lucide-react";
+import {
+  AudioLines,
+  CircleAlert,
+  CornerUpLeft,
+  Plus,
+  Undo2,
+  X,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatClock } from "@/features/studio/format";
 import { ToolbarButton } from "@/features/listening/components/BuilderTools";
 import {
   questionNumbers,
@@ -8,6 +16,7 @@ import {
 } from "@/features/listening/numbering";
 import {
   addOption,
+  answerPhrases,
   answerSummary,
   newChoiceQuestion,
   newOption,
@@ -56,6 +65,13 @@ interface ChoiceBuilderProps {
   /** The phrase currently selected in the transcript, if any — offered as
    *  something to drop into a question or an option. */
   transcriptSelection?: string;
+  /** Marking where the answer is said, the same way a gap does it: the page
+   *  owns the transcript, so it takes the phrases to look for and hands back
+   *  a range. Absent while there is no recording to mark against. */
+  onMarkAudio?: (
+    answers: string[],
+    apply: (range: { startMs: number; endMs: number }) => void,
+  ) => void;
   extraTools?: React.ReactNode;
 }
 
@@ -66,6 +82,7 @@ export function ChoiceBuilder({
   wanted,
   issues,
   transcriptSelection,
+  onMarkAudio,
   extraTools,
 }: ChoiceBuilderProps) {
   // Inputs are registered by key so the caret can be put where the edit
@@ -121,6 +138,25 @@ export function ChoiceBuilder({
             number={startNumber + index * wanted}
             wanted={wanted}
             issue={issues?.get(question.id)}
+            onMark={
+              onMarkAudio
+                ? () =>
+                    onMarkAudio(answerPhrases(question), (range) =>
+                      patchQuestion(question.id, (q) => ({
+                        ...q,
+                        replayStartMs: range.startMs,
+                        replayEndMs: range.endMs,
+                      })),
+                    )
+                : undefined
+            }
+            onClearMark={() =>
+              patchQuestion(question.id, (q) => ({
+                ...q,
+                replayStartMs: null,
+                replayEndMs: null,
+              }))
+            }
             transcriptSelection={transcriptSelection}
             register={register}
             // The only question in a group can't be removed: a group with no
@@ -171,6 +207,8 @@ interface QuestionBlockProps {
   number: number;
   wanted: number;
   issue?: ChoiceIssue;
+  onMark?: () => void;
+  onClearMark: () => void;
   transcriptSelection?: string;
   register: (key: string) => (el: HTMLInputElement | null) => void;
   onRemove?: () => void;
@@ -186,6 +224,8 @@ function QuestionBlock({
   number,
   wanted,
   issue,
+  onMark,
+  onClearMark,
   transcriptSelection,
   register,
   onRemove,
@@ -215,6 +255,7 @@ function QuestionBlock({
   };
 
   const settled = question.correct.length === wanted;
+  const marked = question.replayStartMs != null;
 
   return (
     <div
@@ -348,12 +389,54 @@ function QuestionBlock({
             </span>
           </button>
 
+          {/* Where the answer is said, for the learner to be sent back to
+              after they get it wrong. Never required — a choice question is
+              often answered from the whole of what was said rather than one
+              phrase in it — so this is quiet until there is something to
+              show, and says the time once there is. */}
+          <span className="ml-auto flex shrink-0 items-center gap-0.5">
+            {onMark && (
+              <button
+                type="button"
+                onClick={onMark}
+                title={
+                  marked
+                    ? `Said at ${formatClock(question.replayStartMs ?? 0) ?? "0:00"}–${formatClock(question.replayEndMs ?? 0) ?? "0:00"} — press to re-mark`
+                    : "Mark where this is said in the recording"
+                }
+                aria-label={
+                  marked ? "Re-mark where this is said" : "Mark where this is said"
+                }
+                className={cn(
+                  "flex items-center gap-1 rounded px-1.5 py-0.5 text-xs tabular-nums transition-colors",
+                  marked
+                    ? "text-primary hover:bg-primary/10"
+                    : "text-muted-foreground/60 opacity-0 group-hover/question:opacity-100 hover:text-foreground focus-visible:opacity-100",
+                )}
+              >
+                <AudioLines className="size-3" aria-hidden />
+                {marked && formatClock(question.replayStartMs ?? 0)}
+              </button>
+            )}
+            {marked && (
+              <button
+                type="button"
+                onClick={onClearMark}
+                title="Clear the audio mark"
+                aria-label="Clear the audio mark"
+                className="flex size-5 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover/question:opacity-100 hover:text-destructive focus-visible:opacity-100"
+              >
+                <Undo2 className="size-3" aria-hidden />
+              </button>
+            )}
+          </span>
+
           {/* Already the report for an unfinished key — "1 of 2 marked" is
               the whole of what an issue about the answer would say — so a
               flagged one is coloured rather than described again. */}
           <span
             className={cn(
-              "ml-auto shrink-0 text-xs tabular-nums",
+              "shrink-0 pl-2 text-xs tabular-nums",
               issue?.kind === "answer"
                 ? "text-destructive"
                 : settled

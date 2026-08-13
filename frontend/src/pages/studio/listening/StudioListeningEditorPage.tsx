@@ -42,6 +42,7 @@ import {
 } from "@/features/listening/form-syntax";
 import {
   choiceIssues,
+  choiceMarks,
   choiceQuestionsFromApi,
   choiceQuestionsToApi,
   fitAnswerKeys,
@@ -1663,11 +1664,13 @@ export default function StudioListeningEditorPage() {
 
   const marksForTranscript = useMemo(
     () =>
-      run.flatMap(({ group, startNumber }) =>
-        group.type === "form_completion"
-          ? answerMarks(group.doc, startNumber - 1)
-          : [],
-      ),
+      run.flatMap(({ group, startNumber }) => {
+        if (group.type === "form_completion") {
+          return answerMarks(group.doc, startNumber - 1);
+        }
+        if (group.type === "multiple_choice") return choiceMarks(group.questions);
+        return [];
+      }),
     [run],
   );
   const markChecksByGroup = useMemo(() => {
@@ -2189,6 +2192,9 @@ export default function StudioListeningEditorPage() {
                           startNumber={startNumber}
                           showIssues={badGroupKey === group.key}
                           transcriptSelection={transcriptSelection}
+                          onMarkAudio={
+                            hasAudioEverAttached ? requestMark : undefined
+                          }
                           disabled={!hasAudioEverAttached}
                           extraTools={tools}
                           {...actions}

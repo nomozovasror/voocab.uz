@@ -40,6 +40,11 @@ interface ChoiceGroupEditorProps {
    *  unfinished is marked even if the author hadn't looked yet. */
   showIssues?: boolean;
   transcriptSelection?: string;
+  /** Marking where an answer is said. Absent while there is no recording. */
+  onMarkAudio?: (
+    answers: string[],
+    apply: (range: { startMs: number; endMs: number }) => void,
+  ) => void;
   disabled?: boolean;
   extraTools?: React.ReactNode;
   onMoveUp?: () => void;
@@ -69,6 +74,7 @@ export function ChoiceGroupEditor({
   startNumber,
   showIssues,
   transcriptSelection,
+  onMarkAudio,
   disabled,
   extraTools,
   onMoveUp,
@@ -148,6 +154,7 @@ export function ChoiceGroupEditor({
         wanted={answersPerQuestion}
         issues={issueByQuestion}
         transcriptSelection={transcriptSelection}
+        onMarkAudio={onMarkAudio}
         extraTools={extraTools}
       />
 
