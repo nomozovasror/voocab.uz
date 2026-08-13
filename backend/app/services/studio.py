@@ -10,7 +10,7 @@ grouped queries (one for listening, one for dictation), not N+1.
 
 import uuid
 
-from sqlalchemy import func
+from sqlalchemy import Integer, cast, func
 from sqlmodel import select
 
 from app.core.database import AsyncSession
@@ -22,6 +22,17 @@ from app.models.part import Part
 from app.models.question import Question
 from app.models.question_group import QuestionGroup
 from app.models.segment import Segment
+
+#: What one question row is worth on the paper: the number of answers its
+#: group asks for, which is also how many of the printed numbers it takes.
+#: Absent on a form-completion group and on anything written before the
+#: setting existed, both of which mean one. Summing this rather than counting
+#: rows is what makes a 40-mark test say 40 — a "Choose TWO letters" question
+#: is one row and two questions.
+_QUESTION_MARKS = func.coalesce(
+    cast(QuestionGroup.config["answers_per_question"].astext, Integer),  # type: ignore[index]
+    1,
+)
 
 # Material types the dashboard always reports a row for, even at zero, so
 # the UI can render a real "0" instead of guessing whether a missing entry
@@ -148,7 +159,7 @@ async def _recent(session: AsyncSession, author_id: uuid.UUID) -> list[dict]:
     question_counts: dict[uuid.UUID, int] = {}
     if listening_ids:
         stmt_q = (
-            select(Part.material_id, func.count(Question.id))
+            select(Part.material_id, func.sum(_QUESTION_MARKS))
             .select_from(Question)
             .join(QuestionGroup, Question.group_id == QuestionGroup.id)  # type: ignore[arg-type]
             .join(Part, QuestionGroup.part_id == Part.id)  # type: ignore[arg-type]
@@ -231,7 +242,7 @@ async def get_listening_list(session: AsyncSession, author_id: uuid.UUID) -> dic
     question_counts: dict[uuid.UUID, int] = dict(
         (
             await session.exec(
-                select(Part.material_id, func.count(Question.id))
+                select(Part.material_id, func.sum(_QUESTION_MARKS))
                 .select_from(Question)
                 .join(QuestionGroup, Question.group_id == QuestionGroup.id)  # type: ignore[arg-type]
                 .join(Part, QuestionGroup.part_id == Part.id)  # type: ignore[arg-type]

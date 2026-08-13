@@ -44,12 +44,17 @@ import {
   choiceIssues,
   choiceQuestionsFromApi,
   choiceQuestionsToApi,
+  fitAnswerKeys,
   isChoiceGroupEmpty,
   newChoiceQuestions,
+  DEFAULT_ANSWERS_PER_QUESTION,
   type ChoiceIssue,
   type ChoiceQuestion,
 } from "@/features/listening/mcq";
-import { questionRangeLabel } from "@/features/listening/numbering";
+import {
+  questionRangeLabel,
+  questionSpan,
+} from "@/features/listening/numbering";
 import {
   missingTypeNote,
   questionTypesForPart,
@@ -106,6 +111,10 @@ interface FormGroupState extends GroupStateBase {
 
 interface ChoiceGroupState extends GroupStateBase {
   type: "multiple_choice";
+  /** How many letters every question in this group asks for. A group
+   *  property because the instruction line is — see MultipleChoiceConfig on
+   *  the server, which is where this is stored. */
+  answersPerQuestion: number;
   questions: ChoiceQuestion[];
 }
 
@@ -214,7 +223,7 @@ function groupPayload(group: GroupState): QuestionGroupIn | null {
     return {
       type: "multiple_choice",
       instructions: group.instructions.trim(),
-      config: {},
+      config: { answers_per_question: group.answersPerQuestion },
       questions: choiceQuestionsToApi(group.questions),
     };
   }
@@ -245,13 +254,22 @@ function groupOrderSignature(part: PartState): string {
     .join(",");
 }
 
-/** How many questions a group holds, whichever kind it is — which is what
- *  numbers everything after it. A group with no kind holds none, so the
- *  numbering runs straight through it. */
+/** How many questions a group holds, whichever kind it is. A group with no
+ *  kind holds none. */
 function groupQuestionCount(group: GroupState): number {
   if (group.type === "form_completion") return docGaps(group.doc).length;
   if (group.type === "multiple_choice") return group.questions.length;
   return 0;
+}
+
+/** How many of the numbers on the paper a group covers — which is what
+ *  numbers everything after it, and not the same as how many questions it
+ *  holds: a group of two "choose two" questions covers four. */
+function groupNumberSpan(group: GroupState): number {
+  if (group.type === "multiple_choice") {
+    return group.questions.length * questionSpan(group.answersPerQuestion);
+  }
+  return groupQuestionCount(group);
 }
 
 /** Whether the author has put anything of their own into this group. */
@@ -265,7 +283,12 @@ function newGroup(type: QuestionGroupType | null): GroupState {
   const base = { key: newId(), groupId: null, instructions: "" };
   if (type === null) return { ...base, type };
   return type === "multiple_choice"
-    ? { ...base, type, questions: newChoiceQuestions() }
+    ? {
+        ...base,
+        type,
+        answersPerQuestion: DEFAULT_ANSWERS_PER_QUESTION,
+        questions: newChoiceQuestions(),
+      }
     : { ...base, type, wordLimit: null, rubric: null, doc: newDoc() };
 }
 
@@ -301,7 +324,7 @@ function groupRun(
   for (const part of parts.slice().sort((a, b) => a.orderIndex - b.orderIndex)) {
     for (const group of part.groups) {
       run.push({ part, group, startNumber: seen + 1 });
-      seen += groupQuestionCount(group);
+      seen += groupNumberSpan(group);
     }
   }
   return run;
@@ -322,7 +345,7 @@ function prefersReducedMotion(): boolean {
 /** What a group is called when it has to be named in a message: the part it
  *  is in, and the questions it covers. */
 function groupLabel(part: PartState, group: GroupState, startNumber: number): string {
-  const range = questionRangeLabel(startNumber - 1, groupQuestionCount(group));
+  const range = questionRangeLabel(startNumber - 1, groupNumberSpan(group));
   return range ? `${partLabel(part)} · ${range}` : partLabel(part);
 }
 
@@ -602,6 +625,9 @@ export default function StudioListeningEditorPage() {
                   return {
                     ...base,
                     type: "multiple_choice",
+                    answersPerQuestion:
+                      group.config.answers_per_question ??
+                      DEFAULT_ANSWERS_PER_QUESTION,
                     questions: choiceQuestionsFromApi(group.questions),
                   };
                 }
@@ -1336,7 +1362,11 @@ export default function StudioListeningEditorPage() {
         group.type === "form_completion"
           ? docPublishIssues(group.doc, startNumber - 1)[0]
           : group.type === "multiple_choice"
-            ? choiceIssues(group.questions, startNumber - 1)[0]?.message
+            ? choiceIssues(
+                group.questions,
+                startNumber - 1,
+                group.answersPerQuestion,
+              )[0]?.message
             : // A group still asking what it is has nothing to be wrong
               // about — `started` above has already let it through.
               undefined;
@@ -1497,7 +1527,11 @@ export default function StudioListeningEditorPage() {
     const choiceProblems: ChoiceIssue[] = choiceGroups.flatMap(
       ({ group, startNumber }) =>
         group.type === "multiple_choice"
-          ? choiceIssues(group.questions, startNumber - 1)
+          ? choiceIssues(
+              group.questions,
+              startNumber - 1,
+              group.answersPerQuestion,
+            )
           : [],
     );
     const unwritten = choiceProblems.filter((i) => i.kind !== "answer");
@@ -1799,8 +1833,10 @@ export default function StudioListeningEditorPage() {
             ? {
                 title: state.title.trim() || "untitled listening",
                 visibility: state.visibility,
+                // Numbers on the paper, which is what the list row beside
+                // this dialog counts too — a "choose two" is two of them.
                 questionCount: run.reduce(
-                  (total, { group }) => total + groupQuestionCount(group),
+                  (total, { group }) => total + groupNumberSpan(group),
                   0,
                 ),
                 attempts: attemptsOnRecord(),
@@ -2084,6 +2120,27 @@ export default function StudioListeningEditorPage() {
                           instructions={group.instructions}
                           onInstructionsChange={(instructions) =>
                             updateGroup(group.key, (g) => ({ ...g, instructions }))
+                          }
+                          answersPerQuestion={group.answersPerQuestion}
+                          onAnswersPerQuestionChange={(answersPerQuestion) =>
+                            updateGroup(group.key, (g) =>
+                              g.type === "multiple_choice"
+                                ? {
+                                    ...g,
+                                    answersPerQuestion,
+                                    // Lowering the count leaves keys the
+                                    // candidate could never submit, and the
+                                    // server refuses the whole payload for
+                                    // one of them — so they come down with
+                                    // it rather than blocking every save
+                                    // until the author finds them.
+                                    questions: fitAnswerKeys(
+                                      g.questions,
+                                      answersPerQuestion,
+                                    ),
+                                  }
+                                : g,
+                            )
                           }
                           startNumber={startNumber}
                           showIssues={badGroupKey === group.key}

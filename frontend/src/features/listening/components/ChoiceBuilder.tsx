@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { CornerUpLeft, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ToolbarButton } from "@/features/listening/components/BuilderTools";
+import { questionNumbers } from "@/features/listening/numbering";
 import {
   addOption,
   answerSummary,
@@ -10,11 +11,9 @@ import {
   optionLetter,
   patchOption,
   removeOption,
-  setChoiceMode,
   toggleCorrect,
   type ChoiceQuestion,
 } from "@/features/listening/mcq";
-import type { ChoiceMode } from "@/features/listening/types";
 
 /**
  * The multiple-choice builder.
@@ -28,8 +27,13 @@ import type { ChoiceMode } from "@/features/listening/types";
  * the options lettered beneath it. Marking the answer is done on the letter
  * itself rather than through a separate control, so the sheet says which
  * option is right in the same place the candidate will read it — round
- * markers for one answer, square for several, borrowed from the radio and
- * checkbox they will actually be.
+ * markers where one answer is wanted, square where several are, borrowed
+ * from the radio and checkbox they will actually be.
+ *
+ * How many answers are wanted is the group's, set once above this card
+ * (ChoiceGroupEditor) rather than per question. It arrives here as `wanted`
+ * and does three things: it decides the marker shape, it caps what clicking
+ * an option can mark, and it is what an unfinished key is short of.
  */
 
 interface ChoiceBuilderProps {
@@ -40,6 +44,8 @@ interface ChoiceBuilderProps {
   onChange: (edit: (current: ChoiceQuestion[]) => ChoiceQuestion[]) => void;
   /** The number the first question of this group carries on the page. */
   startNumber: number;
+  /** How many options each question wants marked — the group's setting. */
+  wanted: number;
   /** Question ids with something still missing, flagged so the block can be
    *  found without reading the list underneath. */
   flagged?: Set<string>;
@@ -53,6 +59,7 @@ export function ChoiceBuilder({
   questions,
   onChange,
   startNumber,
+  wanted,
   flagged,
   transcriptSelection,
   extraTools,
@@ -107,7 +114,8 @@ export function ChoiceBuilder({
           <QuestionBlock
             key={question.id}
             question={question}
-            number={startNumber + index}
+            number={startNumber + index * wanted}
+            wanted={wanted}
             flagged={flagged?.has(question.id)}
             transcriptSelection={transcriptSelection}
             register={register}
@@ -125,11 +133,10 @@ export function ChoiceBuilder({
             onPrompt={(prompt) =>
               patchQuestion(question.id, (q) => ({ ...q, prompt }))
             }
-            onMode={(mode) =>
-              patchQuestion(question.id, (q) => setChoiceMode(q, mode))
-            }
             onToggleCorrect={(optionId) =>
-              patchQuestion(question.id, (q) => toggleCorrect(q, optionId))
+              patchQuestion(question.id, (q) =>
+                toggleCorrect(q, optionId, wanted),
+              )
             }
             onOptionText={(optionId, text) =>
               patchQuestion(question.id, (q) => patchOption(q, optionId, text))
@@ -158,12 +165,12 @@ export function ChoiceBuilder({
 interface QuestionBlockProps {
   question: ChoiceQuestion;
   number: number;
+  wanted: number;
   flagged?: boolean;
   transcriptSelection?: string;
   register: (key: string) => (el: HTMLInputElement | null) => void;
   onRemove?: () => void;
   onPrompt: (prompt: string) => void;
-  onMode: (mode: ChoiceMode) => void;
   onToggleCorrect: (optionId: string) => void;
   onOptionText: (optionId: string, text: string) => void;
   onRemoveOption: (optionId: string) => void;
@@ -173,12 +180,12 @@ interface QuestionBlockProps {
 function QuestionBlock({
   question,
   number,
+  wanted,
   flagged,
   transcriptSelection,
   register,
   onRemove,
   onPrompt,
-  onMode,
   onToggleCorrect,
   onOptionText,
   onRemoveOption,
@@ -203,10 +210,17 @@ function QuestionBlock({
     document.execCommand("insertText", false, transcriptSelection);
   };
 
-  const chooseCount =
-    question.mode === "multiple" && question.correct.length > 1
-      ? `choose ${question.correct.length}`
-      : null;
+  // Progress towards what the group asks for, and only where there is
+  // progress to make: in an ordinary single-answer group the marker itself
+  // already says everything, and "1 of 1" beside every question would be
+  // noise on every line.
+  const tally =
+    wanted > 1 ? `${question.correct.length} of ${wanted} marked` : null;
+
+  // The number gutter is wider when a question owns a range ("23 and 24"),
+  // and everything under the prompt lines up with the prompt either way.
+  const gutter = wanted > 1 ? "w-16" : "w-6";
+  const indent = wanted > 1 ? "pl-[4.5rem]" : "pl-8";
 
   return (
     <div
@@ -216,8 +230,15 @@ function QuestionBlock({
       )}
     >
       <div className="flex items-baseline gap-2">
-        <span className="w-6 shrink-0 text-xs tabular-nums text-muted-foreground">
-          {number}.
+        {/* The numbers this question occupies, not its position in the list:
+            a "choose two" is printed as "23 and 24" and takes both. */}
+        <span
+          className={cn(
+            "shrink-0 text-xs tabular-nums text-muted-foreground",
+            gutter,
+          )}
+        >
+          {questionNumbers(number, wanted)}.
         </span>
         <input
           type="text"
@@ -226,14 +247,14 @@ function QuestionBlock({
           onChange={(e) => onPrompt(e.target.value)}
           onFocus={remember}
           placeholder="question text"
-          aria-label={`Question ${number}`}
+          aria-label={`Question ${questionNumbers(number, wanted)}`}
           className="min-w-0 flex-1 border-b border-transparent bg-transparent pr-7 pb-0.5 text-sm text-foreground placeholder:text-muted-foreground/50 hover:border-border focus:border-primary focus:outline-none"
         />
         {onRemove && (
           <button
             type="button"
             onClick={onRemove}
-            aria-label={`Remove question ${number}`}
+            aria-label={`Remove question ${questionNumbers(number, wanted)}`}
             title="Remove this question"
             className="absolute top-2 right-2 flex size-7 items-center justify-center rounded-md bg-card text-muted-foreground opacity-0 shadow-sm transition-opacity group-hover/question:opacity-100 hover:text-destructive focus-visible:opacity-100"
           >
@@ -242,16 +263,22 @@ function QuestionBlock({
         )}
       </div>
 
-      <div className="mt-1.5 flex items-center gap-2 pl-8">
-        <ModeToggle mode={question.mode} onChange={onMode} number={number} />
-        {chooseCount && (
-          <span className="text-[11px] text-muted-foreground">
-            {chooseCount}
+      {tally && (
+        <div className={cn("mt-1", indent)}>
+          <span
+            className={cn(
+              "text-[11px]",
+              question.correct.length === wanted
+                ? "text-muted-foreground"
+                : "text-warning",
+            )}
+          >
+            {tally}
           </span>
-        )}
-      </div>
+        </div>
+      )}
 
-      <ul className="mt-1.5 space-y-0.5 pl-8">
+      <ul className={cn("mt-1.5 space-y-0.5", indent)}>
         {question.options.map((option, index) => {
           const letter = optionLetter(index);
           const correct = question.correct.includes(option.id);
@@ -274,7 +301,7 @@ function QuestionBlock({
                   // Round for one answer, square for several: the same shapes
                   // the candidate will be given, so the author is looking at
                   // the question rather than at a setting.
-                  question.mode === "one" ? "rounded-full" : "rounded-[4px]",
+                  wanted === 1 ? "rounded-full" : "rounded-[4px]",
                   correct
                     ? "border-success/50 bg-success/15 text-success"
                     : "border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground",
@@ -315,7 +342,12 @@ function QuestionBlock({
         })}
       </ul>
 
-      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 pl-8">
+      <div
+        className={cn(
+          "mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1",
+          indent,
+        )}
+      >
         <button
           type="button"
           onClick={onAddOption}
@@ -353,48 +385,5 @@ function QuestionBlock({
         </span>
       </div>
     </div>
-  );
-}
-
-/** One answer or several. Two words rather than a switch: "multiple" has to
- *  say what it does to the question, and a toggle with no label would only
- *  be readable by trying it. */
-function ModeToggle({
-  mode,
-  onChange,
-  number,
-}: {
-  mode: ChoiceMode;
-  onChange: (mode: ChoiceMode) => void;
-  number: number;
-}) {
-  return (
-    <span
-      role="group"
-      aria-label={`Answers accepted for question ${number}`}
-      className="inline-flex items-center rounded-md border border-border p-0.5"
-    >
-      {(["one", "multiple"] as const).map((value) => (
-        <button
-          key={value}
-          type="button"
-          onClick={() => onChange(value)}
-          aria-pressed={mode === value}
-          title={
-            value === "one"
-              ? "One correct answer"
-              : "Several correct answers, all of which must be picked"
-          }
-          className={cn(
-            "rounded px-1.5 py-0.5 text-[11px] transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-            mode === value
-              ? "bg-primary/15 text-primary"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {value}
-        </button>
-      ))}
-    </span>
   );
 }

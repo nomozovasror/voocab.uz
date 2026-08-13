@@ -4,7 +4,11 @@ import { cn } from "@/lib/utils";
 import { ChoiceBuilder } from "@/features/listening/components/ChoiceBuilder";
 import { GroupHeader } from "@/features/listening/components/GroupHeader";
 import { questionRangeLabel } from "@/features/listening/numbering";
-import { choiceIssues, type ChoiceQuestion } from "@/features/listening/mcq";
+import {
+  ANSWER_COUNTS,
+  choiceIssues,
+  type ChoiceQuestion,
+} from "@/features/listening/mcq";
 
 /**
  * One multiple-choice group: its header, its instruction line, and the
@@ -14,6 +18,12 @@ import { choiceIssues, type ChoiceQuestion } from "@/features/listening/mcq";
  * the spacing — the two sit one above the other inside a part. The one thing
  * missing here is the answer-length row: how long an answer may be is not a
  * question you can ask about a letter.
+ *
+ * In its place, how many letters the candidate picks. It sits on the same
+ * line as the instructions because it is the same statement — "Choose the
+ * correct letter, A, B or C" against "Choose TWO letters, A–E" — and asking
+ * it per question, as this used to, let a group be built whose heading and
+ * questions disagreed.
  */
 
 interface ChoiceGroupEditorProps {
@@ -22,6 +32,9 @@ interface ChoiceGroupEditorProps {
   onChange: (edit: (current: ChoiceQuestion[]) => ChoiceQuestion[]) => void;
   instructions: string;
   onInstructionsChange: (v: string) => void;
+  /** How many options each question in this group wants marked. */
+  answersPerQuestion: number;
+  onAnswersPerQuestionChange: (v: number) => void;
   /** The number the first question of this group carries on the page. */
   startNumber: number;
   /** Set while a publish attempt is blocked on this group, so everything
@@ -52,6 +65,8 @@ export function ChoiceGroupEditor({
   onChange,
   instructions,
   onInstructionsChange,
+  answersPerQuestion,
+  onAnswersPerQuestionChange,
   startNumber,
   showIssues,
   transcriptSelection,
@@ -64,8 +79,8 @@ export function ChoiceGroupEditor({
   canMoveDown,
 }: ChoiceGroupEditorProps) {
   const issues = useMemo(
-    () => choiceIssues(questions, startNumber - 1),
-    [questions, startNumber],
+    () => choiceIssues(questions, startNumber - 1, answersPerQuestion),
+    [questions, startNumber, answersPerQuestion],
   );
 
   const shown = useMemo(() => {
@@ -87,7 +102,10 @@ export function ChoiceGroupEditor({
   return (
     <div inert={disabled} className={cn(disabled && "opacity-40")}>
       <GroupHeader
-        range={questionRangeLabel(startNumber - 1, questions.length)}
+        range={questionRangeLabel(
+          startNumber - 1,
+          questions.length * answersPerQuestion,
+        )}
         count={questions.length}
         typeLabel="Multiple choice"
         onMoveUp={onMoveUp}
@@ -97,19 +115,30 @@ export function ChoiceGroupEditor({
         canMoveDown={canMoveDown}
       />
 
-      <input
-        type="text"
-        value={instructions}
-        onChange={(e) => onInstructionsChange(e.target.value)}
-        placeholder="Choose the correct letter, A, B or C."
-        aria-label="Instructions"
-        className="mb-3 w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none"
-      />
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <input
+          type="text"
+          value={instructions}
+          onChange={(e) => onInstructionsChange(e.target.value)}
+          placeholder={
+            answersPerQuestion === 1
+              ? "Choose the correct letter, A, B or C."
+              : `Choose ${WORD[answersPerQuestion] ?? answersPerQuestion} letters, A–E.`
+          }
+          aria-label="Instructions"
+          className="min-w-0 flex-1 rounded-md border border-border bg-transparent px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none"
+        />
+        <AnswerCount
+          value={answersPerQuestion}
+          onChange={onAnswersPerQuestionChange}
+        />
+      </div>
 
       <ChoiceBuilder
         questions={questions}
         onChange={onChange}
         startNumber={startNumber}
+        wanted={answersPerQuestion}
         flagged={flagged}
         transcriptSelection={transcriptSelection}
         extraTools={extraTools}
@@ -129,5 +158,54 @@ export function ChoiceGroupEditor({
         </ul>
       )}
     </div>
+  );
+}
+
+/** "TWO", the way the rubric writes it. Only as far as the control goes. */
+const WORD: Record<number, string> = { 2: "TWO", 3: "THREE" };
+
+/** How many letters this group's questions each ask for.
+ *
+ *  Numbers rather than "one / several", because "several" is not what the
+ *  paper says and not what the candidate needs: the instruction line names a
+ *  number, and so does the count of checkboxes they are allowed to tick. */
+function AnswerCount({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <span className="flex shrink-0 items-center gap-1.5">
+      <span className="text-[11px] text-muted-foreground">answers</span>
+      <span
+        role="group"
+        aria-label="Answers per question"
+        className="inline-flex items-center rounded-md border border-border p-0.5"
+      >
+        {ANSWER_COUNTS.map((count) => (
+          <button
+            key={count}
+            type="button"
+            onClick={() => onChange(count)}
+            aria-pressed={value === count}
+            title={
+              count === 1
+                ? "One correct answer per question"
+                : `${count} correct answers per question, all of which must be picked`
+            }
+            className={cn(
+              "rounded px-2 py-0.5 text-[11px] tabular-nums transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+              value === count
+                ? "bg-primary/15 text-primary"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {count}
+          </button>
+        ))}
+      </span>
+    </span>
   );
 }

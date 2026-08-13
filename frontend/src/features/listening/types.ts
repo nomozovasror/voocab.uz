@@ -85,11 +85,6 @@ export interface PartOut {
 
 export type QuestionGroupType = "form_completion" | "multiple_choice";
 
-/** How many of a choice question's options are right. Stored rather than
- *  counted, so a question set to "several" and given one answer reads as
- *  unfinished instead of as a finished single-answer question. */
-export type ChoiceMode = "one" | "multiple";
-
 export interface ListeningQuestion {
   id: string;
   /** The question's place within its GROUP, always 1..N. What the candidate
@@ -105,7 +100,6 @@ export interface ListeningQuestion {
   // --- multiple_choice only; absent for a gap in a form -------------------
   prompt?: string | null;
   options?: string[] | null;
-  mode?: ChoiceMode | null;
 }
 
 export interface ListeningQuestionGroup {
@@ -136,7 +130,6 @@ export interface ChoiceQuestionIn {
   number: number;
   prompt: string;
   options: string[];
-  mode: ChoiceMode;
   correct_answers: string[];
 }
 
@@ -151,16 +144,25 @@ export type AnswerRubric =
   | "three_words_number";
 
 /** What a group carries at group level. Form completion has the gap-fill
- *  template; multiple choice has nothing — each of its questions holds its
- *  own prompt and options — so `template` is optional on the shape that
- *  comes back for either of them. */
+ *  template; multiple choice has how many letters the candidate picks — each
+ *  of its questions holds its own prompt and options. Both are optional on
+ *  the shape that comes back for either of them. */
 export interface GroupConfig {
   template?: string;
   answer_rubric?: AnswerRubric | null;
+  /** multiple_choice only. Absent on anything written before it existed,
+   *  which means one — see `DEFAULT_ANSWERS_PER_QUESTION`. */
+  answers_per_question?: number;
 }
 
 export interface FormConfig extends GroupConfig {
   template: string;
+}
+
+/** The instruction line states how many letters to pick, so the count sits
+ *  beside it on the group rather than on each question under it. */
+export interface ChoiceConfig {
+  answers_per_question: number;
 }
 
 export interface FormGroupIn {
@@ -177,7 +179,7 @@ export interface ChoiceGroupIn {
   /** Never set: how long an answer may be is not a question you can ask
    *  about a letter. Present so both payloads have the same shape. */
   word_limit?: null;
-  config: Record<string, never>;
+  config: ChoiceConfig;
   questions: ChoiceQuestionIn[];
 }
 

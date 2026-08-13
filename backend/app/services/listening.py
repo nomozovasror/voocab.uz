@@ -20,7 +20,7 @@ from app.core.database import AsyncSession
 from app.models.part import Part
 from app.models.question import Question
 from app.models.question_attempt import QuestionAttempt
-from app.models.question_group import QuestionGroup
+from app.models.question_group import QuestionGroup, QuestionGroupType
 from app.schemas.listening import (
     ChoiceQuestionIn,
     PartCreate,
@@ -229,7 +229,6 @@ def _question_config(question) -> dict | None:
     return {
         "prompt": question.prompt,
         "options": list(question.options),
-        "mode": question.mode,
     }
 
 
@@ -373,39 +372,71 @@ async def delete_question_group(session: AsyncSession, group: QuestionGroup) -> 
 
 async def get_material_questions(
     session: AsyncSession, material_id: uuid.UUID
-) -> list[Question]:
+) -> list[tuple[Question, int]]:
     """Every ``Question`` belonging to a material, in the material's display
     order (part ``order_index`` -> group ``order_index`` -> question
-    ``number``). ``Question.number`` is only unique within its group, not
-    globally, so this traversal order — not a bare ORDER BY number — is what
-    grading (Faza 3) uses to order per-question results and to build the
-    question_id -> correct_answers map."""
-    questions: list[Question] = []
+    ``number``), each with the number of marks it carries.
+
+    ``Question.number`` is only unique within its group, not globally, so
+    this traversal order — not a bare ORDER BY number — is what grading
+    (Faza 3) uses to order per-question results and to build the
+    question_id -> correct_answers map.
+
+    The marks come with it because they are the group's, and grading walks
+    questions. A "Choose TWO letters" question is worth two, and takes two of
+    the numbers printed down the side of the paper, exactly as it does in the
+    real exam — a 40-mark test has 40 numbers, not 40 rows."""
+    questions: list[tuple[Question, int]] = []
     for part in await get_parts(session, material_id):
         for group in await get_question_groups(session, part.id):
-            questions.extend(await get_questions(session, group.id))
+            marks = question_marks(group)
+            questions.extend(
+                (question, marks)
+                for question in await get_questions(session, group.id)
+            )
     return questions
 
 
 # --- Consumption read tree (§7, §3.4) ---------------------------------------
 
 
-def _take_question(question: Question) -> dict:
+def choice_select_count(group: QuestionGroup) -> int:
+    """How many letters this group's questions each ask for.
+
+    Defaults to 1 for anything that doesn't say, which covers every group
+    written before the setting existed and every group that isn't multiple
+    choice — a form gap's count is not a question you can ask."""
+    wanted = (group.config or {}).get("answers_per_question")
+    return wanted if isinstance(wanted, int) and wanted >= 1 else 1
+
+
+def question_marks(group: QuestionGroup) -> int:
+    """How many marks — and how many of the numbers printed down the side of
+    the paper — each question in this group is worth.
+
+    One per answer asked for. "Choose TWO letters" is labelled *Questions 23
+    and 24* in a real paper and carries two marks; treating it as one made a
+    40-mark test come out short and quietly halved what a candidate earned
+    for the harder question."""
+    if group.type != QuestionGroupType.MULTIPLE_CHOICE:
+        return 1
+    return choice_select_count(group)
+
+
+def _take_question(question: Question, select_count: int) -> dict:
     """One question as a candidate may see it.
 
     ``correct_answers`` is not read here, and there is nowhere it could be
     written: every key is named. A choice question adds its prompt, its
-    options in order, and how many to pick — the last of which is derived
-    from the answer key's SIZE, never its contents. "Choose two letters" is
-    printed on the real paper."""
+    options in order, and how many to pick — which comes from the group, the
+    same place the instruction line printed above it comes from, and so can't
+    disagree with it. It used to be read off the answer key's size; that made
+    a paper whose instructions said "choose two" quietly ask for three
+    wherever the author had marked three, and it took the key's size out
+    towards the candidate on every question."""
     if question.config is None:
         return {"id": question.id, "number": question.number}
     options = question.options or []
-    select_count = (
-        max(1, len(question.correct_answers))
-        if question.config.get("mode") == "multiple"
-        else 1
-    )
     return {
         "id": question.id,
         "number": question.number,
@@ -424,8 +455,9 @@ async def get_take_tree(session: AsyncSession, material_id: uuid.UUID) -> list[d
     for part in await get_parts(session, material_id):
         groups: list[dict] = []
         for group in await get_question_groups(session, part.id):
+            select_count = choice_select_count(group)
             questions = [
-                _take_question(question)
+                _take_question(question, select_count)
                 for question in await get_questions(session, group.id)
             ]
             groups.append(
@@ -487,7 +519,6 @@ async def get_author_tree(
                     # sends back.
                     q["prompt"] = question.config.get("prompt") or ""
                     q["options"] = question.options or []
-                    q["mode"] = question.config.get("mode") or "one"
                 if include_answers:
                     q["correct_answers"] = question.correct_answers
                 questions.append(q)

@@ -44,10 +44,12 @@ class Question(SQLModel, table=True):
     #: Per-question presentation, for the types that have any — the same
     #: division of labour as :attr:`QuestionGroup.config`, one level down.
     #: NULL for form completion, whose prompt is the group's template.
-    #: ``multiple_choice``: ``{"prompt": str, "options": [str, ...],
-    #: "mode": "one" | "multiple"}``. Nothing gradeable lives in here: the
-    #: answer key is ``correct_answers``, so the take tree can hand over the
-    #: whole of a question's presentation without deciding what to strip.
+    #: ``multiple_choice``: ``{"prompt": str, "options": [str, ...]}``. How
+    #: many of those options the candidate picks is the group's business, not
+    #: the question's — see :class:`app.schemas.listening.MultipleChoiceConfig`.
+    #: Nothing gradeable lives in here: the answer key is ``correct_answers``,
+    #: so the take tree can hand over the whole of a question's presentation
+    #: without deciding what to strip.
     config: dict | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
     replay_start_ms: int | None = Field(default=None)
     replay_end_ms: int | None = Field(default=None)

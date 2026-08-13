@@ -144,12 +144,17 @@ async def submit_attempt(
         await session.flush()  # assign attempt.id
 
     results: list[dict] = []
-    correct_count = 0
-    for question in questions:
+    # Marks, not questions answered. A "Choose TWO letters" question is two of
+    # the numbers on the paper and two of the marks, so a test of 40 numbers
+    # scores out of 40 however many rows it is made of.
+    earned = 0
+    total_marks = 0
+    for question, marks in questions:
+        total_marks += marks
         given = given_by_question_id.get(question.id, "")
         correct = grade_question(question, given)
         if correct:
-            correct_count += 1
+            earned += marks
         session.add(
             QuestionAttempt(
                 attempt_id=attempt.id,
@@ -168,8 +173,8 @@ async def submit_attempt(
             }
         )
 
-    attempt.score = float(correct_count)
-    attempt.total_questions = len(questions)
+    attempt.score = float(earned)
+    attempt.total_questions = total_marks
     attempt.status = AttemptStatus.SUBMITTED
     attempt.submitted_at = datetime.now(timezone.utc)
     session.add(attempt)

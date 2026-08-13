@@ -9,6 +9,7 @@ import { getErrorMessage } from "@/lib/api";
 import { mediaUrl } from "@/features/listening/api";
 import { useTakeMaterial, useSubmitAttempt } from "@/features/listening/queries";
 import { ChoiceGroup } from "@/features/listening/components/ChoiceGroup";
+import { questionSpan } from "@/features/listening/numbering";
 import { FormCompletionGroup } from "@/features/listening/components/FormCompletionGroup";
 import type {
   AttemptResult,
@@ -28,7 +29,10 @@ function fmt(ms: number): string {
  *  candidate reads runs across the whole material, so a part of "Questions
  *  1–6" followed by "Questions 7–10" is one walk of the tree in order.
  *  Worked out here rather than sent, because it is the same walk the editor
- *  does — one rule in two places beats two numbers that can disagree. */
+ *  does — one rule in two places beats two numbers that can disagree.
+ *
+ *  What accumulates is numbers, not questions: a "Choose TWO letters" is
+ *  printed as *Questions 23 and 24* and takes both. */
 function groupNumbering(material: MaterialTake): Map<string, number> {
   const startAt = new Map<string, number>();
   let seen = 0;
@@ -39,7 +43,7 @@ function groupNumbering(material: MaterialTake): Map<string, number> {
       .slice()
       .sort((a, b) => a.order_index - b.order_index)) {
       startAt.set(group.id, seen + 1);
-      seen += group.questions.length;
+      seen += group.questions.length * questionSpan(group.config.answers_per_question);
     }
   }
   return startAt;

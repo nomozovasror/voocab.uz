@@ -141,10 +141,23 @@ class QuestionGroupConfig(BaseModel):
 
 
 class MultipleChoiceConfig(BaseModel):
-    """``multiple_choice`` has nothing at group level: the prompt and options
-    belong to each question, not to the set. The model is here so the two
-    group types have the same shape — ``config`` is always an object — rather
-    than to hold anything."""
+    """``multiple_choice`` at group level: how many letters the candidate
+    picks. The prompt and options belong to each question, not to the set.
+
+    This is a property of the set because the instruction line is a property
+    of the set, and the instruction line is what states it — "Choose the
+    correct letter, A, B or C" against "Choose TWO letters, A–E". Held per
+    question, as it was, a group could be built whose instructions said one
+    thing and whose questions did another, and nothing anywhere would object.
+    In a real paper the two forms are printed under separate instructions,
+    which is exactly what a second group is."""
+
+    #: 1 is the ordinary single-answer question. Above that, every question in
+    #: the group asks for that many — a count rather than a "several" flag,
+    #: because "several" doesn't tell the candidate what to do and doesn't
+    #: stop one question in the group asking for two while the next asks for
+    #: three under the same instruction line.
+    answers_per_question: int = Field(default=1, ge=1, le=MAX_OPTIONS)
 
 
 class _QuestionInBase(BaseModel):
@@ -191,16 +204,13 @@ class ChoiceQuestionIn(_QuestionInBase):
     Almost everything here is optional, because almost everything here is
     typed over several minutes and autosaved throughout. What isn't optional
     is coherence: ``correct_answers`` may only name options that exist, and
-    ``mode`` may not contradict itself. An empty answer key is a question the
-    author hasn't finished, which publishing refuses and this doesn't."""
+    may not run past what the group asks for (checked on the group, which is
+    the only place both are in view). An empty or short answer key is a
+    question the author hasn't finished, which publishing refuses and this
+    doesn't."""
 
     prompt: str = ""
     options: list[str] = Field(default_factory=list, max_length=MAX_OPTIONS)
-    #: How many answers the candidate picks. Stored rather than derived from
-    #: the length of the answer key: an author who has chosen "several" and
-    #: marked only the first of them has an unfinished question, and deriving
-    #: would quietly turn it into a finished single-answer one.
-    mode: Literal["one", "multiple"] = "one"
     #: The answer key, as option letters. Not accepted variants — the set has
     #: to be matched exactly (see :class:`app.models.question.Question`).
     correct_answers: list[str] = Field(default_factory=list)
@@ -220,10 +230,6 @@ class ChoiceQuestionIn(_QuestionInBase):
         if unknown:
             raise ValueError(
                 f"correct_answers name options that don't exist: {', '.join(unknown)}"
-            )
-        if self.mode == "one" and len(letters) > 1:
-            raise ValueError(
-                "a single-answer question cannot have more than one correct option"
             )
         # Stored in the options' own order, so the key reads the way the
         # question does and two equivalent keys can't be written two ways.
@@ -323,6 +329,24 @@ class MultipleChoiceGroupIn(_QuestionGroupInBase):
         _contiguous_numbers(list(self.questions))
         return self
 
+    @model_validator(mode="after")
+    def _keys_fit_what_the_group_asks(self) -> "MultipleChoiceGroupIn":
+        """A key may be short — that question isn't finished — but never
+        longer than the number of letters the candidate is told to pick. A
+        group asking for two with three marked right is not gradeable: the
+        candidate can only ever submit two, so the answer would be wrong
+        however well they listened."""
+        wanted = self.config.answers_per_question
+        over = [
+            q.number for q in self.questions if len(q.correct_answers) > wanted
+        ]
+        if over:
+            raise ValueError(
+                f"this group asks for {wanted} answer(s) per question, but "
+                f"question(s) {', '.join(str(n) for n in over)} mark more"
+            )
+        return self
+
 
 #: What the create/replace endpoints accept. Tagged on ``type`` so the request
 #: is validated against the group it claims to be — a multiple-choice payload
@@ -345,10 +369,12 @@ class QuestionOut(BaseModel):
     correct_answers: list[str]
     replay_start_ms: int | None
     replay_end_ms: int | None
-    #: Multiple choice only; ``None`` for a gap in a form.
+    #: Multiple choice only; ``None`` for a gap in a form. How many answers
+    #: the question wants isn't here — it is the group's, so the editor reads
+    #: it once from :class:`MultipleChoiceConfig` rather than off whichever
+    #: question happens to be first.
     prompt: str | None = None
     options: list[str] | None = None
-    mode: Literal["one", "multiple"] | None = None
 
 
 class QuestionGroupOut(BaseModel):

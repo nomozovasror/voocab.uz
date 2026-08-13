@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import { optionLetter } from "@/features/listening/mcq";
+import { questionNumbers } from "@/features/listening/numbering";
 import type {
   QuestionResult,
   TakeQuestion,
@@ -55,7 +56,10 @@ export function ChoiceGroup({
           <ChoiceQuestion
             key={question.id}
             question={question}
-            number={startNumber + index}
+            // A "choose two" occupies two of the numbers down the side, so
+            // the next question starts two later — the same walk the editor
+            // and the server do.
+            number={startNumber + index * (question.select_count ?? 1)}
             chosen={chosenLetters(answers[question.id])}
             onChange={(letters) =>
               onChange(question.id, [...letters].join(","))
@@ -112,7 +116,7 @@ function ChoiceQuestion({
     >
       <legend className="mb-1 text-sm text-foreground">
         <span className="mr-2 font-semibold tabular-nums text-muted-foreground">
-          {number}
+          {questionNumbers(number, selectCount)}
         </span>
         {question.prompt}
       </legend>

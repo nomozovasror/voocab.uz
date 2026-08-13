@@ -126,29 +126,44 @@ def _client() -> httpx.AsyncClient:
     )
 
 
-def _choice_group(questions: list[dict]) -> dict:
+def _choice_group(questions: list[dict], wanted: int = 1) -> dict:
+    """A group payload. ``wanted`` is how many letters every question in it
+    asks for — the group's business, because the instruction line is."""
     return {
         "type": "multiple_choice",
-        "instructions": "Choose the correct letter, A, B or C.",
-        "config": {},
+        "instructions": (
+            "Choose the correct letter, A, B or C."
+            if wanted == 1
+            else f"Choose {wanted} letters, A-E."
+        ),
+        "config": {"answers_per_question": wanted},
         "questions": questions,
     }
 
 
-#: A finished pair: one single-answer question and one "choose two".
+#: A finished pair of ordinary single-answer questions.
 FINISHED_QUESTIONS = [
     {
         "number": 1,
         "prompt": "Why did the speaker move to Bristol?",
         "options": ["for a job", "to study", "for the weather"],
-        "mode": "one",
         "correct_answers": ["b"],
     },
     {
         "number": 2,
+        "prompt": "Where does the club meet?",
+        "options": ["the library", "the town hall", "the sports centre"],
+        "correct_answers": ["c"],
+    },
+]
+
+#: The other form, which is its own group because its instruction line is its
+#: own: "Choose TWO letters, A-E."
+CHOOSE_TWO_QUESTIONS = [
+    {
+        "number": 1,
         "prompt": "Which TWO facilities are free?",
         "options": ["the pool", "the gym", "the car park", "the sauna"],
-        "mode": "multiple",
         "correct_answers": ["a", "c"],
     },
 ]
@@ -188,17 +203,25 @@ async def test_a_choice_group_is_stored_with_its_prompts_options_and_key() -> No
             assert r.status_code == 201, r.text
             body = r.json()
             assert body["type"] == "multiple_choice"
-            # Nothing at group level: the prompt and options belong to each
-            # question, so there is no shared resource to keep here.
-            assert body["config"] == {}
+            # How many letters to pick is the group's, said once. The prompt
+            # and options are each question's, so nothing else lives here.
+            assert body["config"] == {"answers_per_question": 1}
 
             first, second = body["questions"]
             assert first["prompt"] == "Why did the speaker move to Bristol?"
             assert first["options"] == ["for a job", "to study", "for the weather"]
-            assert first["mode"] == "one"
             assert first["correct_answers"] == ["b"]
-            assert second["mode"] == "multiple"
-            assert second["correct_answers"] == ["a", "c"]
+            assert second["correct_answers"] == ["c"]
+
+            # The other form is a second group under its own instruction line,
+            # which is how a real paper prints it.
+            r_two = await client.post(
+                f"/api/parts/{part_id}/question-groups",
+                json=_choice_group(CHOOSE_TWO_QUESTIONS, wanted=2),
+                cookies={"access_token": token},
+            )
+            assert r_two.status_code == 201, r_two.text
+            assert r_two.json()["config"] == {"answers_per_question": 2}
 
             # The author's own view of the material carries all of it back,
             # which is what the editor reopens from.
@@ -206,11 +229,11 @@ async def test_a_choice_group_is_stored_with_its_prompts_options_and_key() -> No
                 f"/api/materials/{material.id}", cookies={"access_token": token}
             )
             assert r_author.status_code == 200, r_author.text
-            group = r_author.json()["parts"][0]["question_groups"][0]
-            assert [q["correct_answers"] for q in group["questions"]] == [
-                ["b"],
-                ["a", "c"],
-            ]
+            groups = r_author.json()["parts"][0]["question_groups"]
+            assert [g["config"]["answers_per_question"] for g in groups] == [1, 2]
+            assert [
+                [q["correct_answers"] for q in g["questions"]] for g in groups
+            ] == [[["b"], ["c"]], [["a", "c"]]]
     finally:
         await _cleanup(material.id, email)
 
@@ -237,7 +260,6 @@ async def test_an_unfinished_question_is_saved_and_an_incoherent_one_is_not() ->
                             "number": 1,
                             "prompt": "",
                             "options": ["", "", ""],
-                            "mode": "one",
                             "correct_answers": [],
                         }
                     ]
@@ -247,7 +269,7 @@ async def test_an_unfinished_question_is_saved_and_an_incoherent_one_is_not() ->
             assert blank.status_code == 201, blank.text
             group_id = blank.json()["id"]
 
-            for questions, why in [
+            for questions, wanted, why in [
                 (
                     [
                         {
@@ -256,6 +278,7 @@ async def test_an_unfinished_question_is_saved_and_an_incoherent_one_is_not() ->
                             "correct_answers": ["c"],
                         }
                     ],
+                    1,
                     "an answer naming an option that doesn't exist",
                 ),
                 (
@@ -263,11 +286,22 @@ async def test_an_unfinished_question_is_saved_and_an_incoherent_one_is_not() ->
                         {
                             "number": 1,
                             "options": ["a", "b"],
-                            "mode": "one",
                             "correct_answers": ["a", "b"],
                         }
                     ],
-                    "two answers on a single-answer question",
+                    1,
+                    "two answers where the group asks for one",
+                ),
+                (
+                    [
+                        {
+                            "number": 1,
+                            "options": ["a", "b", "c"],
+                            "correct_answers": ["a", "b", "c"],
+                        }
+                    ],
+                    2,
+                    "three answers where the group asks for two",
                 ),
                 (
                     [
@@ -277,6 +311,7 @@ async def test_an_unfinished_question_is_saved_and_an_incoherent_one_is_not() ->
                             "correct_answers": ["a", "a"],
                         }
                     ],
+                    1,
                     "the same option marked twice",
                 ),
                 (
@@ -284,15 +319,42 @@ async def test_an_unfinished_question_is_saved_and_an_incoherent_one_is_not() ->
                         {"number": 1, "options": ["a", "b"], "correct_answers": []},
                         {"number": 3, "options": ["a", "b"], "correct_answers": []},
                     ],
+                    1,
                     "a hole in the numbering",
                 ),
             ]:
                 r = await client.patch(
                     f"/api/question-groups/{group_id}",
-                    json=_choice_group(questions),
+                    json=_choice_group(questions, wanted=wanted),
                     cookies={"access_token": token},
                 )
                 assert r.status_code == 422, f"{why} should be refused: {r.text}"
+
+            # Short of what the group asks for is not incoherent, only
+            # unfinished — that is autosave a few seconds into a "choose two".
+            r_short = await client.patch(
+                f"/api/question-groups/{group_id}",
+                json=_choice_group(
+                    [
+                        {
+                            "number": 1,
+                            "options": ["a", "b", "c"],
+                            "correct_answers": ["a"],
+                        }
+                    ],
+                    wanted=2,
+                ),
+                cookies={"access_token": token},
+            )
+            assert r_short.status_code == 200, r_short.text
+            # Put the blank group back for the assertion below.
+            await client.patch(
+                f"/api/question-groups/{group_id}",
+                json=_choice_group(
+                    [{"number": 1, "options": ["", "", ""], "correct_answers": []}]
+                ),
+                cookies={"access_token": token},
+            )
 
             # And none of it landed: the group is still the blank one.
             r_after = await client.get(
@@ -453,6 +515,12 @@ async def test_take_carries_the_options_but_never_the_key() -> None:
                 cookies={"access_token": token},
             )
             assert r.status_code == 201, r.text
+            r_two = await client.post(
+                f"/api/parts/{part_id}/question-groups",
+                json=_choice_group(CHOOSE_TWO_QUESTIONS, wanted=2),
+                cookies={"access_token": token},
+            )
+            assert r_two.status_code == 201, r_two.text
             await _make_public(material.id)
 
             r_take = await client.get(
@@ -463,16 +531,17 @@ async def test_take_carries_the_options_but_never_the_key() -> None:
             # Headline security assertion: the key isn't in the JSON text at
             # any depth, under any name it is stored by.
             assert "correct_answers" not in r_take.text
-            assert '"mode"' not in r_take.text
 
-            questions = r_take.json()["parts"][0]["question_groups"][0]["questions"]
-            assert [q["options"] for q in questions] == [
+            groups = r_take.json()["parts"][0]["question_groups"]
+            assert [q["options"] for q in groups[0]["questions"]] == [
                 ["for a job", "to study", "for the weather"],
-                ["the pool", "the gym", "the car park", "the sauna"],
+                ["the library", "the town hall", "the sports centre"],
             ]
             # How many to pick is public — it is printed on the paper — and
-            # says nothing about which.
-            assert [q["select_count"] for q in questions] == [1, 2]
+            # says nothing about which. It comes off the group, so every
+            # question under one instruction line agrees with it.
+            assert [q["select_count"] for q in groups[0]["questions"]] == [1, 1]
+            assert [q["select_count"] for q in groups[1]["questions"]] == [2]
     finally:
         await _cleanup(material.id, email)
 
@@ -703,14 +772,24 @@ async def test_a_choice_is_graded_as_a_set_with_no_partial_credit() -> None:
 
     try:
         async with _client() as client:
+            # The two forms are two groups, because their instruction lines
+            # differ — which is the whole point of the setting being per
+            # group. Both are graded the same way.
             part_id = await _seed_part(client, owner_token, material.id)
-            r = await client.post(
+            r_one = await client.post(
                 f"/api/parts/{part_id}/question-groups",
-                json=_choice_group(FINISHED_QUESTIONS),
+                json=_choice_group(FINISHED_QUESTIONS[:1]),
                 cookies={"access_token": owner_token},
             )
-            assert r.status_code == 201, r.text
-            by_number = {q["number"]: q["id"] for q in r.json()["questions"]}
+            assert r_one.status_code == 201, r_one.text
+            r_two = await client.post(
+                f"/api/parts/{part_id}/question-groups",
+                json=_choice_group(CHOOSE_TWO_QUESTIONS, wanted=2),
+                cookies={"access_token": owner_token},
+            )
+            assert r_two.status_code == 201, r_two.text
+            single_id = r_one.json()["questions"][0]["id"]
+            several_id = r_two.json()["questions"][0]["id"]
             await _make_public(material.id)
 
             async def submit(single: str, several: str) -> dict:
@@ -718,8 +797,8 @@ async def test_a_choice_is_graded_as_a_set_with_no_partial_credit() -> None:
                     f"/api/materials/{material.id}/attempts",
                     json={
                         "answers": [
-                            {"question_id": by_number[1], "given_answer": single},
-                            {"question_id": by_number[2], "given_answer": several},
+                            {"question_id": single_id, "given_answer": single},
+                            {"question_id": several_id, "given_answer": several},
                         ]
                     },
                     cookies={"access_token": student_token},
@@ -730,18 +809,18 @@ async def test_a_choice_is_graded_as_a_set_with_no_partial_credit() -> None:
             # Right, and right in the other order, with the spacing and case
             # a UI might send.
             marks = await submit(" B ", "c, a")
-            assert marks[by_number[1]] is True
-            assert marks[by_number[2]] is True
+            assert marks[single_id] is True
+            assert marks[several_id] is True
 
             # Half of a "choose two" is not half a mark.
             marks = await submit("a", "a")
-            assert marks[by_number[1]] is False
-            assert marks[by_number[2]] is False
+            assert marks[single_id] is False
+            assert marks[several_id] is False
 
             # Nor is all of it plus one more.
             marks = await submit("", "a,b,c")
-            assert marks[by_number[1]] is False
-            assert marks[by_number[2]] is False
+            assert marks[single_id] is False
+            assert marks[several_id] is False
 
             # Each submit is its own attempt, and each one kept what was
             # actually chosen — raw, spacing and all — rather than a verdict.
@@ -751,8 +830,11 @@ async def test_a_choice_is_graded_as_a_set_with_no_partial_credit() -> None:
                         select(Attempt).where(Attempt.material_id == material.id)
                     )
                 ).all()
-                assert sorted(a.score or 0 for a in attempts) == [0, 0, 2]
-                assert {a.total_questions for a in attempts} == {2}
+                # Out of three marks, not two questions: the "choose two"
+                # is two of the numbers on the paper and two of the marks,
+                # exactly as it is printed. Both right earns all three.
+                assert sorted(a.score or 0 for a in attempts) == [0, 0, 3]
+                assert {a.total_questions for a in attempts} == {3}
                 given = {
                     row.given_answer
                     for row in (
@@ -816,14 +898,12 @@ async def test_publishing_names_what_a_choice_group_still_needs() -> None:
                             "number": 1,
                             "prompt": "Why Bristol?",
                             "options": ["work", "study"],
-                            "mode": "one",
                             "correct_answers": [],
                         },
                         {
                             "number": 2,
                             "prompt": "",
                             "options": ["work", "study"],
-                            "mode": "one",
                             "correct_answers": ["a"],
                         },
                     ]
@@ -844,5 +924,59 @@ async def test_publishing_names_what_a_choice_group_still_needs() -> None:
             # A choice question is answered from the whole of what was said,
             # so it is never asked to be linked to a moment.
             assert "not linked to the audio" not in reasons
+
+            # A "choose two" group wants exactly two marked on every question,
+            # not merely one — the candidate is told to pick two, so a key of
+            # one would mark a correct pair wrong.
+            r_two = await client.post(
+                f"/api/parts/{part_id}/question-groups",
+                json=_choice_group(
+                    [
+                        {
+                            "number": 1,
+                            "prompt": "Which TWO are free?",
+                            "options": ["pool", "gym", "sauna"],
+                            "correct_answers": ["a"],
+                        }
+                    ],
+                    wanted=2,
+                ),
+                cookies={"access_token": token},
+            )
+            assert r_two.status_code == 201, r_two.text
+            r = await client.patch(
+                f"/api/materials/{material.id}",
+                json={"visibility": "public"},
+                cookies={"access_token": token},
+            )
+            assert r.status_code == 422, r.text
+            assert "Question 5 is without 2 answers marked" in r.json()["detail"]
+
+            # And it took TWO of the numbers with it: the next group starts at
+            # 7, not 6. This is the whole reason the count is the group's —
+            # everything after a "choose two" shifts by two, exactly as it
+            # does on a printed paper.
+            r_after = await client.post(
+                f"/api/parts/{part_id}/question-groups",
+                json=_choice_group(
+                    [
+                        {
+                            "number": 1,
+                            "prompt": "",
+                            "options": ["a", "b"],
+                            "correct_answers": [],
+                        }
+                    ]
+                ),
+                cookies={"access_token": token},
+            )
+            assert r_after.status_code == 201, r_after.text
+            r = await client.patch(
+                f"/api/materials/{material.id}",
+                json={"visibility": "public"},
+                cookies={"access_token": token},
+            )
+            assert r.status_code == 422, r.text
+            assert "Question 7 is without any question text" in r.json()["detail"]
     finally:
         await _cleanup(material.id, email)

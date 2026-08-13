@@ -1,6 +1,6 @@
 import { newId } from "@/features/listening/form-syntax";
+import { questionNumbers } from "@/features/listening/numbering";
 import type {
-  ChoiceMode,
   ChoiceQuestionIn,
   ListeningQuestion,
 } from "@/features/listening/types";
@@ -24,11 +24,15 @@ import type {
  * wrong option the moment the list moved. Letters appear only at the edges:
  * on the page, and in what gets sent.
  *
- * **`mode` is stored, not counted.** "One answer" and "several answers" are
- * the author's intent, and an author who chose "several" and has marked only
- * the first of them has an unfinished question. Deriving the mode from how
- * many answers are marked would quietly turn that into a finished
- * single-answer one, on the next reload, with no way to tell.
+ * **How many answers belongs to the group, not the question.** The
+ * instruction line above the set is what states it — "Choose the correct
+ * letter, A, B or C" against "Choose TWO letters, A–E" — and that line is the
+ * group's. Asked per question, a group could be built whose instructions and
+ * questions disagreed. It is a count rather than a "several" flag for the
+ * same reason: "several" doesn't tell the candidate what to do, and it let
+ * one question ask for two while the next asked for three under one heading.
+ * So the count lives on the group state and is passed in wherever a question
+ * has to be judged against it.
  */
 
 //: The option labels, in order. Twenty-six is where single letters run out;
@@ -51,10 +55,19 @@ export interface ChoiceQuestion {
   id: string;
   prompt: string;
   options: ChoiceOption[];
-  /** Which options are right, by option id. */
+  /** Which options are right, by option id. How many there should be is the
+   *  group's `answersPerQuestion`, not anything held here. */
   correct: string[];
-  mode: ChoiceMode;
 }
+
+/** What a group asks for when it hasn't said. One is the ordinary
+ *  single-answer question, and every group written before this was a group
+ *  setting means it. */
+export const DEFAULT_ANSWERS_PER_QUESTION = 1;
+
+/** The counts worth offering. IELTS asks for two, occasionally three; beyond
+ *  that it stops being a multiple-choice question. */
+export const ANSWER_COUNTS = [1, 2, 3] as const;
 
 /** How many options a new question starts with. Three is the common IELTS
  *  case, and starting with the shape of the answer is quicker to fill in
@@ -71,7 +84,6 @@ export function newChoiceQuestion(): ChoiceQuestion {
     prompt: "",
     options: Array.from({ length: STARTING_OPTIONS }, () => newOption()),
     correct: [],
-    mode: "one",
   };
 }
 
@@ -82,41 +94,48 @@ export function newChoiceQuestions(): ChoiceQuestion[] {
 
 // ── Editing ──────────────────────────────────────────────────────────────
 
-/** Mark or unmark an option. In single-answer mode picking another option
- *  replaces the answer rather than adding to it, and picking the marked one
- *  again clears it — which is the only way back out of a wrong click. */
+/** Mark or unmark an option, against a group that asks for `wanted` answers.
+ *
+ *  Clicking a marked option always clears it — the only way back out of a
+ *  wrong click. Clicking an unmarked one when the question is already full
+ *  drops the oldest mark to make room, rather than refusing: in a group
+ *  asking for one that is the familiar radio-button behaviour, and in a
+ *  "choose two" it means correcting the second of two answers is one click
+ *  rather than two. */
 export function toggleCorrect(
   question: ChoiceQuestion,
   optionId: string,
+  wanted = DEFAULT_ANSWERS_PER_QUESTION,
 ): ChoiceQuestion {
-  const marked = question.correct.includes(optionId);
-  if (question.mode === "one") {
-    return { ...question, correct: marked ? [] : [optionId] };
+  if (question.correct.includes(optionId)) {
+    return {
+      ...question,
+      correct: question.correct.filter((id) => id !== optionId),
+    };
   }
+  const keep = question.correct.slice(Math.max(0, question.correct.length - wanted + 1));
+  const next = new Set([...keep, optionId]);
   return {
     ...question,
-    correct: marked
-      ? question.correct.filter((id) => id !== optionId)
-      : // Kept in the options' own order, so "answers: a, c" reads the way
-        // the question does however they were clicked.
-        question.options
-          .filter((o) => o.id === optionId || question.correct.includes(o.id))
-          .map((o) => o.id),
+    // Kept in the options' own order, so "answers: a, c" reads the way the
+    // question does however they were clicked.
+    correct: question.options.filter((o) => next.has(o.id)).map((o) => o.id),
   };
 }
 
-/** Switch a question between one answer and several. Going back to one keeps
- *  the first marked option rather than clearing the lot: the author has just
- *  said the question has a single answer, and the first one they marked is
- *  the best guess at which. */
-export function setChoiceMode(
-  question: ChoiceQuestion,
-  mode: ChoiceMode,
-): ChoiceQuestion {
-  if (mode === question.mode) return question;
-  const correct =
-    mode === "one" ? question.correct.slice(0, 1) : question.correct;
-  return { ...question, mode, correct };
+/** Trim every question's key down to what the group now asks for. Called when
+ *  the count is lowered: a "choose two" turned back into a single-answer
+ *  group would otherwise keep two marks that can never both be submitted, and
+ *  the server refuses the payload outright. The earliest marks are kept —
+ *  they are the ones the author was surest of. */
+export function fitAnswerKeys(
+  questions: ChoiceQuestion[],
+  wanted: number,
+): ChoiceQuestion[] {
+  if (questions.every((q) => q.correct.length <= wanted)) return questions;
+  return questions.map((q) =>
+    q.correct.length <= wanted ? q : { ...q, correct: q.correct.slice(0, wanted) },
+  );
 }
 
 /** Add an option. The caller may pass one it has already made, which is how
@@ -172,7 +191,6 @@ export function choiceQuestionsToApi(
       number: index + 1,
       prompt: question.prompt.trim(),
       options: question.options.map((o) => o.text),
-      mode: question.mode,
       correct_answers: question.options
         .filter((o) => question.correct.includes(o.id))
         .map((o) => letterOf.get(o.id) as string),
@@ -203,7 +221,6 @@ export function choiceQuestionsFromApi(
         correct: options
           .filter((_option, index) => key.has(optionLetter(index)))
           .map((option) => option.id),
-        mode: question.mode ?? "one",
       };
     });
   return restored.length > 0 ? restored : newChoiceQuestions();
@@ -216,7 +233,8 @@ export function choiceQuestionsFromApi(
  *  only listed underneath. */
 export interface ChoiceIssue {
   questionId: string;
-  /** The number as the candidate will read it. */
+  /** The first of the numbers this question occupies, as the candidate will
+   *  read it. A "choose two" takes two of them. */
   number: number;
   /** Which half of the work is missing — writing the question, or deciding
    *  the answer. The publish checklist counts them separately, since they
@@ -236,35 +254,43 @@ export interface ChoiceIssue {
 export function choiceIssues(
   questions: ChoiceQuestion[],
   offset = 0,
+  wanted = DEFAULT_ANSWERS_PER_QUESTION,
 ): ChoiceIssue[] {
   const issues: ChoiceIssue[] = [];
 
   questions.forEach((question, index) => {
-    const number = offset + index + 1;
+    const number = offset + index * wanted + 1;
+    // "Question 23", or "Questions 23 and 24" — named the way it is printed,
+    // so the author can find it by the number beside it on the page.
+    const named =
+      wanted > 1
+        ? `Questions ${questionNumbers(number, wanted)}`
+        : `Question ${number}`;
     const add = (kind: ChoiceIssue["kind"], message: string) =>
       issues.push({ questionId: question.id, number, kind, message });
 
     if (!question.prompt.trim()) {
-      add("prompt", `Question ${number} has no question text yet.`);
+      add("prompt", `${named} has no question text yet.`);
       return;
     }
-    if (question.options.length < 2) {
-      add("options", `Question ${number} needs at least two options.`);
+    // Always more options than answers: "choose two of these two" is not a
+    // question, and the same rule the server publishes by.
+    const minimum = Math.max(2, wanted + 1);
+    if (question.options.length < minimum) {
+      add("options", `${named} needs at least ${minimum} options.`);
       return;
     }
     if (question.options.some((option) => !option.text.trim())) {
-      add("options", `Question ${number} has an option with nothing in it.`);
+      add("options", `${named} has an option with nothing in it.`);
       return;
     }
-    if (question.correct.length === 0) {
-      add("answer", `Question ${number} has no correct answer marked.`);
-      return;
-    }
-    if (question.mode === "multiple" && question.correct.length < 2) {
+    if (question.correct.length !== wanted) {
       add(
         "answer",
-        `Question ${number} takes several answers but only one is marked — ` +
-          "mark another, or set it back to one answer.",
+        wanted === 1
+          ? `${named} has no correct answer marked.`
+          : `${named} ${question.correct.length === 1 ? "has" : "have"} ` +
+            `${question.correct.length} of ${wanted} answers marked.`,
       );
     }
   });

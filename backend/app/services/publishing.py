@@ -67,7 +67,9 @@ async def _listening_blockers(
     blockers: list[str] = []
     # Questions are numbered 1..N inside their own group; what the candidate
     # reads runs across the whole material. These messages use the candidate's
-    # numbering, because it is the only one the author can see on the page.
+    # numbering, because it is the only one the author can see on the page —
+    # and a question can take more than one of those numbers, so what is
+    # counted here is numbers, not rows.
     numbered_so_far = 0
 
     for part in parts:
@@ -88,12 +90,15 @@ async def _listening_blockers(
             if not questions:
                 blockers.append(f"{label}: add at least one question.")
 
+            marks = listening_service.question_marks(group)
             if group.type == QuestionGroupType.MULTIPLE_CHOICE:
-                blockers.extend(_choice_blockers(label, questions, numbered_so_far))
+                blockers.extend(
+                    _choice_blockers(label, questions, numbered_so_far, marks)
+                )
             else:
                 blockers.extend(_gap_blockers(label, questions, numbered_so_far))
 
-            numbered_so_far += len(questions)
+            numbered_so_far += len(questions) * marks
 
     if numbered_so_far == 0:
         blockers.append("Add at least one question.")
@@ -125,8 +130,11 @@ def _gap_blockers(label: str, questions: list[Question], offset: int) -> list[st
     return blockers
 
 
-def _choice_blockers(label: str, questions: list[Question], offset: int) -> list[str]:
-    """What a multiple-choice group still needs.
+def _choice_blockers(
+    label: str, questions: list[Question], offset: int, wanted: int
+) -> list[str]:
+    """What a multiple-choice group still needs. ``wanted`` is how many
+    letters the group tells the candidate to pick.
 
     Being linked to the audio isn't among them, unlike a gap: a choice
     question is answered from the whole of what was said rather than from one
@@ -135,15 +143,27 @@ def _choice_blockers(label: str, questions: list[Question], offset: int) -> list
     blockers: list[str] = []
 
     def numbers(matching) -> list[int]:
-        return [offset + q.number for q in questions if matching(q)]
+        # The FIRST of the numbers this question occupies. A "choose two" is
+        # printed as "Questions 23 and 24"; naming 23 is enough to find it,
+        # and a message listing both halves of every question reads as twice
+        # as much wrong as there is.
+        return [
+            offset + (q.number - 1) * wanted + 1
+            for q in questions
+            if matching(q)
+        ]
 
     unwritten = numbers(lambda q: not (q.config or {}).get("prompt", "").strip())
     if unwritten:
         blockers.append(f"{label}: {_numbers(unwritten)} without any question text.")
 
-    too_few = numbers(lambda q: len(q.options or []) < 2)
+    # Enough to choose from, and never fewer than the group asks for: "choose
+    # two of these two" is not a question.
+    too_few = numbers(lambda q: len(q.options or []) < max(2, wanted + 1))
     if too_few:
-        blockers.append(f"{label}: {_numbers(too_few)} with fewer than two options.")
+        blockers.append(
+            f"{label}: {_numbers(too_few)} with too few options to choose from."
+        )
 
     blank_option = numbers(
         lambda q: bool(q.options) and any(not o.strip() for o in q.options or [])
@@ -151,21 +171,19 @@ def _choice_blockers(label: str, questions: list[Question], offset: int) -> list
     if blank_option:
         blockers.append(f"{label}: {_numbers(blank_option)} with a blank option.")
 
-    unmarked = numbers(lambda q: not q.correct_answers)
-    if unmarked:
-        blockers.append(f"{label}: {_numbers(unmarked)} without a correct answer.")
-
-    # Set to several answers but given one: the candidate would be told to
-    # choose two and then marked against a key of one.
-    short_key = numbers(
-        lambda q: (q.config or {}).get("mode") == "multiple"
-        and 0 < len(q.correct_answers) < 2
-    )
-    if short_key:
-        blockers.append(
-            f"{label}: {_numbers(short_key)} set to several answers "
-            "with only one marked."
-        )
+    # Exactly what the instruction line promises. Short of it, the candidate
+    # is told to choose two and then marked against a key of one; over it is
+    # refused at write time and can't get here.
+    if wanted == 1:
+        unmarked = numbers(lambda q: not q.correct_answers)
+        if unmarked:
+            blockers.append(f"{label}: {_numbers(unmarked)} without a correct answer.")
+    else:
+        short = numbers(lambda q: len(q.correct_answers) != wanted)
+        if short:
+            blockers.append(
+                f"{label}: {_numbers(short)} without {wanted} answers marked."
+            )
 
     return blockers
 
