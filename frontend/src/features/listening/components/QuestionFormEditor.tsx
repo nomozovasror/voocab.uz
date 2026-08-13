@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import { ChevronDown, CircleAlert, SquareDashed } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FormBuilder } from "@/features/listening/components/FormBuilder";
+import { GroupHeader } from "@/features/listening/components/GroupHeader";
+import { questionRangeLabel } from "@/features/listening/numbering";
 import { docGaps, docPublishIssues } from "@/features/listening/form-syntax";
 import { ANSWER_RUBRICS, deriveRubric } from "@/features/listening/rubric";
 import type { DocBlock } from "@/features/listening/form-syntax";
@@ -15,9 +17,9 @@ interface QuestionFormEditorProps {
   onInstructionsChange: (v: string) => void;
   rubric: AnswerRubric | null;
   onRubricChange: (v: AnswerRubric | null) => void;
-  /** The part this section authors, e.g. "Part 1". */
-  partLabel: string;
-  /** Set while a publish attempt is blocked on this part, so the offending
+  /** The number the first gap of this group carries on the page. */
+  startNumber: number;
+  /** Set while a publish attempt is blocked on this group, so the offending
    *  gaps are marked even if the author hadn't looked yet. */
   showIssues?: boolean;
   markChecks?: Map<string, { found: boolean; heardAtMs: number | null }>;
@@ -27,10 +29,12 @@ interface QuestionFormEditorProps {
     apply: (range: { startMs: number; endMs: number }) => void,
   ) => void;
   disabled?: boolean;
-  /** Shown under the header — e.g. a note that a part's usual question type
-   *  (map labelling, MCQ, matching…) isn't built yet and only form completion
-   *  is available for it. */
-  note?: string;
+  extraTools?: React.ReactNode;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+  onDelete?: () => void;
+  canMoveUp?: boolean;
+  canMoveDown?: boolean;
 }
 
 function flaggedGapCount(gaps: { answers: string[] }[]): number {
@@ -44,14 +48,23 @@ export function QuestionFormEditor({
   onInstructionsChange,
   rubric,
   onRubricChange,
-  partLabel,
+  startNumber,
   showIssues,
   markChecks,
   onMarkAudio,
   disabled,
-  note,
+  extraTools,
+  onMoveUp,
+  onMoveDown,
+  onDelete,
+  canMoveUp,
+  canMoveDown,
 }: QuestionFormEditorProps) {
-  const issues = useMemo(() => docPublishIssues(doc), [doc]);
+  const offset = startNumber - 1;
+  const issues = useMemo(
+    () => docPublishIssues(doc, offset),
+    [doc, offset],
+  );
   const gaps = useMemo(() => docGaps(doc), [doc]);
 
   // "No gaps yet" is true of every form the moment it's begun, so it waits
@@ -83,31 +96,27 @@ export function QuestionFormEditor({
 
   const flaggedGaps = useMemo(
     () =>
-      gaps.filter((g) => !g.answers.some((a) => a.trim())).map((g) => g.number),
-    [gaps],
+      gaps
+        .filter((g) => !g.answers.some((a) => a.trim()))
+        .map((g) => g.number + offset),
+    [gaps, offset],
   );
 
+  // `inert` rather than only dimming and blocking the pointer: without it
+  // everything in here stays tabbable, so a keyboard can walk into a section
+  // that looks — and, for a mouse, is — switched off.
   return (
-    <div className={cn(disabled && "pointer-events-none opacity-40")}>
-      {/* The part leads and the question type follows it. They used to share a
-          line as equals under a rule, which read as two labels rather than a
-          heading — and the rule only repeated a boundary the section spacing
-          already draws. */}
-      <div className="mb-3 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-        <h3 className="text-base font-medium text-foreground">{partLabel}</h3>
-        <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">
-          {gaps.length} {gaps.length === 1 ? "question" : "questions"}
-        </span>
-        <span className="rounded-full bg-primary/12 px-2 py-0.5 text-[11px] text-primary">
-          Form completion
-        </span>
-      </div>
-
-      {note && (
-        <p className="mb-3 rounded-md bg-foreground/6 px-3 py-2 text-[11px] text-muted-foreground">
-          {note}
-        </p>
-      )}
+    <div inert={disabled} className={cn(disabled && "opacity-40")}>
+      <GroupHeader
+        range={questionRangeLabel(startNumber - 1, gaps.length)}
+        count={gaps.length}
+        typeLabel="Form completion"
+        onMoveUp={onMoveUp}
+        onMoveDown={onMoveDown}
+        onDelete={onDelete}
+        canMoveUp={canMoveUp}
+        canMoveDown={canMoveDown}
+      />
 
       {/* The rubric, in the order it appears on the paper: what to do, then
           how long an answer may be. */}
@@ -178,10 +187,12 @@ export function QuestionFormEditor({
       <FormBuilder
         doc={doc}
         onChange={onChange}
+        numberOffset={offset}
         flaggedGaps={flaggedGaps}
         markChecks={markChecks}
         onSelectionChange={setSelectedText}
         onMarkAudio={onMarkAudio}
+        extraTools={extraTools}
       />
 
       {showsIssues && (

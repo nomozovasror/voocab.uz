@@ -32,13 +32,31 @@ import {
   isDocEmpty,
   isGroupPersistable,
   newDoc,
+  newId,
   type DocBlock,
 } from "@/features/listening/form-syntax";
+import {
+  choiceIssues,
+  choiceQuestionsFromApi,
+  choiceQuestionsToApi,
+  isChoiceGroupEmpty,
+  newChoiceQuestions,
+  type ChoiceIssue,
+  type ChoiceQuestion,
+} from "@/features/listening/mcq";
+import { questionRangeLabel } from "@/features/listening/numbering";
+import {
+  missingTypeNote,
+  questionTypesForPart,
+} from "@/features/listening/parts";
 import {
   AudioEditorPane,
   type AudioEditorHandle,
   type MarkRange,
 } from "@/features/listening/components/AudioEditorPane";
+import { AddGroupButton } from "@/features/listening/components/BuilderTools";
+import { ChoiceGroupEditor } from "@/features/listening/components/ChoiceGroupEditor";
+import { GroupTypeChooser } from "@/features/listening/components/GroupTypeChooser";
 import { QuestionFormEditor } from "@/features/listening/components/QuestionFormEditor";
 import { FormHelpCard } from "@/features/listening/components/FormHelpCard";
 import {
@@ -54,16 +72,9 @@ import type {
   AnswerRubric,
   AudioSegment,
   QuestionGroupIn,
+  QuestionGroupType,
   Visibility,
 } from "@/features/listening/types";
-
-// Parts 2 and 3 (map/plan labelling, MCQ/matching) don't have an authorable
-// question type yet — only form_completion exists. Their questions can still
-// be authored as form completion; the section just carries a note that it's
-// the only type available there.
-const UNSUPPORTED_TYPICAL_TYPE_ORDER_INDICES = new Set([1, 2]);
-const UNSUPPORTED_TYPICAL_TYPE_NOTE =
-  "only form completion is available here — map/plan labelling and multiple choice/matching aren't built yet.";
 
 // The structure is fixed at creation by the picker (§1): a single part
 // (Part 1 or Part 4) trims the shared recording to its range; a full test
@@ -72,6 +83,38 @@ const UNSUPPORTED_TYPICAL_TYPE_NOTE =
 function hasPartRange(parts: PartState[]): boolean {
   return parts.length === 1;
 }
+
+/** What every group has, whichever kind it is. */
+interface GroupStateBase {
+  /** Stable identity for UI + in-flight autosave tracking, independent of
+   *  whether the group has a server id yet. */
+  key: string;
+  groupId: string | null;
+  instructions: string;
+}
+
+interface FormGroupState extends GroupStateBase {
+  type: "form_completion";
+  wordLimit: number | null;
+  rubric: AnswerRubric | null;
+  doc: DocBlock[];
+}
+
+interface ChoiceGroupState extends GroupStateBase {
+  type: "multiple_choice";
+  questions: ChoiceQuestion[];
+}
+
+/** A group whose kind hasn't been settled yet. It exists so the question can
+ *  be asked in the part it is about — Part 2 has no map labelling to offer,
+ *  Part 1 has nothing to ask — rather than once, in a dialog, for a whole
+ *  test. Nothing about it is sent anywhere until it becomes one of the two
+ *  above. */
+interface PendingGroupState extends GroupStateBase {
+  type: null;
+}
+
+type GroupState = FormGroupState | ChoiceGroupState | PendingGroupState;
 
 interface PartState {
   /** Stable identity for UI + in-flight autosave tracking, independent of
@@ -83,11 +126,9 @@ interface PartState {
   title: string;
   audioStartMs: number | null;
   audioEndMs: number | null;
-  groupId: string | null;
-  instructions: string;
-  wordLimit: number | null;
-  rubric: AnswerRubric | null;
-  doc: DocBlock[];
+  /** In the order they are asked. A part is one or more of these: "Questions
+   *  1–6, form completion" then "Questions 7–10, multiple choice". */
+  groups: GroupState[];
 }
 
 interface EditorState {
@@ -146,23 +187,86 @@ function partPayload(part: PartState): {
   };
 }
 
-/** The group payload, or null when there is nothing the API would accept —
- *  no instructions, or a gap still without an answer. */
-function groupPayload(part: PartState): QuestionGroupIn | null {
-  if (!isGroupPersistable(part.doc, part.instructions)) return null;
-  const { template, questions } = docToGroup(part.doc);
+/** The group payload, or null when there is nothing the API would accept.
+ *
+ *  The two kinds draw the line in different places, and both lines are the
+ *  server's. A form can't be stored with a gap nobody can answer, so a
+ *  half-written one waits. A multiple-choice group can: a question with no
+ *  text and no answer marked is exactly what a group looks like a second
+ *  after it was added, and holding it back until it was finished would mean
+ *  autosaving nothing for as long as it takes to write four questions. */
+function groupPayload(group: GroupState): QuestionGroupIn | null {
+  if (group.type === null) return null;
+  if (!group.instructions.trim()) return null;
+
+  if (group.type === "multiple_choice") {
+    // The builder keeps at least one question, and the API insists on it.
+    if (group.questions.length === 0) return null;
+    return {
+      type: "multiple_choice",
+      instructions: group.instructions.trim(),
+      config: {},
+      questions: choiceQuestionsToApi(group.questions),
+    };
+  }
+
+  if (!isGroupPersistable(group.doc, group.instructions)) return null;
+  const { template, questions } = docToGroup(group.doc);
   return {
     type: "form_completion",
-    instructions: part.instructions.trim(),
-    word_limit: part.wordLimit,
+    instructions: group.instructions.trim(),
+    word_limit: group.wordLimit,
     config: {
       template,
       // Left on auto, the rubric the answers imply is stored: the take page
       // has no answers to work it out from.
-      answer_rubric: part.rubric ?? deriveRubric(part.doc),
+      answer_rubric: group.rubric ?? deriveRubric(group.doc),
     },
     questions,
   };
+}
+
+/** The part's saved groups, in order, as one string to compare against. Only
+ *  the ones the server knows about: a group with no id yet has no place in an
+ *  order the server could be told. */
+function groupOrderSignature(part: PartState): string {
+  return part.groups
+    .map((group) => group.groupId)
+    .filter(Boolean)
+    .join(",");
+}
+
+/** How many questions a group holds, whichever kind it is — which is what
+ *  numbers everything after it. A group with no kind holds none, so the
+ *  numbering runs straight through it. */
+function groupQuestionCount(group: GroupState): number {
+  if (group.type === "form_completion") return docGaps(group.doc).length;
+  if (group.type === "multiple_choice") return group.questions.length;
+  return 0;
+}
+
+/** Whether the author has put anything of their own into this group. */
+function isGroupEmpty(group: GroupState): boolean {
+  if (group.type === "form_completion") return isDocEmpty(group.doc);
+  if (group.type === "multiple_choice") return isChoiceGroupEmpty(group.questions);
+  return true;
+}
+
+function newGroup(type: QuestionGroupType | null): GroupState {
+  const base = { key: newId(), groupId: null, instructions: "" };
+  if (type === null) return { ...base, type };
+  return type === "multiple_choice"
+    ? { ...base, type, questions: newChoiceQuestions() }
+    : { ...base, type, wordLimit: null, rubric: null, doc: newDoc() };
+}
+
+/** A part's first group. Where the part has only one kind of question it can
+ *  hold — Part 1 is a completion task and nothing else — that is what it
+ *  gets, with nothing to answer first: a choice of one is a question not
+ *  worth asking. */
+function firstGroup(orderIndex: number): GroupState {
+  const types = questionTypesForPart(orderIndex);
+  return newGroup(types.length === 1 ? types[0] : null);
 }
 
 function newPart(orderIndex: number): PartState {
@@ -173,12 +277,32 @@ function newPart(orderIndex: number): PartState {
     title: `Part ${orderIndex + 1}`,
     audioStartMs: null,
     audioEndMs: null,
-    groupId: null,
-    instructions: "",
-    wordLimit: null,
-    rubric: null,
-    doc: newDoc(),
+    groups: [firstGroup(orderIndex)],
   };
+}
+
+/** Every group in the order it is asked, with the number its first question
+ *  carries on the page. One walk of the material, since a group's numbering
+ *  depends on everything before it — including groups in earlier parts. */
+function groupRun(
+  parts: PartState[],
+): { part: PartState; group: GroupState; startNumber: number }[] {
+  const run: { part: PartState; group: GroupState; startNumber: number }[] = [];
+  let seen = 0;
+  for (const part of parts.slice().sort((a, b) => a.orderIndex - b.orderIndex)) {
+    for (const group of part.groups) {
+      run.push({ part, group, startNumber: seen + 1 });
+      seen += groupQuestionCount(group);
+    }
+  }
+  return run;
+}
+
+/** What a group is called when it has to be named in a message: the part it
+ *  is in, and the questions it covers. */
+function groupLabel(part: PartState, group: GroupState, startNumber: number): string {
+  const range = questionRangeLabel(startNumber - 1, groupQuestionCount(group));
+  return range ? `${partLabel(part)} · ${range}` : partLabel(part);
 }
 
 export default function StudioListeningEditorPage() {
@@ -213,7 +337,7 @@ export default function StudioListeningEditorPage() {
 
   const [saving, setSaving] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
-  const [unsavedParts, setUnsavedParts] = useState<string[]>([]);
+  const [unsavedGroups, setUnsavedGroups] = useState<string[]>([]);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   // The server's own refusal, which can name things the local checklist
@@ -221,10 +345,10 @@ export default function StudioListeningEditorPage() {
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishing, setPublishing] = useState(false);
   const [milestone, setMilestone] = useState<PublishMilestone | null>(null);
-  const [badPartKey, setBadPartKey] = useState<string | null>(null);
+  const [badGroupKey, setBadGroupKey] = useState<string | null>(null);
   // Sections are stacked vertically now (no part switcher) — publish
-  // validation failures scroll the offending section into view instead.
-  const partSectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  // validation failures scroll the offending group into view instead.
+  const groupSectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   // Client-side clamping in AudioEditorPane should make this unreachable in
   // practice, but if a part-range save error still arrives, never surface
@@ -279,6 +403,23 @@ export default function StudioListeningEditorPage() {
     setSuggestions([]);
     setPicking(false);
   }, []);
+
+  // The phrase highlighted in the transcript, remembered rather than read
+  // when it's wanted: clicking into a field in the questions pane collapses
+  // the window selection, so by the time the author reaches for it the
+  // browser no longer knows what they had picked out. Only the transcript's
+  // own selection changes it — including to nothing, when they click a line
+  // — so working over here leaves it alone.
+  const [transcriptSelection, setTranscriptSelection] = useState("");
+  useEffect(() => {
+    const onSelectionChange = () => {
+      const picked = audioPaneRef.current?.selectedText();
+      if (picked != null) setTranscriptSelection(picked);
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () =>
+      document.removeEventListener("selectionchange", onSelectionChange);
+  }, []);
   const saveTimerRef = useRef<number | undefined>(undefined);
   const savingRef = useRef(false);
   const rerunNeededRef = useRef(false);
@@ -330,7 +471,16 @@ export default function StudioListeningEditorPage() {
     material: "",
     parts: new Map<string, string>(),
     groups: new Map<string, string>(),
+    /** Per part: the order its saved groups are in, as the server has them.
+     *  Moving a group changes nothing about the groups themselves, so it
+     *  would otherwise go unsent — every payload would still match. */
+    order: new Map<string, string>(),
   });
+  /** Groups the author has deleted that the server still has. Held here
+   *  rather than acted on immediately so a delete goes out with the same
+   *  debounce as everything else, and so one that fails can be retried on
+   *  the next round instead of vanishing with the click. */
+  const removedGroupsRef = useRef<string[]>([]);
   const hasPendingWork = () =>
     pendingRef.current || savingRef.current || rerunNeededRef.current;
 
@@ -360,45 +510,89 @@ export default function StudioListeningEditorPage() {
     [commit],
   );
 
-  /** Applies an edit to a part's form against the freshest copy of it. The
-   *  editor hands over the change rather than the result, so two edits landing
-   *  between renders can't overwrite each other — which they did when Enter
-   *  was held down: rows that had just been deleted came back. */
-  const editPartDoc = useCallback(
-    (key: string, edit: (current: DocBlock[]) => DocBlock[]) => {
+  const updateGroup = useCallback(
+    (key: string, edit: (group: GroupState) => GroupState) => {
       commit((prev) => ({
         ...prev,
-        parts: prev.parts.map((p) =>
-          p.key === key ? { ...p, doc: edit(p.doc) } : p,
-        ),
+        parts: prev.parts.map((part) => ({
+          ...part,
+          groups: part.groups.map((g) => (g.key === key ? edit(g) : g)),
+        })),
       }));
     },
     [commit],
+  );
+
+  /** Applies an edit to a group's form against the freshest copy of it. The
+   *  editor hands over the change rather than the result, so two edits landing
+   *  between renders can't overwrite each other — which they did when Enter
+   *  was held down: rows that had just been deleted came back. */
+  const editGroupDoc = useCallback(
+    (key: string, edit: (current: DocBlock[]) => DocBlock[]) => {
+      updateGroup(key, (group) =>
+        group.type === "form_completion"
+          ? { ...group, doc: edit(group.doc) }
+          : group,
+      );
+    },
+    [updateGroup],
+  );
+
+  const editGroupQuestions = useCallback(
+    (key: string, edit: (current: ChoiceQuestion[]) => ChoiceQuestion[]) => {
+      updateGroup(key, (group) =>
+        group.type === "multiple_choice"
+          ? { ...group, questions: edit(group.questions) }
+          : group,
+      );
+    },
+    [updateGroup],
   );
 
   // --- Hydrate from the author endpoint (existing material only) ----------
   useEffect(() => {
     if (!existing || loadedRef.current) return;
     loadedRef.current = true;
-    const parts: PartState[] = existing.parts.map((p) => {
-      const group = p.question_groups[0];
-      const doc = group
-        ? docFromGroup(group.config.template, group.questions)
-        : newDoc();
-      return {
-        key: String(p.order_index),
-        partId: p.id,
-        orderIndex: p.order_index,
-        title: p.title,
-        audioStartMs: p.audio_start_ms,
-        audioEndMs: p.audio_end_ms,
-        groupId: group?.id ?? null,
-        instructions: group?.instructions ?? "",
-        wordLimit: group?.word_limit ?? null,
-        rubric: group?.config.answer_rubric ?? null,
-        doc,
-      };
-    });
+    const parts: PartState[] = existing.parts.map((p) => ({
+      key: String(p.order_index),
+      partId: p.id,
+      orderIndex: p.order_index,
+      title: p.title,
+      audioStartMs: p.audio_start_ms,
+      audioEndMs: p.audio_end_ms,
+      // A part with no groups at all is one the author emptied; it gets a
+      // fresh form to write into rather than nothing to click.
+      groups:
+        p.question_groups.length > 0
+          ? p.question_groups
+              .slice()
+              .sort((a, b) => a.order_index - b.order_index)
+              .map((group): GroupState => {
+                const base = {
+                  key: newId(),
+                  groupId: group.id,
+                  instructions: group.instructions,
+                };
+                if (group.type === "multiple_choice") {
+                  return {
+                    ...base,
+                    type: "multiple_choice",
+                    questions: choiceQuestionsFromApi(group.questions),
+                  };
+                }
+                // Anything else is read as a form: it is the only other type
+                // that exists, and a type this build doesn't know is better
+                // shown as its template than dropped.
+                return {
+                  ...base,
+                  type: "form_completion",
+                  wordLimit: group.word_limit,
+                  rubric: group.config.answer_rubric ?? null,
+                  doc: docFromGroup(group.config.template ?? "", group.questions),
+                };
+              })
+          : [firstGroup(p.order_index)],
+    }));
     versionRef.current = existing.version;
     // Everything just loaded is, by definition, what the server has. Recording
     // it here is what stops merely opening a material from PATCHing all of it
@@ -414,11 +608,16 @@ export default function StudioListeningEditorPage() {
         parts.map((p) => [p.key, JSON.stringify(partPayload(p))]),
       ),
       groups: new Map(
-        parts.flatMap((p) => {
-          const forGroup = p.groupId ? groupPayload(p) : null;
-          return forGroup ? [[p.key, JSON.stringify(forGroup)] as const] : [];
-        }),
+        parts.flatMap((p) =>
+          p.groups.flatMap((group) => {
+            const forGroup = group.groupId ? groupPayload(group) : null;
+            return forGroup
+              ? [[group.key, JSON.stringify(forGroup)] as const]
+              : [];
+          }),
+        ),
       ),
+      order: new Map(parts.map((p) => [p.key, groupOrderSignature(p)])),
     };
     commit(() => ({
       materialId: existing.id,
@@ -437,6 +636,86 @@ export default function StudioListeningEditorPage() {
     update({ parts: orderIndices.map(newPart) });
   };
 
+  // --- Groups within a part -------------------------------------------------
+
+  /** A new group, right after the one whose toolbar was used. A part is
+   *  written top to bottom, so "after this one" is where the next set of
+   *  questions goes; appending to the end would be wrong the moment a part
+   *  has three of them. */
+  const addGroup = useCallback(
+    (partKey: string, afterKey: string | null, type: QuestionGroupType) => {
+      const group = newGroup(type);
+      commit((prev) => ({
+        ...prev,
+        parts: prev.parts.map((part) => {
+          if (part.key !== partKey) return part;
+          const at = afterKey
+            ? part.groups.findIndex((g) => g.key === afterKey)
+            : -1;
+          const groups = part.groups.slice();
+          groups.splice(at < 0 ? groups.length : at + 1, 0, group);
+          return { ...part, groups };
+        }),
+      }));
+    },
+    [commit],
+  );
+
+  /** Settles what a group is. The key survives, so the autosave signatures
+   *  and the section ref that were already keyed to it stay pointed at the
+   *  same block — this is the same group answering a question, not a new
+   *  one. There is nothing to unsettle it afterwards: an empty group is
+   *  nothing to lose by deleting and adding the other kind, and one with
+   *  work in it shouldn't be quietly emptied by a dropdown. */
+  const chooseGroupType = useCallback(
+    (groupKey: string, type: QuestionGroupType) => {
+      updateGroup(groupKey, (group) =>
+        group.type === null ? { ...newGroup(type), key: group.key } : group,
+      );
+    },
+    [updateGroup],
+  );
+
+  const removeGroup = useCallback(
+    (partKey: string, groupKey: string) => {
+      const group = stateRef.current.parts
+        .find((part) => part.key === partKey)
+        ?.groups.find((g) => g.key === groupKey);
+      // Queued rather than deleted here and now, so it goes out on the same
+      // debounce as everything else and can be retried if it fails.
+      if (group?.groupId) removedGroupsRef.current.push(group.groupId);
+      sentRef.current.groups.delete(groupKey);
+      commit((prev) => ({
+        ...prev,
+        parts: prev.parts.map((part) =>
+          part.key === partKey
+            ? { ...part, groups: part.groups.filter((g) => g.key !== groupKey) }
+            : part,
+        ),
+      }));
+    },
+    [commit],
+  );
+
+  const moveGroup = useCallback(
+    (partKey: string, groupKey: string, delta: number) => {
+      commit((prev) => ({
+        ...prev,
+        parts: prev.parts.map((part) => {
+          if (part.key !== partKey) return part;
+          const index = part.groups.findIndex((g) => g.key === groupKey);
+          const to = index + delta;
+          if (index < 0 || to < 0 || to >= part.groups.length) return part;
+          const groups = part.groups.slice();
+          const [moved] = groups.splice(index, 1);
+          groups.splice(to, 0, moved);
+          return { ...part, groups };
+        }),
+      }));
+    },
+    [commit],
+  );
+
   // --- Autosave -------------------------------------------------------------
   // ensure material -> for each part, ensure/PATCH it + its question group ->
   // PATCH material. Each part is saved independently (its own try/catch) so
@@ -451,6 +730,7 @@ export default function StudioListeningEditorPage() {
   const hasUnsentChanges = useCallback(() => {
     const s = stateRef.current;
     if (!s.materialId) return true;
+    if (removedGroupsRef.current.length > 0) return true;
     if (
       materialSignature(
         s.title.trim() || "untitled listening",
@@ -465,11 +745,28 @@ export default function StudioListeningEditorPage() {
       if (JSON.stringify(partPayload(part)) !== sentRef.current.parts.get(part.key)) {
         return true;
       }
-      const forGroup = groupPayload(part);
-      if (forGroup) {
-        return JSON.stringify(forGroup) !== sentRef.current.groups.get(part.key);
+      if (groupOrderSignature(part) !== sentRef.current.order.get(part.key)) {
+        return true;
       }
-      return Boolean(part.groupId) && isDocEmpty(part.doc);
+      return part.groups.some((group) => {
+        const forGroup = groupPayload(group);
+        if (forGroup) {
+          return (
+            JSON.stringify(forGroup) !== sentRef.current.groups.get(group.key)
+          );
+        }
+        // Nothing the API would take. That is either a group emptied out —
+        // which means deleting the server's copy — or one the author has
+        // left unfinished, which the save round has to look at so the status
+        // line can say it isn't saved.
+        //
+        // Answering "nothing to do" here for an unfinished group is how
+        // clearing the instructions on a saved one came to be lost in
+        // silence: the round never ran, so the group was never listed as
+        // unsaved, and "saved just now" stood over an edit the server had
+        // never been told about.
+        return Boolean(group.groupId) || groupQuestionCount(group) > 0;
+      });
     });
   }, []);
 
@@ -526,24 +823,61 @@ export default function StudioListeningEditorPage() {
         }
       }
 
+      // Groups the author deleted. Sent before anything else: the reorder
+      // below tells the server the part's whole running order, and one that
+      // still names a group being removed is an order the server refuses.
+      // Taken off the queue as each one succeeds, so a failure is retried
+      // rather than lost.
+      const partErrors: string[] = [];
+      /** A conflict is not a problem with one group: the material this editor
+       *  was built from is gone, so every later request in the round would be
+       *  refused too. It goes up to the round's own handler, which says so
+       *  once and stops autosave — reported per group it would arrive as a
+       *  list of failures with no explanation among them. */
+      const rethrowConflict = (e: unknown) => {
+        if (e instanceof ApiError && e.status === 409) throw e;
+      };
+
+      for (const groupId of removedGroupsRef.current.slice()) {
+        try {
+          await listeningApi.questionGroups.remove(groupId, versioned());
+          sentAnything = true;
+        } catch (e) {
+          rethrowConflict(e);
+          // Already gone is the outcome we wanted; anything else is worth
+          // saying, and worth keeping in the queue.
+          if (!(e instanceof ApiError && e.status === 404)) {
+            partErrors.push(getErrorMessage(e));
+            continue;
+          }
+        }
+        removedGroupsRef.current = removedGroupsRef.current.filter(
+          (id) => id !== groupId,
+        );
+      }
+
       // Re-read after the material-create await: the author may have edited
       // while it was in flight.
       const partsSnapshot = stateRef.current.parts;
-      const persisted = new Map<string, { partId: string; groupId: string | null }>();
-      const partErrors: string[] = [];
-      // Parts holding questions the server can't be given yet — a gap with no
-      // answer typed in, or missing instructions, both of which the API
+      const persistedParts = new Map<string, string>();
+      const persistedGroups = new Map<string, string | null>();
+      // Groups holding questions the server can't be given yet — a gap with
+      // no answer typed in, or missing instructions, both of which the API
       // rejects outright. Collected so the status line can stop claiming the
       // material is saved when part of it isn't.
-      const partsUnsaved: string[] = [];
+      const unsaved: string[] = [];
+      const numberedGroups = groupRun(partsSnapshot);
+      const startNumberOf = new Map(
+        numberedGroups.map((entry) => [entry.group.key, entry.startNumber]),
+      );
 
       for (const part of partsSnapshot) {
-        const label = partLabel(part);
         try {
           const forPart = partPayload(part);
           const partSignature = JSON.stringify(forPart);
 
           let partId = part.partId;
+          const partIsNew = !partId;
           if (!partId) {
             const created = await listeningApi.parts.create(
               materialId,
@@ -562,45 +896,102 @@ export default function StudioListeningEditorPage() {
             sentAnything = true;
             sentRef.current.parts.set(part.key, partSignature);
           }
+          persistedParts.set(part.key, partId);
 
-          let groupId = part.groupId;
-          const forGroup = groupPayload(part);
-          if (forGroup) {
-            const groupSignature = JSON.stringify(forGroup);
-            if (!groupId) {
-              const group = await listeningApi.questionGroups.create(
-                partId,
-                forGroup,
-                versioned(),
-              );
-              groupId = group.id;
-              sentAnything = true;
-              sentRef.current.groups.set(part.key, groupSignature);
-            } else if (sentRef.current.groups.get(part.key) !== groupSignature) {
-              await listeningApi.questionGroups.update(
-                groupId,
-                forGroup,
-                versioned(),
-              );
-              sentAnything = true;
-              sentRef.current.groups.set(part.key, groupSignature);
+          for (const group of part.groups) {
+            const label = groupLabel(
+              part,
+              group,
+              startNumberOf.get(group.key) ?? 1,
+            );
+            try {
+              let groupId = group.groupId;
+              const forGroup = groupPayload(group);
+              if (forGroup) {
+                const groupSignature = JSON.stringify(forGroup);
+                if (!groupId) {
+                  const created = await listeningApi.questionGroups.create(
+                    partId,
+                    forGroup,
+                    versioned(),
+                  );
+                  groupId = created.id;
+                  sentAnything = true;
+                  sentRef.current.groups.set(group.key, groupSignature);
+                } else if (
+                  sentRef.current.groups.get(group.key) !== groupSignature
+                ) {
+                  await listeningApi.questionGroups.update(
+                    groupId,
+                    forGroup,
+                    versioned(),
+                  );
+                  sentAnything = true;
+                  sentRef.current.groups.set(group.key, groupSignature);
+                }
+              } else if (groupId && isGroupEmpty(group)) {
+                // Cleared out. A group can't exist server-side with no
+                // questions, so emptying it means deleting it — skipping the
+                // write instead left the old questions in the database, and
+                // they came back the next time the material was opened.
+                await listeningApi.questionGroups.remove(groupId, versioned());
+                groupId = null;
+                sentAnything = true;
+                sentRef.current.groups.delete(group.key);
+              } else if (groupQuestionCount(group) > 0) {
+                unsaved.push(label);
+              }
+              persistedGroups.set(group.key, groupId);
+            } catch (e) {
+              rethrowConflict(e);
+              partErrors.push(`${label}: ${getErrorMessage(e)}`);
             }
-          } else if (groupId && isDocEmpty(part.doc)) {
-            // The form has been cleared. A group can't exist server-side with
-            // no questions, so clearing it means deleting it — skipping the
-            // write instead left the old questions in the database, and they
-            // came back the next time the material was opened.
-            await listeningApi.questionGroups.remove(groupId, versioned());
-            groupId = null;
-            sentAnything = true;
-            sentRef.current.groups.delete(part.key);
-          } else if (docGaps(part.doc).length > 0) {
-            partsUnsaved.push(label);
           }
 
-          persisted.set(part.key, { partId, groupId });
+          // Last, and only once every group in this part has an id: the
+          // server is told the whole running order, so it has to be an order
+          // it can recognise.
+          // `has` rather than `??`: a group this round deleted is recorded as
+          // null, and falling back to the id it used to have would name a
+          // group that no longer exists in the order — which the server
+          // refuses outright, taking the rest of the round's work with it.
+          const order = part.groups
+            .map((group) =>
+              persistedGroups.has(group.key)
+                ? persistedGroups.get(group.key)
+                : group.groupId,
+            )
+            .filter((id): id is string => Boolean(id));
+          const signature = order.join(",");
+          const known = sentRef.current.order.get(part.key);
+          if (
+            order.length === part.groups.length &&
+            signature !== known &&
+            // Not while a delete is still queued: the order below is the
+            // local one, which no longer names the group the server still
+            // has, and the server refuses an order that isn't the part's.
+            // The retry that clears the queue will send it.
+            removedGroupsRef.current.length === 0
+          ) {
+            if (known === undefined && partIsNew) {
+              // The part was created a moment ago and its groups were POSTed
+              // in this order, so the server appended them in it. Nothing to
+              // correct — every new material would otherwise open with a
+              // reorder that changed nothing.
+              sentRef.current.order.set(part.key, signature);
+            } else {
+              await listeningApi.questionGroups.reorder(
+                partId,
+                order,
+                versioned(),
+              );
+              sentAnything = true;
+              sentRef.current.order.set(part.key, signature);
+            }
+          }
         } catch (e) {
-          partErrors.push(`${label}: ${getErrorMessage(e)}`);
+          rethrowConflict(e);
+          partErrors.push(`${partLabel(part)}: ${getErrorMessage(e)}`);
         }
       }
 
@@ -614,11 +1005,18 @@ export default function StudioListeningEditorPage() {
       commit((prev) => {
         let changed = false;
         const parts = prev.parts.map((p) => {
-          const ids = persisted.get(p.key);
-          if (!ids) return p;
-          if (p.partId === ids.partId && p.groupId === ids.groupId) return p;
+          const partId = persistedParts.get(p.key) ?? p.partId;
+          let groupsChanged = false;
+          const groups = p.groups.map((group) => {
+            if (!persistedGroups.has(group.key)) return group;
+            const groupId = persistedGroups.get(group.key) ?? null;
+            if (group.groupId === groupId) return group;
+            groupsChanged = true;
+            return { ...group, groupId };
+          });
+          if (p.partId === partId && !groupsChanged) return p;
           changed = true;
-          return { ...p, partId: ids.partId, groupId: ids.groupId };
+          return { ...p, partId, groups };
         });
         return changed ? { ...prev, parts } : prev;
       });
@@ -665,7 +1063,7 @@ export default function StudioListeningEditorPage() {
           duration: 0,
         });
       }
-      setUnsavedParts(partsUnsaved);
+      setUnsavedGroups(unsaved);
       setSaveError(partErrors.length > 0 ? partErrors.join(" · ") : null);
       // Only clears a failure that is now untrue. Dismissing unconditionally
       // meant the next save round — which runs a second after a publish and
@@ -857,22 +1255,22 @@ export default function StudioListeningEditorPage() {
     }
   };
 
-  // Every part that has questions needs instructions + a non-empty answer
-  // per gap; the material needs at least one part with at least one gap.
-  // "Has questions" = the author has touched it (typed instructions or a
-  // label/answer) — an untouched, still-empty part is fine to leave alone.
+  // Every group the author has started needs instructions and finished
+  // questions; the material needs at least one question somewhere. "Started"
+  // = they have typed something into it — an untouched, still-empty group is
+  // fine to leave alone.
   const validateForPublish = (): {
     ok: boolean;
     message?: string;
-    badPartKey?: string;
+    badGroupKey?: string;
   } => {
     const s = stateRef.current;
-    let anyPartHasGap = false;
+    let anyQuestions = false;
 
     // The same requirements the server keeps (app/services/publishing.py).
     // Checked here too so the author hears it from the page they are on,
-    // pointing at the part that needs work — but the server is the authority,
-    // and its refusal is what actually holds.
+    // pointing at the group that needs work — but the server is the
+    // authority, and its refusal is what actually holds.
     const title = s.title.trim();
     if (!title || title.toLowerCase() === "untitled listening") {
       return { ok: false, message: "give the material a title before publishing." };
@@ -881,30 +1279,36 @@ export default function StudioListeningEditorPage() {
       return { ok: false, message: "add the audio recording before publishing." };
     }
 
-    for (const part of s.parts.slice().sort((a, b) => a.orderIndex - b.orderIndex)) {
-      const label = part.title.trim() || `Part ${part.orderIndex + 1}`;
-      const touched =
-        part.instructions.trim() !== "" || !isDocEmpty(part.doc);
-      if (!touched) continue;
+    for (const { part, group, startNumber } of groupRun(s.parts)) {
+      const label = groupLabel(part, group, startNumber);
+      const started = group.instructions.trim() !== "" || !isGroupEmpty(group);
+      if (!started) continue;
 
-      if (!part.instructions.trim()) {
-        return { ok: false, message: `${label}: add instructions before publishing.`, badPartKey: part.key };
-      }
-      // The syntax module owns what "complete" means, so the publish gate and
-      // the editor's own inline warnings can never disagree.
-      const issues = docPublishIssues(part.doc);
-      if (issues.length > 0) {
+      if (!group.instructions.trim()) {
         return {
           ok: false,
-          message: `${label} — ${issues[0]}`,
-          badPartKey: part.key,
+          message: `${label}: add instructions before publishing.`,
+          badGroupKey: group.key,
         };
       }
-      anyPartHasGap = true;
+      // The syntax and mcq modules own what "complete" means, so the publish
+      // gate and the editor's own inline warnings can never disagree.
+      const issue =
+        group.type === "form_completion"
+          ? docPublishIssues(group.doc, startNumber - 1)[0]
+          : group.type === "multiple_choice"
+            ? choiceIssues(group.questions, startNumber - 1)[0]?.message
+            : // A group still asking what it is has nothing to be wrong
+              // about — `started` above has already let it through.
+              undefined;
+      if (issue) {
+        return { ok: false, message: `${label} — ${issue}`, badGroupKey: group.key };
+      }
+      if (groupQuestionCount(group) > 0) anyQuestions = true;
     }
 
-    if (!anyPartHasGap) {
-      return { ok: false, message: "add at least one part with at least one gap before publishing." };
+    if (!anyQuestions) {
+      return { ok: false, message: "add at least one question before publishing." };
     }
     return { ok: true };
   };
@@ -917,10 +1321,10 @@ export default function StudioListeningEditorPage() {
     const v = validateForPublish();
     if (!v.ok) {
       // The checklist in the publish button has already said this; all that
-      // is left is to take the author to the part that needs the work.
-      setBadPartKey(v.badPartKey ?? null);
-      if (v.badPartKey) {
-        partSectionRefs.current[v.badPartKey]?.scrollIntoView({
+      // is left is to take the author to the group that needs the work.
+      setBadGroupKey(v.badGroupKey ?? null);
+      if (v.badGroupKey) {
+        groupSectionRefs.current[v.badGroupKey]?.scrollIntoView({
           behavior: "smooth",
           block: "center",
         });
@@ -928,7 +1332,7 @@ export default function StudioListeningEditorPage() {
       return;
     }
     setPublishError(null);
-    setBadPartKey(null);
+    setBadGroupKey(null);
     setPublishing(true);
     update({ visibility: "public" });
     const ok = await scheduleSave(true);
@@ -966,7 +1370,7 @@ export default function StudioListeningEditorPage() {
 
   const handleDraft = async () => {
     setPublishError(null);
-    setBadPartKey(null);
+    setBadGroupKey(null);
     setPublishing(true);
     update({ visibility: "private" });
     const ok = await scheduleSave(true);
@@ -987,14 +1391,40 @@ export default function StudioListeningEditorPage() {
    *  this is the reading of them the author actually looks at. */
   const publishRequirements = useMemo((): PublishRequirement[] => {
     const title = state.title.trim();
-    const gaps = state.parts.flatMap((part) => docGaps(part.doc));
+    const run = groupRun(state.parts);
+
+    const gaps = run.flatMap(({ group }) =>
+      group.type === "form_completion" ? docGaps(group.doc) : [],
+    );
     const answered = gaps.filter((g) => g.answers.some((a) => a.trim()));
     const unmarked = answered.filter((g) => g.replayStartMs == null);
-    const partsMissingInstructions = state.parts
-      .filter((part) => docGaps(part.doc).length > 0 && !part.instructions.trim())
-      .map((part) => partLabel(part));
 
-    return [
+    const choiceGroups = run.filter(
+      ({ group }) => group.type === "multiple_choice",
+    );
+    const choiceProblems: ChoiceIssue[] = choiceGroups.flatMap(
+      ({ group, startNumber }) =>
+        group.type === "multiple_choice"
+          ? choiceIssues(group.questions, startNumber - 1)
+          : [],
+    );
+    const unwritten = choiceProblems.filter((i) => i.kind !== "answer");
+    const unanswered = choiceProblems.filter((i) => i.kind === "answer");
+
+    const totalQuestions = run.reduce(
+      (total, { group }) => total + groupQuestionCount(group),
+      0,
+    );
+    const missingInstructions = run
+      .filter(
+        ({ group }) =>
+          groupQuestionCount(group) > 0 && !group.instructions.trim(),
+      )
+      .map(({ part, group, startNumber }) =>
+        groupLabel(part, group, startNumber),
+      );
+
+    const requirements: PublishRequirement[] = [
       {
         label: "Give it a title",
         done: !!title && title.toLowerCase() !== "untitled listening",
@@ -1002,26 +1432,47 @@ export default function StudioListeningEditorPage() {
       { label: "Add the recording", done: !!state.audioAssetId },
       {
         label: "Write the instructions",
-        done: partsMissingInstructions.length === 0,
-        detail: partsMissingInstructions.join(", "),
+        done: missingInstructions.length === 0,
+        detail: missingInstructions.join(", "),
       },
-      { label: "Add at least one question", done: gaps.length > 0 },
-      {
-        label: "Answer every question",
-        done: gaps.length > 0 && answered.length === gaps.length,
-        detail:
-          gaps.length > answered.length
-            ? `${gaps.length - answered.length} still empty`
-            : undefined,
-      },
-      {
+      { label: "Add at least one question", done: totalQuestions > 0 },
+    ];
+
+    // Only where there is one to be about: a material with no multiple
+    // choice in it shouldn't be told about a requirement it can't fail.
+    if (choiceGroups.length > 0) {
+      requirements.push({
+        label: "Finish every choice question",
+        done: unwritten.length === 0,
+        detail: unwritten.length
+          ? `${unwritten.length} missing text or options`
+          : undefined,
+      });
+    }
+
+    const missingAnswers = gaps.length - answered.length + unanswered.length;
+    requirements.push({
+      label: "Answer every question",
+      done: totalQuestions > 0 && missingAnswers === 0,
+      detail: missingAnswers > 0 ? `${missingAnswers} still empty` : undefined,
+    });
+
+    // Gaps only, and only where there are gaps: a choice question is answered
+    // from the whole of what was said rather than from one phrase in it, so
+    // there is often no single moment to point a reviewer at. Listed for a
+    // material that can't fail it, it would be a requirement that never goes
+    // green however finished the material is.
+    if (gaps.length > 0) {
+      requirements.push({
         label: "Link every answer to the audio",
         done: answered.length > 0 && unmarked.length === 0,
         detail: unmarked.length
           ? `${unmarked.length} not linked yet`
           : undefined,
-      },
-    ];
+      });
+    }
+
+    return requirements;
   }, [state.title, state.audioAssetId, state.parts]);
 
   const hasAudioEverAttached = !!state.audioAssetId;
@@ -1036,30 +1487,49 @@ export default function StudioListeningEditorPage() {
   // and a stale transcript would search yesterday's words.
   transcriptRef.current = transcriptSegments;
 
-  const marksForTranscript = useMemo(
-    () => state.parts.flatMap((part) => answerMarks(part.doc)),
-    [state.parts],
-  );
-  const markChecksByPart = useMemo(() => {
-    const byPart = new Map<string, ReturnType<typeof checkMarks>>();
-    for (const part of state.parts) {
-      byPart.set(part.key, checkMarks(part.doc, transcriptSegments));
-    }
-    return byPart;
-  }, [state.parts, transcriptSegments]);
+  /** Every group in the order it is asked, with the number it starts at. One
+   *  walk, reused by the render, the marks and the help card — computing it
+   *  in each of them is how the three would come to disagree. */
+  const run = useMemo(() => groupRun(state.parts), [state.parts]);
 
-  // Gaps with an answer written: the nearest thing to evidence that the
+  const marksForTranscript = useMemo(
+    () =>
+      run.flatMap(({ group, startNumber }) =>
+        group.type === "form_completion"
+          ? answerMarks(group.doc, startNumber - 1)
+          : [],
+      ),
+    [run],
+  );
+  const markChecksByGroup = useMemo(() => {
+    const byGroup = new Map<string, ReturnType<typeof checkMarks>>();
+    for (const { group } of run) {
+      if (group.type !== "form_completion") continue;
+      byGroup.set(group.key, checkMarks(group.doc, transcriptSegments));
+    }
+    return byGroup;
+  }, [run, transcriptSegments]);
+
+  // Questions with an answer decided: the nearest thing to evidence that the
   // author has understood how this is done, which is when the help retires.
   const authoredGapCount = useMemo(
     () =>
-      state.parts.reduce(
-        (total, part) =>
-          total +
-          docGaps(part.doc).filter((g) => g.answers.some((a) => a.trim()))
-            .length,
-        0,
-      ),
-    [state.parts],
+      run.reduce((total, { group }) => {
+        if (group.type === "form_completion") {
+          return (
+            total +
+            docGaps(group.doc).filter((g) => g.answers.some((a) => a.trim()))
+              .length
+          );
+        }
+        if (group.type === "multiple_choice") {
+          return (
+            total + group.questions.filter((q) => q.correct.length > 0).length
+          );
+        }
+        return total;
+      }, 0),
+    [run],
   );
 
   // The help card lives at the foot of the questions pane and steps aside as
@@ -1093,6 +1563,10 @@ export default function StudioListeningEditorPage() {
   }, []);
 
   const sortedParts = state.parts.slice().sort((a, b) => a.orderIndex - b.orderIndex);
+  const startNumberOf = useMemo(
+    () => new Map(run.map((entry) => [entry.group.key, entry.startNumber])),
+    [run],
+  );
   const singlePart = hasPartRange(state.parts) ? state.parts[0] : null;
   const showPicker = !routeId && state.parts.length === 0;
 
@@ -1121,7 +1595,7 @@ export default function StudioListeningEditorPage() {
               New listening material
             </DialogTitle>
             <DialogDescription className="text-center text-xs">
-              Which part are you authoring?
+              What are you authoring, and where does it go?
             </DialogDescription>
           </DialogHeader>
           <PartsPicker onPick={handlePick} />
@@ -1178,15 +1652,15 @@ export default function StudioListeningEditorPage() {
         <span
           className={cn(
             "hidden text-xs sm:inline",
-            !saving && unsavedParts.length > 0
+            !saving && unsavedGroups.length > 0
               ? "text-warning"
               : "text-muted-foreground",
           )}
         >
           {saving
             ? "saving…"
-            : unsavedParts.length > 0
-              ? `${unsavedParts.join(", ")} not saved`
+            : unsavedGroups.length > 0
+              ? `${unsavedGroups.join(", ")} not saved`
               : lastSavedAt
                 ? `saved ${timeAgo(lastSavedAt.toISOString())}`
                 : ""}
@@ -1291,44 +1765,123 @@ export default function StudioListeningEditorPage() {
         >
           <div ref={sectionsRef} className="space-y-8">
           {sortedParts.map((part) => {
-            const label = part.title.trim() || `Part ${part.orderIndex + 1}`;
+            // What this part of the exam can be given, and what it's known
+            // for that isn't built yet. Both are the part's business, so
+            // they're worked out once here rather than per group.
+            const partTypes = questionTypesForPart(part.orderIndex);
+            const note = missingTypeNote(part.orderIndex);
             return (
-              <div
-                key={part.key}
-                ref={(el) => {
-                  partSectionRefs.current[part.key] = el;
-                }}
-              >
-                <QuestionFormEditor
-                  doc={part.doc}
-                  onChange={(edit) => editPartDoc(part.key, edit)}
-                  instructions={part.instructions}
-                  onInstructionsChange={(instructions) =>
-                    updatePart(part.key, { instructions })
-                  }
-                  rubric={part.rubric}
-                  onRubricChange={(rubric) =>
-                    updatePart(part.key, {
-                      rubric,
-                      // The old numeric field is kept in step so nothing that
-                      // still reads it starts disagreeing with the sentence.
-                      wordLimit:
-                        ANSWER_RUBRICS.find((r) => r.value === rubric)?.words ??
-                        null,
-                    })
-                  }
-                  partLabel={label}
-                  showIssues={badPartKey === part.key}
-                  markChecks={markChecksByPart.get(part.key)}
-                  onMarkAudio={hasAudioEverAttached ? requestMark : undefined}
-                  disabled={!hasAudioEverAttached}
-                  note={
-                    UNSUPPORTED_TYPICAL_TYPE_ORDER_INDICES.has(part.orderIndex)
-                      ? UNSUPPORTED_TYPICAL_TYPE_NOTE
-                      : undefined
-                  }
-                />
-              </div>
+              <section key={part.key} className="space-y-6">
+                {/* The part heads its groups rather than sharing a line with
+                    the first of them: with two sets of questions under it,
+                    "Part 1" is what they have in common, not a label on one. */}
+                <div className="space-y-2">
+                  <h3 className="text-base font-medium text-foreground">
+                    {partLabel(part)}
+                  </h3>
+                  {note && (
+                    <p className="rounded-md bg-foreground/6 px-3 py-2 text-[11px] text-muted-foreground">
+                      {note}
+                    </p>
+                  )}
+                </div>
+
+                {part.groups.map((group, index) => {
+                  const startNumber = startNumberOf.get(group.key) ?? 1;
+                  const tools = (
+                    <AddGroupButton
+                      types={partTypes}
+                      onAdd={(type) => addGroup(part.key, group.key, type)}
+                    />
+                  );
+                  const actions = {
+                    onMoveUp: () => moveGroup(part.key, group.key, -1),
+                    onMoveDown: () => moveGroup(part.key, group.key, 1),
+                    onDelete: () => removeGroup(part.key, group.key),
+                    canMoveUp: index > 0,
+                    canMoveDown: index < part.groups.length - 1,
+                  };
+                  return (
+                    <div
+                      key={group.key}
+                      ref={(el) => {
+                        groupSectionRefs.current[group.key] = el;
+                      }}
+                    >
+                      {group.type === null ? (
+                        <GroupTypeChooser
+                          types={partTypes}
+                          note={missingTypeNote(part.orderIndex)}
+                          onChoose={(type) => chooseGroupType(group.key, type)}
+                          onRemove={() => removeGroup(part.key, group.key)}
+                          disabled={!hasAudioEverAttached}
+                        />
+                      ) : group.type === "multiple_choice" ? (
+                        <ChoiceGroupEditor
+                          questions={group.questions}
+                          onChange={(edit) => editGroupQuestions(group.key, edit)}
+                          instructions={group.instructions}
+                          onInstructionsChange={(instructions) =>
+                            updateGroup(group.key, (g) => ({ ...g, instructions }))
+                          }
+                          startNumber={startNumber}
+                          showIssues={badGroupKey === group.key}
+                          transcriptSelection={transcriptSelection}
+                          disabled={!hasAudioEverAttached}
+                          extraTools={tools}
+                          {...actions}
+                        />
+                      ) : (
+                        <QuestionFormEditor
+                          doc={group.doc}
+                          onChange={(edit) => editGroupDoc(group.key, edit)}
+                          instructions={group.instructions}
+                          onInstructionsChange={(instructions) =>
+                            updateGroup(group.key, (g) => ({ ...g, instructions }))
+                          }
+                          rubric={group.rubric}
+                          onRubricChange={(rubric) =>
+                            updateGroup(group.key, (g) =>
+                              g.type === "form_completion"
+                                ? {
+                                    ...g,
+                                    rubric,
+                                    // The old numeric field is kept in step so
+                                    // nothing that still reads it starts
+                                    // disagreeing with the sentence.
+                                    wordLimit:
+                                      ANSWER_RUBRICS.find(
+                                        (r) => r.value === rubric,
+                                      )?.words ?? null,
+                                  }
+                                : g,
+                            )
+                          }
+                          startNumber={startNumber}
+                          showIssues={badGroupKey === group.key}
+                          markChecks={markChecksByGroup.get(group.key)}
+                          onMarkAudio={
+                            hasAudioEverAttached ? requestMark : undefined
+                          }
+                          disabled={!hasAudioEverAttached}
+                          extraTools={tools}
+                          {...actions}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* A part emptied of every group still needs a way back in. */}
+                {part.groups.length === 0 && (
+                  <div className="flex justify-center">
+                    <AddGroupButton
+                      types={partTypes}
+                      onAdd={(type) => addGroup(part.key, null, type)}
+                    />
+                  </div>
+                )}
+              </section>
             );
           })}
 

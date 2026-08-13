@@ -43,7 +43,9 @@ export interface StudioListeningItem {
   visibility: "public" | "private";
   duration_ms: number | null;
   transcript_status: TranscriptStatus | null;
-  question_type: string | null;
+  /** Every kind of question group in the material, in the order they are
+   *  asked. Empty until it has any. */
+  question_types: string[];
   question_count: number;
   attempts: number;
   avg_score_pct: number | null;

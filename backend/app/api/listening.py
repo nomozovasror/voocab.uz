@@ -1,4 +1,4 @@
-"""Listening Part-1 form-completion authoring API (brief §5).
+"""Listening authoring API (brief §5).
 
 Authorization mirrors ``app/api/materials.py``: mutations are owner-only —
 foreign material/part/group -> 403, missing -> 404. Group create/replace
@@ -32,6 +32,7 @@ from app.schemas.listening import (
     PartOut,
     PartUpdate,
     QuestionGroupIn,
+    QuestionGroupOrderIn,
     QuestionGroupOut,
     QuestionOut,
     QuestionResultOut,
@@ -73,6 +74,9 @@ async def _group_out(session: AsyncSession, group: QuestionGroup) -> QuestionGro
                 correct_answers=q.correct_answers,
                 replay_start_ms=q.replay_start_ms,
                 replay_end_ms=q.replay_end_ms,
+                prompt=None if q.config is None else q.config.get("prompt", ""),
+                options=q.options,
+                mode=None if q.config is None else q.config.get("mode", "one"),
             )
             for q in questions
         ],
@@ -211,6 +215,29 @@ async def update_question_group(
     group = await listening_service.replace_question_group(session, group, data)
     await settle_visibility(response, session, material)
     return await _group_out(session, group)
+
+
+@router.put(
+    "/parts/{part_id}/question-groups/order",
+    response_model=list[QuestionGroupOut],
+)
+async def reorder_question_groups(
+    part_id: uuid.UUID,
+    data: QuestionGroupOrderIn,
+    user: CurrentUser,
+    session: SessionDep,
+    request: Request,
+    response: Response,
+) -> list[QuestionGroupOut]:
+    """Reorder a part's question groups. PUT rather than PATCH: the body is
+    the whole order, not a change to it."""
+    _part, material = await _load_owned_part(session, part_id, user.id)
+    claim_material_version(request, response, session, material)
+    groups = await listening_service.reorder_question_groups(
+        session, part_id, data.group_ids
+    )
+    await settle_visibility(response, session, material)
+    return [await _group_out(session, group) for group in groups]
 
 
 @router.delete("/question-groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)

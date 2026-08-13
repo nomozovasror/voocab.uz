@@ -35,8 +35,11 @@ function normalize(text: string): string {
     .trim();
 }
 
-/** Every gap the author has marked, with the answers to check against. */
-export function answerMarks(doc: DocBlock[]): AnswerMark[] {
+/** Every gap the author has marked, with the answers to check against.
+ *  `offset` is how many questions come before this group in the material —
+ *  the transcript labels marks with the number on the page, not the one the
+ *  group stores. */
+export function answerMarks(doc: DocBlock[], offset = 0): AnswerMark[] {
   return docGaps(doc).flatMap((gap) => {
     const answers = gap.answers.map((a) => a.trim()).filter(Boolean);
     if (gap.replayStartMs == null || gap.replayEndMs == null) return [];
@@ -44,7 +47,7 @@ export function answerMarks(doc: DocBlock[]): AnswerMark[] {
     return [
       {
         gapId: gap.id,
-        number: gap.number,
+        number: gap.number + offset,
         startMs: gap.replayStartMs,
         endMs: gap.replayEndMs,
         answers,

@@ -98,6 +98,14 @@ export const listeningApi = {
       }),
     remove: (groupId: string, opts?: RequestOptions) =>
       api.delete<void>(`/api/question-groups/${groupId}`, opts),
+    /** The part's groups in their new order — all of them, by id. A move is
+     *  sent as the whole order rather than as a direction, so two windows
+     *  can't interleave two half-moves into an order neither asked for. */
+    reorder: (partId: string, groupIds: string[], opts?: RequestOptions) =>
+      api.put<ListeningQuestionGroup[]>(
+        `/api/parts/${partId}/question-groups/order`,
+        { ...opts, json: { group_ids: groupIds } },
+      ),
   },
 
   // --- Consumption (§8): the ONLY read path the take/practice UI may use.

@@ -1,5 +1,5 @@
-"""Listening Part-1 form-completion authoring: create/read/update/delete
-Parts, QuestionGroups and their Questions.
+"""Listening authoring: create/read/update/delete Parts, QuestionGroups and
+their Questions.
 
 Pure data layer — no HTTP. The router (``app/api/listening.py``) handles
 authorization (owner-only) and translates absence into 404/403, plus the
@@ -21,7 +21,12 @@ from app.models.part import Part
 from app.models.question import Question
 from app.models.question_attempt import QuestionAttempt
 from app.models.question_group import QuestionGroup
-from app.schemas.listening import PartCreate, PartUpdate, QuestionGroupIn
+from app.schemas.listening import (
+    ChoiceQuestionIn,
+    PartCreate,
+    PartUpdate,
+    QuestionGroupIn,
+)
 
 
 # --- Part ---------------------------------------------------------------
@@ -191,16 +196,37 @@ async def get_questions(
     )
 
 
+def _question_config(question) -> dict | None:
+    """A question's own presentation, or ``None`` where it has none.
+
+    Only multiple choice has any: its prompt and options. A form gap's prompt
+    is the template around it, which belongs to the group, so it stores NULL —
+    and that NULL is what tells grading it is looking at accepted variants
+    rather than an answer key."""
+    if not isinstance(question, ChoiceQuestionIn):
+        return None
+    return {
+        "prompt": question.prompt,
+        "options": list(question.options),
+        "mode": question.mode,
+    }
+
+
 async def create_question_group(
     session: AsyncSession, part_id: uuid.UUID, data: QuestionGroupIn
 ) -> QuestionGroup:
     """Create a group and its questions atomically. ``order_index`` is
     server-derived (append), mirroring how dictation segment order_index is
-    derived from array position rather than trusted from the client."""
+    derived from array position rather than trusted from the client.
+
+    Appending means one past the highest, not the count: deleting a group from
+    the middle leaves the indices sparse (0, 2), and counting would have put
+    the next group at 2 — straight into the unique constraint, for a 409 the
+    author did nothing to deserve."""
     existing = await get_question_groups(session, part_id)
     group = QuestionGroup(
         part_id=part_id,
-        order_index=len(existing),
+        order_index=max((g.order_index for g in existing), default=-1) + 1,
         type=data.type,
         instructions=data.instructions,
         word_limit=data.word_limit,
@@ -214,6 +240,7 @@ async def create_question_group(
                 group_id=group.id,
                 number=q.number,
                 correct_answers=q.correct_answers,
+                config=_question_config(q),
                 replay_start_ms=q.replay_start_ms,
                 replay_end_ms=q.replay_end_ms,
             )
@@ -238,7 +265,13 @@ async def replace_question_group(
     author touched a comma.
 
     Only numbers that disappear from the payload are removed, and that path
-    goes through ``_remove_questions`` for the attempts they leave behind."""
+    goes through ``_remove_questions`` for the attempts they leave behind.
+
+    Changing the group's TYPE is the exception: number 3 of a form and number
+    3 of a multiple-choice set are not the same question wearing a different
+    hat — the answer key means something else entirely — so nothing is kept
+    across that change."""
+    retype = group.type != data.type
     group.type = data.type
     group.instructions = data.instructions
     group.word_limit = data.word_limit
@@ -253,21 +286,61 @@ async def replace_question_group(
     # written, or the unit of work is free to order those statements the
     # other way round and trip the FK it was ordered around.
     await _remove_questions(
-        session, [q for number, q in existing.items() if number not in incoming]
+        session,
+        [q for number, q in existing.items() if retype or number not in incoming],
     )
     await session.flush()
+    if retype:
+        existing = {}
 
     for q in data.questions:
         question = existing.get(q.number)
         if question is None:
             question = Question(group_id=group.id, number=q.number, correct_answers=[])
         question.correct_answers = q.correct_answers
+        question.config = _question_config(q)
         question.replay_start_ms = q.replay_start_ms
         question.replay_end_ms = q.replay_end_ms
         session.add(question)
     await session.commit()
     await session.refresh(group)
     return group
+
+
+async def reorder_question_groups(
+    session: AsyncSession, part_id: uuid.UUID, group_ids: list[uuid.UUID]
+) -> list[QuestionGroup]:
+    """Put the part's groups in the given order.
+
+    The whole order is sent, and it has to be the whole order: a list missing
+    a group, or naming one from another part, is a request built from a stale
+    picture of the part and is refused rather than half-applied.
+
+    Written in two passes because ``(part_id, order_index)`` is unique —
+    swapping two groups by assigning their new indices directly collides on
+    whichever is written first. The first pass moves everything out of the way
+    (indices past the end, which nothing else can be using), the second puts
+    them down in order; both are in the one transaction, so nothing outside it
+    ever sees the parked indices."""
+    groups = await get_question_groups(session, part_id)
+    by_id = {group.id: group for group in groups}
+    if set(group_ids) != set(by_id):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "group_ids must name exactly the groups in this part",
+        )
+
+    parked = max((g.order_index for g in groups), default=0) + 1
+    for offset, group_id in enumerate(group_ids):
+        by_id[group_id].order_index = parked + offset
+        session.add(by_id[group_id])
+    await session.flush()
+
+    for index, group_id in enumerate(group_ids):
+        by_id[group_id].order_index = index
+        session.add(by_id[group_id])
+    await session.commit()
+    return await get_question_groups(session, part_id)
 
 
 async def delete_question_group(session: AsyncSession, group: QuestionGroup) -> None:
@@ -296,18 +369,42 @@ async def get_material_questions(
 # --- Consumption read tree (§7, §3.4) ---------------------------------------
 
 
+def _take_question(question: Question) -> dict:
+    """One question as a candidate may see it.
+
+    ``correct_answers`` is not read here, and there is nowhere it could be
+    written: every key is named. A choice question adds its prompt, its
+    options in order, and how many to pick — the last of which is derived
+    from the answer key's SIZE, never its contents. "Choose two letters" is
+    printed on the real paper."""
+    if question.config is None:
+        return {"id": question.id, "number": question.number}
+    options = question.options or []
+    select_count = (
+        max(1, len(question.correct_answers))
+        if question.config.get("mode") == "multiple"
+        else 1
+    )
+    return {
+        "id": question.id,
+        "number": question.number,
+        "prompt": question.config.get("prompt") or "",
+        "options": options,
+        "select_count": select_count,
+    }
+
+
 async def get_take_tree(session: AsyncSession, material_id: uuid.UUID) -> list[dict]:
     """The student-facing render tree (parts -> question_groups ->
     questions). Deliberately a SEPARATE function from ``get_author_tree``:
-    this one never reads ``Question.correct_answers`` at all, so there is no
-    code path here — no flag, no branch — that could leak it. Each question
-    dict carries only ``id``/``number``."""
+    this one never reads ``Question.correct_answers`` for its contents, so
+    there is no code path here — no flag, no branch — that could leak it."""
     tree: list[dict] = []
     for part in await get_parts(session, material_id):
         groups: list[dict] = []
         for group in await get_question_groups(session, part.id):
             questions = [
-                {"id": question.id, "number": question.number}
+                _take_question(question)
                 for question in await get_questions(session, group.id)
             ]
             groups.append(
@@ -363,6 +460,13 @@ async def get_author_tree(
                     "replay_start_ms": question.replay_start_ms,
                     "replay_end_ms": question.replay_end_ms,
                 }
+                if question.config is not None:
+                    # The choice question's own presentation, flattened out of
+                    # config so the editor reads the same field names it
+                    # sends back.
+                    q["prompt"] = question.config.get("prompt") or ""
+                    q["options"] = question.options or []
+                    q["mode"] = question.config.get("mode") or "one"
                 if include_answers:
                     q["correct_answers"] = question.correct_answers
                 questions.append(q)

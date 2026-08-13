@@ -43,7 +43,11 @@ class ListeningListItem(BaseModel):
     visibility: str
     duration_ms: int | None
     transcript_status: str | None
-    question_type: str | None
+    #: Every kind of question group the material holds, in the order they are
+    #: asked. A list rather than "the first one": a part can mix form
+    #: completion and multiple choice, and naming only the first would label
+    #: half the material after the other half.
+    question_types: list[str]
     question_count: int
     attempts: int
     avg_score_pct: float | None

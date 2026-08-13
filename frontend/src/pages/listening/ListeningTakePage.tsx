@@ -8,9 +8,11 @@ import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
 import { mediaUrl } from "@/features/listening/api";
 import { useTakeMaterial, useSubmitAttempt } from "@/features/listening/queries";
+import { ChoiceGroup } from "@/features/listening/components/ChoiceGroup";
 import { FormCompletionGroup } from "@/features/listening/components/FormCompletionGroup";
 import type {
   AttemptResult,
+  MaterialTake,
   QuestionResult,
   TakePart,
 } from "@/features/listening/types";
@@ -18,6 +20,29 @@ import type {
 function fmt(ms: number): string {
   const s = ms / 1000;
   return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+}
+
+/** Where each group's numbering starts, by group id.
+ *
+ *  Questions are stored numbered 1..N inside their own group; what the
+ *  candidate reads runs across the whole material, so a part of "Questions
+ *  1–6" followed by "Questions 7–10" is one walk of the tree in order.
+ *  Worked out here rather than sent, because it is the same walk the editor
+ *  does — one rule in two places beats two numbers that can disagree. */
+function groupNumbering(material: MaterialTake): Map<string, number> {
+  const startAt = new Map<string, number>();
+  let seen = 0;
+  for (const part of material.parts
+    .slice()
+    .sort((a, b) => a.order_index - b.order_index)) {
+    for (const group of part.question_groups
+      .slice()
+      .sort((a, b) => a.order_index - b.order_index)) {
+      startAt.set(group.id, seen + 1);
+      seen += group.questions.length;
+    }
+  }
+  return startAt;
 }
 
 export default function ListeningTakePage() {
@@ -43,6 +68,11 @@ export default function ListeningTakePage() {
     }
     return ids;
   }, [material]);
+
+  const startNumbers = useMemo(
+    () => (material ? groupNumbering(material) : new Map<string, number>()),
+    [material],
+  );
 
   const resultsByQuestion = useMemo(() => {
     if (!result) return undefined;
@@ -180,19 +210,30 @@ export default function ListeningTakePage() {
               {part.question_groups
                 .slice()
                 .sort((a, b) => a.order_index - b.order_index)
-                .map((group) => (
-                  <FormCompletionGroup
-                    key={group.id}
-                    group={group}
-                    answers={answers}
-                    onChange={(qid, value) =>
-                      setAnswers((prev) => ({ ...prev, [qid]: value }))
-                    }
-                    results={resultsByQuestion}
-                    onReplay={playRange}
-                    disabled={!!result}
-                  />
-                ))}
+                .map((group) => {
+                  const shared = {
+                    group,
+                    answers,
+                    onChange: (qid: string, value: string) =>
+                      setAnswers((prev) => ({ ...prev, [qid]: value })),
+                    startNumber: startNumbers.get(group.id) ?? 1,
+                    results: resultsByQuestion,
+                    disabled: !!result,
+                  };
+                  // Anything that isn't multiple choice is rendered as a
+                  // form: it is the only other type there is, and a type
+                  // this build doesn't know about is better shown as its
+                  // template than left out of the paper entirely.
+                  return group.type === "multiple_choice" ? (
+                    <ChoiceGroup key={group.id} {...shared} />
+                  ) : (
+                    <FormCompletionGroup
+                      key={group.id}
+                      {...shared}
+                      onReplay={playRange}
+                    />
+                  );
+                })}
             </CardContent>
           </Card>
         ))}

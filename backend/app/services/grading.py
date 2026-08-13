@@ -1,9 +1,15 @@
-"""Grading + attempt persistence for listening form-completion (§7, §3.5).
+"""Grading + attempt persistence for listening (§7, §3.5).
 
 Normalization is intentionally "dumb" and author-controlled: no fuzzy/
-edit-distance matching, no number<->word conversion, no stemming. A given
-answer is correct iff its normalized form exactly equals the normalized form
-of any element of that question's ``correct_answers``.
+edit-distance matching, no number<->word conversion, no stemming. For a
+gap-fill, a given answer is correct iff its normalized form exactly equals
+the normalized form of any element of that question's ``correct_answers``.
+
+A choice question is graded differently, because its ``correct_answers``
+means something different: it is the answer key, not a list of acceptable
+phrasings. The candidate's selection must equal it as a SET — all of it, and
+nothing besides. IELTS gives no partial credit for a "choose two", and one
+right letter plus one wrong one is not half an answer.
 """
 
 import re
@@ -14,6 +20,7 @@ from sqlmodel import select
 
 from app.core.database import AsyncSession
 from app.models.attempt import Attempt, AttemptStatus
+from app.models.question import Question
 from app.models.question_attempt import QuestionAttempt
 from app.schemas.listening import AnswerIn
 from app.services import listening as listening_service
@@ -37,6 +44,36 @@ def grade_answer(given_answer: str, correct_answers: list[str]) -> bool:
     return any(
         normalized_given == normalize_answer(accepted) for accepted in correct_answers
     )
+
+
+def grade_choice(given_answer: str, correct_answers: list[str]) -> bool:
+    """Exact SET match for a multiple-choice question.
+
+    The selection arrives as the chosen option letters, comma-separated
+    ("b", or "a,c"), which is how it is stored on the attempt row too — still
+    readable as an answer long after the options have been edited. Order and
+    spacing don't matter; membership does, exactly. An empty selection is
+    wrong: there is no question here whose answer is "none of them"."""
+    chosen = {
+        normalize_answer(letter)
+        for letter in given_answer.split(",")
+        if letter.strip()
+    }
+    if not chosen:
+        return False
+    return chosen == {normalize_answer(letter) for letter in correct_answers}
+
+
+def grade_question(question: Question, given_answer: str) -> bool:
+    """Grade one answer the way its question is meant to be graded.
+
+    Which way that is comes off the question row itself — a question with
+    options is a choice question — rather than from its group. Grading walks
+    questions, and looking up a group per question to be told something the
+    question already knows is a query per answer for no new information."""
+    if question.options is not None:
+        return grade_choice(given_answer, question.correct_answers)
+    return grade_answer(given_answer, question.correct_answers)
 
 
 async def _find_in_progress_attempt(
@@ -110,7 +147,7 @@ async def submit_attempt(
     correct_count = 0
     for question in questions:
         given = given_by_question_id.get(question.id, "")
-        correct = grade_answer(given, question.correct_answers)
+        correct = grade_question(question, given)
         if correct:
             correct_count += 1
         session.add(

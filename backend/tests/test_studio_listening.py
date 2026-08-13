@@ -238,7 +238,7 @@ async def test_listening_row_fields_and_avg_score() -> None:
             assert item["visibility"] == "public"
             assert item["duration_ms"] == 222_000
             assert item["transcript_status"] == "ready"
-            assert item["question_type"] == "form_completion"
+            assert item["question_types"] == ["form_completion"]
             assert item["question_count"] == 5
             assert item["attempts"] == 2  # submitted only
             assert item["avg_score_pct"] == 70.0
@@ -267,13 +267,61 @@ async def test_material_without_audio_has_null_duration_and_status() -> None:
             item = r.json()["items"][0]
             assert item["duration_ms"] is None
             assert item["transcript_status"] is None
-            assert item["question_type"] == "form_completion"
+            assert item["question_types"] == ["form_completion"]
     finally:
         await _cleanup(material_ids=(material.id,), emails=(email,))
 
 
 @pytest.mark.asyncio
-async def test_material_without_group_has_null_question_type_zero_count() -> None:
+async def test_a_material_mixing_types_names_both_of_them() -> None:
+    """A part can hold form completion followed by multiple choice. Naming
+    only the first would label the whole material after half of it."""
+    email = "listlist-mixed@example.com"
+    author = await _make_user(email)
+    token = create_access_token(str(author.id))
+    material = await _make_material(author.id)
+    await _add_group(material.id, 2)
+
+    async with async_session_factory() as session:
+        part = (
+            await session.exec(select(Part).where(Part.material_id == material.id))
+        ).first()
+        assert part is not None
+        group = QuestionGroup(
+            part_id=part.id,
+            order_index=1,
+            type="multiple_choice",
+            instructions="Choose the correct letter.",
+            config={},
+        )
+        session.add(group)
+        await session.flush()
+        session.add(
+            Question(
+                group_id=group.id,
+                number=1,
+                correct_answers=["b"],
+                config={"prompt": "Why?", "options": ["a", "b"], "mode": "one"},
+            )
+        )
+        await session.commit()
+
+    try:
+        async with _client() as client:
+            r = await client.get(
+                "/api/studio/listening", cookies={"access_token": token}
+            )
+            assert r.status_code == 200, r.text
+            item = r.json()["items"][0]
+            # In the order they are asked, and each named once.
+            assert item["question_types"] == ["form_completion", "multiple_choice"]
+            assert item["question_count"] == 3
+    finally:
+        await _cleanup(material_ids=(material.id,), emails=(email,))
+
+
+@pytest.mark.asyncio
+async def test_material_without_group_has_no_question_types_zero_count() -> None:
     email = "listlist-nogroup@example.com"
     author = await _make_user(email)
     token = create_access_token(str(author.id))
@@ -286,7 +334,7 @@ async def test_material_without_group_has_null_question_type_zero_count() -> Non
             )
             assert r.status_code == 200, r.text
             item = r.json()["items"][0]
-            assert item["question_type"] is None
+            assert item["question_types"] == []
             assert item["question_count"] == 0
             assert item["attempts"] == 0
             assert item["avg_score_pct"] is None

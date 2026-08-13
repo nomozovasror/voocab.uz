@@ -10,6 +10,10 @@ interface FormCompletionGroupProps {
   group: TakeQuestionGroup;
   answers: Record<string, string>;
   onChange: (questionId: string, value: string) => void;
+  /** The number this group's first gap carries on the page. Gaps are stored
+   *  numbered 1..N within their group; what the candidate reads runs across
+   *  the whole material. */
+  startNumber: number;
   results?: Record<string, QuestionResult>;
   /** Replays the moment this answer is said. Only ever called after grading:
    *  the timings aren't in the take payload until then. */
@@ -21,6 +25,7 @@ export function FormCompletionGroup({
   group,
   answers,
   onChange,
+  startNumber,
   results,
   onReplay,
   disabled,
@@ -36,7 +41,7 @@ export function FormCompletionGroup({
   // Same parse the editor previews with, so what the author saw is what the
   // candidate sits — layout can't drift between the two.
   const blocks = useMemo(
-    () => parseTemplateLayout(group.config.template),
+    () => parseTemplateLayout(group.config.template ?? ""),
     [group.config.template],
   );
 
@@ -53,12 +58,13 @@ export function FormCompletionGroup({
             // A token with no question behind it can only come from a
             // template we didn't author; show the gap rather than pretend.
             if (!question) return <span className="text-muted-foreground">{`{{${n}}}`}</span>;
+            const shown = startNumber + n - 1;
             const result = results?.[question.id];
             const graded = result !== undefined;
             return (
               <span className="mx-1 inline-flex items-baseline gap-1 align-baseline">
                 <span aria-hidden className="text-xs font-semibold text-muted-foreground">
-                  {n}
+                  {shown}
                 </span>
                 <input
                   type="text"
@@ -72,7 +78,7 @@ export function FormCompletionGroup({
                   value={answers[question.id] ?? ""}
                   onChange={(e) => onChange(question.id, e.target.value)}
                   disabled={disabled}
-                  aria-label={`Answer ${n}`}
+                  aria-label={`Answer ${shown}`}
                   aria-invalid={graded && !result.is_correct}
                 />
                 {graded && !result.is_correct && (
@@ -90,7 +96,7 @@ export function FormCompletionGroup({
                       onReplay(result.replay_start_ms, result.replay_end_ms)
                     }
                     title="Hear where this answer is said"
-                    aria-label={`Hear where answer ${n} is said`}
+                    aria-label={`Hear where answer ${shown} is said`}
                     className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-primary"
                   >
                     <Volume2 className="size-3.5" aria-hidden />

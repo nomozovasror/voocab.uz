@@ -22,6 +22,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { ToolbarButton } from "@/features/listening/components/BuilderTools";
 import { ValueField } from "@/features/listening/components/ValueField";
 import { formatClock } from "@/features/studio/format";
 import {
@@ -62,7 +63,12 @@ interface FormBuilderProps {
    *  enough — and a handler that computed from its own snapshot wrote the
    *  older one back, resurrecting deleted rows and duplicating live ones. */
   onChange: (edit: (current: DocBlock[]) => DocBlock[]) => void;
-  /** Gap numbers reported as unanswered, highlighted so they're findable. */
+  /** How many questions come before this group in the material. Gaps store
+   *  their place inside the group (1..N); what goes on the sheet is the
+   *  number the candidate reads. */
+  numberOffset?: number;
+  /** Gap numbers reported as unanswered, highlighted so they're findable.
+   *  In the same numbering as the sheet — i.e. already offset. */
   flaggedGaps?: number[];
   /** Per gap id: whether the answer is actually said inside the seconds the
    *  author marked, and where it is said instead. */
@@ -77,17 +83,25 @@ interface FormBuilderProps {
     answers: string[],
     apply: (range: { startMs: number; endMs: number }) => void,
   ) => void;
+  /** Controls that belong to the group rather than to the form — adding
+   *  another group after this one. They sit on the same row as the rest so
+   *  everything that adds something is in one place. */
+  extraTools?: React.ReactNode;
 }
 
 export function FormBuilder({
   doc,
   onChange,
+  numberOffset = 0,
   flaggedGaps,
   markChecks,
   onSelectionChange,
   onMarkAudio,
+  extraTools,
 }: FormBuilderProps) {
-  const numbers = gapNumbers(doc);
+  const numbers = new Map(
+    [...gapNumbers(doc)].map(([id, number]) => [id, number + numberOffset]),
+  );
   const flagged = new Set(flaggedGaps ?? []);
 
   // Inputs are registered by key so the caret can be placed after a change
@@ -571,6 +585,7 @@ export function FormBuilder({
             title="Add the form's title at the top"
           />
         )}
+        {extraTools}
       </div>
     </div>
   );
@@ -605,30 +620,6 @@ function RuleButton({
       )}
     >
       {icon}
-    </button>
-  );
-}
-
-function ToolbarButton({
-  onClick,
-  icon,
-  label,
-  title,
-}: {
-  onClick: () => void;
-  icon: React.ReactNode;
-  label: string;
-  title?: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/60 hover:bg-foreground/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-    >
-      {icon}
-      {label}
     </button>
   );
 }

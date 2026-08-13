@@ -92,11 +92,14 @@ function buildMeta(item: StudioListeningItem): string {
   const clock = formatClock(item.duration_ms);
   parts.push(clock ?? "no audio yet");
 
-  if (item.question_type) {
-    parts.push(formatQuestionType(item.question_type));
+  // All of the kinds it holds, not the first: a part can mix form completion
+  // and multiple choice, and naming one of them would label the whole
+  // material after half of it.
+  if (item.question_types.length > 0) {
+    parts.push(item.question_types.map(formatQuestionType).join(" + "));
     parts.push(`${item.question_count} question${item.question_count === 1 ? "" : "s"}`);
   } else if (item.question_count === 0) {
-    // Honesty rule: don't invent a question_type — just say there isn't one yet.
+    // Honesty rule: don't invent a question type — just say there isn't one yet.
     parts.push("no questions yet");
   } else {
     parts.push(`${item.question_count} question${item.question_count === 1 ? "" : "s"}`);

@@ -21,6 +21,8 @@ import uuid
 
 from app.core.database import AsyncSession
 from app.models.material import Material
+from app.models.question import Question
+from app.models.question_group import QuestionGroupType
 from app.services import listening as listening_service
 from app.services import materials as materials_service
 
@@ -63,7 +65,10 @@ async def _listening_blockers(
         return ["Add at least one part."]
 
     blockers: list[str] = []
-    total_questions = 0
+    # Questions are numbered 1..N inside their own group; what the candidate
+    # reads runs across the whole material. These messages use the candidate's
+    # numbering, because it is the only one the author can see on the page.
+    numbered_so_far = 0
 
     for part in parts:
         label = part.title.strip() or f"Part {part.order_index + 1}"
@@ -82,30 +87,85 @@ async def _listening_blockers(
             questions = await listening_service.get_questions(session, group.id)
             if not questions:
                 blockers.append(f"{label}: add at least one question.")
-            total_questions += len(questions)
 
-            unanswered = [
-                q.number
-                for q in questions
-                if not any(a.strip() for a in q.correct_answers)
-            ]
-            if unanswered:
-                blockers.append(
-                    f"{label}: {_numbers(unanswered)} without an accepted answer."
-                )
+            if group.type == QuestionGroupType.MULTIPLE_CHOICE:
+                blockers.extend(_choice_blockers(label, questions, numbered_so_far))
+            else:
+                blockers.extend(_gap_blockers(label, questions, numbered_so_far))
 
-            # Where the answer is said is what the learner gets back with
-            # their result — the reason to re-listen rather than just be told
-            # they were wrong. Required, by the same reasoning as the answer
-            # itself.
-            unmarked = [q.number for q in questions if q.replay_start_ms is None]
-            if unmarked:
-                blockers.append(
-                    f"{label}: {_numbers(unmarked)} not linked to the audio."
-                )
+            numbered_so_far += len(questions)
 
-    if total_questions == 0:
+    if numbered_so_far == 0:
         blockers.append("Add at least one question.")
+
+    return blockers
+
+
+def _gap_blockers(label: str, questions: list[Question], offset: int) -> list[str]:
+    """What a form-completion group still needs. ``offset`` is how many
+    questions come before this group in the material, so the numbers quoted
+    are the ones printed beside the gaps."""
+    blockers: list[str] = []
+
+    unanswered = [
+        offset + q.number
+        for q in questions
+        if not any(a.strip() for a in q.correct_answers)
+    ]
+    if unanswered:
+        blockers.append(f"{label}: {_numbers(unanswered)} without an accepted answer.")
+
+    # Where the answer is said is what the learner gets back with their
+    # result — the reason to re-listen rather than just be told they were
+    # wrong. Required, by the same reasoning as the answer itself.
+    unmarked = [offset + q.number for q in questions if q.replay_start_ms is None]
+    if unmarked:
+        blockers.append(f"{label}: {_numbers(unmarked)} not linked to the audio.")
+
+    return blockers
+
+
+def _choice_blockers(label: str, questions: list[Question], offset: int) -> list[str]:
+    """What a multiple-choice group still needs.
+
+    Being linked to the audio isn't among them, unlike a gap: a choice
+    question is answered from the whole of what was said rather than from one
+    phrase in it, so there is often no single moment to point a reviewer at,
+    and requiring one would be asking the author to invent it."""
+    blockers: list[str] = []
+
+    def numbers(matching) -> list[int]:
+        return [offset + q.number for q in questions if matching(q)]
+
+    unwritten = numbers(lambda q: not (q.config or {}).get("prompt", "").strip())
+    if unwritten:
+        blockers.append(f"{label}: {_numbers(unwritten)} without any question text.")
+
+    too_few = numbers(lambda q: len(q.options or []) < 2)
+    if too_few:
+        blockers.append(f"{label}: {_numbers(too_few)} with fewer than two options.")
+
+    blank_option = numbers(
+        lambda q: bool(q.options) and any(not o.strip() for o in q.options or [])
+    )
+    if blank_option:
+        blockers.append(f"{label}: {_numbers(blank_option)} with a blank option.")
+
+    unmarked = numbers(lambda q: not q.correct_answers)
+    if unmarked:
+        blockers.append(f"{label}: {_numbers(unmarked)} without a correct answer.")
+
+    # Set to several answers but given one: the candidate would be told to
+    # choose two and then marked against a key of one.
+    short_key = numbers(
+        lambda q: (q.config or {}).get("mode") == "multiple"
+        and 0 < len(q.correct_answers) < 2
+    )
+    if short_key:
+        blockers.append(
+            f"{label}: {_numbers(short_key)} set to several answers "
+            "with only one marked."
+        )
 
     return blockers
 

@@ -83,10 +83,18 @@ export interface PartOut {
   created_at: string;
 }
 
-export type QuestionGroupType = "form_completion";
+export type QuestionGroupType = "form_completion" | "multiple_choice";
+
+/** How many of a choice question's options are right. Stored rather than
+ *  counted, so a question set to "several" and given one answer reads as
+ *  unfinished instead of as a finished single-answer question. */
+export type ChoiceMode = "one" | "multiple";
 
 export interface ListeningQuestion {
   id: string;
+  /** The question's place within its GROUP, always 1..N. What the candidate
+   *  reads runs across the whole material and is worked out from the ordered
+   *  tree — see `questionNumbering`. */
   number: number;
   correct_answers?: string[];
   /** Where in the recording this answer is said. Author-facing only — the
@@ -94,6 +102,10 @@ export interface ListeningQuestion {
    *  the question. */
   replay_start_ms?: number | null;
   replay_end_ms?: number | null;
+  // --- multiple_choice only; absent for a gap in a form -------------------
+  prompt?: string | null;
+  options?: string[] | null;
+  mode?: ChoiceMode | null;
 }
 
 export interface ListeningQuestionGroup {
@@ -106,7 +118,7 @@ export interface ListeningQuestionGroup {
   type: string;
   instructions: string;
   word_limit: number | null;
-  config: FormConfig;
+  config: GroupConfig;
   questions: ListeningQuestion[];
 }
 
@@ -115,6 +127,17 @@ export interface QuestionIn {
   correct_answers: string[];
   replay_start_ms?: number | null;
   replay_end_ms?: number | null;
+}
+
+/** One multiple-choice question as it is sent. `correct_answers` is the
+ *  answer key in option letters ("b", or "a","c") — the set the candidate
+ *  has to match exactly, not a list of acceptable phrasings. */
+export interface ChoiceQuestionIn {
+  number: number;
+  prompt: string;
+  options: string[];
+  mode: ChoiceMode;
+  correct_answers: string[];
 }
 
 /** IELTS uses a small closed set of rubrics, varying on two axes: how many
@@ -127,24 +150,51 @@ export type AnswerRubric =
   | "three_words"
   | "three_words_number";
 
-export interface FormConfig {
-  template: string;
+/** What a group carries at group level. Form completion has the gap-fill
+ *  template; multiple choice has nothing — each of its questions holds its
+ *  own prompt and options — so `template` is optional on the shape that
+ *  comes back for either of them. */
+export interface GroupConfig {
+  template?: string;
   answer_rubric?: AnswerRubric | null;
 }
 
-export interface QuestionGroupIn {
-  type: QuestionGroupType;
+export interface FormConfig extends GroupConfig {
+  template: string;
+}
+
+export interface FormGroupIn {
+  type: "form_completion";
   instructions: string;
   word_limit?: number | null;
   config: FormConfig;
   questions: QuestionIn[];
 }
 
+export interface ChoiceGroupIn {
+  type: "multiple_choice";
+  instructions: string;
+  /** Never set: how long an answer may be is not a question you can ask
+   *  about a letter. Present so both payloads have the same shape. */
+  word_limit?: null;
+  config: Record<string, never>;
+  questions: ChoiceQuestionIn[];
+}
+
+export type QuestionGroupIn = FormGroupIn | ChoiceGroupIn;
+
 // --- Consumption ("take") tree: no correct_answers anywhere (§3.4/§7) -------
 
 export interface TakeQuestion {
   id: string;
   number: number;
+  /** multiple_choice only. `options` is the option text, in order; which of
+   *  them is right has no field here and never will. */
+  prompt?: string | null;
+  options?: string[] | null;
+  /** How many options to pick. Public by design — "Choose TWO letters" is
+   *  printed on the paper, and how many are right says nothing about which. */
+  select_count?: number | null;
 }
 
 export interface TakeQuestionGroup {
@@ -153,7 +203,7 @@ export interface TakeQuestionGroup {
   type: string;
   instructions: string;
   word_limit: number | null;
-  config: FormConfig;
+  config: GroupConfig;
   questions: TakeQuestion[];
 }
 

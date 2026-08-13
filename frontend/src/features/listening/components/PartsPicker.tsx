@@ -1,26 +1,41 @@
 import { ClipboardList, Layers, ListChecks, Map, NotebookPen } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { cn } from "@/lib/utils";
+import {
+  QUESTION_TYPE_LABEL,
+  questionTypesForPart,
+} from "@/features/listening/parts";
 
 interface PickerPart {
   n: 1 | 2 | 3 | 4;
-  available: boolean;
-  blurb: string;
   icon: LucideIcon;
 }
 
-// Only form completion is built — Part 1 and Part 4 are typically form/note
-// completion in IELTS Listening, so they're the only single-part starting
-// points offered. Part 2 (map/plan labelling) and Part 3 (MCQ, matching)
-// aren't authorable yet; say so plainly rather than let someone pick a part
-// we can't grade. Each icon names that part's characteristic question type,
-// so the row reads as information rather than decoration.
+// Only the part is chosen here. What kind of questions go in it is decided in
+// the editor, where it can be offered per part — Part 1 is a completion task
+// and nothing else, so it is never asked the question at all
+// (features/listening/parts.ts).
+//
+// The icon names what the part is known for, which is not always what we can
+// author yet: Part 2's is map/plan labelling, still to be built. The blurb
+// underneath is what it can actually be given, read from the same table the
+// editor offers, so the two can't come to disagree.
 const PICKER_PARTS: PickerPart[] = [
-  { n: 1, available: true, blurb: "Form completion", icon: ClipboardList },
-  { n: 2, available: false, blurb: "Map / plan labelling — soon", icon: Map },
-  { n: 3, available: false, blurb: "Multiple choice, matching — soon", icon: ListChecks },
-  { n: 4, available: true, blurb: "Note completion", icon: NotebookPen },
+  { n: 1, icon: ClipboardList },
+  { n: 2, icon: Map },
+  { n: 3, icon: ListChecks },
+  { n: 4, icon: NotebookPen },
 ];
+
+/** "Multiple choice, form completion" — the types this part can be given, in
+ *  the order it is offered them, as one line of prose. */
+function availableTypes(n: number): string {
+  return questionTypesForPart(n - 1)
+    .map((type, index) => {
+      const label = QUESTION_TYPE_LABEL[type];
+      return index === 0 ? label : label.toLowerCase();
+    })
+    .join(", ");
+}
 
 interface PartsPickerProps {
   /** 0-based order indices to seed as new, empty parts. */
@@ -58,34 +73,14 @@ export function PartsPicker({ onPick }: PartsPickerProps) {
             <button
               key={p.n}
               type="button"
-              disabled={!p.available}
               onClick={() => onPick([p.n - 1])}
-              aria-disabled={!p.available}
-              className={cn(
-                "flex items-start gap-3 rounded-lg border border-dashed px-4 py-4 text-left transition-colors",
-                p.available
-                  ? "border-border text-muted-foreground hover:border-primary hover:text-foreground focus-visible:border-primary focus-visible:outline-none"
-                  : "cursor-default border-border/50 text-muted-foreground opacity-50",
-              )}
+              className="flex items-start gap-3 rounded-lg border border-dashed border-border px-4 py-4 text-left text-muted-foreground transition-colors hover:border-primary hover:text-foreground focus-visible:border-primary focus-visible:outline-none"
             >
-              <Icon
-                className={cn(
-                  "mt-0.5 size-4 shrink-0",
-                  p.available ? "text-primary" : "text-muted-foreground",
-                )}
-                aria-hidden
-              />
+              <Icon className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
               <span className="min-w-0">
-                <span className="flex items-center gap-2">
-                  <span className="text-foreground">Part {p.n}</span>
-                  {!p.available && (
-                    <span className="rounded-full bg-foreground/8 px-2 py-0.5 text-[10px] font-bold tracking-wider text-muted-foreground uppercase">
-                      soon
-                    </span>
-                  )}
-                </span>
+                <span className="block text-foreground">Part {p.n}</span>
                 <span className="mt-1 block text-[11px] text-muted-foreground">
-                  {p.blurb}
+                  {availableTypes(p.n)}
                 </span>
               </span>
             </button>

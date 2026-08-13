@@ -214,6 +214,12 @@ export interface AudioEditorHandle {
     | { kind: "needs-pick" }
     | { kind: "playhead"; range: MarkRange }
     | null;
+  /** The words highlighted in the transcript right now, for an author who
+   *  wants them in a question rather than as a timestamp. Distinguishes
+   *  "nothing highlighted in the transcript" (empty string) from "the
+   *  selection isn't in the transcript at all" (null), so a caller
+   *  remembering the last phrase knows whether this is news. */
+  selectedText: () => string | null;
 }
 
 interface AudioEditorPaneProps {
@@ -1241,10 +1247,21 @@ export const AudioEditorPane = forwardRef<
     selectionRangeRef.current = selectionRange;
   }, [selectionRange]);
 
+  const selectedText = useCallback((): string | null => {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || !listRef.current) {
+      return null;
+    }
+    const range = selection.getRangeAt(0);
+    return listRef.current.contains(range.commonAncestorContainer)
+      ? selection.toString().trim()
+      : null;
+  }, []);
+
   useImperativeHandle(
     ref,
-    () => ({ togglePlay: togglePlayback, pickTarget }),
-    [togglePlayback, pickTarget],
+    () => ({ togglePlay: togglePlayback, pickTarget, selectedText }),
+    [togglePlayback, pickTarget, selectedText],
   );
 
   /** Scrolls the transcript to a moment and flashes the line there. Used by

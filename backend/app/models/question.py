@@ -7,9 +7,24 @@ from sqlmodel import Field, SQLModel
 
 
 class Question(SQLModel, table=True):
-    """One gradeable gap within a :class:`QuestionGroup` (normalized, not
+    """One gradeable question within a :class:`QuestionGroup` (normalized, not
     embedded in the group's JSON config, so each answer stays individually
     gradeable and event-sourceable).
+
+    ``number`` is the question's place **within its group**, always 1..N. The
+    number a candidate reads runs across the whole material ("Questions
+    7–10"), but that is a view of the ordered tree, not a stored value: it
+    would otherwise have to be rewritten on every row of every later group
+    each time a group was added, removed or moved.
+
+    ``correct_answers`` means two subtly different things, and which one is
+    decided by ``config``:
+
+    * a gap-fill question (``config is None``) holds the ACCEPTED VARIANTS —
+      any one of them, matched exactly after normalization, is right;
+    * a choice question holds THE ANSWER KEY — the set of option letters that
+      must be selected, all of them and nothing else (IELTS gives no partial
+      credit for a "choose two").
 
     ``replay_start_ms``/``replay_end_ms`` mark where in the recording this
     answer is said, so a student reviewing a finished attempt can hear the
@@ -26,9 +41,27 @@ class Question(SQLModel, table=True):
     group_id: uuid.UUID = Field(foreign_key="question_groups.id", index=True)
     number: int
     correct_answers: list[str] = Field(sa_column=Column(JSONB, nullable=False))
+    #: Per-question presentation, for the types that have any — the same
+    #: division of labour as :attr:`QuestionGroup.config`, one level down.
+    #: NULL for form completion, whose prompt is the group's template.
+    #: ``multiple_choice``: ``{"prompt": str, "options": [str, ...],
+    #: "mode": "one" | "multiple"}``. Nothing gradeable lives in here: the
+    #: answer key is ``correct_answers``, so the take tree can hand over the
+    #: whole of a question's presentation without deciding what to strip.
+    config: dict | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
     replay_start_ms: int | None = Field(default=None)
     replay_end_ms: int | None = Field(default=None)
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
+
+    @property
+    def options(self) -> list[str] | None:
+        """The answer options, for a question that has any. ``None`` — not an
+        empty list — for a gap-fill, which is what tells grading and the take
+        serializer which of the two kinds of question they are holding."""
+        if self.config is None:
+            return None
+        options = self.config.get("options")
+        return list(options) if isinstance(options, list) else None

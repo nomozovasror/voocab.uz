@@ -209,23 +209,24 @@ async def get_listening_list(session: AsyncSession, author_id: uuid.UUID) -> dic
 
     material_ids = [material.id for material, _duration, _status in rows]
 
-    # "first question group by order" = smallest (part.order_index,
-    # group.order_index) per material -- Postgres DISTINCT ON, one query for
-    # every material at once.
-    question_type_by_material: dict[uuid.UUID, str] = dict(
-        (
-            await session.exec(
-                select(Part.material_id, QuestionGroup.type)
-                .select_from(QuestionGroup)
-                .join(Part, QuestionGroup.part_id == Part.id)  # type: ignore[arg-type]
-                .where(Part.material_id.in_(material_ids))  # type: ignore[attr-defined]
-                .order_by(
-                    Part.material_id, Part.order_index, QuestionGroup.order_index
-                )
-                .distinct(Part.material_id)
-            )
-        ).all()
-    )
+    # The kinds of question each material holds, in the order they are asked
+    # and without repeating one -- one query for every material at once.
+    # Deduplicated here rather than in SQL because "in the order they are
+    # asked" and DISTINCT don't compose without an aggregate that would cost
+    # more to read than this loop.
+    question_types_by_material: dict[uuid.UUID, list[str]] = {}
+    for material_id, group_type in (
+        await session.exec(
+            select(Part.material_id, QuestionGroup.type)
+            .select_from(QuestionGroup)
+            .join(Part, QuestionGroup.part_id == Part.id)  # type: ignore[arg-type]
+            .where(Part.material_id.in_(material_ids))  # type: ignore[attr-defined]
+            .order_by(Part.material_id, Part.order_index, QuestionGroup.order_index)
+        )
+    ).all():
+        seen = question_types_by_material.setdefault(material_id, [])
+        if group_type not in seen:
+            seen.append(group_type)
 
     question_counts: dict[uuid.UUID, int] = dict(
         (
@@ -288,7 +289,7 @@ async def get_listening_list(session: AsyncSession, author_id: uuid.UUID) -> dic
                 "visibility": material.visibility,
                 "duration_ms": duration_ms,
                 "transcript_status": transcript_status,
-                "question_type": question_type_by_material.get(material.id),
+                "question_types": question_types_by_material.get(material.id, []),
                 "question_count": question_counts.get(material.id, 0),
                 "attempts": attempts_count,
                 "avg_score_pct": round(avg_score, 1) if avg_score is not None else None,

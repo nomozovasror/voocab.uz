@@ -378,15 +378,19 @@ export function docToLayout(doc: DocBlock[]): FormBlock[] {
 // ── Validation ───────────────────────────────────────────────────────────
 
 /** What still has to be filled in, phrased for the author. Empty means it's
- *  publishable. */
-export function docIssues(doc: DocBlock[]): string[] {
+ *  publishable.
+ *
+ *  `offset` is how many questions come before this group in the material, so
+ *  the numbers quoted are the ones printed beside the gaps rather than the
+ *  1..N this group happens to store. */
+export function docIssues(doc: DocBlock[], offset = 0): string[] {
   const gaps = docGaps(doc);
   if (gaps.length === 0) {
     return ["No questions yet — put an answer in brackets, like [Chinese]."];
   }
   const unanswered = gaps
     .filter((g) => !g.answers.some((a) => a.trim()))
-    .map((g) => g.number);
+    .map((g) => g.number + offset);
   if (unanswered.length === 0) return [];
   return [
     unanswered.length === 1
@@ -399,12 +403,12 @@ export function docIssues(doc: DocBlock[]): string[] {
  *  must also be linked to the moment it is said. Kept apart from `docIssues`
  *  so a half-finished draft still autosaves — an author shouldn't have to
  *  mark the audio before they're allowed to write the next row. */
-export function docPublishIssues(doc: DocBlock[]): string[] {
-  const issues = docIssues(doc);
+export function docPublishIssues(doc: DocBlock[], offset = 0): string[] {
+  const issues = docIssues(doc, offset);
   if (issues.length > 0) return issues;
   const unmarked = docGaps(doc)
     .filter((g) => g.replayStartMs == null)
-    .map((g) => g.number);
+    .map((g) => g.number + offset);
   if (unmarked.length === 0) return [];
   return [
     unmarked.length === 1

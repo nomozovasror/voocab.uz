@@ -1,19 +1,48 @@
-"""Request/response schemas for listening Part-1 form-completion authoring
-(brief §5). Validation happens here so a malformed group/template/question
-set raises 422 before any DB write — the router/service never see a
-half-valid payload.
+"""Request/response schemas for listening authoring (brief §5). Validation
+happens here so a malformed group/template/question set raises 422 before any
+DB write — the router/service never see a half-valid payload.
+
+Two group types exist, and the split runs all the way through this module: a
+form-completion group is a template plus its gaps, a multiple-choice group is
+a list of self-contained questions. They share an instruction line and
+nothing else, so they are two schemas under a tagged union rather than one
+schema with half its fields optional — which is also what makes
+"a template is required" and "options are required" enforceable at all.
+
+What each of them will and won't refuse is a deliberate line. These payloads
+are written by an editor that autosaves while the author is still typing, so
+anything that is merely *unfinished* — a question with no text yet, an option
+left blank, no correct answer marked — has to be storable. Those are
+publishing requirements (app/services/publishing.py), not write-time errors.
+What is refused here is what would be *incoherent*: an answer key pointing at
+an option that doesn't exist, question numbers with holes in them, a template
+whose gaps and questions disagree.
 """
 
 import re
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-QuestionGroupType = Literal["form_completion"]
+QuestionGroupType = Literal["form_completion", "multiple_choice"]
 
 _TOKEN_RE = re.compile(r"\{\{(\d+)\}\}")
+
+#: Option labels, in the order the options are listed. A choice question's
+#: answer key is written in these rather than in indices or option text: it is
+#: what the paper says ("Choose the correct letter, A, B or C"), what the
+#: candidate submits, and what a ``question_attempts`` row is still readable
+#: as years later. Twenty-six is where single letters run out, not a limit
+#: anyone will meet.
+OPTION_LETTERS = "abcdefghijklmnopqrstuvwxyz"
+MAX_OPTIONS = len(OPTION_LETTERS)
+
+
+def option_letter(index: int) -> str:
+    """The label for the option at ``index`` (0 -> "a")."""
+    return OPTION_LETTERS[index]
 
 
 # --- Part -------------------------------------------------------------------
@@ -96,7 +125,7 @@ AnswerRubric = Literal[
 class QuestionGroupConfig(BaseModel):
     """``form_completion`` presentation payload: the gap-fill template. Gaps
     are ``{{N}}`` tokens, 1-indexed and contiguous — validated against the
-    question set on :class:`QuestionGroupIn`."""
+    question set on :class:`FormCompletionGroupIn`."""
 
     template: str
     answer_rubric: AnswerRubric | None = None
@@ -109,16 +138,22 @@ class QuestionGroupConfig(BaseModel):
         return v
 
 
-class QuestionIn(BaseModel):
+class MultipleChoiceConfig(BaseModel):
+    """``multiple_choice`` has nothing at group level: the prompt and options
+    belong to each question, not to the set. The model is here so the two
+    group types have the same shape — ``config`` is always an object — rather
+    than to hold anything."""
+
+
+class _QuestionInBase(BaseModel):
     number: int = Field(ge=1)
-    correct_answers: list[str] = Field(min_length=1)
     #: Where in the recording this answer is said (§ replay). Optional — an
     #: author can publish without marking any of them.
     replay_start_ms: int | None = Field(default=None, ge=0)
     replay_end_ms: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
-    def _replay_range_ordered(self) -> "QuestionIn":
+    def _replay_range_ordered(self) -> "_QuestionInBase":
         if (
             self.replay_start_ms is not None
             and self.replay_end_ms is not None
@@ -126,6 +161,15 @@ class QuestionIn(BaseModel):
         ):
             raise ValueError("the replay range's end must come after its start")
         return self
+
+
+class QuestionIn(_QuestionInBase):
+    """One gap in a form. ``correct_answers`` is the list of accepted
+    variants, and at least one is required: a gap nobody can answer isn't a
+    draft of anything, and the editor holds a half-written form back rather
+    than sending one."""
+
+    correct_answers: list[str] = Field(min_length=1)
 
     @field_validator("correct_answers")
     @classmethod
@@ -138,15 +182,59 @@ class QuestionIn(BaseModel):
         return cleaned
 
 
-class QuestionGroupIn(BaseModel):
-    """Full authoring payload for a group: template + its questions, authored
-    and validated as one atomic unit (§5 — no per-gap endpoint)."""
+class ChoiceQuestionIn(_QuestionInBase):
+    """One multiple-choice question: its text, its options, and which of them
+    are right.
 
-    type: QuestionGroupType = "form_completion"
+    Almost everything here is optional, because almost everything here is
+    typed over several minutes and autosaved throughout. What isn't optional
+    is coherence: ``correct_answers`` may only name options that exist, and
+    ``mode`` may not contradict itself. An empty answer key is a question the
+    author hasn't finished, which publishing refuses and this doesn't."""
+
+    prompt: str = ""
+    options: list[str] = Field(default_factory=list, max_length=MAX_OPTIONS)
+    #: How many answers the candidate picks. Stored rather than derived from
+    #: the length of the answer key: an author who has chosen "several" and
+    #: marked only the first of them has an unfinished question, and deriving
+    #: would quietly turn it into a finished single-answer one.
+    mode: Literal["one", "multiple"] = "one"
+    #: The answer key, as option letters. Not accepted variants — the set has
+    #: to be matched exactly (see :class:`app.models.question.Question`).
+    correct_answers: list[str] = Field(default_factory=list)
+
+    @field_validator("prompt")
+    @classmethod
+    def _clean_prompt(cls, v: str) -> str:
+        return v.strip()
+
+    @model_validator(mode="after")
+    def _answers_name_real_options(self) -> "ChoiceQuestionIn":
+        letters = [a.strip().lower() for a in self.correct_answers]
+        if len(letters) != len(set(letters)):
+            raise ValueError("correct_answers must not repeat an option")
+        available = {option_letter(i) for i in range(len(self.options))}
+        unknown = [letter for letter in letters if letter not in available]
+        if unknown:
+            raise ValueError(
+                f"correct_answers name options that don't exist: {', '.join(unknown)}"
+            )
+        if self.mode == "one" and len(letters) > 1:
+            raise ValueError(
+                "a single-answer question cannot have more than one correct option"
+            )
+        # Stored in the options' own order, so the key reads the way the
+        # question does and two equivalent keys can't be written two ways.
+        self.correct_answers = sorted(letters, key=OPTION_LETTERS.index)
+        return self
+
+
+class _QuestionGroupInBase(BaseModel):
     instructions: str = Field(min_length=1)
+    #: Form completion's answer length. Carried on the base so both group
+    #: types have one shape; multiple choice never sets it — how long an
+    #: answer may be is not a question you can ask about a letter.
     word_limit: int | None = Field(default=None, ge=1)
-    config: QuestionGroupConfig
-    questions: list[QuestionIn] = Field(min_length=1)
 
     @field_validator("instructions")
     @classmethod
@@ -155,8 +243,34 @@ class QuestionGroupIn(BaseModel):
             raise ValueError("instructions must not be blank")
         return v
 
+
+def _contiguous_numbers(questions: list[_QuestionInBase]) -> set[int]:
+    """The question numbers, checked to be 1..N with no holes and no repeats.
+
+    Numbers are the question's place inside its group, so they are always
+    1..N however the group is numbered on the page — the run a candidate
+    reads ("Questions 7–10") is worked out from the material's order."""
+    numbers = [q.number for q in questions]
+    if len(numbers) != len(set(numbers)):
+        raise ValueError("question numbers must be unique")
+    if set(numbers) != set(range(1, len(numbers) + 1)):
+        raise ValueError(
+            f"question numbers must be contiguous 1..{len(numbers)}, starting at 1"
+        )
+    return set(numbers)
+
+
+class FormCompletionGroupIn(_QuestionGroupInBase):
+    """Full authoring payload for a form-completion group: template + its
+    questions, authored and validated as one atomic unit (§5 — no per-gap
+    endpoint)."""
+
+    type: Literal["form_completion"] = "form_completion"
+    config: QuestionGroupConfig
+    questions: list[QuestionIn] = Field(min_length=1)
+
     @model_validator(mode="after")
-    def _tokens_match_questions(self) -> "QuestionGroupIn":
+    def _tokens_match_questions(self) -> "FormCompletionGroupIn":
         tokens = [int(n) for n in _TOKEN_RE.findall(self.config.template)]
         if not tokens:
             raise ValueError("template must contain at least one {{N}} gap token")
@@ -170,22 +284,53 @@ class QuestionGroupIn(BaseModel):
                 "gaps, starting at 1"
             )
 
-        numbers = [q.number for q in self.questions]
-        if len(numbers) != len(set(numbers)):
-            raise ValueError("question numbers must be unique")
-        if set(numbers) != token_set:
+        if _contiguous_numbers(list(self.questions)) != token_set:
             raise ValueError(
                 "question numbers must exactly match the template's gap tokens"
             )
         return self
 
 
+class MultipleChoiceGroupIn(_QuestionGroupInBase):
+    """Full authoring payload for a multiple-choice group: the instruction
+    line and the questions under it, replaced as one unit like any other
+    group."""
+
+    type: Literal["multiple_choice"]
+    config: MultipleChoiceConfig = Field(default_factory=MultipleChoiceConfig)
+    questions: list[ChoiceQuestionIn] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _numbers_contiguous(self) -> "MultipleChoiceGroupIn":
+        _contiguous_numbers(list(self.questions))
+        return self
+
+
+#: What the create/replace endpoints accept. Tagged on ``type`` so the request
+#: is validated against the group it claims to be — a multiple-choice payload
+#: is never checked for a template it shouldn't have, and a form-completion
+#: one can't quietly arrive without questions for its gaps.
+QuestionGroupIn = Annotated[
+    FormCompletionGroupIn | MultipleChoiceGroupIn,
+    Field(discriminator="type"),
+]
+
+
 class QuestionOut(BaseModel):
+    """The author's view of a question — everything, answer key included.
+    Only ever reached through an ownership check (see
+    ``app/api/listening.py``); the candidate's view is
+    :class:`TakeQuestionOut`, which is a different model on purpose."""
+
     id: uuid.UUID
     number: int
     correct_answers: list[str]
     replay_start_ms: int | None
     replay_end_ms: int | None
+    #: Multiple choice only; ``None`` for a gap in a form.
+    prompt: str | None = None
+    options: list[str] | None = None
+    mode: Literal["one", "multiple"] | None = None
 
 
 class QuestionGroupOut(BaseModel):
@@ -199,19 +344,48 @@ class QuestionGroupOut(BaseModel):
     questions: list[QuestionOut]
 
 
+class QuestionGroupOrderIn(BaseModel):
+    """The part's groups, in the order the author has put them. Every one of
+    them, by id: a move is expressed as the whole new order rather than as
+    "up"/"down", so two windows can't interleave two half-moves into an order
+    neither of them asked for."""
+
+    group_ids: list[uuid.UUID] = Field(min_length=1)
+
+    @field_validator("group_ids")
+    @classmethod
+    def _no_repeats(cls, v: list[uuid.UUID]) -> list[uuid.UUID]:
+        if len(v) != len(set(v)):
+            raise ValueError("group_ids must not repeat")
+        return v
+
+
 # --- Consumption: take (§7, §3.4 — MUST NEVER carry correct_answers) --------
 
 
 class TakeQuestionOut(BaseModel):
-    """The student's view of a gap: only what's needed to render an input
-    and submit an answer. No ``correct_answers`` field exists on this model
-    at all — even if a caller mistakenly fed it a dict that had the key,
-    pydantic drops unknown fields, so this is a second, structural guarantee
-    on top of the take-serializer in app/services/listening.py never adding
-    it in the first place."""
+    """The student's view of a question: only what's needed to render it and
+    submit an answer. No ``correct_answers`` field exists on this model at
+    all — even if a caller mistakenly fed it a dict that had the key, pydantic
+    drops unknown fields, so this is a second, structural guarantee on top of
+    the take-serializer in app/services/listening.py never adding it in the
+    first place.
+
+    The choice fields below are the reason this model names its fields one by
+    one instead of passing a question's ``config`` through the way the group
+    does: a candidate may see the prompt and the options, and nothing else
+    that might one day be put in there."""
 
     id: uuid.UUID
     number: int
+    #: Multiple choice only. ``options`` is the option TEXT, in order — which
+    #: of them is right is not expressible here.
+    prompt: str | None = None
+    options: list[str] | None = None
+    #: How many options to pick. Public by design: "Choose TWO letters" is
+    #: printed on the paper, and knowing how many are right tells the
+    #: candidate nothing about which.
+    select_count: int | None = None
 
 
 class TakeQuestionGroupOut(BaseModel):

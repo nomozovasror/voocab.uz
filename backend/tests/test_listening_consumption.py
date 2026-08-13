@@ -190,7 +190,20 @@ async def test_take_response_never_contains_correct_answers() -> None:
             questions = body["parts"][0]["question_groups"][0]["questions"]
             assert len(questions) == 5
             for q in questions:
-                assert set(q.keys()) == {"id", "number"}
+                # Every key a take question may carry, listed: the point is
+                # that the set is closed, so a field added to the model
+                # without being thought about fails here rather than in
+                # production. The choice fields are null for a gap.
+                assert set(q.keys()) == {
+                    "id",
+                    "number",
+                    "prompt",
+                    "options",
+                    "select_count",
+                }
+                assert q["prompt"] is None
+                assert q["options"] is None
+                assert q["select_count"] is None
     finally:
         await _cleanup(material.id, owner_email)
 
