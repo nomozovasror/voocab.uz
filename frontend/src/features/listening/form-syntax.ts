@@ -417,15 +417,18 @@ export function docPublishIssues(doc: DocBlock[], offset = 0): string[] {
   ];
 }
 
-/** Whether this part can be persisted without tripping the server's 422s.
+/** Whether this form can be persisted without tripping the server's 422s.
  *  Gates autosave, so an incomplete draft simply isn't sent yet rather than
- *  erroring on every keystroke. */
-export function isGroupPersistable(
-  doc: DocBlock[],
-  instructions: string,
-): boolean {
-  if (!instructions.trim()) return false;
-  return docIssues(doc).length === 0;
+ *  erroring on every keystroke.
+ *
+ *  Only one thing holds a form back: a gap with no accepted answer, which the
+ *  server refuses because a gap nobody can answer isn't a draft of anything.
+ *  Everything else about an unfinished form — no instructions, no gaps at
+ *  all, nothing but a heading — is a form being written, and saving it is the
+ *  whole point. This used to also require instructions and at least one gap,
+ *  which meant the beginning of a group was never stored at all. */
+export function isGroupPersistable(doc: DocBlock[]): boolean {
+  return docGaps(doc).every((gap) => gap.answers.some((a) => a.trim()));
 }
 
 /** Whether the author has put anything of their own in yet. */

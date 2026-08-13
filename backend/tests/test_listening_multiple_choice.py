@@ -306,6 +306,67 @@ async def test_an_unfinished_question_is_saved_and_an_incoherent_one_is_not() ->
 
 
 @pytest.mark.asyncio
+async def test_a_group_that_is_only_a_type_survives_being_saved() -> None:
+    """The earliest thing an author settles about a group is what kind of
+    questions it holds — before the instructions, before a single question.
+
+    That state used to have no representation here: ``instructions`` was
+    required and so was at least one question, so the group was never sent,
+    so choosing "multiple choice" and coming back the next day meant being
+    asked all over again. Both kinds have to survive it, and publishing —
+    not this endpoint — is what insists on the rest.
+    """
+    email = "mcq-bare-owner@example.com"
+    owner = await _make_user(email)
+    material = await _make_material(owner.id)
+    token = create_access_token(str(owner.id))
+
+    try:
+        async with _client() as client:
+            part_id = await _seed_part(client, token, material.id)
+
+            for payload, kind in [
+                ({"type": "multiple_choice", "config": {}, "questions": []},
+                 "multiple_choice"),
+                ({"type": "form_completion", "config": {"template": ""},
+                  "questions": []}, "form_completion"),
+            ]:
+                r = await client.post(
+                    f"/api/parts/{part_id}/question-groups",
+                    json=payload,
+                    cookies={"access_token": token},
+                )
+                assert r.status_code == 201, f"{kind}: {r.text}"
+                assert r.json()["type"] == kind
+                assert r.json()["instructions"] == ""
+                assert r.json()["questions"] == []
+
+            # Reopened, the material still knows what each group was going to
+            # be — which is the whole point of storing it.
+            r_after = await client.get(
+                f"/api/materials/{material.id}", cookies={"access_token": token}
+            )
+            groups = r_after.json()["parts"][0]["question_groups"]
+            assert [g["type"] for g in groups] == [
+                "multiple_choice",
+                "form_completion",
+            ]
+
+            # And none of it is publishable, so nothing incomplete escapes by
+            # being storable.
+            r_publish = await client.patch(
+                f"/api/materials/{material.id}",
+                json={"visibility": "public"},
+                cookies={"access_token": token},
+            )
+            assert r_publish.status_code == 422, r_publish.text
+            assert "add the instructions" in r_publish.text
+            assert "add at least one question" in r_publish.text
+    finally:
+        await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
 async def test_groups_reorder_together_and_a_partial_order_is_refused() -> None:
     email = "mcq3-owner@example.com"
     owner = await _make_user(email)

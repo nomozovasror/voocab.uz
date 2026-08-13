@@ -193,19 +193,24 @@ function partPayload(part: PartState): {
 
 /** The group payload, or null when there is nothing the API would accept.
  *
- *  The two kinds draw the line in different places, and both lines are the
- *  server's. A form can't be stored with a gap nobody can answer, so a
- *  half-written one waits. A multiple-choice group can: a question with no
- *  text and no answer marked is exactly what a group looks like a second
- *  after it was added, and holding it back until it was finished would mean
- *  autosaving nothing for as long as it takes to write four questions. */
+ *  Almost everything unfinished is acceptable, and deliberately so: what a
+ *  group looks like a second after it was added — a kind, no instructions,
+ *  no questions — is a state the author can leave the page in, so it has to
+ *  be a state the server can hold.
+ *
+ *  The one thing held back is a form gap with no accepted answer. That line
+ *  is the server's (schemas/listening.py): a gap nobody can answer isn't a
+ *  draft of anything, and the rest of the form waits the few seconds it
+ *  takes to type the answer. */
 function groupPayload(group: GroupState): QuestionGroupIn | null {
+  // Nothing has been settled about it yet, so there is nothing to say. Every
+  // other state of a group — a kind and no instructions, instructions and no
+  // questions — is a draft the server now keeps, because the alternative was
+  // asking the author what kind of questions these are every time they
+  // reopened the material.
   if (group.type === null) return null;
-  if (!group.instructions.trim()) return null;
 
   if (group.type === "multiple_choice") {
-    // The builder keeps at least one question, and the API insists on it.
-    if (group.questions.length === 0) return null;
     return {
       type: "multiple_choice",
       instructions: group.instructions.trim(),
@@ -214,7 +219,7 @@ function groupPayload(group: GroupState): QuestionGroupIn | null {
     };
   }
 
-  if (!isGroupPersistable(group.doc, group.instructions)) return null;
+  if (!isGroupPersistable(group.doc)) return null;
   const { template, questions } = docToGroup(group.doc);
   return {
     type: "form_completion",

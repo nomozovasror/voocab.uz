@@ -11,12 +11,16 @@ schema with half its fields optional — which is also what makes
 
 What each of them will and won't refuse is a deliberate line. These payloads
 are written by an editor that autosaves while the author is still typing, so
-anything that is merely *unfinished* — a question with no text yet, an option
-left blank, no correct answer marked — has to be storable. Those are
-publishing requirements (app/services/publishing.py), not write-time errors.
+anything that is merely *unfinished* — no instructions yet, no questions yet,
+a question with no text, an option left blank, no correct answer marked — has
+to be storable. Those are publishing requirements
+(app/services/publishing.py), not write-time errors. The earliest draft of a
+group is one that knows only what kind it is, and that has to survive being
+saved, or the author is asked the same question every time they come back.
+
 What is refused here is what would be *incoherent*: an answer key pointing at
 an option that doesn't exist, question numbers with holes in them, a template
-whose gaps and questions disagree.
+whose gaps and questions disagree, a gap with no accepted answer at all.
 """
 
 import re
@@ -127,15 +131,13 @@ class QuestionGroupConfig(BaseModel):
     are ``{{N}}`` tokens, 1-indexed and contiguous — validated against the
     question set on :class:`FormCompletionGroupIn`."""
 
-    template: str
+    #: Blank means an empty form — one the author has opened and not yet
+    #: written into. Refusing it made the first save of a new group fail,
+    #: which is the save that records what kind of group it is.
+    #: :class:`FormCompletionGroupIn` is where a template and its questions
+    #: are held to agreeing with each other, blank included.
+    template: str = ""
     answer_rubric: AnswerRubric | None = None
-
-    @field_validator("template")
-    @classmethod
-    def _nonblank_template(cls, v: str) -> str:
-        if not v or not v.strip():
-            raise ValueError("template must not be blank")
-        return v
 
 
 class MultipleChoiceConfig(BaseModel):
@@ -230,18 +232,24 @@ class ChoiceQuestionIn(_QuestionInBase):
 
 
 class _QuestionGroupInBase(BaseModel):
-    instructions: str = Field(min_length=1)
+    #: Blank is allowed, and means the author hasn't written them yet.
+    #:
+    #: This used to be required, which read as a sensible invariant and was
+    #: in fact a way to lose work: the first thing an author settles about a
+    #: group is what kind of questions it holds, and a group with a kind and
+    #: nothing else had no representation here at all. It could not be saved,
+    #: so it was not saved, so choosing "multiple choice" and coming back the
+    #: next day meant being asked again.
+    #:
+    #: Publishing still requires them (services/publishing.py), which is
+    #: where a requirement about finished work belongs. What this schema
+    #: refuses is incoherence, not incompleteness — same line the
+    #: multiple-choice questions above draw.
+    instructions: str = ""
     #: Form completion's answer length. Carried on the base so both group
     #: types have one shape; multiple choice never sets it — how long an
     #: answer may be is not a question you can ask about a letter.
     word_limit: int | None = Field(default=None, ge=1)
-
-    @field_validator("instructions")
-    @classmethod
-    def _nonblank_instructions(cls, v: str) -> str:
-        if not v.strip():
-            raise ValueError("instructions must not be blank")
-        return v
 
 
 def _contiguous_numbers(questions: list[_QuestionInBase]) -> set[int]:
@@ -267,13 +275,21 @@ class FormCompletionGroupIn(_QuestionGroupInBase):
 
     type: Literal["form_completion"] = "form_completion"
     config: QuestionGroupConfig
-    questions: list[QuestionIn] = Field(min_length=1)
+    #: A form with no gaps in it yet is a form being written — the labels
+    #: typically go in before the answers do. Empty is a draft, not an error;
+    #: publishing is where "add at least one question" is enforced.
+    questions: list[QuestionIn] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _tokens_match_questions(self) -> "FormCompletionGroupIn":
         tokens = [int(n) for n in _TOKEN_RE.findall(self.config.template)]
         if not tokens:
-            raise ValueError("template must contain at least one {{N}} gap token")
+            # No gaps and no questions is coherent — the two agree that this
+            # form has nothing to answer yet. Questions without tokens to
+            # sit in is not.
+            if self.questions:
+                raise ValueError("template must contain at least one {{N}} gap token")
+            return self
         if len(tokens) != len(set(tokens)):
             raise ValueError("template gap tokens must not repeat")
         token_set = set(tokens)
@@ -298,7 +314,9 @@ class MultipleChoiceGroupIn(_QuestionGroupInBase):
 
     type: Literal["multiple_choice"]
     config: MultipleChoiceConfig = Field(default_factory=MultipleChoiceConfig)
-    questions: list[ChoiceQuestionIn] = Field(min_length=1)
+    #: Empty for the same reason as a form's: this is what a group looks like
+    #: between being given a kind and being given a question.
+    questions: list[ChoiceQuestionIn] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _numbers_contiguous(self) -> "MultipleChoiceGroupIn":
