@@ -87,11 +87,6 @@ export function PartsPicker({ onPick }: PartsPickerProps) {
           );
         })}
       </div>
-
-      <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
-        Start with a single part, or seed the full test — parts can be added or
-        removed later.
-      </p>
     </div>
   );
 }

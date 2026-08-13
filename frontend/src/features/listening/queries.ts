@@ -25,11 +25,29 @@ export function useListeningMaterials(scope: "mine" | "public" = "mine") {
   });
 }
 
+/** A material's full authoring tree. Both editors read this once, to fill
+ *  their own state from, and are the source of truth from then on — which is
+ *  why it is fetched fresh every time rather than cached.
+ *
+ *  The listening editor saves through `listeningApi` directly (its autosave
+ *  sends part, group and material writes as one ordered round, which the
+ *  mutation hooks below can't express), so nothing it writes ever reaches
+ *  this cache. Left cached, the entry kept a snapshot from before those
+ *  writes and the next mount hydrated from it — data the editor then held as
+ *  current. An author who attached audio, went back to the list and returned
+ *  was asked to attach it again, and hydration being one-shot, the refetch
+ *  landing a moment later could not correct it.
+ *
+ *  `gcTime: 0` drops the entry the moment the editor unmounts, so the next
+ *  mount has nothing to hydrate from but the server. */
 export function useListeningMaterial(id: string | undefined) {
   return useQuery({
     queryKey: materialDetailKey(id ?? ""),
     queryFn: () => listeningApi.materials.get(id as string),
     enabled: !!id,
+    gcTime: 0,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 }
 

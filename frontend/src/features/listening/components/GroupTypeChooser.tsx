@@ -1,10 +1,6 @@
-import { ListChecks, Rows3, X } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import {
-  QUESTION_TYPE_BLURB,
-  QUESTION_TYPE_LABEL,
-} from "@/features/listening/parts";
+import { QuestionTypeChoices } from "@/features/listening/components/QuestionTypeChoices";
 import type { QuestionGroupType } from "@/features/listening/types";
 
 /**
@@ -16,15 +12,14 @@ import type { QuestionGroupType } from "@/features/listening/types";
  * the dialog before the editor opened would have meant asking once for a
  * whole test and getting it wrong for three quarters of it.
  *
+ * This is the question asked of a group added mid-edit. The same question for
+ * a material's opening groups is asked by EditorSetup, before the editor is
+ * any use at all — both draw their cards from QuestionTypeChoices.
+ *
  * Dashed, like the empty states elsewhere in the studio: nothing has been
  * written here yet, and the block is a place for something rather than the
  * something itself.
  */
-
-const TYPE_ICON: Record<QuestionGroupType, LucideIcon> = {
-  form_completion: Rows3,
-  multiple_choice: ListChecks,
-};
 
 interface GroupTypeChooserProps {
   types: QuestionGroupType[];
@@ -68,29 +63,7 @@ export function GroupTypeChooser({
         </button>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        {types.map((type) => {
-          const Icon = TYPE_ICON[type];
-          return (
-            <button
-              key={type}
-              type="button"
-              onClick={() => onChoose(type)}
-              className="flex items-start gap-3 rounded-lg border border-border px-4 py-3 text-left transition-colors hover:border-primary hover:bg-foreground/[0.03] focus-visible:border-primary focus-visible:outline-none"
-            >
-              <Icon className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
-              <span className="min-w-0">
-                <span className="block text-sm text-foreground">
-                  {QUESTION_TYPE_LABEL[type]}
-                </span>
-                <span className="mt-1 block text-[11px] text-muted-foreground">
-                  {QUESTION_TYPE_BLURB[type]}
-                </span>
-              </span>
-            </button>
-          );
-        })}
-      </div>
+      <QuestionTypeChoices types={types} onChoose={onChoose} />
 
       {note && (
         <p className="mt-3 text-[11px] text-muted-foreground">{note}</p>

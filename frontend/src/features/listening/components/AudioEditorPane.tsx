@@ -37,6 +37,7 @@ import {
 import { cn } from "@/lib/utils";
 import { formatClock } from "@/features/studio/format";
 import { mediaUrl } from "@/features/listening/api";
+import { AudioDropzone } from "@/features/listening/components/AudioDropzone";
 import {
   useAudioAsset,
   useUpdateSegmentText,
@@ -318,7 +319,6 @@ export const AudioEditorPane = forwardRef<
     index: number;
   } | null>(null);
   const [search, setSearch] = useState("");
-  const [dragOver, setDragOver] = useState(false);
 
   // Whether the transcript follows playback. Mirrored into a ref because the
   // wavesurfer handlers read it outside React's render cycle, while the back
@@ -1320,46 +1320,7 @@ export const AudioEditorPane = forwardRef<
   if (!audioUrl) {
     return (
       <div>
-        <label
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragOver(true);
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragOver(false);
-            const f = e.dataTransfer.files?.[0];
-            if (f) onUpload(f);
-          }}
-          className={cn(
-            "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-6 py-14 text-center text-muted-foreground transition-colors",
-            dragOver ? "border-primary text-foreground" : "border-border",
-            uploading && "pointer-events-none opacity-60",
-          )}
-        >
-          {uploading ? (
-            <Loader2 className="size-5 animate-spin text-primary" aria-hidden />
-          ) : (
-            <Upload className="size-5" aria-hidden />
-          )}
-          <span>drop audio here, or click to browse</span>
-          <span className="text-[11px] text-muted-foreground">
-            mp3, wav, m4a
-          </span>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="audio/*"
-            className="hidden"
-            disabled={uploading}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) onUpload(f);
-              e.target.value = "";
-            }}
-          />
-        </label>
+        <AudioDropzone onUpload={onUpload} busy={uploading} />
       </div>
     );
   }

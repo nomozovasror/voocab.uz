@@ -1,3 +1,5 @@
+import { ListChecks, Rows3 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import type { QuestionGroupType } from "@/features/listening/types";
 
 /**
@@ -31,6 +33,14 @@ export const QUESTION_TYPE_LABEL: Record<QuestionGroupType, string> = {
 export const QUESTION_TYPE_BLURB: Record<QuestionGroupType, string> = {
   form_completion: "Gaps in a form the candidate fills in",
   multiple_choice: "Lettered options, one or several right",
+};
+
+/** And one mark per type, for the same reason: a type is recognised by its
+ *  icon in the chooser, in the opening sequence and on a settled part, and
+ *  those have to be the same icon. */
+export const QUESTION_TYPE_ICON: Record<QuestionGroupType, LucideIcon> = {
+  form_completion: Rows3,
+  multiple_choice: ListChecks,
 };
 
 // Listed with the part's dominant type first, since that is the order they

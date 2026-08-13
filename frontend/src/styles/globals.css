@@ -602,3 +602,82 @@
     animation-duration: 0.01s;
   }
 }
+
+
+/* ── Opening a listening material ─────────────────────────────────────────
+   The material is started in order — the parts, the recording, then what each
+   part asks — and the steps replace one another inside one dialog rather than
+   the author being handed three of them. The step lifts away, the next one
+   fades in and its contents rise into it in reading order. See EditorSetup.
+
+   The container carries only the fade; the movement is the children's, so the
+   two don't compound into a lurch. */
+@keyframes setup-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes setup-lift-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-14px);
+  }
+}
+@keyframes setup-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.setup-step {
+  animation: setup-fade-in 0.3s ease-out both;
+}
+.setup-step[data-leaving="true"] {
+  animation: setup-lift-out 0.24s cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+/* --i is the row's place in the reading order, set inline. Delays rather than
+   :nth-child so a heading, a note and a list of parts can share one sequence
+   without knowing about each other. */
+.setup-rise {
+  animation: setup-rise 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+
+/* A part that has just been answered: the row settles into its confirmed
+   form, once, in the primary the rest of the editor uses for "this is
+   decided". */
+@keyframes setup-settle {
+  from {
+    transform: scale(0.985);
+    background-color: color-mix(in srgb, var(--primary) 20%, transparent);
+  }
+  to {
+    transform: none;
+    background-color: transparent;
+  }
+}
+.setup-settled {
+  animation: setup-settle 0.5s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .setup-step,
+  .setup-step[data-leaving="true"],
+  .setup-rise,
+  .setup-settled {
+    animation: none;
+  }
+}

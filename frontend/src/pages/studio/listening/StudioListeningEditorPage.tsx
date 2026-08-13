@@ -61,17 +61,15 @@ import {
 } from "@/features/listening/components/AudioEditorPane";
 import { AddGroupButton } from "@/features/listening/components/BuilderTools";
 import { ChoiceGroupEditor } from "@/features/listening/components/ChoiceGroupEditor";
+import {
+  EditorSetup,
+  type SetupChoice,
+  type SetupStep,
+} from "@/features/listening/components/EditorSetup";
 import { GroupTypeChooser } from "@/features/listening/components/GroupTypeChooser";
 import { QuestionFormEditor } from "@/features/listening/components/QuestionFormEditor";
 import { FormHelpCard } from "@/features/listening/components/FormHelpCard";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { PartsPicker } from "@/features/listening/components/PartsPicker";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { ANSWER_RUBRICS, deriveRubric } from "@/features/listening/rubric";
 import type { StudioListeningList } from "@/features/studio/types";
 import type {
@@ -304,6 +302,18 @@ function groupRun(
   return run;
 }
 
+/** What the page is showing. The first three are the opening sequence, asked
+ *  for in one dialog over the editor (EditorSetup); "editor" is the editor
+ *  itself, and where a material that has been started at all begins. */
+type Stage = "parts" | "audio" | "types" | "editor";
+
+/** Read at the moment of animating rather than subscribed to: the only thing
+ *  that depends on it is how long a step waits before it is replaced, and
+ *  changing the setting mid-transition is not a case worth a listener. */
+function prefersReducedMotion(): boolean {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+}
+
 /** What a group is called when it has to be named in a message: the part it
  *  is in, and the questions it covers. */
 function groupLabel(part: PartState, group: GroupState, startNumber: number): string {
@@ -316,7 +326,8 @@ export default function StudioListeningEditorPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
 
-  const { data: existing, isLoading: hydrating } = useListeningMaterial(routeId);
+  const { data: existing, isError: hydrateFailed } =
+    useListeningMaterial(routeId);
   const loadedRef = useRef(false);
 
   const [state, setState] = useState<EditorState>(() => ({
@@ -673,14 +684,23 @@ export default function StudioListeningEditorPage() {
   /** Settles what a group is. The key survives, so the autosave signatures
    *  and the section ref that were already keyed to it stay pointed at the
    *  same block — this is the same group answering a question, not a new
-   *  one. There is nothing to unsettle it afterwards: an empty group is
-   *  nothing to lose by deleting and adding the other kind, and one with
-   *  work in it shouldn't be quietly emptied by a dropdown. */
+   *  one.
+   *
+   *  A group that is still empty and has never been saved can be answered
+   *  again: in the opening sequence the answers are three clicks in a row,
+   *  and a misclick there shouldn't have to be undone by deleting the group
+   *  and adding the other kind. Past that — anything written, or anything
+   *  the server already has — the kind stands: a control that silently
+   *  empties a written group is not one to offer. */
   const chooseGroupType = useCallback(
     (groupKey: string, type: QuestionGroupType) => {
-      updateGroup(groupKey, (group) =>
-        group.type === null ? { ...newGroup(type), key: group.key } : group,
-      );
+      updateGroup(groupKey, (group) => {
+        if (group.type === type) return group;
+        if (group.type !== null && (group.groupId || !isGroupEmpty(group))) {
+          return group;
+        }
+        return { ...newGroup(type), key: group.key };
+      });
     },
     [updateGroup],
   );
@@ -1599,6 +1619,126 @@ export default function StudioListeningEditorPage() {
     [run],
   );
 
+  const sortedParts = state.parts
+    .slice()
+    .sort((a, b) => a.orderIndex - b.orderIndex);
+  const singlePart = hasPartRange(state.parts) ? state.parts[0] : null;
+
+  // --- The opening sequence -------------------------------------------------
+  // Which of the four the page is: the parts, the recording, what each part
+  // asks, or the editor itself. Derived rather than counted off, so it
+  // survives a reload — an author who uploaded audio and closed the tab comes
+  // back to the question they had got to, not to step one.
+
+  /** Nothing has been written into this material yet. The last two steps
+   *  hang off it: one gap filled in, one option typed, and the editor is what
+   *  the author wants from here on. */
+  const untouched = state.parts.every((part) => part.groups.every(isGroupEmpty));
+  const unsettledGroups = state.parts.flatMap((part) =>
+    part.groups.filter((group) => group.type === null),
+  );
+  /** The author has closed the sequence to get at the editor behind it. Not
+   *  applied to the parts step: with no parts there is no material to edit,
+   *  and dismissing there leaves for the list instead. */
+  const [setupSkipped, setSetupSkipped] = useState(false);
+
+  // The recording, not the asset id: the id is set the moment the upload
+  // returns, but the material only really has audio once the save that
+  // attaches it comes back with a url to play. Stepping forward on the id
+  // handed the author an editor whose player was still an upload box.
+  const stage: Stage =
+    state.parts.length === 0
+      ? "parts"
+      : setupSkipped
+        ? "editor"
+        : !state.audioUrl
+          ? "audio"
+          : untouched && unsettledGroups.length > 0
+            ? "types"
+            : "editor";
+
+  // The step on screen, which lags the one the state is in by the length of
+  // its exit. Without the lag every answer would swap the panel out from
+  // under the click that gave it.
+  const [shownStage, setShownStage] = useState<Stage>(stage);
+  const [leavingStage, setLeavingStage] = useState(false);
+
+  /** Whether any stage has actually been on screen yet. Until it has, the
+   *  page is still the loading line, and the stage the material turns out to
+   *  be in is where it starts rather than somewhere it moves to — without
+   *  this, opening a finished material flashed the first step on the way
+   *  past. */
+  const [stageEverShown, setStageEverShown] = useState(false);
+  /** Until hydration has actually run, not merely until the request has come
+   *  back: the reply lands one render before the effect that reads it, and
+   *  that render had an empty material in state. It used to draw an editor
+   *  with an empty form for a frame, which nobody noticed; now it draws
+   *  "add the recording" over a material that has one. Given up on only if
+   *  the fetch failed, where waiting would be waiting for nothing. */
+  const showingLoader = !!routeId && !loadedRef.current && !hydrateFailed;
+  useEffect(() => {
+    if (showingLoader) return;
+    setStageEverShown(true);
+  }, [showingLoader]);
+
+  /** What to draw. Before anything has been drawn there is nothing to move
+   *  away from, so the stage the material is in is simply the stage — worked
+   *  out in the render rather than corrected in an effect, which would paint
+   *  a frame of the wrong one first. */
+  const displayStage = stageEverShown ? shownStage : stage;
+
+  useEffect(() => {
+    if (stage === shownStage) return;
+    if (!stageEverShown) {
+      setShownStage(stage);
+      return;
+    }
+    // Longer on the way out of the last question than between the steps: the
+    // answer that ends the sequence is worth seeing land before the dialog
+    // gets out of the way.
+    const hold = prefersReducedMotion() ? 0 : shownStage === "types" ? 520 : 260;
+    setLeavingStage(true);
+    const t = window.setTimeout(() => {
+      setShownStage(stage);
+      setLeavingStage(false);
+    }, hold);
+    return () => window.clearTimeout(t);
+  }, [stage, shownStage, stageEverShown]);
+
+  /** The step the panel is showing, held past the moment it closes. The
+   *  dialog animates itself out over a couple of frames, and swapping its
+   *  contents for nothing at the start of that emptied the panel as it left
+   *  — and took its title, which is what names the dialog, with it. */
+  const setupStepRef = useRef<SetupStep>("parts");
+  if (displayStage !== "editor") setupStepRef.current = displayStage;
+
+  /** Closing the panel without answering. */
+  const dismissSetup = () => {
+    // Nothing has been chosen, so there is nothing to edit and nothing to
+    // keep: an empty editor behind a dismissed dialog is a dead end.
+    if (displayStage === "parts") navigate("/studio/listening");
+    else setSetupSkipped(true);
+  };
+
+  /** The type question, one row per part, in the order they're asked. */
+  const setupChoices: SetupChoice[] = sortedParts.flatMap((part) =>
+    part.groups.map((group) => ({
+      groupKey: group.key,
+      partLabel: partLabel(part),
+      types: questionTypesForPart(part.orderIndex),
+      note: missingTypeNote(part.orderIndex),
+      chosen: group.type,
+    })),
+  );
+  /** Whether this material's opening asks the type question at all — read
+   *  from the parts it was seeded with, not from what is still unanswered,
+   *  so the rail doesn't lose a step as the last one is answered. Before the
+   *  parts are picked nothing is known yet, and the rail shows the step it
+   *  will most likely have rather than growing one under the author. */
+  const hasTypeStep =
+    sortedParts.length === 0 ||
+    sortedParts.some((part) => questionTypesForPart(part.orderIndex).length > 1);
+
   // The help card lives at the foot of the questions pane and steps aside as
   // soon as the form is tall enough to reach it: past that point the space is
   // the author's, and a card floating over their work is in the way.
@@ -1627,47 +1767,22 @@ export default function StudioListeningEditorPage() {
     observer.observe(pane);
     observer.observe(sections);
     return () => observer.disconnect();
-  }, []);
+    // Re-run once the editor is actually on the page: through the opening
+    // sequence there is no questions pane to measure, and a mount-only effect
+    // would have given up on a null ref and left the card showing for good.
+  }, [displayStage]);
 
-  const sortedParts = state.parts.slice().sort((a, b) => a.orderIndex - b.orderIndex);
   const startNumberOf = useMemo(
     () => new Map(run.map((entry) => [entry.group.key, entry.startNumber])),
     [run],
   );
-  const singlePart = hasPartRange(state.parts) ? state.parts[0] : null;
-  const showPicker = !routeId && state.parts.length === 0;
 
-  if (routeId && hydrating && !loadedRef.current) {
+  if (showingLoader) {
     return (
       <div className="mx-auto w-full max-w-[75rem] px-2 py-16 text-center font-mono text-sm text-muted-foreground">
         <Loader2 className="mx-auto mb-2 size-5 animate-spin" aria-hidden />
         loading material…
       </div>
-    );
-  }
-
-  if (showPicker) {
-    return (
-      // Dismissing without choosing means there's nothing to edit, so it
-      // returns to the list rather than leaving an empty editor behind.
-      <Dialog
-        open
-        onOpenChange={(open) => {
-          if (!open) navigate("/studio/listening");
-        }}
-      >
-        <DialogContent className="modal-stagger gap-6 p-6 font-mono duration-200 sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-center text-lg font-medium">
-              New listening material
-            </DialogTitle>
-            <DialogDescription className="text-center text-xs">
-              What are you authoring, and where does it go?
-            </DialogDescription>
-          </DialogHeader>
-          <PartsPicker onPick={handlePick} />
-        </DialogContent>
-      </Dialog>
     );
   }
 
@@ -1801,6 +1916,46 @@ export default function StudioListeningEditorPage() {
           to pick up the latest version. Copy anything you typed since first.
         </div>
       )}
+
+      {/* Before the editor is any use: the parts, the recording, then what
+          each part asks. One dialog over the editor rather than three screens
+          in front of it — the answers are what is being collected, and the
+          thing they are being collected for stays visible behind them. */}
+      <Dialog
+        open={displayStage !== "editor"}
+        onOpenChange={(open) => {
+          if (!open) dismissSetup();
+        }}
+      >
+        <DialogContent className="gap-6 p-6 font-mono duration-200 sm:max-w-2xl">
+          <EditorSetup
+            step={setupStepRef.current}
+            hasTypeStep={hasTypeStep}
+            leaving={leavingStage}
+            onPickParts={handlePick}
+            onUpload={(file) => void handleUpload(file)}
+            uploading={uploading}
+            // The upload has landed and the save that attaches it is still
+            // out. Nothing for the author to do, but not nothing happening
+            // either — unless it failed, in which case the target goes live
+            // again rather than spinning forever over an error.
+            attaching={!!state.audioAssetId && !state.audioUrl && !saveError}
+            error={saveError}
+            recording={
+              state.audioUrl
+                ? {
+                    title: audioAsset?.title ?? null,
+                    durationMs: audioAsset?.duration_ms ?? state.durationMs,
+                    status: audioAsset?.transcript_status ?? null,
+                  }
+                : null
+            }
+            choices={setupChoices}
+            onChoose={chooseGroupType}
+            onSkip={() => setSetupSkipped(true)}
+          />
+        </DialogContent>
+      </Dialog>
 
       {/* Panes. min-h-0 caps the grid at the height left over from the title
           bar; without it the row sizes to its tallest child and pushes the
