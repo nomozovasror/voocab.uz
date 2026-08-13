@@ -1,11 +1,5 @@
 import { useEffect, useRef } from "react";
-import {
-  AudioLines,
-  CircleAlert,
-  CornerUpLeft,
-  Plus,
-  X,
-} from "lucide-react";
+import { CircleAlert, CornerUpLeft, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatClock } from "@/features/studio/format";
 import { ToolbarButton } from "@/features/listening/components/BuilderTools";
@@ -24,6 +18,7 @@ import {
   removeOption,
   toggleCorrect,
   type ChoiceIssue,
+  type ChoiceOption,
   type ChoiceQuestion,
 } from "@/features/listening/mcq";
 
@@ -46,6 +41,15 @@ import {
  * (ChoiceGroupEditor) rather than per question. It arrives here as `wanted`
  * and does three things: it decides the marker shape, it caps what clicking
  * an option can mark, and it is what an unfinished key is short of.
+ *
+ * Marking an option right and saying where it is said are ONE action. The
+ * author presses the letter, the transcript asks which line, and the answer
+ * to that question settles both — because they are the same decision. "This
+ * is the right answer" and "because of this sentence" arrive together in the
+ * author's head, and asking for them separately meant a second control on
+ * every answer and a state, right-but-unlinked, that publishing then had to
+ * refuse. The moment shows at the end of the row afterwards, as a reading
+ * rather than a button.
  */
 
 interface ChoiceBuilderProps {
@@ -137,20 +141,6 @@ export function ChoiceBuilder({
             number={startNumber + index * wanted}
             wanted={wanted}
             issue={issues?.get(question.id)}
-            onMarkOption={
-              onMarkAudio
-                ? (optionId, phrase) =>
-                    onMarkAudio([phrase], (range) =>
-                      patchQuestion(question.id, (q) =>
-                        editOption(q, optionId, (option) => ({
-                          ...option,
-                          replayStartMs: range.startMs,
-                          replayEndMs: range.endMs,
-                        })),
-                      ),
-                    )
-                : undefined
-            }
             transcriptSelection={transcriptSelection}
             register={register}
             // The only question in a group can't be removed: a group with no
@@ -167,11 +157,38 @@ export function ChoiceBuilder({
             onPrompt={(prompt) =>
               patchQuestion(question.id, (q) => ({ ...q, prompt }))
             }
-            onToggleCorrect={(optionId) =>
-              patchQuestion(question.id, (q) =>
-                toggleCorrect(q, optionId, wanted),
-              )
-            }
+            onChooseCorrect={(option) => {
+              // Already right: pressing it again takes it back, which is the
+              // only way out of a wrong press.
+              if (question.correct.includes(option.id)) {
+                patchQuestion(question.id, (q) =>
+                  toggleCorrect(q, option.id, wanted),
+                );
+                return;
+              }
+              // Nothing to mark against — no recording, or none that
+              // decoded. The letter still does what it always did rather
+              // than doing nothing at all.
+              if (!onMarkAudio) {
+                patchQuestion(question.id, (q) =>
+                  toggleCorrect(q, option.id, wanted),
+                );
+                return;
+              }
+              onMarkAudio([option.text.trim()], (range) =>
+                patchQuestion(question.id, (q) =>
+                  editOption(
+                    toggleCorrect(q, option.id, wanted),
+                    option.id,
+                    (o) => ({
+                      ...o,
+                      replayStartMs: range.startMs,
+                      replayEndMs: range.endMs,
+                    }),
+                  ),
+                ),
+              );
+            }}
             onOptionText={(optionId, text) =>
               patchQuestion(question.id, (q) => patchOption(q, optionId, text))
             }
@@ -201,16 +218,13 @@ interface QuestionBlockProps {
   number: number;
   wanted: number;
   issue?: ChoiceIssue;
-  /** Marking where this option's answer is given. There is no clearing to
-   *  go with it: the link is required to publish, so "no mark" is not a
-   *  state an author means to return to, and marking a different line is
-   *  how a mark in the wrong place gets fixed. */
-  onMarkOption?: (optionId: string, phrase: string) => void;
   transcriptSelection?: string;
   register: (key: string) => (el: HTMLInputElement | null) => void;
   onRemove?: () => void;
   onPrompt: (prompt: string) => void;
-  onToggleCorrect: (optionId: string) => void;
+  /** Pressing an option's letter: the one gesture that makes it the answer
+   *  and records where that answer is given. */
+  onChooseCorrect: (option: ChoiceOption) => void;
   onOptionText: (optionId: string, text: string) => void;
   onRemoveOption: (optionId: string) => void;
   onAddOption: () => void;
@@ -221,12 +235,11 @@ function QuestionBlock({
   number,
   wanted,
   issue,
-  onMarkOption,
   transcriptSelection,
   register,
   onRemove,
   onPrompt,
-  onToggleCorrect,
+  onChooseCorrect,
   onOptionText,
   onRemoveOption,
   onAddOption,
@@ -304,15 +317,17 @@ function QuestionBlock({
             <li key={option.id} className="group/option flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => onToggleCorrect(option.id)}
+                onClick={() => onChooseCorrect(option)}
                 aria-pressed={correct}
                 aria-label={
                   correct
                     ? `${letter} is a correct answer — press to unmark`
-                    : `Mark ${letter} as a correct answer`
+                    : `Mark ${letter} as a correct answer and say where it is given`
                 }
                 title={
-                  correct ? "Correct — press to unmark" : "Mark as correct"
+                  correct
+                    ? "Correct — press to unmark"
+                    : "Mark as correct, then click the line where it is given"
                 }
                 className={cn(
                   "flex size-6 shrink-0 items-center justify-center border text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
@@ -327,49 +342,6 @@ function QuestionBlock({
               >
                 {letter}
               </button>
-              {/* Where THIS answer is given. On the option because that is
-                  what an answer is here: a "choose two" is answered twice,
-                  in two places that are rarely near each other, and a mark
-                  on the question could only ever point at the first.
-
-                  In a fixed slot between the letter and the text, so the
-                  marks make a column instead of floating wherever the row
-                  happens to leave them. Both states are the same width —
-                  "0:50" and "link" are four characters — so nothing shifts
-                  when one is filled in. The slot is there on every row,
-                  including the options that can't have one, which is what
-                  keeps the text starting in the same place.
-
-                  Only the options that are answers get a control. A
-                  distractor has no moment, and offering to mark one would be
-                  offering to record where the wrong answer wasn't given. */}
-              <span className="flex w-16 shrink-0 items-center">
-                {correct && onMarkOption && (
-                  <button
-                    type="button"
-                    onClick={() => onMarkOption(option.id, option.text.trim())}
-                    title={
-                      marked
-                        ? `Said at ${formatClock(option.replayStartMs ?? 0) ?? "0:00"}–${formatClock(option.replayEndMs ?? 0) ?? "0:00"} — press to mark it somewhere else`
-                        : `Mark where ${letter} is given in the recording`
-                    }
-                    aria-label={
-                      marked
-                        ? `Re-mark where option ${letter} is given`
-                        : `Mark where option ${letter} is given`
-                    }
-                    className={cn(
-                      "flex items-center gap-1 rounded px-1.5 py-0.5 text-xs tabular-nums transition-colors",
-                      marked
-                        ? "text-primary hover:bg-primary/10"
-                        : "text-warning hover:bg-warning/10",
-                    )}
-                  >
-                    <AudioLines className="size-3 shrink-0" aria-hidden />
-                    {marked ? formatClock(option.replayStartMs ?? 0) : "link"}
-                  </button>
-                )}
-              </span>
               <input
                 type="text"
                 ref={register(`option#${option.id}`)}
@@ -385,19 +357,41 @@ function QuestionBlock({
                 aria-label={`Option ${letter} of question ${number}`}
                 className="min-w-0 flex-1 border-b border-transparent bg-transparent pb-0.5 text-base text-foreground placeholder:text-muted-foreground/50 hover:border-border focus:border-primary focus:outline-none"
               />
-              {/* Two is the fewest a question can have; below that there is
-                  nothing to choose between. */}
-              {question.options.length > 2 && (
-                <button
-                  type="button"
-                  onClick={() => onRemoveOption(option.id)}
-                  aria-label={`Remove option ${letter}`}
-                  title="Remove this option"
-                  className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover/option:opacity-100 hover:text-destructive focus-visible:opacity-100"
+              {/* When the answer is given, read out at the end of the row.
+                  Not a control: it was settled by the press that made this
+                  the answer, and there is nothing here to press that the
+                  letter doesn't already do.
+
+                  A right option with no time is a state only work from
+                  before this could be in — those get the word instead, and
+                  pressing the letter twice puts it right. */}
+              {correct && (
+                <span
+                  className={cn(
+                    "shrink-0 text-xs tabular-nums",
+                    marked ? "text-primary" : "text-warning",
+                  )}
                 >
-                  <X className="size-3.5" aria-hidden />
-                </button>
+                  {marked ? formatClock(option.replayStartMs ?? 0) : "unlinked"}
+                </span>
               )}
+
+              {/* Two is the fewest a question can have; below that there is
+                  nothing to choose between. Its space is held either way, so
+                  the times above stay in one column. */}
+              <span className="flex size-6 shrink-0 items-center justify-center">
+                {question.options.length > 2 && (
+                  <button
+                    type="button"
+                    onClick={() => onRemoveOption(option.id)}
+                    aria-label={`Remove option ${letter}`}
+                    title="Remove this option"
+                    className="flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover/option:opacity-100 hover:text-destructive focus-visible:opacity-100"
+                  >
+                    <X className="size-3.5" aria-hidden />
+                  </button>
+                )}
+              </span>
             </li>
           );
         })}
@@ -423,9 +417,6 @@ function QuestionBlock({
             >
               <Plus className="size-3" aria-hidden />
             </span>
-            {/* The mark column, empty — so this label starts where the
-                options' text does rather than a slot to the left of it. */}
-            <span className="w-16 shrink-0" aria-hidden />
             <span className="text-sm text-muted-foreground/60 transition-colors group-hover/add:text-foreground">
               add an option
             </span>
