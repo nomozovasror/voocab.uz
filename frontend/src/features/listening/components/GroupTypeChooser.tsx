@@ -66,7 +66,7 @@ export function GroupTypeChooser({
       <QuestionTypeChoices types={types} onChoose={onChoose} />
 
       {note && (
-        <p className="mt-3 text-[11px] text-muted-foreground">{note}</p>
+        <p className="mt-3 text-xs text-muted-foreground">{note}</p>
       )}
     </div>
   );

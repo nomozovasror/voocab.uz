@@ -152,7 +152,7 @@ export function ChoiceGroupEditor({
           {shown.map((issue) => (
             <li
               key={issue.questionId}
-              className="flex items-start gap-1.5 text-[11px] text-destructive"
+              className="flex items-start gap-1.5 text-xs text-destructive"
             >
               <CircleAlert className="mt-0.5 size-3 shrink-0" aria-hidden />
               {issue.message}
@@ -189,7 +189,7 @@ function AnswerCount({
       aria-label="Answers per question"
       className="flex h-10 shrink-0 items-center gap-1 rounded-md border border-border pr-1 pl-3"
     >
-      <span className="mr-1 text-xs text-muted-foreground">answers</span>
+      <span className="mr-1 text-xs text-muted-foreground">Answers</span>
       {ANSWER_COUNTS.map((count) => (
         <button
           key={count}

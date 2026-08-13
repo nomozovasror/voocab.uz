@@ -200,7 +200,7 @@ export function QuestionFormEditor({
           {issues.map((issue) => (
             <li
               key={issue}
-              className="flex items-start gap-1.5 text-[11px] text-destructive"
+              className="flex items-start gap-1.5 text-xs text-destructive"
             >
               <CircleAlert className="mt-0.5 size-3 shrink-0" aria-hidden />
               {issue}

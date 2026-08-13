@@ -59,7 +59,7 @@ export function FormHelpCard({
   // enough to scroll, but not yet long enough for the card to step aside.
   return (
     <div className="pointer-events-none sticky bottom-0 z-10 mt-auto pt-3">
-      <div className="pointer-events-auto relative rounded-lg border border-border bg-card px-3.5 py-3 text-[11px] shadow-lg">
+      <div className="pointer-events-auto relative rounded-lg border border-border bg-card px-3.5 py-3 text-xs shadow-lg">
         <button
           type="button"
           onClick={() => {
@@ -171,7 +171,7 @@ function Code({ children }: { children: React.ReactNode }) {
 
 function Key({ children }: { children: React.ReactNode }) {
   return (
-    <kbd className="inline-flex min-w-6 items-center justify-center rounded border border-border bg-foreground/5 px-1.5 py-0.5 font-mono text-[11px] text-foreground">
+    <kbd className="inline-flex min-w-6 items-center justify-center rounded border border-border bg-foreground/5 px-1.5 py-0.5 font-mono text-xs text-foreground">
       {children}
     </kbd>
   );

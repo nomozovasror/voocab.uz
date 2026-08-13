@@ -179,7 +179,7 @@ function paint(
     label.textContent = `${number}.`;
 
     const answer = document.createElement("span");
-    answer.className = written.length ? "text-sm" : "text-sm italic opacity-70";
+    answer.className = written.length ? "text-base" : "text-base italic opacity-70";
     answer.textContent = written.length ? written.join(" / ") : "answer";
 
     chip.append(label, answer);
@@ -307,11 +307,11 @@ export function ValueField({
         onMouseUp={() =>
           onSelectionChange?.(window.getSelection()?.toString().trim() ?? "")
         }
-        className="min-h-7 w-full text-sm leading-7 break-words whitespace-pre-wrap text-foreground focus:outline-none"
+        className="min-h-8 w-full text-base leading-8 break-words whitespace-pre-wrap text-foreground focus:outline-none"
       />
 
       {empty && placeholder && (
-        <span className="pointer-events-none absolute inset-y-0 left-0 text-sm leading-7 text-muted-foreground/50">
+        <span className="pointer-events-none absolute inset-y-0 left-0 text-base leading-8 text-muted-foreground/50">
           {placeholder}
         </span>
       )}

@@ -59,7 +59,7 @@ export function AudioDropzone({
       <span>
         {busy && busyLabel ? busyLabel : "drop audio here, or click to browse"}
       </span>
-      <span className="text-[11px] text-muted-foreground">mp3, wav, m4a</span>
+      <span className="text-xs text-muted-foreground">mp3, wav, m4a</span>
       <input
         type="file"
         accept="audio/*"

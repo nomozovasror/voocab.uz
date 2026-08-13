@@ -2121,7 +2121,7 @@ export default function StudioListeningEditorPage() {
                     {partLabel(part)}
                   </h3>
                   {note && (
-                    <p className="rounded-md bg-foreground/6 px-3 py-2 text-[11px] text-muted-foreground">
+                    <p className="rounded-md bg-foreground/6 px-3 py-2 text-xs text-muted-foreground">
                       {note}
                     </p>
                   )}

@@ -343,7 +343,7 @@ export function FormBuilder({
                     }
                     placeholder="Form title"
                     aria-label="Form title"
-                    className="w-full bg-transparent px-3 py-2.5 text-center text-sm font-semibold tracking-wide text-foreground uppercase placeholder:font-normal placeholder:normal-case placeholder:text-muted-foreground focus:outline-none"
+                    className="w-full bg-transparent px-3 py-2.5 text-center text-base font-semibold tracking-wide text-foreground uppercase placeholder:font-normal placeholder:normal-case placeholder:text-muted-foreground focus:outline-none"
                   />
                 )}
 
@@ -357,7 +357,7 @@ export function FormBuilder({
                     }
                     placeholder="Section heading"
                     aria-label="Section heading"
-                    className="w-full bg-transparent px-3 py-1.5 text-sm font-medium text-primary placeholder:font-normal placeholder:text-muted-foreground focus:outline-none"
+                    className="w-full bg-transparent px-3 py-1.5 text-base font-medium text-primary placeholder:font-normal placeholder:text-muted-foreground focus:outline-none"
                   />
                 )}
 
@@ -398,7 +398,7 @@ export function FormBuilder({
                               // (leading-7 + py-1): the two columns
                               // read as one line, so a half-step
                               // between them shows.
-                              className="w-full bg-transparent px-3 py-1 text-sm leading-7 text-foreground placeholder:text-muted-foreground/50 focus:outline-none"
+                              className="w-full bg-transparent px-3 py-1 text-base leading-8 text-foreground placeholder:text-muted-foreground/50 focus:outline-none"
                             />
                           )}
                         </div>
@@ -696,7 +696,7 @@ function GapActions({
           icon={<Trash2 className="size-4" aria-hidden />}
         />
         {mismatch && (
-          <span className="border-l border-border px-2 text-[11px] whitespace-nowrap text-warning">
+          <span className="border-l border-border px-2 text-xs whitespace-nowrap text-warning">
             {markCheck?.heardAtMs != null
               ? `heard at ${formatClock(markCheck.heardAtMs) ?? "0:00"}`
               : "not said there"}

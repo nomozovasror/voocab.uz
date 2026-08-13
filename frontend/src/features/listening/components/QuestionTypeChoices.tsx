@@ -39,7 +39,7 @@ export function QuestionTypeChoices({
               <span className="block text-sm text-foreground">
                 {QUESTION_TYPE_LABEL[type]}
               </span>
-              <span className="mt-1 block text-[11px] text-muted-foreground">
+              <span className="mt-1 block text-xs text-muted-foreground">
                 {QUESTION_TYPE_BLURB[type]}
               </span>
             </span>

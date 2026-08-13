@@ -79,7 +79,7 @@ export function PartsPicker({ onPick }: PartsPickerProps) {
               <Icon className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
               <span className="min-w-0">
                 <span className="block text-foreground">Part {p.n}</span>
-                <span className="mt-1 block text-[11px] text-muted-foreground">
+                <span className="mt-1 block text-xs text-muted-foreground">
                   {availableTypes(p.n)}
                 </span>
               </span>

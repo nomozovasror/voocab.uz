@@ -132,7 +132,7 @@ function SettledChoice({
         <button
           type="button"
           onClick={onChange}
-          className="ml-auto shrink-0 text-[11px] text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
+          className="ml-auto shrink-0 text-xs text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
         >
           change
         </button>
@@ -150,7 +150,7 @@ function StepRail({
 }) {
   const at = steps.findIndex((s) => s.key === current);
   return (
-    <ol className="flex items-center justify-center gap-3 text-[11px]">
+    <ol className="flex items-center justify-center gap-3 text-xs">
       {steps.map((s, i) => {
         const done = i < at;
         const here = i === at;
@@ -262,7 +262,7 @@ export function EditorSetup({
           <>
             {recording && (
               <div
-                className="setup-rise mb-5 flex items-center gap-2.5 rounded-lg bg-foreground/5 px-3.5 py-2.5 text-[11px] text-muted-foreground"
+                className="setup-rise mb-5 flex items-center gap-2.5 rounded-lg bg-foreground/5 px-3.5 py-2.5 text-xs text-muted-foreground"
                 style={{ "--i": 2 } as CSSProperties}
               >
                 {recording.status === "ready" ||
@@ -313,7 +313,7 @@ export function EditorSetup({
                           }}
                         />
                         {choice.note && (
-                          <p className="mt-3 text-[11px] text-muted-foreground">
+                          <p className="mt-3 text-xs text-muted-foreground">
                             {choice.note}
                           </p>
                         )}
@@ -351,7 +351,7 @@ export function EditorSetup({
               <button
                 type="button"
                 onClick={onSkip}
-                className="text-[11px] text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
+                className="text-xs text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
               >
                 decide in the editor
               </button>

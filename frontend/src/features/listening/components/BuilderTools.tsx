@@ -17,6 +17,30 @@ import type { QuestionGroupType } from "@/features/listening/types";
  * the same in both: a part can hold a form and a set of multiple-choice
  * questions one after another, and two different-looking toolbars would make
  * that read as two different tools.
+ *
+ * ── The editor's type scale ───────────────────────────────────────────────
+ * Three sizes, and the reason there are only three is that a fourth is how
+ * you end up with 11px and 12px doing the same job in the same pane, which
+ * is where this started.
+ *
+ *   text-base   The words that end up on the paper: form rows and their
+ *               values, question prompts, options. The content is the
+ *               largest thing in the pane, because it is the thing being
+ *               written.
+ *   text-sm     What the author fills in around it — the instruction line,
+ *               a group's heading — and labels that sit beside content
+ *               without being it.
+ *   text-xs     Chrome: counts, chips, toolbar buttons, hints, answer
+ *               summaries, warnings. Everything that describes the work
+ *               rather than being it.
+ *
+ * Markers (a gap's number, an option's letter) are text-xs inside a fixed
+ * box: they are labels on content, not content, and they have to stay the
+ * same width whatever they say.
+ *
+ * The take page is deliberately not on this scale. It is a candidate reading
+ * a paper rather than an author working on one, and it sizes itself for
+ * that.
  */
 
 export function ToolbarButton({

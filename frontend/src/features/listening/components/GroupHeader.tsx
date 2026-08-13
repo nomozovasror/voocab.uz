@@ -60,10 +60,13 @@ export function GroupHeader({
           line between the chip and the menu and leave the menu adrift on the
           next one — or off the end of it. */}
       <div className="ml-auto flex shrink-0 items-center gap-2.5">
-        <span className="hidden text-[11px] tabular-nums text-muted-foreground sm:inline">
+        <span className="hidden text-xs tabular-nums text-muted-foreground sm:inline">
           {count} {count === 1 ? "question" : "questions"}
         </span>
-        <span className="rounded-full bg-primary/12 px-2 py-0.5 text-[11px] text-primary">
+        {/* Chip and menu share a height. They sat at 20px and 28px, which
+            reads as two things that happen to be near each other rather than
+            one row of controls. */}
+        <span className="flex h-6 items-center rounded-full bg-primary/12 px-2.5 text-xs text-primary">
           {typeLabel}
         </span>
 
@@ -74,9 +77,9 @@ export function GroupHeader({
                 type="button"
                 title="Group actions"
                 aria-label="Group actions"
-                className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                className="flex size-6 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
               >
-                <EllipsisVertical className="size-4" aria-hidden />
+                <EllipsisVertical className="size-3.5" aria-hidden />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">

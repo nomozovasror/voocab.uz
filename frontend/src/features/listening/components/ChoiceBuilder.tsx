@@ -320,37 +320,53 @@ function QuestionBlock({
             </li>
           );
         })}
-        {/* The next option, drawn as one: same row, same marker size, same
-            place for the text. Dashed rather than solid, and the label says
-            what pressing it does — a lettered box that looked exactly like
-            the others would read as an option someone forgot to fill in. */}
-        <li>
+        {/* The next option, drawn as one but a size down: it lines up with
+            the letters above it without competing with them for the eye.
+            Dashed rather than solid, and the label says what pressing it
+            does — a lettered box that looked exactly like the others would
+            read as an option someone forgot to fill in.
+            The answer rides on the same line: both are about the key, and
+            two half-empty rows in a row is a gap for no reason. */}
+        <li className="flex items-center gap-2 pt-0.5">
           <button
             type="button"
             onClick={onAddOption}
             title="Add an option"
-            className="group/add flex w-full items-center gap-2 text-left"
+            className="group/add flex min-w-0 items-center gap-2 text-left"
           >
             <span
               className={cn(
-                "flex size-6 shrink-0 items-center justify-center border border-dashed border-border text-muted-foreground transition-colors group-hover/add:border-primary group-hover/add:text-primary",
+                "flex size-5 shrink-0 items-center justify-center border border-dashed border-border text-muted-foreground transition-colors group-hover/add:border-primary group-hover/add:text-primary",
                 wanted === 1 ? "rounded-full" : "rounded-[4px]",
               )}
             >
-              <Plus className="size-3.5" aria-hidden />
+              <Plus className="size-3" aria-hidden />
             </span>
-            <span className="text-base text-muted-foreground/60 transition-colors group-hover/add:text-foreground">
+            <span className="text-sm text-muted-foreground/60 transition-colors group-hover/add:text-foreground">
               add an option
             </span>
           </button>
+
+          <span
+            className={cn(
+              "ml-auto shrink-0 text-xs tabular-nums",
+              settled
+                ? "text-success"
+                : question.correct.length > 0
+                  ? "text-warning"
+                  : "text-muted-foreground/70",
+            )}
+          >
+            {answerSummary(question, wanted)}
+          </span>
         </li>
       </ul>
 
-      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+      {/* Only once there is something to take, so most questions end at the
+          options and this row isn't there at all. */}
+      {transcriptSelection && (
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
 
-        {/* Only once there is something to take. Shown always it would be a
-            disabled control on every question, explaining itself to nobody. */}
-        {transcriptSelection && (
           <button
             type="button"
             // Keeps the transcript selection alive: a plain click would
@@ -358,30 +374,13 @@ function QuestionBlock({
             onMouseDown={(e) => e.preventDefault()}
             onClick={takeFromTranscript}
             title={`Put “${transcriptSelection}” into the last field you were in`}
-            className="flex items-center gap-1 text-[11px] text-primary transition-colors hover:text-primary/80"
+            className="flex items-center gap-1 text-xs text-primary transition-colors hover:text-primary/80"
           >
             <CornerUpLeft className="size-3" aria-hidden />
             from transcript
           </button>
-        )}
-
-        {/* The one place the answer is reported. A group asking for two
-            says how far off it is here rather than in a row of its own
-            above the options, which was the same fact in two places and in
-            the wrong one. */}
-        <span
-          className={cn(
-            "ml-auto text-[11px] tabular-nums",
-            settled
-              ? "text-success"
-              : question.correct.length > 0
-                ? "text-warning"
-                : "text-muted-foreground/70",
-          )}
-        >
-          {answerSummary(question, wanted)}
-        </span>
-      </div>
+        </div>
+      )}
     </div>
   );
 }

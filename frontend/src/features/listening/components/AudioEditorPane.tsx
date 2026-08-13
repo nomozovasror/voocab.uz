@@ -1634,7 +1634,7 @@ export const AudioEditorPane = forwardRef<
               single-part material gets the range controls — a full test has
               nothing to trim, its recording already runs all four parts in
               sequence. */}
-        <div className="mt-2.5 flex items-center gap-2 border-t border-border pt-2.5 text-[11px]">
+        <div className="mt-2.5 flex items-center gap-2 border-t border-border pt-2.5 text-xs">
           {hasPartRange && (
             <>
               <DropdownMenu open={helpOpen} onOpenChange={setHelpOpen}>
@@ -1667,7 +1667,7 @@ export const AudioEditorPane = forwardRef<
                     as
                     {partNumber ? ` Part ${partNumber}` : " this part"}.
                   </p>
-                  <ul className="space-y-2.5 px-3.5 py-3 text-[11px] leading-relaxed text-muted-foreground">
+                  <ul className="space-y-2.5 px-3.5 py-3 text-xs leading-relaxed text-muted-foreground">
                     <HelpRow
                       icon={<MoveHorizontal className="size-3.5" aria-hidden />}
                     >
@@ -1710,7 +1710,7 @@ export const AudioEditorPane = forwardRef<
                     <button
                       type="button"
                       onClick={() => setHelpOpen(false)}
-                      className="w-full rounded bg-foreground/8 py-1.5 text-center text-[11px] text-foreground transition-colors hover:bg-foreground/14"
+                      className="w-full rounded bg-foreground/8 py-1.5 text-center text-xs text-foreground transition-colors hover:bg-foreground/14"
                     >
                       Got it
                     </button>
@@ -1858,7 +1858,7 @@ export const AudioEditorPane = forwardRef<
         {/* Under the search box, directly above the lines it's asking to be
             clicked — over the search it read as a note about searching. */}
         {picking && (
-          <div className="mb-2 shrink-0 rounded-md border border-primary/40 bg-primary/10 px-2.5 py-1.5 text-[11px] text-foreground">
+          <div className="mb-2 shrink-0 rounded-md border border-primary/40 bg-primary/10 px-2.5 py-1.5 text-xs text-foreground">
             <div className="flex items-center gap-2">
               <MousePointerClick
                 className="size-3.5 shrink-0 text-primary"
@@ -2030,7 +2030,7 @@ export const AudioEditorPane = forwardRef<
             aria-hidden={!showBackToPlaying}
             tabIndex={showBackToPlaying ? 0 : -1}
             className={cn(
-              "absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-[11px] text-foreground shadow-lg",
+              "absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs text-foreground shadow-lg",
               // `translate`, not `transform`: Tailwind v4's translate-* set
               // the standalone `translate` property, so a transition listing
               // only `transform` left the movement instant and just faded the
@@ -2199,7 +2199,7 @@ function TimeField({
         }
       }}
       className={cn(
-        "text-center text-[11px] tabular-nums text-foreground focus:outline-none",
+        "text-center text-xs tabular-nums text-foreground focus:outline-none",
         bare
           ? "w-10 bg-transparent p-0 text-left"
           : "w-12 rounded border border-transparent bg-foreground/6 px-1.5 py-0.5 focus:border-primary",
@@ -2325,7 +2325,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
   if (editing) {
     return (
       <div className="flex w-full items-start gap-2.5 rounded-md bg-foreground/6 px-2 py-1">
-        <span className="mt-1.5 shrink-0 text-[11px] tabular-nums text-muted-foreground">
+        <span className="mt-1.5 shrink-0 text-xs tabular-nums text-muted-foreground">
           {fmt(segment.start_ms)}
         </span>
         <textarea
