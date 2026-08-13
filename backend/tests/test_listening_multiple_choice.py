@@ -387,42 +387,53 @@ async def test_where_a_choice_answer_is_said_round_trips_but_never_reaches_take(
                 json=_choice_group(
                     [
                         {
-                            **FINISHED_QUESTIONS[0],
-                            "replay_start_ms": 12_000,
-                            "replay_end_ms": 15_500,
+                            **CHOOSE_TWO_QUESTIONS[0],
+                            # One per right option, at two different moments,
+                            # which is the whole reason this isn't on the
+                            # question: "choose two" is answered twice.
+                            "option_replay": {
+                                "a": [12_000, 15_500],
+                                "c": [96_000, 99_000],
+                            },
                         }
-                    ]
+                    ],
+                    wanted=2,
                 ),
                 cookies={"access_token": token},
             )
             assert r.status_code == 201, r.text
             question_id = r.json()["questions"][0]["id"]
-            assert r.json()["questions"][0]["replay_start_ms"] == 12_000
 
             # Reopened by the editor, which is what it is stored for.
             r_author = await client.get(
                 f"/api/materials/{material.id}", cookies={"access_token": token}
             )
             question = r_author.json()["parts"][0]["question_groups"][0]["questions"][0]
-            assert question["replay_start_ms"] == 12_000
-            assert question["replay_end_ms"] == 15_500
+            assert question["option_replay"] == {
+                "a": [12_000, 15_500],
+                "c": [96_000, 99_000],
+            }
 
             await _make_public(material.id)
             r_take = await client.get(
                 f"/api/materials/{material.id}/take",
                 cookies={"access_token": token},
             )
-            assert "replay_start_ms" not in r_take.text
+            assert "replay" not in r_take.text
 
             # And handed over with the marking, which is when it stops being
-            # a clue and starts being the explanation.
+            # a clue and starts being the explanation. Both moments, since
+            # both are why the answer is what it is.
             r_attempt = await client.post(
                 f"/api/materials/{material.id}/attempts",
                 json={"answers": [{"question_id": question_id, "given_answer": "a"}]},
                 cookies={"access_token": token},
             )
             assert r_attempt.status_code == 200, r_attempt.text
-            assert r_attempt.json()["results"][0]["replay_start_ms"] == 12_000
+            assert r_attempt.json()["results"][0]["option_replay"] == {
+                "a": [12_000, 15_500],
+                "c": [96_000, 99_000],
+            }
     finally:
         await _cleanup(material.id, email)
 
@@ -985,7 +996,12 @@ async def test_publishing_names_what_a_choice_group_still_needs() -> None:
             # rarely spoken, but the answer always is: some sentence makes b
             # right rather than a, and that is what a learner who got it
             # wrong is sent back to.
-            assert "Questions 3, 4 are not linked to the audio" in reasons
+            #
+            # Only question 4, though it is question 3 that has no mark
+            # either: 3 has no right option yet, so there is nothing to link
+            # and nothing to say beyond the missing answer already listed.
+            assert "Question 4 is not linked to the audio" in reasons
+            assert "Questions 3, 4 are not linked" not in reasons
 
             # A "choose two" group wants exactly two marked on every question,
             # not merely one — the candidate is told to pick two, so a key of

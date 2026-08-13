@@ -16,8 +16,8 @@ import {
 } from "@/features/listening/numbering";
 import {
   addOption,
-  answerPhrases,
   answerSummary,
+  editOption,
   newChoiceQuestion,
   newOption,
   optionLetter,
@@ -138,24 +138,28 @@ export function ChoiceBuilder({
             number={startNumber + index * wanted}
             wanted={wanted}
             issue={issues?.get(question.id)}
-            onMark={
+            onMarkOption={
               onMarkAudio
-                ? () =>
-                    onMarkAudio(answerPhrases(question), (range) =>
-                      patchQuestion(question.id, (q) => ({
-                        ...q,
-                        replayStartMs: range.startMs,
-                        replayEndMs: range.endMs,
-                      })),
+                ? (optionId, phrase) =>
+                    onMarkAudio([phrase], (range) =>
+                      patchQuestion(question.id, (q) =>
+                        editOption(q, optionId, (option) => ({
+                          ...option,
+                          replayStartMs: range.startMs,
+                          replayEndMs: range.endMs,
+                        })),
+                      ),
                     )
                 : undefined
             }
-            onClearMark={() =>
-              patchQuestion(question.id, (q) => ({
-                ...q,
-                replayStartMs: null,
-                replayEndMs: null,
-              }))
+            onClearOptionMark={(optionId) =>
+              patchQuestion(question.id, (q) =>
+                editOption(q, optionId, (option) => ({
+                  ...option,
+                  replayStartMs: null,
+                  replayEndMs: null,
+                })),
+              )
             }
             transcriptSelection={transcriptSelection}
             register={register}
@@ -207,8 +211,8 @@ interface QuestionBlockProps {
   number: number;
   wanted: number;
   issue?: ChoiceIssue;
-  onMark?: () => void;
-  onClearMark: () => void;
+  onMarkOption?: (optionId: string, phrase: string) => void;
+  onClearOptionMark: (optionId: string) => void;
   transcriptSelection?: string;
   register: (key: string) => (el: HTMLInputElement | null) => void;
   onRemove?: () => void;
@@ -224,8 +228,8 @@ function QuestionBlock({
   number,
   wanted,
   issue,
-  onMark,
-  onClearMark,
+  onMarkOption,
+  onClearOptionMark,
   transcriptSelection,
   register,
   onRemove,
@@ -255,7 +259,6 @@ function QuestionBlock({
   };
 
   const settled = question.correct.length === wanted;
-  const marked = question.replayStartMs != null;
 
   return (
     <div
@@ -304,6 +307,7 @@ function QuestionBlock({
         {question.options.map((option, index) => {
           const letter = optionLetter(index);
           const correct = question.correct.includes(option.id);
+          const marked = option.replayStartMs != null;
           return (
             <li key={option.id} className="group/option flex items-center gap-2">
               <button
@@ -346,6 +350,53 @@ function QuestionBlock({
                 aria-label={`Option ${letter} of question ${number}`}
                 className="min-w-0 flex-1 border-b border-transparent bg-transparent pb-0.5 text-base text-foreground placeholder:text-muted-foreground/50 hover:border-border focus:border-primary focus:outline-none"
               />
+              {/* Where THIS answer is given. On the option because that is
+                  what an answer is here: a "choose two" is answered twice,
+                  in two places that are rarely near each other, and a mark
+                  on the question could only ever point at the first.
+
+                  Only on the options that are answers. A distractor has no
+                  moment, and offering to mark one would be offering to
+                  record where the wrong answer wasn't given. */}
+              {correct && onMarkOption && (
+                <span className="flex shrink-0 items-center gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => onMarkOption(option.id, option.text.trim())}
+                    title={
+                      marked
+                        ? `Said at ${formatClock(option.replayStartMs ?? 0) ?? "0:00"}–${formatClock(option.replayEndMs ?? 0) ?? "0:00"} — press to re-mark`
+                        : `Mark where ${letter} is given in the recording`
+                    }
+                    aria-label={
+                      marked
+                        ? `Re-mark where option ${letter} is given`
+                        : `Mark where option ${letter} is given`
+                    }
+                    className={cn(
+                      "flex items-center gap-1 rounded px-1.5 py-0.5 text-xs tabular-nums transition-colors",
+                      marked
+                        ? "text-primary hover:bg-primary/10"
+                        : "text-warning hover:bg-warning/10",
+                    )}
+                  >
+                    <AudioLines className="size-3" aria-hidden />
+                    {marked ? formatClock(option.replayStartMs ?? 0) : "link"}
+                  </button>
+                  {marked && (
+                    <button
+                      type="button"
+                      onClick={() => onClearOptionMark(option.id)}
+                      title="Clear the audio mark"
+                      aria-label={`Clear the audio mark on option ${letter}`}
+                      className="flex size-5 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover/option:opacity-100 hover:text-destructive focus-visible:opacity-100"
+                    >
+                      <Undo2 className="size-3" aria-hidden />
+                    </button>
+                  )}
+                </span>
+              )}
+
               {/* Two is the fewest a question can have; below that there is
                   nothing to choose between. */}
               {question.options.length > 2 && (
@@ -389,56 +440,12 @@ function QuestionBlock({
             </span>
           </button>
 
-          {/* Where the answer is said, for the learner to be sent back to
-              after they get it wrong. Required to publish, so an unlinked
-              question wears it in warning colour rather than hiding until
-              hovered — a requirement nobody can see until they reach for it
-              is one they meet at the publish button instead.
-              It goes quiet once there is a time to show: done is not a
-              thing to keep shouting about. */}
-          <span className="ml-auto flex shrink-0 items-center gap-0.5">
-            {onMark && (
-              <button
-                type="button"
-                onClick={onMark}
-                title={
-                  marked
-                    ? `Said at ${formatClock(question.replayStartMs ?? 0) ?? "0:00"}–${formatClock(question.replayEndMs ?? 0) ?? "0:00"} — press to re-mark`
-                    : "Mark where this is said in the recording"
-                }
-                aria-label={
-                  marked ? "Re-mark where this is said" : "Mark where this is said"
-                }
-                className={cn(
-                  "flex items-center gap-1 rounded px-1.5 py-0.5 text-xs tabular-nums transition-colors",
-                  marked
-                    ? "text-primary hover:bg-primary/10"
-                    : "text-warning hover:bg-warning/10",
-                )}
-              >
-                <AudioLines className="size-3" aria-hidden />
-                {marked ? formatClock(question.replayStartMs ?? 0) : "link"}
-              </button>
-            )}
-            {marked && (
-              <button
-                type="button"
-                onClick={onClearMark}
-                title="Clear the audio mark"
-                aria-label="Clear the audio mark"
-                className="flex size-5 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover/question:opacity-100 hover:text-destructive focus-visible:opacity-100"
-              >
-                <Undo2 className="size-3" aria-hidden />
-              </button>
-            )}
-          </span>
-
           {/* Already the report for an unfinished key — "1 of 2 marked" is
               the whole of what an issue about the answer would say — so a
               flagged one is coloured rather than described again. */}
           <span
             className={cn(
-              "shrink-0 pl-2 text-xs tabular-nums",
+              "ml-auto shrink-0 pl-2 text-xs tabular-nums",
               issue?.kind === "answer"
                 ? "text-destructive"
                 : settled

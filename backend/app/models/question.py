@@ -44,9 +44,13 @@ class Question(SQLModel, table=True):
     #: Per-question presentation, for the types that have any — the same
     #: division of labour as :attr:`QuestionGroup.config`, one level down.
     #: NULL for form completion, whose prompt is the group's template.
-    #: ``multiple_choice``: ``{"prompt": str, "options": [str, ...]}``. How
-    #: many of those options the candidate picks is the group's business, not
-    #: the question's — see :class:`app.schemas.listening.MultipleChoiceConfig`.
+    #: ``multiple_choice``: ``{"prompt": str, "options": [str, ...],
+    #: "option_replay": {letter: [start_ms, end_ms]}}``. How many of those
+    #: options the candidate picks is the group's business, not the
+    #: question's — see :class:`app.schemas.listening.MultipleChoiceConfig`.
+    #: Where each answer is given is the OPTION's, since a "choose two" has
+    #: two of them at two moments; the ``replay_*`` columns below carry a
+    #: form gap's, where one question is one answer.
     #: Nothing gradeable lives in here: the answer key is ``correct_answers``,
     #: so the take tree can hand over the whole of a question's presentation
     #: without deciding what to strip.
@@ -67,3 +71,23 @@ class Question(SQLModel, table=True):
             return None
         options = self.config.get("options")
         return list(options) if isinstance(options, list) else None
+
+    @property
+    def option_replay(self) -> dict[str, tuple[int, int]]:
+        """Where each of this question's answers is given, by option letter.
+
+        Empty for a gap, and for a choice question nobody has marked yet.
+        Read through a property so every caller sees the same shape whatever
+        happens to be in the JSON — a half-written entry is no entry."""
+        raw = (self.config or {}).get("option_replay")
+        if not isinstance(raw, dict):
+            return {}
+        spans: dict[str, tuple[int, int]] = {}
+        for letter, span in raw.items():
+            if (
+                isinstance(span, (list, tuple))
+                and len(span) == 2
+                and all(isinstance(n, int) for n in span)
+            ):
+                spans[str(letter)] = (span[0], span[1])
+        return spans

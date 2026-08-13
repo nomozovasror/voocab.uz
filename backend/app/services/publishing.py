@@ -193,7 +193,16 @@ def _choice_blockers(
                 f"{label}: {_numbers(short)} without {wanted} answers marked."
             )
 
-    unlinked = numbers(lambda q: q.replay_start_ms is None)
+    # Every RIGHT option, not the question: a "choose two" is answered in two
+    # places, and one range covering the first of them leaves the second
+    # unexplained. Options that aren't right are ignored — a distractor has
+    # no moment, and a mark left on one from before the key changed is kept
+    # rather than demanded.
+    unlinked = numbers(
+        lambda q: any(
+            letter not in q.option_replay for letter in (q.correct_answers or [])
+        )
+    )
     if unlinked:
         blockers.append(f"{label}: {_numbers(unlinked)} not linked to the audio.")
 

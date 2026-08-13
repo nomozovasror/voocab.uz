@@ -100,6 +100,9 @@ export interface ListeningQuestion {
   // --- multiple_choice only; absent for a gap in a form -------------------
   prompt?: string | null;
   options?: string[] | null;
+  /** multiple_choice only. Where each answer is given, by option letter —
+   *  one per right option, because a "choose two" is answered twice. */
+  option_replay?: Record<string, [number, number]> | null;
 }
 
 export interface ListeningQuestionGroup {
@@ -131,6 +134,9 @@ export interface ChoiceQuestionIn {
   prompt: string;
   options: string[];
   correct_answers: string[];
+  /** Where each answer is given, by option letter. Absent entries are
+   *  options nobody has marked, which for a distractor is every one. */
+  option_replay: Record<string, [number, number]>;
 }
 
 /** IELTS uses a small closed set of rubrics, varying on two axes: how many
@@ -246,6 +252,10 @@ export interface QuestionResult {
    *  moment in the recording is feedback rather than a hint. */
   replay_start_ms: number | null;
   replay_end_ms: number | null;
+  /** multiple_choice only: one moment per right option, since a "choose
+   *  two" is answered in two places and sending back one of them would send
+   *  the learner to half of why they were wrong. */
+  option_replay?: Record<string, [number, number]>;
 }
 
 export interface AttemptResult {

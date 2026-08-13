@@ -214,6 +214,22 @@ class ChoiceQuestionIn(_QuestionInBase):
     #: The answer key, as option letters. Not accepted variants — the set has
     #: to be matched exactly (see :class:`app.models.question.Question`).
     correct_answers: list[str] = Field(default_factory=list)
+    #: Where each answer is given, per OPTION rather than per question:
+    #: ``{"b": [12000, 15500]}``.
+    #:
+    #: A "Choose TWO letters" has two answers and they are almost never said
+    #: in the same breath — one at 0:57, the other two minutes later. A
+    #: single range on the question could only ever point at one of them,
+    #: which is why the mark belongs where the answer does. It is the same
+    #: shape the form has: there, one gap is one answer and carries its own
+    #: range; here, one right option is one answer and carries its own.
+    #:
+    #: Keyed by letter for the same reason ``correct_answers`` is — that is
+    #: what identifies an option once it is stored. Marks on options that
+    #: aren't currently right are kept rather than dropped: an author who
+    #: unmarks an option and marks it again should not have to find the
+    #: moment twice.
+    option_replay: dict[str, tuple[int, int]] = Field(default_factory=dict)
 
     @field_validator("prompt")
     @classmethod
@@ -234,6 +250,25 @@ class ChoiceQuestionIn(_QuestionInBase):
         # Stored in the options' own order, so the key reads the way the
         # question does and two equivalent keys can't be written two ways.
         self.correct_answers = sorted(letters, key=OPTION_LETTERS.index)
+        return self
+
+    @model_validator(mode="after")
+    def _marks_name_real_options(self) -> "ChoiceQuestionIn":
+        cleaned: dict[str, tuple[int, int]] = {}
+        available = {option_letter(i) for i in range(len(self.options))}
+        for letter, span in self.option_replay.items():
+            key = letter.strip().lower()
+            if key not in available:
+                raise ValueError(
+                    f"option_replay names an option that doesn't exist: {letter}"
+                )
+            start, end = span
+            if start < 0 or end <= start:
+                raise ValueError(
+                    f"option {key}'s replay range must end after it starts"
+                )
+            cleaned[key] = (start, end)
+        self.option_replay = cleaned
         return self
 
 
@@ -487,8 +522,14 @@ class QuestionResultOut(BaseModel):
     #: Safe to send here for the same reason as ``correct_answers``: the
     #: attempt is already committed, so pointing at the moment in the
     #: recording is feedback rather than a hint.
+    #:
+    #: A form gap has one answer and so one range. A choice question has one
+    #: per right option — "Choose TWO letters" is answered in two places, and
+    #: sending back one of them would send the learner to half of why they
+    #: were wrong.
     replay_start_ms: int | None
     replay_end_ms: int | None
+    option_replay: dict[str, list[int]] = Field(default_factory=dict)
 
 
 class AttemptResultOut(BaseModel):

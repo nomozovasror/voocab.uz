@@ -229,6 +229,13 @@ def _question_config(question) -> dict | None:
     return {
         "prompt": question.prompt,
         "options": list(question.options),
+        # Per option, because a "choose two" has two answers said at two
+        # different moments — see ChoiceQuestionIn.option_replay. The
+        # question's own replay_* columns stay empty for choice questions;
+        # they are the form's, where one gap is one answer.
+        "option_replay": {
+            letter: list(span) for letter, span in question.option_replay.items()
+        },
     }
 
 
@@ -519,6 +526,7 @@ async def get_author_tree(
                     # sends back.
                     q["prompt"] = question.config.get("prompt") or ""
                     q["options"] = question.options or []
+                    q["option_replay"] = question.config.get("option_replay") or {}
                 if include_answers:
                     q["correct_answers"] = question.correct_answers
                 questions.append(q)

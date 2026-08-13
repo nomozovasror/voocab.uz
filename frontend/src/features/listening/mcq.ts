@@ -49,6 +49,19 @@ export function optionLetter(index: number): string {
 export interface ChoiceOption {
   id: string;
   text: string;
+  /** Where this answer is given, for the options that are answers.
+   *
+   *  On the option rather than the question because a "Choose TWO letters"
+   *  is answered twice, at two moments that are rarely near each other — one
+   *  range on the question could only ever point at the first. It is the
+   *  same shape the form has: one gap is one answer and carries its own
+   *  range; one right option is one answer and carries its own.
+   *
+   *  Kept on an option that stops being right, rather than cleared: an
+   *  author who changes their mind twice shouldn't have to find the moment
+   *  twice. Nothing asks for it until the option is an answer again. */
+  replayStartMs: number | null;
+  replayEndMs: number | null;
 }
 
 export interface ChoiceQuestion {
@@ -58,14 +71,6 @@ export interface ChoiceQuestion {
   /** Which options are right, by option id. How many there should be is the
    *  group's `answersPerQuestion`, not anything held here. */
   correct: string[];
-  /** Where in the recording the answer is given, if the author has marked
-   *  it. Optional here in a way it isn't for a gap: a choice question is
-   *  often answered from the whole of what was said rather than from one
-   *  phrase in it, so publishing never asks for this
-   *  (services/publishing.py). Where there IS a moment, it is worth having —
-   *  it is what a learner gets back with their result. */
-  replayStartMs: number | null;
-  replayEndMs: number | null;
 }
 
 /** What a group asks for when it hasn't said. One is the ordinary
@@ -83,7 +88,7 @@ export const ANSWER_COUNTS = [1, 2, 3] as const;
 const STARTING_OPTIONS = 3;
 
 export function newOption(text = ""): ChoiceOption {
-  return { id: newId(), text };
+  return { id: newId(), text, replayStartMs: null, replayEndMs: null };
 }
 
 export function newChoiceQuestion(): ChoiceQuestion {
@@ -92,8 +97,6 @@ export function newChoiceQuestion(): ChoiceQuestion {
     prompt: "",
     options: Array.from({ length: STARTING_OPTIONS }, () => newOption()),
     correct: [],
-    replayStartMs: null,
-    replayEndMs: null,
   };
 }
 
@@ -177,11 +180,18 @@ export function patchOption(
   optionId: string,
   text: string,
 ): ChoiceQuestion {
+  return editOption(question, optionId, (option) => ({ ...option, text }));
+}
+
+/** Any change to one option, against the latest question. */
+export function editOption(
+  question: ChoiceQuestion,
+  optionId: string,
+  edit: (option: ChoiceOption) => ChoiceOption,
+): ChoiceQuestion {
   return {
     ...question,
-    options: question.options.map((o) =>
-      o.id === optionId ? { ...o, text } : o,
-    ),
+    options: question.options.map((o) => (o.id === optionId ? edit(o) : o)),
   };
 }
 
@@ -204,8 +214,13 @@ export function choiceQuestionsToApi(
       correct_answers: question.options
         .filter((o) => question.correct.includes(o.id))
         .map((o) => letterOf.get(o.id) as string),
-      replay_start_ms: question.replayStartMs,
-      replay_end_ms: question.replayEndMs,
+      option_replay: Object.fromEntries(
+        question.options.flatMap((option, i) =>
+          option.replayStartMs != null && option.replayEndMs != null
+            ? [[optionLetter(i), [option.replayStartMs, option.replayEndMs]]]
+            : [],
+        ),
+      ),
     };
   });
 }
@@ -220,7 +235,15 @@ export function choiceQuestionsFromApi(
     .slice()
     .sort((a, b) => a.number - b.number)
     .map((question) => {
-      const options = (question.options ?? []).map((text) => newOption(text));
+      const spans = question.option_replay ?? {};
+      const options = (question.options ?? []).map((text, index) => {
+        const span = spans[optionLetter(index)];
+        return {
+          ...newOption(text),
+          replayStartMs: span?.[0] ?? null,
+          replayEndMs: span?.[1] ?? null,
+        };
+      });
       const key = new Set(
         (question.correct_answers ?? []).map((letter) =>
           letter.trim().toLowerCase(),
@@ -233,8 +256,6 @@ export function choiceQuestionsFromApi(
         correct: options
           .filter((_option, index) => key.has(optionLetter(index)))
           .map((option) => option.id),
-        replayStartMs: question.replay_start_ms ?? null,
-        replayEndMs: question.replay_end_ms ?? null,
       };
     });
   return restored.length > 0 ? restored : newChoiceQuestions();
@@ -378,20 +399,23 @@ export function answerPhrases(question: ChoiceQuestion): string[] {
 export function choiceMarks(
   questions: ChoiceQuestion[],
 ): { startMs: number; endMs: number; answers: string[] }[] {
-  return questions.flatMap((question) => {
-    if (question.replayStartMs == null || question.replayEndMs == null) {
-      return [];
-    }
-    const answers = answerPhrases(question);
-    if (answers.length === 0) return [];
-    return [
-      {
-        startMs: question.replayStartMs,
-        endMs: question.replayEndMs,
-        answers,
-      },
-    ];
-  });
+  return questions.flatMap((question) =>
+    question.options.flatMap((option) =>
+      option.replayStartMs != null &&
+      option.replayEndMs != null &&
+      option.text.trim()
+        ? [
+            {
+              startMs: option.replayStartMs,
+              endMs: option.replayEndMs,
+              // Just this option's words: the mark is about this answer, not
+              // about every answer the question happens to have.
+              answers: [option.text.trim()],
+            },
+          ]
+        : [],
+    ),
+  );
 }
 
 /** What has to be true to publish, over and above being finished: every
@@ -417,7 +441,11 @@ export function choicePublishIssues(
   if (issues.length > 0) return issues;
 
   return questions.flatMap((question, index) => {
-    if (question.replayStartMs != null) return [];
+    const unlinked = question.options.filter(
+      (option) =>
+        question.correct.includes(option.id) && option.replayStartMs == null,
+    );
+    if (unlinked.length === 0) return [];
     const number = offset + index * wanted + 1;
     const named =
       wanted > 1

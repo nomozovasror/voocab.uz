@@ -1642,7 +1642,16 @@ export default function StudioListeningEditorPage() {
         (total, { group }) =>
           total +
           (group.type === "multiple_choice"
-            ? group.questions.filter((q) => q.replayStartMs == null).length
+            ? // Per right option, since that is what carries a mark: a
+              // "choose two" is two answers and so two things to link.
+              group.questions.reduce(
+                (n, q) =>
+                  n +
+                  q.options.filter(
+                    (o) => q.correct.includes(o.id) && o.replayStartMs == null,
+                  ).length,
+                0,
+              )
             : 0),
         0,
       );

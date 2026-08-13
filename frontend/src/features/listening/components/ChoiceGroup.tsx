@@ -206,22 +206,31 @@ function ChoiceQuestion({
         );
       })}
 
-      {/* Only where the author marked one. A choice question is often
-          answered from the whole of what was said rather than from one
-          phrase in it, so most of them will never have a moment to point at
-          — and a "hear it" that played the wrong seconds would be worse
-          than no "hear it" at all. */}
-      {graded && onReplay && result.replay_start_ms != null && (
-        <button
-          type="button"
-          onClick={() => onReplay(result.replay_start_ms, result.replay_end_ms)}
-          title="Hear where this answer is given"
-          aria-label={`Hear where the answer to question ${number} is given`}
-          className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-primary"
-        >
-          <Volume2 className="size-3.5" aria-hidden />
-          hear it
-        </button>
+      {/* One per right option, not one per question. "Choose TWO letters"
+          is answered in two places, and a single "hear it" would send the
+          learner to half of why they were wrong — so each right letter gets
+          its own, named, in the order they are printed. */}
+      {graded && onReplay && (
+        <div className="flex flex-wrap items-center gap-1 pt-0.5">
+          {options.map((_text, index) => {
+            const letter = optionLetter(index);
+            const span = result.option_replay?.[letter];
+            if (!span || !key.has(letter)) return null;
+            return (
+              <button
+                key={letter}
+                type="button"
+                onClick={() => onReplay(span[0], span[1])}
+                title={`Hear where ${letter.toUpperCase()} is given`}
+                aria-label={`Hear where option ${letter.toUpperCase()} of question ${number} is given`}
+                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-primary"
+              >
+                <Volume2 className="size-3.5" aria-hidden />
+                hear {letter}
+              </button>
+            );
+          })}
+        </div>
       )}
     </fieldset>
   );

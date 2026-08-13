@@ -170,6 +170,10 @@ async def submit_attempt(
                 "correct_answers": question.correct_answers,
                 "replay_start_ms": question.replay_start_ms,
                 "replay_end_ms": question.replay_end_ms,
+                "option_replay": {
+                    letter: list(span)
+                    for letter, span in question.option_replay.items()
+                },
             }
         )
 
