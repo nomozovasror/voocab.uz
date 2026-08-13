@@ -266,22 +266,27 @@ export function choiceIssues(
       wanted > 1
         ? `Questions ${questionNumbers(number, wanted)}`
         : `Question ${number}`;
+    // "Questions 23 and 24 have…", "Question 23 has…". The subject is the
+    // numbers the question occupies, so the verb follows `named` rather than
+    // the count of whatever is being complained about.
+    const has = wanted > 1 ? "have" : "has";
+    const needs = wanted > 1 ? "need" : "needs";
     const add = (kind: ChoiceIssue["kind"], message: string) =>
       issues.push({ questionId: question.id, number, kind, message });
 
     if (!question.prompt.trim()) {
-      add("prompt", `${named} has no question text yet.`);
+      add("prompt", `${named} ${has} no question text yet.`);
       return;
     }
     // Always more options than answers: "choose two of these two" is not a
     // question, and the same rule the server publishes by.
     const minimum = Math.max(2, wanted + 1);
     if (question.options.length < minimum) {
-      add("options", `${named} needs at least ${minimum} options.`);
+      add("options", `${named} ${needs} at least ${minimum} options.`);
       return;
     }
     if (question.options.some((option) => !option.text.trim())) {
-      add("options", `${named} has an option with nothing in it.`);
+      add("options", `${named} ${has} an option with nothing in it.`);
       return;
     }
     if (question.correct.length !== wanted) {
@@ -289,8 +294,8 @@ export function choiceIssues(
         "answer",
         wanted === 1
           ? `${named} has no correct answer marked.`
-          : `${named} ${question.correct.length === 1 ? "has" : "have"} ` +
-            `${question.correct.length} of ${wanted} answers marked.`,
+          : `${named} ${has} ${question.correct.length} of ${wanted} ` +
+            "answers marked.",
       );
     }
   });

@@ -15,6 +15,14 @@ import type {
  * here knows which option is right until the attempt comes back graded: the
  * take payload carries the option text and how many to pick, and there is no
  * field in it that could carry more.
+ *
+ * "How many to pick" is a limit, not a suggestion. A question that says
+ * choose two and lets you tick four is marked wrong for a reason the
+ * candidate never sees — grading is an exact set match — so the extra ticks
+ * are refused here instead, with the tally saying why. Refused rather than
+ * silently dropping an earlier answer: this is someone sitting a test, and an
+ * answer disappearing from under them because they clicked elsewhere is worse
+ * than a click that does nothing.
  */
 
 interface ChoiceGroupProps {
@@ -96,16 +104,21 @@ function ChoiceQuestion({
     graded ? result.correct_answers.map((l) => l.trim().toLowerCase()) : [],
   );
 
+  // Only in the way once the question is answered in full, so it never
+  // blocks a first click.
+  const full = several && chosen.size >= selectCount;
+
   const pick = (letter: string) => {
     if (!several) {
       onChange([letter]);
       return;
     }
-    // Kept in the options' own order, so what is submitted reads the way the
-    // question does however it was clicked.
     const next = new Set(chosen);
     if (next.has(letter)) next.delete(letter);
+    else if (next.size >= selectCount) return;
     else next.add(letter);
+    // Kept in the options' own order, so what is submitted reads the way the
+    // question does however it was clicked.
     onChange(options.map((_o, i) => optionLetter(i)).filter((l) => next.has(l)));
   };
 
@@ -123,7 +136,8 @@ function ChoiceQuestion({
 
       {several && (
         <p className="text-xs text-muted-foreground">
-          Choose {selectCount} letters.
+          Choose {selectCount} letters — {chosen.size} of {selectCount} chosen
+          {full && !graded && ". Unpick one to change your answer."}
         </p>
       )}
 
@@ -131,6 +145,10 @@ function ChoiceQuestion({
         const letter = optionLetter(index);
         const picked = chosen.has(letter);
         const isKey = key.has(letter);
+        // Not disabled on the way to being answered — only once the question
+        // is full and this option isn't part of the answer. It stays
+        // readable; it just stops responding until something is unpicked.
+        const spent = full && !picked && !graded;
         return (
           <label
             key={letter}
@@ -147,7 +165,8 @@ function ChoiceQuestion({
                   : picked
                     ? "border-primary bg-primary/10 text-foreground"
                     : "border-border text-foreground hover:border-foreground/30",
-              disabled && "cursor-default",
+              (disabled || spent) && "cursor-default",
+              spent && "opacity-45 hover:border-border",
             )}
           >
             <input
@@ -155,7 +174,7 @@ function ChoiceQuestion({
               name={question.id}
               checked={picked}
               onChange={() => pick(letter)}
-              disabled={disabled}
+              disabled={disabled || spent}
               className="sr-only"
             />
             <span
