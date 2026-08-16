@@ -12,14 +12,21 @@ interface FormLayoutProps {
 }
 
 /**
- * Renders a parsed form-completion layout: a title, section headings, and
- * label/value rows whose values can carry gaps anywhere inside them and run
- * to several bulleted lines.
+ * Renders a parsed completion layout: a title, section headings, and rows
+ * whose values can carry gaps anywhere inside them and run to several
+ * bulleted lines.
  *
  * The label column is fixed rather than sized to content so the values line
  * up down the form the way they do on the printed paper — a value column
  * that jogged left and right per row would read as a list of unrelated
  * fields instead of one form.
+ *
+ * A row with no label has no column to line up with, and takes the whole
+ * width. That is what notes, sentences, a summary paragraph and short-answer
+ * questions are: the same gaps, on a page with no label column. Holding the
+ * column open for them left every one of those indented past an empty quarter
+ * of the sheet, which is a form with the labels rubbed out rather than the
+ * thing the paper actually prints.
  */
 export function FormLayout({ blocks, renderGap, className }: FormLayoutProps) {
   return (
@@ -59,10 +66,16 @@ export function FormLayout({ blocks, renderGap, className }: FormLayoutProps) {
             {/* Full strength, like the value beside it: on the paper a label
                 is content, not a caption. The column and its rule already
                 separate the two — dimming real text to do that job again cost
-                legibility for nothing. */}
-            <div className="w-64 shrink-0 text-foreground">
-              {block.label}
-            </div>
+                legibility for nothing.
+
+                Absent entirely when there is no label, rather than empty: a
+                held-open column is what made every note and every sentence
+                start a quarter of the way across the page. */}
+            {block.label.trim() && (
+              <div className="w-64 shrink-0 text-foreground">
+                {block.label}
+              </div>
+            )}
             <div className="min-w-0 flex-1 space-y-1">
               {block.lines.map((line, j) => (
                 <div key={j} className={cn("flex gap-1.5", line.bullet && "pl-0")}>

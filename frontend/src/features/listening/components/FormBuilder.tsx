@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  AlignLeft,
   AudioLines,
   ChevronDown,
   ChevronUp,
+  Columns2,
   CornerDownRight,
   Ellipsis,
   Heading,
@@ -115,9 +117,15 @@ export function FormBuilder({
   useEffect(() => {
     const key = pendingFocus.current;
     if (!key) return;
-    pendingFocus.current = null;
+    // Held until the field it names actually exists, rather than cleared on
+    // the first render after it was asked for. A menu item that opens a field
+    // and then asks for the caret closes the menu too, and the menu's own
+    // render lands first — so the request was being spent on a render where
+    // there was nothing yet to focus, and the author's typing went to the
+    // page instead, where the first space starts the recording playing.
     const el = inputs.current.get(key);
     if (!el) return;
+    pendingFocus.current = null;
     el.focus();
     // A real field puts the caret at the end; the editable value region is
     // handed to the browser's own placement.
@@ -280,6 +288,58 @@ export function FormBuilder({
     replaceBlock(blockId, { ...block, lines: [...block.lines, line] });
   };
 
+  /** Rows the author has asked for a label on but not yet typed one into.
+   *
+   *  What a row is, once it is stored, is decided by its label: with one it is
+   *  a form row, without one it runs the full width as a note or a sentence.
+   *  That leaves the field with nowhere to live in between — a label being
+   *  typed is empty for as long as it takes to type the first letter, and a
+   *  column that vanished under the caret would be unusable.
+   *
+   *  So this is the open field, and only that. It is not persisted and is not
+   *  meant to be: a row reopened tomorrow with an empty label is a full-width
+   *  line, which is exactly what it is. */
+  const [labelling, setLabelling] = useState<Set<string>>(new Set());
+
+  /** The row whose label column has just been opened from the menu, waiting
+   *  for the caret.
+   *
+   *  A menu hands focus back to its own trigger as it closes, and it does so
+   *  after everything this render schedules — a frame later was still too
+   *  early, and the caret ended up on the trigger, where the author's next
+   *  space re-opened the menu they had just used. Closing is the moment to
+   *  place it, and closing is a thing the menu tells us about. */
+  const focusLabelOnClose = useRef<string | null>(null);
+
+  const openLabel = (blockId: string) => {
+    focusLabelOnClose.current = blockId;
+    editLabelling(blockId, true);
+  };
+  const editLabelling = (id: string, keep: boolean) =>
+    setLabelling((current) => {
+      const next = new Set(current);
+      if (keep) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+
+  const showsLabel = (block: DocBlock): boolean =>
+    block.kind === "row" && (block.label.trim() !== "" || labelling.has(block.id));
+
+  /** Adds a block below, shaped like the one being worked in: Enter at the end
+   *  of a form row starts another form row, and Enter at the end of a note
+   *  starts another note. The caret goes wherever there is something to type
+   *  next — the label, or straight into the text where there is no label. */
+  const addSibling = (afterId: string, withLabel: boolean) => {
+    const row = newRow();
+    if (withLabel) editLabelling(row.id, true);
+    insertAfter(
+      afterId,
+      row,
+      withLabel ? `label#${row.id}` : `${row.lines[0].id}#0`,
+    );
+  };
+
   const removeLine = (blockId: string, lineId: string) => {
     const block = doc.find((b) => b.id === blockId);
     if (!block || block.kind !== "row" || block.lines.length <= 1) return;
@@ -297,7 +357,9 @@ export function FormBuilder({
           which is cheaper than a permanently empty lane or a sheet that stops
           short of everything else. */}
       <div className="rounded-lg border border-border bg-card [&>*:first-child]:rounded-t-lg [&>*:last-child]:rounded-b-lg">
-        {doc.map((block, blockIndex) => (
+        {doc.map((block, blockIndex) => {
+          const labelShown = showsLabel(block);
+          return (
           <div key={block.id} className="group/block relative">
             <div className="flex items-start">
               <div className="min-w-0 flex-1">
@@ -369,39 +431,62 @@ export function FormBuilder({
                         the way the printed table does. */}
                     {block.lines.map((line, lineIndex) => (
                       <div key={line.id} className="group/line relative flex">
-                        <div className="w-64 shrink-0">
-                          {lineIndex === 0 && (
-                            <input
-                              type="text"
-                              value={block.label}
-                              ref={register(`label#${block.id}`)}
-                              onChange={(e) =>
-                                replaceBlock(block.id, {
-                                  ...block,
-                                  label: e.target.value,
-                                })
-                              }
-                              onKeyDown={(e) => {
-                                if (e.key !== "Enter") return;
-                                e.preventDefault();
-                                pendingFocus.current = `${block.lines[0].id}#0`;
-                                // No edit — the pendingFocus effect just
-                                // needs a render to move into the value.
-                                onChange((current) => [...current]);
-                              }}
-                              placeholder="Label"
-                              aria-label="Row label"
-                              title={block.label}
-                              // The same line box as the value beside it
-                              // (leading-7 + py-1): the two columns
-                              // read as one line, so a half-step
-                              // between them shows.
-                              className="w-full bg-transparent px-3 py-1 text-base leading-8 text-foreground placeholder:text-muted-foreground/50 focus:outline-none"
-                            />
-                          )}
-                        </div>
+                        {/* Absent, not empty, on a row with no label: the
+                            column and the rule beside it are what make a form
+                            look like a form, and holding them open over a note
+                            is what pushed every note a quarter of the way
+                            across the sheet. */}
+                        {labelShown && (
+                          <div className="w-64 shrink-0">
+                            {lineIndex === 0 && (
+                              <input
+                                type="text"
+                                value={block.label}
+                                // Findable from outside the render that made
+                                // it — see `openLabel`.
+                                data-label-for={block.id}
+                                ref={register(`label#${block.id}`)}
+                                onChange={(e) =>
+                                  replaceBlock(block.id, {
+                                    ...block,
+                                    label: e.target.value,
+                                  })
+                                }
+                                onBlur={() => {
+                                  // Left empty, it was never a label. The
+                                  // column closes and the row is what it
+                                  // stores as: a full-width line.
+                                  if (!block.label.trim()) {
+                                    editLabelling(block.id, false);
+                                  }
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key !== "Enter") return;
+                                  e.preventDefault();
+                                  pendingFocus.current = `${block.lines[0].id}#0`;
+                                  // No edit — the pendingFocus effect just
+                                  // needs a render to move into the value.
+                                  onChange((current) => [...current]);
+                                }}
+                                placeholder="Label"
+                                aria-label="Row label"
+                                title={block.label}
+                                // The same line box as the value beside it
+                                // (leading-7 + py-1): the two columns
+                                // read as one line, so a half-step
+                                // between them shows.
+                                className="w-full bg-transparent px-3 py-1 text-base leading-8 text-foreground placeholder:text-muted-foreground/50 focus:outline-none"
+                              />
+                            )}
+                          </div>
+                        )}
 
-                        <div className="flex min-w-0 flex-1 items-center gap-1 border-l border-border/60 px-3 py-1">
+                        <div
+                          className={cn(
+                            "flex min-w-0 flex-1 items-center gap-1 px-3 py-1",
+                            labelShown && "border-l border-border/60",
+                          )}
+                        >
                           {line.bullet && (
                             <span
                               aria-hidden
@@ -417,11 +502,14 @@ export function FormBuilder({
                             markChecks={markChecks}
                             selectedGap={selectedGap}
                             onSelectGap={setSelectedGap}
-                            placeholder={lineIndex === 0 ? "Value" : undefined}
-                            onEnter={() => {
-                              const row = newRow();
-                              insertAfter(block.id, row, `label#${row.id}`);
-                            }}
+                            placeholder={
+                              lineIndex > 0
+                                ? undefined
+                                : labelShown
+                                  ? "Value"
+                                  : "Sentence, note or question"
+                            }
+                            onEnter={() => addSibling(block.id, labelShown)}
                             onShiftEnter={() => addLine(block.id)}
                             registerInput={register(`${line.id}#0`)}
                             onChange={(parts) =>
@@ -503,14 +591,51 @@ export function FormBuilder({
                       <Ellipsis className="size-4" aria-hidden />
                     </button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-52">
+                  <DropdownMenuContent
+                    align="end"
+                    className="w-52"
+                    onCloseAutoFocus={(e) => {
+                      const target = focusLabelOnClose.current;
+                      focusLabelOnClose.current = null;
+                      if (!target) return;
+                      const el = document.querySelector<HTMLInputElement>(
+                        `[data-label-for="${target}"]`,
+                      );
+                      // Not there after all — let the menu put focus back
+                      // where it normally would rather than dropping it.
+                      if (!el) return;
+                      e.preventDefault();
+                      el.focus();
+                    }}
+                  >
                     {block.kind === "row" && (
                       <DropdownMenuItem onClick={() => addLine(block.id)}>
                         <CornerDownRight aria-hidden />
-                        Add line
+                        Continue below
                         <DropdownMenuShortcut>⇧↵</DropdownMenuShortcut>
                       </DropdownMenuItem>
                     )}
+                    {/* What kind of block this is, said as the one thing that
+                        decides it. A label makes it a form row; without one it
+                        runs the whole width, which is what a note, a sentence
+                        and a short-answer question all are. */}
+                    {block.kind === "row" &&
+                      (labelShown ? (
+                        <DropdownMenuItem
+                          onClick={() => {
+                            editLabelling(block.id, false);
+                            replaceBlock(block.id, { ...block, label: "" });
+                          }}
+                        >
+                          <AlignLeft aria-hidden />
+                          Remove label
+                        </DropdownMenuItem>
+                      ) : (
+                        <DropdownMenuItem onClick={() => openLabel(block.id)}>
+                          <Columns2 aria-hidden />
+                          Add label
+                        </DropdownMenuItem>
+                      ))}
                     <DropdownMenuItem
                       onClick={() => moveBlock(block.id, -1)}
                       disabled={blockIndex === 0}
@@ -538,7 +663,8 @@ export function FormBuilder({
               )}
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Under the sheet, where a new row goes. `title` is the exception: a
@@ -547,14 +673,29 @@ export function FormBuilder({
           the help card at the foot of the editor — captions alongside them
           only ever got read once, then sat there. */}
       <div className="mt-2.5 flex flex-wrap items-center justify-center gap-1.5">
+        {/* Two ways to add something to write in, because there are two
+            shapes on the paper and neither is a special case of the other. A
+            row has a label column — the form and the table. A line runs the
+            whole width — the notes, the sentences, the summary, the
+            short-answer questions. */}
         <ToolbarButton
           onClick={() => {
             const row = newRow();
+            editLabelling(row.id, true);
             addBlock(row, `label#${row.id}`);
           }}
           icon={<Plus className="size-3.5" aria-hidden />}
           label="row"
-          title="Add a row at the end"
+          title="Add a labelled row at the end — for a form"
+        />
+        <ToolbarButton
+          onClick={() => {
+            const row = newRow();
+            addBlock(row, `${row.lines[0].id}#0`);
+          }}
+          icon={<AlignLeft className="size-3.5" aria-hidden />}
+          label="line"
+          title="Add a full-width line at the end — for notes, sentences and short answers"
         />
         <ToolbarButton
           onClick={() => {

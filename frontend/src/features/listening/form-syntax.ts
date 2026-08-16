@@ -11,6 +11,16 @@ import type { ListeningQuestion, QuestionIn } from "@/features/listening/types";
  * The author builds that visually; this module is the only place that knows
  * how to write it down and read it back.
  *
+ * **A row with no label runs the full width.** That one rule is what makes
+ * this a completion builder rather than a form builder: notes, sentences, a
+ * summary paragraph and short-answer questions are all full-width lines with
+ * gaps in them, and they differ from a form only in not having a label column.
+ * The storage format has said so from the start — a labelled row is written
+ * with a bar, a labelless one bare — because a bar with nothing before it
+ * already means "continue the row above". So there is no third thing to store
+ * and nothing to migrate; the layout simply stopped reserving a column for a
+ * label that isn't there.
+ *
  * Stored form — the layout rides along inside `config.template`, so no schema
  * change was needed; the server only ever validates the `{{N}}` tokens:
  *
@@ -22,6 +32,12 @@ import type { ListeningQuestion, QuestionIn } from "@/features/listening/types";
  *     Reason for visit | business (to buy antique {{2}})
  *     Items stolen | - a wallet containing approximately £ {{3}}
  *      | - a {{4}}
+ *
+ * and the same file holding notes, where nothing has a label:
+ *
+ *     ## Museum tour
+ *     - Meet outside the {{1}} at 4 pm
+ *     - Tour lasts {{2}} minutes
  */
 
 // ── Layout model (what gets rendered, by the builder and the take page) ───
@@ -209,7 +225,12 @@ export function newTextLine(text = ""): DocLine {
   return { id: newId(), bullet: false, parts: [{ kind: "text", text }] };
 }
 
-export function newRow(label = ""): DocBlock {
+/** A block of the sheet. With a label it is a form row, label column and all;
+ *  without one it is a line running the full width — a note, a sentence, a
+ *  short-answer question. The two are one kind because they are one thing to
+ *  the storage format, and because an author turning a form row into a note is
+ *  clearing a field rather than replacing a block. */
+export function newRow(label = ""): Extract<DocBlock, { kind: "row" }> {
   return { id: newId(), kind: "row", label, lines: [newTextLine()] };
 }
 
