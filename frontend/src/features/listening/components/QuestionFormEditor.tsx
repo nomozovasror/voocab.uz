@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { FormBuilder } from "@/features/listening/components/FormBuilder";
 import { GroupHeader } from "@/features/listening/components/GroupHeader";
 import { questionRangeLabel } from "@/features/listening/numbering";
+import { QUESTION_TYPE_LABEL } from "@/features/listening/parts";
 import { docGaps, docPublishIssues } from "@/features/listening/form-syntax";
 import { ANSWER_RUBRICS, deriveRubric } from "@/features/listening/rubric";
 import type { DocBlock } from "@/features/listening/form-syntax";
@@ -145,7 +146,7 @@ export function QuestionFormEditor({
       <GroupHeader
         range={questionRangeLabel(startNumber - 1, gaps.length)}
         count={gaps.length}
-        typeLabel="Form completion"
+        typeLabel={QUESTION_TYPE_LABEL.form_completion}
         onMoveUp={onMoveUp}
         onMoveDown={onMoveDown}
         onDelete={onDelete}
