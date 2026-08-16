@@ -2,12 +2,14 @@
 happens here so a malformed group/template/question set raises 422 before any
 DB write — the router/service never see a half-valid payload.
 
-Two group types exist, and the split runs all the way through this module: a
-form-completion group is a template plus its gaps, a multiple-choice group is
-a list of self-contained questions. They share an instruction line and
-nothing else, so they are two schemas under a tagged union rather than one
-schema with half its fields optional — which is also what makes
-"a template is required" and "options are required" enforceable at all.
+Three group types exist, and the split runs all the way through this module:
+a form-completion group is a template plus its gaps, a multiple-choice group
+is a list of self-contained questions, and a matching group is one box of
+lettered options with a list of items answered from it. They share an
+instruction line and nothing else, so they are three schemas under a tagged
+union rather than one schema with most of its fields optional — which is also
+what makes "a template is required" and "an answer must name an option that
+exists" enforceable at all.
 
 What each of them will and won't refuse is a deliberate line. These payloads
 are written by an editor that autosaves while the author is still typing, so
@@ -30,7 +32,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-QuestionGroupType = Literal["form_completion", "multiple_choice"]
+QuestionGroupType = Literal["form_completion", "multiple_choice", "matching"]
 
 _TOKEN_RE = re.compile(r"\{\{(\d+)\}\}")
 
@@ -160,6 +162,28 @@ class MultipleChoiceConfig(BaseModel):
     answers_per_question: int = Field(default=1, ge=1, le=MAX_OPTIONS)
 
 
+class MatchingConfig(BaseModel):
+    """``matching`` at group level: the box of options every question under it
+    is answered from, and whether an option may answer more than one of them.
+
+    The box is the group's because the paper prints it once, above the whole
+    set — *A holiday cottage, B a hotel, C a campsite* — and the items
+    underneath are answered by pointing at it. Held per question, as multiple
+    choice holds its options, the same five lines would be stored once per
+    item and could be edited into five different boxes under one heading.
+    """
+
+    #: In the order they are lettered, so ``options[2]`` is C. Empty is a box
+    #: the author has opened and not yet written into — a draft, like every
+    #: other emptiness in this module.
+    options: list[str] = Field(default_factory=list, max_length=MAX_OPTIONS)
+    #: "You may use any letter more than once", which a real paper prints as
+    #: an NB line under the instructions. False is the ordinary case: as many
+    #: options as items, each used once, and two items sharing a letter is
+    #: then something publishing objects to.
+    allow_reuse: bool = False
+
+
 class _QuestionInBase(BaseModel):
     number: int = Field(ge=1)
     #: Where in the recording this answer is said (§ replay). Optional — an
@@ -270,6 +294,36 @@ class ChoiceQuestionIn(_QuestionInBase):
             cleaned[key] = (start, end)
         self.option_replay = cleaned
         return self
+
+
+class MatchingQuestionIn(_QuestionInBase):
+    """One item to be matched: its text, and the letter it is answered by.
+
+    The letter is checked against the group's box of options, not against
+    anything here — this model can't see it. An item with no answer yet is a
+    draft, like everything else that is merely unfinished; publishing is where
+    every item is required to have one.
+
+    Where the answer is given lives on the question's own ``replay_*``
+    columns, the way a form gap's does, because one item is one answer said at
+    one moment. Multiple choice needed a range per option only because a
+    "choose two" has two of them.
+    """
+
+    prompt: str = ""
+    #: At most one letter. An item matched to two options isn't a matching
+    #: question that hasn't been finished — it is one that can't be sat.
+    correct_answers: list[str] = Field(default_factory=list, max_length=1)
+
+    @field_validator("prompt")
+    @classmethod
+    def _clean_prompt(cls, v: str) -> str:
+        return v.strip()
+
+    @field_validator("correct_answers")
+    @classmethod
+    def _clean_letters(cls, v: list[str]) -> list[str]:
+        return [letter.strip().lower() for letter in v if letter.strip()]
 
 
 class _QuestionGroupInBase(BaseModel):
@@ -383,12 +437,54 @@ class MultipleChoiceGroupIn(_QuestionGroupInBase):
         return self
 
 
+class MatchingGroupIn(_QuestionGroupInBase):
+    """Full authoring payload for a matching group: the box of options, and
+    the items answered from it, replaced as one unit like any other group."""
+
+    type: Literal["matching"]
+    config: MatchingConfig = Field(default_factory=MatchingConfig)
+    #: Empty for the same reason as the other two: this is what a group looks
+    #: like between being given a kind and being given a question.
+    questions: list[MatchingQuestionIn] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _numbers_contiguous(self) -> "MatchingGroupIn":
+        _contiguous_numbers(list(self.questions))
+        return self
+
+    @model_validator(mode="after")
+    def _answers_name_real_options(self) -> "MatchingGroupIn":
+        """An answer may be missing — that item isn't finished — but never a
+        letter the box doesn't have. That is the same line
+        :class:`ChoiceQuestionIn` draws, one level up: incoherent is refused,
+        incomplete is stored.
+
+        Reusing a letter is NOT refused here even where the group says each is
+        used once. Reassigning two items is two saves, and the state between
+        them has both pointing at the same option; publishing is where that
+        has to be resolved."""
+        available = {option_letter(i) for i in range(len(self.config.options))}
+        unknown = sorted(
+            {
+                letter
+                for question in self.questions
+                for letter in question.correct_answers
+                if letter not in available
+            }
+        )
+        if unknown:
+            raise ValueError(
+                f"answers name options that don't exist: {', '.join(unknown)}"
+            )
+        return self
+
+
 #: What the create/replace endpoints accept. Tagged on ``type`` so the request
 #: is validated against the group it claims to be — a multiple-choice payload
 #: is never checked for a template it shouldn't have, and a form-completion
 #: one can't quietly arrive without questions for its gaps.
 QuestionGroupIn = Annotated[
-    FormCompletionGroupIn | MultipleChoiceGroupIn,
+    FormCompletionGroupIn | MultipleChoiceGroupIn | MatchingGroupIn,
     Field(discriminator="type"),
 ]
 
@@ -404,11 +500,13 @@ class QuestionOut(BaseModel):
     correct_answers: list[str]
     replay_start_ms: int | None
     replay_end_ms: int | None
-    #: Multiple choice only; ``None`` for a gap in a form. How many answers
-    #: the question wants isn't here — it is the group's, so the editor reads
-    #: it once from :class:`MultipleChoiceConfig` rather than off whichever
-    #: question happens to be first.
+    #: The question's own text: a choice question's, a matching item's.
+    #: ``None`` for a gap in a form, whose prompt is the template around it.
     prompt: str | None = None
+    #: Multiple choice only. A matching item is answered from its group's box,
+    #: and how many answers a choice question wants is the group's too — the
+    #: editor reads both once from the group rather than off whichever
+    #: question happens to be first.
     options: list[str] | None = None
 
 
@@ -457,9 +555,12 @@ class TakeQuestionOut(BaseModel):
 
     id: uuid.UUID
     number: int
-    #: Multiple choice only. ``options`` is the option TEXT, in order — which
-    #: of them is right is not expressible here.
+    #: The question's own text — a choice question's, a matching item's.
     prompt: str | None = None
+    #: Multiple choice only: the option TEXT, in order. Which of them is right
+    #: is not expressible here. A matching item's options are its group's, and
+    #: reach the candidate in the group's ``config`` — the same box the paper
+    #: prints once above the set.
     options: list[str] | None = None
     #: How many options to pick. Public by design: "Choose TWO letters" is
     #: printed on the paper, and knowing how many are right tells the

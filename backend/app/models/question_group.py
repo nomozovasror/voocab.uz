@@ -8,21 +8,28 @@ from sqlmodel import Field, SQLModel
 
 
 class QuestionGroupType(enum.StrEnum):
-    """Kind of question group. The enum is intentionally open to grow
-    (matching, map labelling, table/flow-chart completion, ...) without a type
-    migration — new members are a data-only change since this is stored as a
-    plain string column."""
+    """Kind of question group. The enum is intentionally open to grow (map
+    labelling, short answer, ...) without a type migration — new members are a
+    data-only change since this is stored as a plain string column, which is
+    how ``matching`` was added."""
 
     FORM_COMPLETION = "form_completion"
     MULTIPLE_CHOICE = "multiple_choice"
+    MATCHING = "matching"
 
 
 class QuestionGroup(SQLModel, table=True):
     """A set of questions sharing one instruction line, and — where the type
-    has one — one presentational resource: for ``form_completion`` the
-    gap-fill template, which lives in ``config``. ``multiple_choice`` has no
-    such shared resource; each of its questions carries its own prompt and
-    options, so its ``config`` is empty.
+    has one — one presentational resource, which lives in ``config``:
+
+    * ``form_completion``: the gap-fill template.
+    * ``matching``: the box of lettered options every question under it is
+      answered from. The box is the group's because the paper prints it once
+      above the whole set, and because "you may use any letter more than once"
+      is a statement about the set rather than about any one question.
+    * ``multiple_choice``: nothing. Each of its questions carries its own
+      prompt and options, so its ``config`` holds only how many letters to
+      pick.
 
     A part holds an ordered list of these, which is how one Part 1 comes to
     be "Questions 1–6, form completion" followed by "Questions 7–10, multiple

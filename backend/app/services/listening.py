@@ -23,6 +23,7 @@ from app.models.question_attempt import QuestionAttempt
 from app.models.question_group import QuestionGroup, QuestionGroupType
 from app.schemas.listening import (
     ChoiceQuestionIn,
+    MatchingQuestionIn,
     PartCreate,
     PartUpdate,
     QuestionGroupIn,
@@ -220,10 +221,13 @@ async def get_questions(
 def _question_config(question) -> dict | None:
     """A question's own presentation, or ``None`` where it has none.
 
-    Only multiple choice has any: its prompt and options. A form gap's prompt
-    is the template around it, which belongs to the group, so it stores NULL —
-    and that NULL is what tells grading it is looking at accepted variants
-    rather than an answer key."""
+    A form gap's prompt is the template around it, which belongs to the group,
+    so it stores NULL. A matching item stores its text and nothing else: what
+    it may be matched to is the group's box of options, printed once above the
+    set. Multiple choice stores the most, because its options really are one
+    question's."""
+    if isinstance(question, MatchingQuestionIn):
+        return {"prompt": question.prompt}
     if not isinstance(question, ChoiceQuestionIn):
         return None
     return {
@@ -379,32 +383,58 @@ async def delete_question_group(session: AsyncSession, group: QuestionGroup) -> 
 
 async def get_material_questions(
     session: AsyncSession, material_id: uuid.UUID
-) -> list[tuple[Question, int]]:
+) -> list[tuple[Question, QuestionGroup]]:
     """Every ``Question`` belonging to a material, in the material's display
     order (part ``order_index`` -> group ``order_index`` -> question
-    ``number``), each with the number of marks it carries.
+    ``number``), each with the group it belongs to.
 
     ``Question.number`` is only unique within its group, not globally, so
     this traversal order — not a bare ORDER BY number — is what grading
     (Faza 3) uses to order per-question results and to build the
     question_id -> correct_answers map.
 
-    The marks come with it because they are the group's, and grading walks
-    questions. A "Choose TWO letters" question is worth two, and takes two of
-    the numbers printed down the side of the paper, exactly as it does in the
-    real exam — a 40-mark test has 40 numbers, not 40 rows."""
-    questions: list[tuple[Question, int]] = []
+    The group comes with it because grading walks questions and two of the
+    things it needs are the group's: how many marks the question is worth (a
+    "Choose TWO letters" is two of the numbers printed down the side of the
+    paper, so a 40-mark test has 40 numbers and not 40 rows), and whether its
+    answer key is option letters or accepted phrasings. That second one used
+    to be read off the question row, on the reasoning that a question with
+    options is a lettered one — which stopped being true when matching
+    arrived and put the options on the group."""
+    questions: list[tuple[Question, QuestionGroup]] = []
     for part in await get_parts(session, material_id):
         for group in await get_question_groups(session, part.id):
-            marks = question_marks(group)
             questions.extend(
-                (question, marks)
+                (question, group)
                 for question in await get_questions(session, group.id)
             )
     return questions
 
 
 # --- Consumption read tree (§7, §3.4) ---------------------------------------
+
+
+#: The types whose ``correct_answers`` is an answer key of option letters
+#: rather than a list of accepted phrasings. What separates them is not
+#: whether the question has options — a matching item's are its group's — but
+#: what the candidate submits: a letter, matched as a set, against words,
+#: matched after normalization.
+LETTERED_TYPES = frozenset(
+    {QuestionGroupType.MULTIPLE_CHOICE, QuestionGroupType.MATCHING}
+)
+
+
+def answers_are_letters(group_type: str) -> bool:
+    """Whether this group's questions are answered by picking a letter."""
+    return group_type in LETTERED_TYPES
+
+
+def matching_options(group: QuestionGroup) -> list[str]:
+    """The box of options a matching group's items are answered from, in the
+    order they are lettered. Empty for anything else, and for a box the author
+    hasn't written into."""
+    options = (group.config or {}).get("options")
+    return [str(option) for option in options] if isinstance(options, list) else []
 
 
 def choice_select_count(group: QuestionGroup) -> int:
@@ -430,27 +460,32 @@ def question_marks(group: QuestionGroup) -> int:
     return choice_select_count(group)
 
 
-def _take_question(question: Question, select_count: int) -> dict:
+def _take_question(question: Question, group: QuestionGroup) -> dict:
     """One question as a candidate may see it.
 
     ``correct_answers`` is not read here, and there is nowhere it could be
-    written: every key is named. A choice question adds its prompt, its
-    options in order, and how many to pick — which comes from the group, the
-    same place the instruction line printed above it comes from, and so can't
-    disagree with it. It used to be read off the answer key's size; that made
-    a paper whose instructions said "choose two" quietly ask for three
-    wherever the author had marked three, and it took the key's size out
-    towards the candidate on every question."""
+    written: every key is named.
+
+    A gap is only its number — the words around it are the group's template. A
+    matching item adds its text, and stops there: the options it is answered
+    from are printed once above the whole set, so they travel on the group. A
+    choice question adds its own options and how many to pick, which comes
+    from the group as well — the same place the instruction line comes from,
+    and so can't disagree with it. That count used to be read off the answer
+    key's size; that made a paper whose instructions said "choose two" quietly
+    ask for three wherever the author had marked three, and it took the key's
+    size out towards the candidate on every question."""
     if question.config is None:
         return {"id": question.id, "number": question.number}
-    options = question.options or []
-    return {
+    take = {
         "id": question.id,
         "number": question.number,
         "prompt": question.config.get("prompt") or "",
-        "options": options,
-        "select_count": select_count,
     }
+    options = question.options
+    if options is None:
+        return take
+    return take | {"options": options, "select_count": choice_select_count(group)}
 
 
 async def get_take_tree(session: AsyncSession, material_id: uuid.UUID) -> list[dict]:
@@ -462,9 +497,8 @@ async def get_take_tree(session: AsyncSession, material_id: uuid.UUID) -> list[d
     for part in await get_parts(session, material_id):
         groups: list[dict] = []
         for group in await get_question_groups(session, part.id):
-            select_count = choice_select_count(group)
             questions = [
-                _take_question(question, select_count)
+                _take_question(question, group)
                 for question in await get_questions(session, group.id)
             ]
             groups.append(
@@ -521,12 +555,19 @@ async def get_author_tree(
                     "replay_end_ms": question.replay_end_ms,
                 }
                 if question.config is not None:
-                    # The choice question's own presentation, flattened out of
-                    # config so the editor reads the same field names it
-                    # sends back.
+                    # The question's own presentation, flattened out of config
+                    # so the editor reads the same field names it sends back.
                     q["prompt"] = question.config.get("prompt") or ""
-                    q["options"] = question.options or []
-                    q["option_replay"] = question.config.get("option_replay") or {}
+                    options = question.options
+                    if options is not None:
+                        # Multiple choice only. A matching item would answer
+                        # with an empty list here, which reads as "a question
+                        # whose options were deleted" rather than as "a
+                        # question whose options are its group's".
+                        q["options"] = options
+                        q["option_replay"] = (
+                            question.config.get("option_replay") or {}
+                        )
                 if include_answers:
                     q["correct_answers"] = question.correct_answers
                 questions.append(q)

@@ -5,11 +5,12 @@ edit-distance matching, no number<->word conversion, no stemming. For a
 gap-fill, a given answer is correct iff its normalized form exactly equals
 the normalized form of any element of that question's ``correct_answers``.
 
-A choice question is graded differently, because its ``correct_answers``
-means something different: it is the answer key, not a list of acceptable
-phrasings. The candidate's selection must equal it as a SET — all of it, and
-nothing besides. IELTS gives no partial credit for a "choose two", and one
-right letter plus one wrong one is not half an answer.
+A lettered question — multiple choice, matching — is graded differently,
+because its ``correct_answers`` means something different: it is the answer
+key, not a list of acceptable phrasings. The candidate's selection must equal
+it as a SET — all of it, and nothing besides. IELTS gives no partial credit
+for a "choose two", and one right letter plus one wrong one is not half an
+answer.
 """
 
 import re
@@ -47,7 +48,7 @@ def grade_answer(given_answer: str, correct_answers: list[str]) -> bool:
 
 
 def grade_choice(given_answer: str, correct_answers: list[str]) -> bool:
-    """Exact SET match for a multiple-choice question.
+    """Exact SET match for a question answered by letter.
 
     The selection arrives as the chosen option letters, comma-separated
     ("b", or "a,c"), which is how it is stored on the attempt row too — still
@@ -64,14 +65,15 @@ def grade_choice(given_answer: str, correct_answers: list[str]) -> bool:
     return chosen == {normalize_answer(letter) for letter in correct_answers}
 
 
-def grade_question(question: Question, given_answer: str) -> bool:
-    """Grade one answer the way its question is meant to be graded.
+def grade_question(question: Question, given_answer: str, group_type: str) -> bool:
+    """Grade one answer the way its group is meant to be graded.
 
-    Which way that is comes off the question row itself — a question with
-    options is a choice question — rather than from its group. Grading walks
-    questions, and looking up a group per question to be told something the
-    question already knows is a query per answer for no new information."""
-    if question.options is not None:
+    Which way that is is the GROUP's, not the question's. It was the
+    question's — a question with options is a lettered one — until matching
+    put the options on the group and left its items looking, from the row
+    alone, exactly like gap-fills. Nothing extra is loaded to ask: the walk
+    that collects the questions already has their groups in hand."""
+    if listening_service.answers_are_letters(group_type):
         return grade_choice(given_answer, question.correct_answers)
     return grade_answer(given_answer, question.correct_answers)
 
@@ -149,10 +151,11 @@ async def submit_attempt(
     # scores out of 40 however many rows it is made of.
     earned = 0
     total_marks = 0
-    for question, marks in questions:
+    for question, group in questions:
+        marks = listening_service.question_marks(group)
         total_marks += marks
         given = given_by_question_id.get(question.id, "")
-        correct = grade_question(question, given)
+        correct = grade_question(question, given, group.type)
         if correct:
             earned += marks
         session.add(

@@ -22,7 +22,7 @@ import uuid
 from app.core.database import AsyncSession
 from app.models.material import Material
 from app.models.question import Question
-from app.models.question_group import QuestionGroupType
+from app.models.question_group import QuestionGroup, QuestionGroupType
 from app.services import listening as listening_service
 from app.services import materials as materials_service
 
@@ -94,6 +94,10 @@ async def _listening_blockers(
             if group.type == QuestionGroupType.MULTIPLE_CHOICE:
                 blockers.extend(
                     _choice_blockers(label, questions, numbered_so_far, marks)
+                )
+            elif group.type == QuestionGroupType.MATCHING:
+                blockers.extend(
+                    _matching_blockers(label, group, questions, numbered_so_far)
                 )
             else:
                 blockers.extend(_gap_blockers(label, questions, numbered_so_far))
@@ -205,6 +209,76 @@ def _choice_blockers(
     )
     if unlinked:
         blockers.append(f"{label}: {_numbers(unlinked)} not linked to the audio.")
+
+    return blockers
+
+
+def _matching_blockers(
+    label: str,
+    group: QuestionGroup,
+    questions: list[Question],
+    offset: int,
+) -> list[str]:
+    """What a matching group still needs.
+
+    Half of it is about the group rather than any one question, which is what
+    makes this different from the other two: the box of options is printed
+    once above the set, so "there is nothing to match to" is one complaint
+    about the whole group and not one per item.
+
+    Each item is one number and one mark, so the numbers quoted here are
+    simply ``offset + q.number`` — the arithmetic a "choose two" forces on
+    :func:`_choice_blockers` has nothing to do here."""
+    blockers: list[str] = []
+    options = listening_service.matching_options(group)
+    allow_reuse = bool((group.config or {}).get("allow_reuse"))
+
+    if len(options) < 2:
+        blockers.append(f"{label}: add at least two options to match from.")
+    elif any(not option.strip() for option in options):
+        blockers.append(f"{label}: an option to match from has nothing in it.")
+    # Without reuse each option answers at most one item, so a box shorter
+    # than the list of items is a group that cannot be completed however long
+    # the author works at it. With reuse allowed it is ordinary — three
+    # options and eight items is a common Part 3 set.
+    elif not allow_reuse and len(options) < len(questions):
+        blockers.append(
+            f"{label}: {len(questions)} questions and only {len(options)} "
+            "options to match them to — add more options, or allow a letter "
+            "to be used more than once."
+        )
+
+    def numbers(matching) -> list[int]:
+        return [offset + q.number for q in questions if matching(q)]
+
+    unwritten = numbers(lambda q: not (q.config or {}).get("prompt", "").strip())
+    if unwritten:
+        blockers.append(f"{label}: {_numbers(unwritten)} without any question text.")
+
+    unanswered = numbers(lambda q: not q.correct_answers)
+    if unanswered:
+        blockers.append(f"{label}: {_numbers(unanswered)} without an answer.")
+
+    if not allow_reuse:
+        # Every item after the first to claim a letter another already has.
+        # The first keeps it: something has to, and the one the author wrote
+        # earlier is the likelier of the two to be the one they meant.
+        taken: set[str] = set()
+        repeated: list[int] = []
+        for question in sorted(questions, key=lambda q: q.number):
+            for letter in question.correct_answers:
+                if letter in taken:
+                    repeated.append(offset + question.number)
+                taken.add(letter)
+        if repeated:
+            blockers.append(
+                f"{label}: {_numbers(repeated)} matched to a letter another "
+                "question already uses."
+            )
+
+    unmarked = numbers(lambda q: q.replay_start_ms is None)
+    if unmarked:
+        blockers.append(f"{label}: {_numbers(unmarked)} not linked to the audio.")
 
     return blockers
 

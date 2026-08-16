@@ -25,10 +25,11 @@ from app.models.segment import Segment
 
 #: What one question row is worth on the paper: the number of answers its
 #: group asks for, which is also how many of the printed numbers it takes.
-#: Absent on a form-completion group and on anything written before the
-#: setting existed, both of which mean one. Summing this rather than counting
-#: rows is what makes a 40-mark test say 40 — a "Choose TWO letters" question
-#: is one row and two questions.
+#: Only multiple choice records it — a gap is one gap, a matching item is one
+#: item — and anything written before the setting existed doesn't either, all
+#: of which mean one. Summing this rather than counting rows is what makes a
+#: 40-mark test say 40: a "Choose TWO letters" question is one row and two
+#: questions.
 _QUESTION_MARKS = func.coalesce(
     cast(QuestionGroup.config["answers_per_question"].astext, Integer),  # type: ignore[index]
     1,

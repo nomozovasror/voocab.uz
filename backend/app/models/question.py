@@ -18,13 +18,18 @@ class Question(SQLModel, table=True):
     each time a group was added, removed or moved.
 
     ``correct_answers`` means two subtly different things, and which one is
-    decided by ``config``:
+    decided by the question's GROUP (see
+    :func:`app.services.listening.answers_are_letters`):
 
-    * a gap-fill question (``config is None``) holds the ACCEPTED VARIANTS —
-      any one of them, matched exactly after normalization, is right;
-    * a choice question holds THE ANSWER KEY — the set of option letters that
-      must be selected, all of them and nothing else (IELTS gives no partial
-      credit for a "choose two").
+    * a gap-fill question holds the ACCEPTED VARIANTS — any one of them,
+      matched exactly after normalization, is right;
+    * a lettered question — multiple choice, matching — holds THE ANSWER KEY:
+      the set of option letters that must be selected, all of them and nothing
+      else (IELTS gives no partial credit for a "choose two").
+
+    It used to be read off this row alone, on the reasoning that a question
+    with options is a choice question. A matching item's options are its
+    group's, so the row no longer knows.
 
     ``replay_start_ms``/``replay_end_ms`` mark where in the recording this
     answer is said, so a student reviewing a finished attempt can hear the
@@ -44,6 +49,9 @@ class Question(SQLModel, table=True):
     #: Per-question presentation, for the types that have any — the same
     #: division of labour as :attr:`QuestionGroup.config`, one level down.
     #: NULL for form completion, whose prompt is the group's template.
+    #: ``matching``: ``{"prompt": str}`` — the item to be matched. What it may
+    #: be matched TO is the group's box of options, so there is no ``options``
+    #: key here and :attr:`options` below answers ``None``.
     #: ``multiple_choice``: ``{"prompt": str, "options": [str, ...],
     #: "option_replay": {letter: [start_ms, end_ms]}}``. How many of those
     #: options the candidate picks is the group's business, not the
@@ -64,9 +72,10 @@ class Question(SQLModel, table=True):
 
     @property
     def options(self) -> list[str] | None:
-        """The answer options, for a question that has any. ``None`` — not an
-        empty list — for a gap-fill, which is what tells grading and the take
-        serializer which of the two kinds of question they are holding."""
+        """The answer options this question carries ITSELF. ``None`` — not an
+        empty list — for a gap-fill, which has none, and for a matching item,
+        whose options belong to its group. Only multiple choice answers with a
+        list, which is what the take serializer sends alongside the prompt."""
         if self.config is None:
             return None
         options = self.config.get("options")
