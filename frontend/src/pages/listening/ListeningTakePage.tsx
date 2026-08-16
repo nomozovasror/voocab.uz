@@ -11,6 +11,7 @@ import { useTakeMaterial, useSubmitAttempt } from "@/features/listening/queries"
 import { ChoiceGroup } from "@/features/listening/components/ChoiceGroup";
 import { questionSpan } from "@/features/listening/numbering";
 import { FormCompletionGroup } from "@/features/listening/components/FormCompletionGroup";
+import { MatchingGroup } from "@/features/listening/components/MatchingGroup";
 import type {
   AttemptResult,
   MaterialTake,
@@ -224,12 +225,18 @@ export default function ListeningTakePage() {
                     results: resultsByQuestion,
                     disabled: !!result,
                   };
-                  // Anything that isn't multiple choice is rendered as a
-                  // form: it is the only other type there is, and a type
-                  // this build doesn't know about is better shown as its
-                  // template than left out of the paper entirely.
+                  // Anything this build doesn't know about is rendered as a
+                  // form: every group has a template field, so showing it is
+                  // better than leaving the questions out of the paper
+                  // entirely.
                   return group.type === "multiple_choice" ? (
                     <ChoiceGroup
+                      key={group.id}
+                      {...shared}
+                      onReplay={playRange}
+                    />
+                  ) : group.type === "matching" ? (
+                    <MatchingGroup
                       key={group.id}
                       {...shared}
                       onReplay={playRange}
