@@ -12,6 +12,7 @@ import {
   newMatchItem,
   newMatchOption,
   patchItem,
+  setMatch,
   takenOptions,
   type MatchItem,
   type MatchOption,
@@ -145,20 +146,25 @@ export function MatchingBuilder({
    *  transcript has been answered too — they are the same decision, so a
    *  cancelled pick leaves the item exactly as it was. */
   const chooseAnswer = (item: MatchItem, option: MatchOption) => {
-    const match = (current: MatchItem[]) =>
-      matchTo(current, item.id, option.id, allowReuse);
     // Already this one: pressing it again takes it back, which is the only
     // way out of a wrong press. Nothing to ask the transcript about.
     if (item.answer === option.id || !onMarkAudio) {
-      onItemsChange(match);
+      onItemsChange((current) =>
+        matchTo(current, item.id, option.id, allowReuse),
+      );
       return;
     }
     // Both, because either may be what the recording says: the item is named
     // outright far more often than the option's wording is, but a set whose
     // options are places has it the other way round.
     const phrases = [item.prompt.trim(), option.text.trim()].filter(Boolean);
+    // Set rather than toggled: this runs once per line picked, and the author
+    // may shift-click a second one to widen the phrase. Toggling here took
+    // the answer back off on that second pick.
     onMarkAudio(phrases, (range) =>
-      onItemsChange((current) => markItem(match(current), item.id, range)),
+      onItemsChange((current) =>
+        markItem(setMatch(current, item.id, option.id, allowReuse), item.id, range),
+      ),
     );
   };
 

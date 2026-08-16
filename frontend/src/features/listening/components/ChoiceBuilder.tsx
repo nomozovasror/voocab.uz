@@ -11,6 +11,7 @@ import {
   addOption,
   answerSummary,
   editOption,
+  markCorrect,
   newChoiceQuestion,
   newOption,
   optionLetter,
@@ -175,10 +176,14 @@ export function ChoiceBuilder({
                 );
                 return;
               }
+              // Marked rather than toggled: this runs once per line picked,
+              // and the author may shift-click a second one to widen the
+              // phrase. Toggling here took the answer back off on that
+              // second pick.
               onMarkAudio([option.text.trim()], (range) =>
                 patchQuestion(question.id, (q) =>
                   editOption(
-                    toggleCorrect(q, option.id, wanted),
+                    markCorrect(q, option.id, wanted),
                     option.id,
                     (o) => ({
                       ...o,

@@ -100,18 +100,46 @@ export function newMatchItems(): MatchItem[] {
 
 // ── Editing ──────────────────────────────────────────────────────────────
 
-/** Match an item to an option, or unmatch it.
+/** Match an item to an option.
  *
- *  Pressing the letter an item already has takes it back — the only way out
- *  of a wrong press.
+ *  Matching one to the option it already has changes nothing, and that is the
+ *  point: the press that matches an item opens the transcript, and the author
+ *  may pick a line and then shift-click a second one to reach the rest of the
+ *  phrase. Each of those picks applies the whole edit again. Written as a
+ *  toggle, the second pick took the answer back off — the phrase widened and
+ *  the match vanished with it.
  *
- *  Where a letter may only answer one item, pressing one that another item
+ *  Where a letter may only answer one item, matching to one that another item
  *  holds MOVES it: the letter leaves the item that had it and arrives here.
  *  That is what the gesture means on paper — there is one A and it goes in
  *  one box — and it is the alternative to refusing the press, which would
  *  leave the author to go and find the other item first. The one it leaves
  *  keeps everything else it had, including where its answer is said: the
  *  moment is about the item, not about the letter. */
+export function setMatch(
+  items: MatchItem[],
+  itemId: string,
+  optionId: string,
+  allowReuse: boolean,
+): MatchItem[] {
+  return items.map((current) => {
+    if (current.id === itemId) return { ...current, answer: optionId };
+    if (allowReuse || current.answer !== optionId) return current;
+    return { ...current, answer: null };
+  });
+}
+
+/** Take a match back — the only way out of a wrong press. What was matched
+ *  keeps where its answer is said: that was about the item all along. */
+export function clearMatch(items: MatchItem[], itemId: string): MatchItem[] {
+  return items.map((item) =>
+    item.id === itemId ? { ...item, answer: null } : item,
+  );
+}
+
+/** What one press of a letter means. Kept apart from the two above because a
+ *  press is a decision and applying it is not: only the press may reverse
+ *  what is already there. */
 export function matchTo(
   items: MatchItem[],
   itemId: string,
@@ -120,12 +148,9 @@ export function matchTo(
 ): MatchItem[] {
   const item = items.find((i) => i.id === itemId);
   if (!item) return items;
-  const next = item.answer === optionId ? null : optionId;
-  return items.map((current) => {
-    if (current.id === itemId) return { ...current, answer: next };
-    if (allowReuse || next === null || current.answer !== next) return current;
-    return { ...current, answer: null };
-  });
+  return item.answer === optionId
+    ? clearMatch(items, itemId)
+    : setMatch(items, itemId, optionId, allowReuse);
 }
 
 /** Where an item's answer is said. Set by the same press that chooses the

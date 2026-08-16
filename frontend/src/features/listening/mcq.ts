@@ -107,25 +107,25 @@ export function newChoiceQuestions(): ChoiceQuestion[] {
 
 // ── Editing ──────────────────────────────────────────────────────────────
 
-/** Mark or unmark an option, against a group that asks for `wanted` answers.
+/** Mark an option right, against a group that asks for `wanted` answers.
  *
- *  Clicking a marked option always clears it — the only way back out of a
- *  wrong click. Clicking an unmarked one when the question is already full
- *  drops the oldest mark to make room, rather than refusing: in a group
- *  asking for one that is the familiar radio-button behaviour, and in a
- *  "choose two" it means correcting the second of two answers is one click
- *  rather than two. */
-export function toggleCorrect(
+ *  Marking one that is already marked changes nothing, and that is the point:
+ *  the press that marks an option opens the transcript, and the author may
+ *  pick a line and then shift-click a second one to reach the rest of the
+ *  phrase. Each of those picks applies the whole edit again. Written as a
+ *  toggle, the second pick took the answer back off — the phrase widened and
+ *  the mark vanished with it.
+ *
+ *  Marking an unmarked option when the question is already full drops the
+ *  oldest mark to make room, rather than refusing: in a group asking for one
+ *  that is the familiar radio-button behaviour, and in a "choose two" it
+ *  means correcting the second of two answers is one click rather than two. */
+export function markCorrect(
   question: ChoiceQuestion,
   optionId: string,
   wanted = DEFAULT_ANSWERS_PER_QUESTION,
 ): ChoiceQuestion {
-  if (question.correct.includes(optionId)) {
-    return {
-      ...question,
-      correct: question.correct.filter((id) => id !== optionId),
-    };
-  }
+  if (question.correct.includes(optionId)) return question;
   const keep = question.correct.slice(Math.max(0, question.correct.length - wanted + 1));
   const next = new Set([...keep, optionId]);
   return {
@@ -134,6 +134,30 @@ export function toggleCorrect(
     // question does however they were clicked.
     correct: question.options.filter((o) => next.has(o.id)).map((o) => o.id),
   };
+}
+
+/** Take a mark back — the only way out of a wrong press. */
+export function unmarkCorrect(
+  question: ChoiceQuestion,
+  optionId: string,
+): ChoiceQuestion {
+  return {
+    ...question,
+    correct: question.correct.filter((id) => id !== optionId),
+  };
+}
+
+/** What one press of an option's letter means. Kept apart from the two above
+ *  because a press is a decision and applying it is not: only the press may
+ *  reverse what is already there. */
+export function toggleCorrect(
+  question: ChoiceQuestion,
+  optionId: string,
+  wanted = DEFAULT_ANSWERS_PER_QUESTION,
+): ChoiceQuestion {
+  return question.correct.includes(optionId)
+    ? unmarkCorrect(question, optionId)
+    : markCorrect(question, optionId, wanted);
 }
 
 /** Trim every question's key down to what the group now asks for. Called when
