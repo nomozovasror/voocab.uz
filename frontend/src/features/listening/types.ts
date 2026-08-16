@@ -83,7 +83,10 @@ export interface PartOut {
   created_at: string;
 }
 
-export type QuestionGroupType = "form_completion" | "multiple_choice";
+export type QuestionGroupType =
+  | "form_completion"
+  | "multiple_choice"
+  | "matching";
 
 export interface ListeningQuestion {
   id: string;
@@ -97,7 +100,8 @@ export interface ListeningQuestion {
    *  the question. */
   replay_start_ms?: number | null;
   replay_end_ms?: number | null;
-  // --- multiple_choice only; absent for a gap in a form -------------------
+  // --- the question's own text; absent for a gap in a form ----------------
+  /** Multiple choice: the question. Matching: the item to be matched. */
   prompt?: string | null;
   options?: string[] | null;
   /** multiple_choice only. Where each answer is given, by option letter —
@@ -150,15 +154,20 @@ export type AnswerRubric =
   | "three_words_number";
 
 /** What a group carries at group level. Form completion has the gap-fill
- *  template; multiple choice has how many letters the candidate picks — each
- *  of its questions holds its own prompt and options. Both are optional on
- *  the shape that comes back for either of them. */
+ *  template; matching has the box of options its items are answered from;
+ *  multiple choice has only how many letters the candidate picks, since each
+ *  of its questions holds its own prompt and options. All of them are
+ *  optional on the shape that comes back for any of them. */
 export interface GroupConfig {
   template?: string;
   answer_rubric?: AnswerRubric | null;
   /** multiple_choice only. Absent on anything written before it existed,
    *  which means one — see `DEFAULT_ANSWERS_PER_QUESTION`. */
   answers_per_question?: number;
+  /** matching only: the box of options, in the order they are lettered. */
+  options?: string[];
+  /** matching only: "you may use any letter more than once". */
+  allow_reuse?: boolean;
 }
 
 export interface FormConfig extends GroupConfig {
@@ -189,7 +198,36 @@ export interface ChoiceGroupIn {
   questions: ChoiceQuestionIn[];
 }
 
-export type QuestionGroupIn = FormGroupIn | ChoiceGroupIn;
+/** One matching item as it is sent. `correct_answers` is at most one letter
+ *  — the option it is matched to. Where that answer is given is the
+ *  question's own replay range, the way a form gap's is: one item is one
+ *  answer, said at one moment. */
+export interface MatchingQuestionIn {
+  number: number;
+  prompt: string;
+  correct_answers: string[];
+  replay_start_ms?: number | null;
+  replay_end_ms?: number | null;
+}
+
+/** The box every item in the group is answered from, and whether one option
+ *  may answer more than one of them. Both are the group's because the paper
+ *  prints them once, above the whole set. */
+export interface MatchingConfig {
+  options: string[];
+  allow_reuse: boolean;
+}
+
+export interface MatchingGroupIn {
+  type: "matching";
+  instructions: string;
+  /** Never set, for the same reason multiple choice never sets it. */
+  word_limit?: null;
+  config: MatchingConfig;
+  questions: MatchingQuestionIn[];
+}
+
+export type QuestionGroupIn = FormGroupIn | ChoiceGroupIn | MatchingGroupIn;
 
 // --- Consumption ("take") tree: no correct_answers anywhere (§3.4/§7) -------
 

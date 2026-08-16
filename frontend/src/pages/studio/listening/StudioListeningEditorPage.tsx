@@ -54,6 +54,21 @@ import {
   type ChoiceQuestion,
 } from "@/features/listening/mcq";
 import {
+  isMatchingGroupEmpty,
+  matchingFromApi,
+  matchingIssues,
+  matchingMarks,
+  matchingOptionsToApi,
+  matchingPublishIssues,
+  matchingToApi,
+  newMatchItems,
+  newMatchOptions,
+  removeMatchOption,
+  type MatchItem,
+  type MatchOption,
+  type MatchingIssue,
+} from "@/features/listening/matching";
+import {
   questionRangeLabel,
   questionSpan,
 } from "@/features/listening/numbering";
@@ -68,6 +83,7 @@ import {
 } from "@/features/listening/components/AudioEditorPane";
 import { AddGroupButton } from "@/features/listening/components/BuilderTools";
 import { ChoiceGroupEditor } from "@/features/listening/components/ChoiceGroupEditor";
+import { MatchingGroupEditor } from "@/features/listening/components/MatchingGroupEditor";
 import {
   EditorSetup,
   type SetupChoice,
@@ -120,6 +136,17 @@ interface ChoiceGroupState extends GroupStateBase {
   questions: ChoiceQuestion[];
 }
 
+interface MatchingGroupState extends GroupStateBase {
+  type: "matching";
+  /** The box every item under it is answered from. A group property because
+   *  the paper prints it once, above the whole set. */
+  options: MatchOption[];
+  /** Whether one option may answer more than one item — the paper's "you may
+   *  use any letter more than once". */
+  allowReuse: boolean;
+  items: MatchItem[];
+}
+
 /** A group whose kind hasn't been settled yet. It exists so the question can
  *  be asked in the part it is about — Part 2 has no map labelling to offer,
  *  Part 1 has nothing to ask — rather than once, in a dialog, for a whole
@@ -129,7 +156,11 @@ interface PendingGroupState extends GroupStateBase {
   type: null;
 }
 
-type GroupState = FormGroupState | ChoiceGroupState | PendingGroupState;
+type GroupState =
+  | FormGroupState
+  | ChoiceGroupState
+  | MatchingGroupState
+  | PendingGroupState;
 
 interface PartState {
   /** Stable identity for UI + in-flight autosave tracking, independent of
@@ -230,6 +261,18 @@ function groupPayload(group: GroupState): QuestionGroupIn | null {
     };
   }
 
+  if (group.type === "matching") {
+    return {
+      type: "matching",
+      instructions: group.instructions.trim(),
+      config: {
+        options: matchingOptionsToApi(group.options),
+        allow_reuse: group.allowReuse,
+      },
+      questions: matchingToApi(group.options, group.items),
+    };
+  }
+
   if (!isGroupPersistable(group.doc)) return null;
   const { template, questions } = docToGroup(group.doc);
   return {
@@ -261,6 +304,7 @@ function groupOrderSignature(part: PartState): string {
 function groupQuestionCount(group: GroupState): number {
   if (group.type === "form_completion") return docGaps(group.doc).length;
   if (group.type === "multiple_choice") return group.questions.length;
+  if (group.type === "matching") return group.items.length;
   return 0;
 }
 
@@ -278,20 +322,33 @@ function groupNumberSpan(group: GroupState): number {
 function isGroupEmpty(group: GroupState): boolean {
   if (group.type === "form_completion") return isDocEmpty(group.doc);
   if (group.type === "multiple_choice") return isChoiceGroupEmpty(group.questions);
+  if (group.type === "matching") {
+    return isMatchingGroupEmpty(group.options, group.items);
+  }
   return true;
 }
 
 function newGroup(type: QuestionGroupType | null): GroupState {
   const base = { key: newId(), groupId: null, instructions: "" };
   if (type === null) return { ...base, type };
-  return type === "multiple_choice"
-    ? {
-        ...base,
-        type,
-        answersPerQuestion: DEFAULT_ANSWERS_PER_QUESTION,
-        questions: newChoiceQuestions(),
-      }
-    : { ...base, type, wordLimit: null, rubric: null, doc: newDoc() };
+  if (type === "multiple_choice") {
+    return {
+      ...base,
+      type,
+      answersPerQuestion: DEFAULT_ANSWERS_PER_QUESTION,
+      questions: newChoiceQuestions(),
+    };
+  }
+  if (type === "matching") {
+    return {
+      ...base,
+      type,
+      options: newMatchOptions(),
+      allowReuse: false,
+      items: newMatchItems(),
+    };
+  }
+  return { ...base, type, wordLimit: null, rubric: null, doc: newDoc() };
 }
 
 /** A part's first group. Where the part has only one kind of question it can
@@ -611,6 +668,41 @@ export default function StudioListeningEditorPage() {
     [updateGroup],
   );
 
+  const editGroupItems = useCallback(
+    (key: string, edit: (current: MatchItem[]) => MatchItem[]) => {
+      updateGroup(key, (group) =>
+        group.type === "matching" ? { ...group, items: edit(group.items) } : group,
+      );
+    },
+    [updateGroup],
+  );
+
+  const editGroupOptions = useCallback(
+    (key: string, edit: (current: MatchOption[]) => MatchOption[]) => {
+      updateGroup(key, (group) =>
+        group.type === "matching"
+          ? { ...group, options: edit(group.options) }
+          : group,
+      );
+    },
+    [updateGroup],
+  );
+
+  /** Dropping an option from a matching group's box. One edit rather than
+   *  two, because the answers pointing at it have to go with it: a payload
+   *  naming a letter the box hasn't got is refused outright, so the two
+   *  landing separately would leave the group unable to save. */
+  const dropMatchOption = useCallback(
+    (key: string, optionId: string) => {
+      updateGroup(key, (group) =>
+        group.type === "matching"
+          ? { ...group, ...removeMatchOption(group.options, group.items, optionId) }
+          : group,
+      );
+    },
+    [updateGroup],
+  );
+
   // --- Hydrate from the author endpoint (existing material only) ----------
   useEffect(() => {
     if (!existing || loadedRef.current) return;
@@ -645,9 +737,16 @@ export default function StudioListeningEditorPage() {
                     questions: choiceQuestionsFromApi(group.questions),
                   };
                 }
-                // Anything else is read as a form: it is the only other type
-                // that exists, and a type this build doesn't know is better
-                // shown as its template than dropped.
+                if (group.type === "matching") {
+                  return {
+                    ...base,
+                    type: "matching",
+                    ...matchingFromApi(group),
+                  };
+                }
+                // Anything else is read as a form: a type this build doesn't
+                // know is better shown as its template — which every group
+                // has a field for — than dropped.
                 return {
                   ...base,
                   type: "form_completion",
@@ -1401,9 +1500,16 @@ export default function StudioListeningEditorPage() {
                 startNumber - 1,
                 group.answersPerQuestion,
               )[0]?.message
-            : // A group still asking what it is has nothing to be wrong
-              // about — `started` above has already let it through.
-              undefined;
+            : group.type === "matching"
+              ? matchingPublishIssues(
+                  group.options,
+                  group.items,
+                  startNumber - 1,
+                  group.allowReuse,
+                )[0]?.message
+              : // A group still asking what it is has nothing to be wrong
+                // about — `started` above has already let it through.
+                undefined;
       if (issue) {
         return { ok: false, message: `${label} — ${issue}`, badGroupKey: group.key };
       }
@@ -1568,8 +1674,31 @@ export default function StudioListeningEditorPage() {
             )
           : [],
     );
-    const unwritten = choiceProblems.filter((i) => i.kind !== "answer");
-    const unanswered = choiceProblems.filter((i) => i.kind === "answer");
+    const matchingGroups = run.filter(({ group }) => group.type === "matching");
+    const matchingProblems: MatchingIssue[] = matchingGroups.flatMap(
+      ({ group, startNumber }) =>
+        group.type === "matching"
+          ? matchingIssues(
+              group.options,
+              group.items,
+              startNumber - 1,
+              group.allowReuse,
+            )
+          : [],
+    );
+
+    // Both types split the same way: what is still to be written, and what is
+    // still to be decided. They are two different things to go and do, and a
+    // checklist that merged them would send the author looking for the wrong
+    // one.
+    const unwritten = [
+      ...choiceProblems.filter((i) => i.kind !== "answer"),
+      ...matchingProblems.filter((i) => i.kind !== "answer"),
+    ];
+    const unanswered = [
+      ...choiceProblems.filter((i) => i.kind === "answer"),
+      ...matchingProblems.filter((i) => i.kind === "answer"),
+    ];
 
     const totalQuestions = run.reduce(
       (total, { group }) => total + groupQuestionCount(group),
@@ -1609,11 +1738,12 @@ export default function StudioListeningEditorPage() {
       { label: "Add at least one question", done: totalQuestions > 0 },
     ];
 
-    // Only where there is one to be about: a material with no multiple
-    // choice in it shouldn't be told about a requirement it can't fail.
-    if (choiceGroups.length > 0) {
+    // Only where there is one to be about: a material of nothing but form
+    // completion shouldn't be told about a requirement it can't fail — a gap
+    // has no text or options of its own to be missing.
+    if (choiceGroups.length + matchingGroups.length > 0) {
       requirements.push({
-        label: "Finish every choice question",
+        label: "Finish every question",
         done: unwritten.length === 0,
         detail: unwritten.length
           ? `${unwritten.length} missing text or options`
@@ -1654,6 +1784,16 @@ export default function StudioListeningEditorPage() {
               )
             : 0),
         0,
+      ) +
+      matchingGroups.reduce(
+        (total, { group }) =>
+          total +
+          // Per item, not per option: one item is one answer at one moment,
+          // and an option answering three of them is three moments.
+          (group.type === "matching"
+            ? group.items.filter((item) => item.replayStartMs == null).length
+            : 0),
+        0,
       );
     if (totalQuestions > 0) {
       requirements.push({
@@ -1690,6 +1830,7 @@ export default function StudioListeningEditorPage() {
           return answerMarks(group.doc, startNumber - 1);
         }
         if (group.type === "multiple_choice") return choiceMarks(group.questions);
+        if (group.type === "matching") return matchingMarks(group.items);
         return [];
       }),
     [run],
@@ -1719,6 +1860,9 @@ export default function StudioListeningEditorPage() {
           return (
             total + group.questions.filter((q) => q.correct.length > 0).length
           );
+        }
+        if (group.type === "matching") {
+          return total + group.items.filter((item) => item.answer).length;
         }
         return total;
       }, 0),
@@ -2208,6 +2352,39 @@ export default function StudioListeningEditorPage() {
                                     ),
                                   }
                                 : g,
+                            )
+                          }
+                          startNumber={startNumber}
+                          showIssues={badGroupKey === group.key}
+                          transcriptSelection={transcriptSelection}
+                          onMarkAudio={
+                            hasAudioEverAttached ? requestMark : undefined
+                          }
+                          disabled={!hasAudioEverAttached}
+                          extraTools={tools}
+                          {...actions}
+                        />
+                      ) : group.type === "matching" ? (
+                        <MatchingGroupEditor
+                          options={group.options}
+                          items={group.items}
+                          onOptionsChange={(edit) =>
+                            editGroupOptions(group.key, edit)
+                          }
+                          onItemsChange={(edit) =>
+                            editGroupItems(group.key, edit)
+                          }
+                          onRemoveOption={(optionId) =>
+                            dropMatchOption(group.key, optionId)
+                          }
+                          instructions={group.instructions}
+                          onInstructionsChange={(instructions) =>
+                            updateGroup(group.key, (g) => ({ ...g, instructions }))
+                          }
+                          allowReuse={group.allowReuse}
+                          onAllowReuseChange={(allowReuse) =>
+                            updateGroup(group.key, (g) =>
+                              g.type === "matching" ? { ...g, allowReuse } : g,
                             )
                           }
                           startNumber={startNumber}

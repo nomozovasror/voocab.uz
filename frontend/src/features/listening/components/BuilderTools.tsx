@@ -1,12 +1,14 @@
-import { ListChecks, Rows3, SquarePlus } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { SquarePlus } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { QUESTION_TYPE_LABEL } from "@/features/listening/parts";
+import {
+  QUESTION_TYPE_ICON,
+  QUESTION_TYPE_LABEL,
+} from "@/features/listening/parts";
 import type { QuestionGroupType } from "@/features/listening/types";
 
 /**
@@ -67,11 +69,6 @@ export function ToolbarButton({
   );
 }
 
-const TYPE_ICON: Record<QuestionGroupType, LucideIcon> = {
-  form_completion: Rows3,
-  multiple_choice: ListChecks,
-};
-
 /** Adds a group after this one. The type is chosen on the way in rather than
  *  switched afterwards: it decides what the whole block is, and an empty
  *  group is nothing to lose by deleting and adding the other kind.
@@ -108,7 +105,9 @@ export function AddGroupButton({
       <DropdownMenuTrigger asChild>{trigger()}</DropdownMenuTrigger>
       <DropdownMenuContent align="center" className="w-52">
         {types.map((type) => {
-          const Icon = TYPE_ICON[type];
+          // The same mark the chooser and the group header use: a type has
+          // one icon, or it has three that have to be kept in step by hand.
+          const Icon = QUESTION_TYPE_ICON[type];
           return (
             <DropdownMenuItem key={type} onClick={() => onAdd(type)}>
               <Icon aria-hidden />
