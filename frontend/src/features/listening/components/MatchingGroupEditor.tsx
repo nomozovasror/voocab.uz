@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GroupHeader } from "@/features/listening/components/GroupHeader";
 import { MatchingBuilder } from "@/features/listening/components/MatchingBuilder";
@@ -143,11 +144,15 @@ export function MatchingGroupEditor({
 
 /** Whether one option may answer more than one item.
  *
- *  Two states rather than a checkbox with a long label, because the two are
- *  both real IELTS forms and neither is the "off" of the other: as many
- *  options as items, each used once, against a short box every item is
- *  answered from. The wording is the paper's own NB line, shortened to what
- *  fits beside the rubric. */
+ *  One switch, not a pair of buttons. Multiple choice's neighbouring control
+ *  offers 1, 2 or 3 and needs three of them; this has two states, and drawn
+ *  the same way it needed a word to label it — at which point "Letters",
+ *  "once" and "reused" were three words side by side and the label read as a
+ *  third option that happened never to be selected.
+ *
+ *  So the label is the switch. It says the thing a real paper prints under
+ *  the rubric, and ticking it is what puts that line on the candidate's page.
+ */
 function ReuseToggle({
   value,
   onChange,
@@ -156,36 +161,33 @@ function ReuseToggle({
   onChange: (v: boolean) => void;
 }) {
   return (
-    <div
-      role="group"
-      aria-label="Whether a letter may be used more than once"
-      className="flex h-10 shrink-0 items-center gap-1 rounded-md border border-border pr-1 pl-3"
+    <button
+      type="button"
+      role="switch"
+      aria-checked={value}
+      onClick={() => onChange(!value)}
+      title={
+        value
+          ? "The paper says: NB You may use any letter more than once"
+          : "Each option answers one question"
+      }
+      className={cn(
+        "flex h-10 shrink-0 items-center gap-2 rounded-md border px-3 text-sm transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+        value
+          ? "border-primary/40 bg-primary/10 text-primary"
+          : "border-border text-muted-foreground hover:bg-foreground/4 hover:text-foreground",
+      )}
     >
-      <span className="mr-1 text-xs text-muted-foreground">Letters</span>
-      {[
-        { reuse: false, label: "once", title: "Each option answers one question" },
-        {
-          reuse: true,
-          label: "reused",
-          title: "You may use any letter more than once",
-        },
-      ].map((choice) => (
-        <button
-          key={choice.label}
-          type="button"
-          onClick={() => onChange(choice.reuse)}
-          aria-pressed={value === choice.reuse}
-          title={choice.title}
-          className={cn(
-            "flex h-8 items-center rounded px-2 text-sm transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-            value === choice.reuse
-              ? "bg-primary/15 font-medium text-primary"
-              : "text-muted-foreground hover:bg-foreground/6 hover:text-foreground",
-          )}
-        >
-          {choice.label}
-        </button>
-      ))}
-    </div>
+      <span
+        aria-hidden
+        className={cn(
+          "flex size-4 shrink-0 items-center justify-center rounded-[4px] border transition-colors",
+          value ? "border-primary bg-primary/20" : "border-border",
+        )}
+      >
+        {value && <Check className="size-3" aria-hidden />}
+      </span>
+      reuse letters
+    </button>
   );
 }
