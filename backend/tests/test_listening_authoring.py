@@ -571,3 +571,91 @@ async def test_update_unknown_part_is_404() -> None:
             assert r_patch.status_code == 404, r_patch.text
     finally:
         await _cleanup(uuid.uuid4(), email)
+
+
+@pytest.mark.asyncio
+async def test_renaming_the_task_keeps_its_gaps_and_changing_the_kind_does_not() -> None:
+    """The five completion tasks are one payload with five names. An author
+    who decides their form is really a set of notes has not written different
+    questions — the gaps, their answers and their audio marks are the same
+    ones — so the rows survive, and with them every attempt that points at
+    them. Turning the group into multiple choice is the other thing entirely:
+    the answer key stops meaning accepted phrasings and starts meaning option
+    letters, and nothing is carried across."""
+    email = "l-rename-owner@example.com"
+    owner = await _make_user(email)
+    material = await _make_material(owner.id)
+    token = create_access_token(str(owner.id))
+
+    async def question_ids(group_id: str) -> set[uuid.UUID]:
+        async with async_session_factory() as session:
+            rows = (
+                await session.exec(
+                    select(Question).where(Question.group_id == uuid.UUID(group_id))
+                )
+            ).all()
+            return {q.id for q in rows}
+
+    try:
+        async with _client() as client:
+            r_part = await client.post(
+                f"/api/materials/{material.id}/parts",
+                json={"order_index": 0, "title": "Part 1"},
+                cookies={"access_token": token},
+            )
+            assert r_part.status_code == 201, r_part.text
+            part_id = r_part.json()["id"]
+
+            template, questions = _template_and_questions(3)
+            r_group = await client.post(
+                f"/api/parts/{part_id}/question-groups",
+                json={
+                    "type": "form_completion",
+                    "instructions": "Complete the form below.",
+                    "config": {"template": template},
+                    "questions": questions,
+                },
+                cookies={"access_token": token},
+            )
+            assert r_group.status_code == 201, r_group.text
+            group_id = r_group.json()["id"]
+            before = await question_ids(group_id)
+            assert len(before) == 3
+
+            r_notes = await client.patch(
+                f"/api/question-groups/{group_id}",
+                json={
+                    "type": "note_completion",
+                    "instructions": "Complete the notes below.",
+                    "config": {"template": template},
+                    "questions": questions,
+                },
+                cookies={"access_token": token},
+            )
+            assert r_notes.status_code == 200, r_notes.text
+            assert r_notes.json()["type"] == "note_completion"
+            assert await question_ids(group_id) == before
+
+            r_choice = await client.patch(
+                f"/api/question-groups/{group_id}",
+                json={
+                    "type": "multiple_choice",
+                    "instructions": "Choose the correct letter.",
+                    "config": {"answers_per_question": 1},
+                    "questions": [
+                        {
+                            "number": 1,
+                            "prompt": "Why?",
+                            "options": ["a", "b"],
+                            "correct_answers": ["a"],
+                        }
+                    ],
+                },
+                cookies={"access_token": token},
+            )
+            assert r_choice.status_code == 200, r_choice.text
+            after = await question_ids(group_id)
+            assert len(after) == 1
+            assert after.isdisjoint(before)
+    finally:
+        await _cleanup(material.id, email)

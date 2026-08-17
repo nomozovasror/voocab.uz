@@ -32,7 +32,26 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-QuestionGroupType = Literal["form_completion", "multiple_choice", "matching"]
+#: The tasks answered by writing the missing words. One payload shape, five
+#: names, because that is how the paper prints them and how an author thinks
+#: about them — see :data:`app.models.question_group.COMPLETION_TYPES`.
+CompletionType = Literal[
+    "form_completion",
+    "note_completion",
+    "sentence_completion",
+    "summary_completion",
+    "short_answer",
+]
+
+QuestionGroupType = Literal[
+    "form_completion",
+    "note_completion",
+    "sentence_completion",
+    "summary_completion",
+    "short_answer",
+    "multiple_choice",
+    "matching",
+]
 
 _TOKEN_RE = re.compile(r"\{\{(\d+)\}\}")
 
@@ -364,11 +383,17 @@ def _contiguous_numbers(questions: list[_QuestionInBase]) -> set[int]:
 
 
 class FormCompletionGroupIn(_QuestionGroupInBase):
-    """Full authoring payload for a form-completion group: template + its
+    """Full authoring payload for a completion group: template + its
     questions, authored and validated as one atomic unit (§5 — no per-gap
-    endpoint)."""
+    endpoint).
 
-    type: Literal["form_completion"] = "form_completion"
+    One schema for all five completion tasks. They carry the same fields and
+    are checked the same way — what differs between a form and a set of notes
+    is the shape of the template, which is the author's business and not
+    something to validate. The discriminator accepts all five so a payload is
+    still routed here by name rather than by trial."""
+
+    type: CompletionType = "form_completion"
     config: QuestionGroupConfig
     #: A form with no gaps in it yet is a form being written — the labels
     #: typically go in before the answers do. Empty is a draft, not an error;

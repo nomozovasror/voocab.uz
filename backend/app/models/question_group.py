@@ -8,21 +8,58 @@ from sqlmodel import Field, SQLModel
 
 
 class QuestionGroupType(enum.StrEnum):
-    """Kind of question group. The enum is intentionally open to grow (map
-    labelling, short answer, ...) without a type migration — new members are a
-    data-only change since this is stored as a plain string column, which is
-    how ``matching`` was added."""
+    """Kind of question group, in the exam's own names. The enum is
+    intentionally open to grow (map labelling, table completion, ...) without a
+    type migration — new members are a data-only change since this is stored as
+    a plain string column, which is how ``matching`` and the completion tasks
+    below were added."""
 
     FORM_COMPLETION = "form_completion"
+    NOTE_COMPLETION = "note_completion"
+    SENTENCE_COMPLETION = "sentence_completion"
+    SUMMARY_COMPLETION = "summary_completion"
+    SHORT_ANSWER = "short_answer"
     MULTIPLE_CHOICE = "multiple_choice"
     MATCHING = "matching"
+
+
+#: The tasks that are answered by writing the missing words. They are one
+#: thing to the server — a template with ``{{N}}`` gaps, graded against
+#: accepted phrasings — and five things to the author, because a candidate is
+#: told to "complete the notes" or "answer the questions" and an author works
+#: from a paper that says so. Keeping them apart is what stops one name
+#: standing for five tasks and making four of them look unavailable.
+COMPLETION_TYPES = frozenset(
+    {
+        QuestionGroupType.FORM_COMPLETION,
+        QuestionGroupType.NOTE_COMPLETION,
+        QuestionGroupType.SENTENCE_COMPLETION,
+        QuestionGroupType.SUMMARY_COMPLETION,
+        QuestionGroupType.SHORT_ANSWER,
+    }
+)
+
+
+def same_question_kind(before: str, after: str) -> bool:
+    """Whether a group changing type keeps the questions it already has.
+
+    Renaming the task does: gap 3 of a form and gap 3 of the notes it becomes
+    are the same question, with the same answers, said at the same moment. A
+    form turning into multiple choice is not — the answer key means something
+    else entirely — and nothing is kept across that.
+    """
+    return before == after or (before in COMPLETION_TYPES and after in COMPLETION_TYPES)
 
 
 class QuestionGroup(SQLModel, table=True):
     """A set of questions sharing one instruction line, and — where the type
     has one — one presentational resource, which lives in ``config``:
 
-    * ``form_completion``: the gap-fill template.
+    * the completion tasks (``form_completion``, ``note_completion``,
+      ``sentence_completion``, ``summary_completion``, ``short_answer``): the
+      gap-fill template. They differ in what the paper calls them and in the
+      shape the template takes — a form has a label column, notes and
+      sentences run the full width — and in nothing else.
     * ``matching``: the box of lettered options every question under it is
       answered from. The box is the group's because the paper prints it once
       above the whole set, and because "you may use any letter more than once"

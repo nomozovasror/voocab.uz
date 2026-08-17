@@ -20,7 +20,11 @@ from app.core.database import AsyncSession
 from app.models.part import Part
 from app.models.question import Question
 from app.models.question_attempt import QuestionAttempt
-from app.models.question_group import QuestionGroup, QuestionGroupType
+from app.models.question_group import (
+    QuestionGroup,
+    QuestionGroupType,
+    same_question_kind,
+)
 from app.schemas.listening import (
     ChoiceQuestionIn,
     MatchingQuestionIn,
@@ -298,11 +302,13 @@ async def replace_question_group(
     Only numbers that disappear from the payload are removed, and that path
     goes through ``_remove_questions`` for the attempts they leave behind.
 
-    Changing the group's TYPE is the exception: number 3 of a form and number
-    3 of a multiple-choice set are not the same question wearing a different
-    hat — the answer key means something else entirely — so nothing is kept
-    across that change."""
-    retype = group.type != data.type
+    Changing what KIND of question the group holds is the exception: number 3
+    of a form and number 3 of a multiple-choice set are not the same question
+    wearing a different hat — the answer key means something else entirely —
+    so nothing is kept across that change. Renaming the task is not that: gap
+    3 of a form and gap 3 of the notes it becomes are the same question, with
+    the same answers, marked at the same moment (see ``same_question_kind``)."""
+    retype = not same_question_kind(group.type, data.type)
     group.type = data.type
     group.instructions = data.instructions
     group.word_limit = data.word_limit
