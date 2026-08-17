@@ -51,7 +51,15 @@ import type {
  *     + Harbour trip | £12 | {{1}}
  *     + City walk | {{2}} | 11 am
  *
- * The `+` is what makes them unambiguous. A bar-delimited line on its own
+ A flow chart is a run of `>` lines, one per step, drawn as boxes with an
+ * arrow between them. The prefix reads as "then", which is what the arrow
+ * means:
+ *
+ *     > Application form sent to {{1}}
+ *     > Interview with the {{2}}
+ *     > Decision within {{3}} days
+ *
+ * The `+` and the `>` are what make these runs unambiguous. A bar-delimited line on its own
  * already means something here — a label and its value, or, with nothing
  * before the bar, a continuation of the row above — so a table's rows have to
  * say that is what they are.
@@ -76,6 +84,11 @@ export type FormBlock =
    *  completion never gaps its own headers. Every body row carries one cell
    *  per column, padded on the way in so the grid is always rectangular. */
   | { kind: "table"; head: string[]; rows: FormLine[][] }
+  /** A chain of steps, drawn as boxes with an arrow between them. Linear on
+   *  purpose: a real flow-chart completion is a process in order, and the
+   *  branching kind is rare enough that offering it would be offering authors
+   *  a diagram to get wrong. */
+  | { kind: "flow"; steps: FormLine[] }
   /** A rule across the form. On the printed page these separate groups of
    *  fields rather than every row, so they are placed, never implied. */
   | { kind: "divider" }
@@ -161,10 +174,12 @@ function parseBlocks(
   const blocks: FormBlock[] = [];
   let openRow: Extract<FormBlock, { kind: "row" }> | null = null;
   let openTable: Extract<FormBlock, { kind: "table" }> | null = null;
-  /** Anything that isn't another cell closes both. */
+  let openFlow: Extract<FormBlock, { kind: "flow" }> | null = null;
+  /** Anything that isn't another cell, or another step, closes them all. */
   const closeBlocks = () => {
     openRow = null;
     openTable = null;
+    openFlow = null;
   };
 
   for (const raw of masked.split("\n")) {
@@ -194,6 +209,20 @@ function parseBlocks(
       blocks.push({ kind: "title", text: unescapePipes(trimmed.slice(2).trim()) });
       continue;
     }
+    if (trimmed === ">" || trimmed.startsWith("> ")) {
+      const step = { bullet: false, parts: splitParts(trimmed.slice(1).trim(), numberOf) };
+      openRow = null;
+      openTable = null;
+      if (openFlow) {
+        openFlow.steps.push(step);
+      } else {
+        openFlow = { kind: "flow", steps: [step] };
+        blocks.push(openFlow);
+      }
+      continue;
+    }
+    openFlow = null;
+
     if (trimmed === "+" || trimmed.startsWith("+ ")) {
       const cells = splitCells(trimmed.slice(1).trim());
       openRow = null;
@@ -317,7 +346,8 @@ export type DocBlock =
   | { id: string; kind: "heading"; text: string }
   | { id: string; kind: "divider" }
   | { id: string; kind: "row"; label: string; lines: DocLine[] }
-  | { id: string; kind: "table"; head: string[]; rows: DocTableRow[] };
+  | { id: string; kind: "table"; head: string[]; rows: DocTableRow[] }
+  | { id: string; kind: "flow"; steps: DocLine[] };
 
 let idCounter = 0;
 export function newId(): string {
@@ -351,6 +381,18 @@ export function newTableRow(columns: number): DocTableRow {
   };
 }
 
+/** How many steps a chart starts with. Three is the shortest thing that reads
+ *  as a process rather than as a pair. */
+const FLOW_STEPS = 3;
+
+export function newFlow(): DocBlock {
+  return {
+    id: newId(),
+    kind: "flow",
+    steps: Array.from({ length: FLOW_STEPS }, () => newTextLine()),
+  };
+}
+
 export function newTable(): DocBlock {
   return {
     id: newId(),
@@ -372,6 +414,7 @@ export function newTable(): DocBlock {
  *  precisely so that costs nothing. */
 export function newDoc(type: CompletionType = "form_completion"): DocBlock[] {
   if (type === "table_completion") return [newTable()];
+  if (type === "flow_chart_completion") return [newFlow()];
   const row = newRow();
   if (type !== "note_completion") return [row];
   return [{ ...row, lines: [{ ...row.lines[0], bullet: true }] }];
@@ -409,7 +452,7 @@ export function docGaps(doc: DocBlock[]): DocGap[] {
     if (block.kind === "row") block.lines.forEach(take);
     else if (block.kind === "table") {
       for (const row of block.rows) row.cells.forEach(take);
-    }
+    } else if (block.kind === "flow") block.steps.forEach(take);
   }
   return gaps;
 }
@@ -435,6 +478,7 @@ export function clearGapOption(
   });
   return doc.map((block) => {
     if (block.kind === "row") return { ...block, lines: block.lines.map(line) };
+    if (block.kind === "flow") return { ...block, steps: block.steps.map(line) };
     if (block.kind === "table") {
       return {
         ...block,
@@ -495,6 +539,12 @@ export function docToGroup(
     if (block.kind === "heading") {
       if (lines.length > 0 && lines[lines.length - 1] !== "") lines.push("");
       lines.push(`## ${escapePipes(block.text)}`);
+      continue;
+    }
+    if (block.kind === "flow") {
+      for (const step of block.steps) {
+        lines.push(`> ${lineToText(step, numberOf)}`);
+      }
       continue;
     }
     if (block.kind === "table") {
@@ -590,6 +640,14 @@ export function docFromGroup(
       doc.push({ id: newId(), kind: block.kind, text: block.text });
       continue;
     }
+    if (block.kind === "flow") {
+      doc.push({
+        id: newId(),
+        kind: "flow",
+        steps: block.steps.map((step) => docLine(step, byNumber, optionIdOf)),
+      });
+      continue;
+    }
     if (block.kind === "table") {
       doc.push({
         id: newId(),
@@ -632,6 +690,9 @@ export function docToLayout(doc: DocBlock[]): FormBlock[] {
         label: block.label,
         lines: block.lines.map(line),
       };
+    }
+    if (block.kind === "flow") {
+      return { kind: "flow" as const, steps: block.steps.map(line) };
     }
     if (block.kind === "table") {
       return {
@@ -713,6 +774,7 @@ export function isDocEmpty(doc: DocBlock[]): boolean {
     line.parts.every((p) => p.kind === "text" && p.text.trim() === "");
   return doc.every((block) => {
     if (block.kind === "divider") return true;
+    if (block.kind === "flow") return block.steps.every(blank);
     if (block.kind === "table") {
       return (
         block.head.every((cell) => !cell.trim()) &&

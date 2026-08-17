@@ -42,6 +42,7 @@ CompletionType = Literal[
     "summary_completion",
     "short_answer",
     "table_completion",
+    "flow_chart_completion",
 ]
 
 QuestionGroupType = Literal[
@@ -51,6 +52,7 @@ QuestionGroupType = Literal[
     "summary_completion",
     "short_answer",
     "table_completion",
+    "flow_chart_completion",
     "multiple_choice",
     "matching",
 ]

@@ -7,6 +7,7 @@ import {
   Pilcrow,
   Rows3,
   Table,
+  Workflow,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type {
@@ -43,6 +44,7 @@ export const QUESTION_TYPE_LABEL: Record<QuestionGroupType, string> = {
   summary_completion: "Summary completion",
   short_answer: "Short answer",
   table_completion: "Table completion",
+  flow_chart_completion: "Flow-chart completion",
   multiple_choice: "Multiple choice",
   matching: "Matching",
 };
@@ -57,6 +59,7 @@ export const QUESTION_TYPE_BLURB: Record<QuestionGroupType, string> = {
   summary_completion: "A paragraph with gaps in it",
   short_answer: "Questions answered in a few words",
   table_completion: "A grid with gaps in its cells",
+  flow_chart_completion: "A process, as boxes with arrows between them",
   multiple_choice: "Lettered options, one or several right",
   matching: "One box of options, answering a list of items",
 };
@@ -71,6 +74,7 @@ export const QUESTION_TYPE_RUBRIC: Record<CompletionType, string> = {
   summary_completion: "Complete the summary below.",
   short_answer: "Answer the questions below.",
   table_completion: "Complete the table below.",
+  flow_chart_completion: "Complete the flow chart below.",
 };
 
 /** And one mark per type, for the same reason: a type is recognised by its
@@ -85,6 +89,7 @@ export const QUESTION_TYPE_ICON: Record<QuestionGroupType, LucideIcon> = {
   summary_completion: Pilcrow,
   short_answer: CircleQuestionMark,
   table_completion: Table,
+  flow_chart_completion: Workflow,
   multiple_choice: ListChecks,
   matching: ArrowLeftRight,
 };
@@ -123,6 +128,7 @@ const PART_TYPES: QuestionGroupType[][] = [
     "summary_completion",
     "sentence_completion",
     "table_completion",
+    "flow_chart_completion",
     "multiple_choice",
   ],
 ];
@@ -143,13 +149,13 @@ export function questionTypesForPart(orderIndex: number): QuestionGroupType[] {
 
 //: What each part asks that we can't author yet — a list of choices should
 //: read as "these are the ones built", not "these are the ones allowed".
-//: What is left needs something the completion sheet still can't draw: an
-//: image, or a chart of boxes and arrows.
+//: What is left needs the one thing the completion sheet still can't draw: an
+//: image to put labels on.
 const MISSING_TYPES: (string | null)[] = [
   null,
   "map/plan labelling",
   null,
-  "diagram labelling and flow-chart completion",
+  "diagram labelling",
 ];
 
 /** What this part characteristically asks that we can't author yet, phrased

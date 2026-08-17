@@ -93,7 +93,8 @@ export type CompletionType =
   | "sentence_completion"
   | "summary_completion"
   | "short_answer"
-  | "table_completion";
+  | "table_completion"
+  | "flow_chart_completion";
 
 export type QuestionGroupType =
   | CompletionType

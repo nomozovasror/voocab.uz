@@ -20,6 +20,7 @@ class QuestionGroupType(enum.StrEnum):
     SUMMARY_COMPLETION = "summary_completion"
     SHORT_ANSWER = "short_answer"
     TABLE_COMPLETION = "table_completion"
+    FLOW_CHART_COMPLETION = "flow_chart_completion"
     MULTIPLE_CHOICE = "multiple_choice"
     MATCHING = "matching"
 
@@ -38,6 +39,7 @@ COMPLETION_TYPES = frozenset(
         QuestionGroupType.SUMMARY_COMPLETION,
         QuestionGroupType.SHORT_ANSWER,
         QuestionGroupType.TABLE_COMPLETION,
+        QuestionGroupType.FLOW_CHART_COMPLETION,
     }
 )
 
@@ -62,7 +64,8 @@ class QuestionGroup(SQLModel, table=True):
       ``table_completion``): the
       gap-fill template. They differ in what the paper calls them and in the
       shape the template takes — a form has a label column, notes and
-      sentences run the full width, a table is a grid — and in nothing else.
+      sentences run the full width, a table is a grid, a flow chart is a chain
+      of boxes — and in nothing else.
     * ``matching``: the box of lettered options every question under it is
       answered from. The box is the group's because the paper prints it once
       above the whole set, and because "you may use any letter more than once"

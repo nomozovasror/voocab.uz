@@ -1,4 +1,5 @@
 import { Fragment, type ReactNode } from "react";
+import { ArrowDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FormBlock } from "@/features/listening/form-syntax";
 
@@ -12,9 +13,8 @@ interface FormLayoutProps {
 }
 
 /**
- * Renders a parsed completion layout: a title, section headings, and rows
- * whose values can carry gaps anywhere inside them and run to several
- * bulleted lines.
+ * Renders a parsed completion layout: a title, section headings, rows whose
+ * values can carry gaps anywhere inside them, grids, and flow charts.
  *
  * The label column is fixed rather than sized to content so the values line
  * up down the form the way they do on the printed paper — a value column
@@ -58,6 +58,33 @@ export function FormLayout({ blocks, renderGap, className }: FormLayoutProps) {
             <h4 key={i} className="mt-3 mb-1.5 font-medium text-primary">
               {block.text}
             </h4>
+          );
+        }
+
+        if (block.kind === "flow") {
+          return (
+            // Narrower than the sheet and centred: a chart is read down, and
+            // boxes stretched to the full width would read as rows.
+            <div key={i} className="mx-auto my-2 max-w-md">
+              {block.steps.map((step, sIndex) => (
+                <Fragment key={sIndex}>
+                  {sIndex > 0 && (
+                    <div className="flex justify-center py-1" aria-hidden>
+                      <ArrowDown className="size-4 text-muted-foreground" />
+                    </div>
+                  )}
+                  <div className="rounded-md border border-border px-3 py-2 leading-7 text-foreground">
+                    {step.parts.map((part, k) =>
+                      part.kind === "text" ? (
+                        <Fragment key={k}>{part.text}</Fragment>
+                      ) : (
+                        <Fragment key={k}>{renderGap(part.number)}</Fragment>
+                      ),
+                    )}
+                  </div>
+                </Fragment>
+              ))}
+            </div>
           );
         }
 

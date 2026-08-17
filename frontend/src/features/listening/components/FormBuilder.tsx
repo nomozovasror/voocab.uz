@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   AlignLeft,
+  ArrowDown,
   AudioLines,
   ChevronDown,
   ChevronUp,
@@ -14,6 +15,7 @@ import {
   Trash2,
   Type,
   Undo2,
+  Workflow,
   X,
 } from "lucide-react";
 import {
@@ -31,6 +33,7 @@ import { formatClock } from "@/features/studio/format";
 import {
   gapNumbers,
   newId,
+  newFlow,
   newRow,
   newTable,
   newTableRow,
@@ -390,6 +393,27 @@ export function FormBuilder({
     );
   };
 
+  const editFlow = (
+    blockId: string,
+    edit: (flow: Extract<DocBlock, { kind: "flow" }>) => DocBlock,
+  ) =>
+    onChange((current) =>
+      current.map((b) => (b.id === blockId && b.kind === "flow" ? edit(b) : b)),
+    );
+
+  const addStep = (blockId: string) => {
+    const step = newTextLine();
+    pendingFocus.current = `${step.id}#0`;
+    editFlow(blockId, (flow) => ({ ...flow, steps: [...flow.steps, step] }));
+  };
+
+  const removeStep = (blockId: string, stepId: string) =>
+    editFlow(blockId, (flow) =>
+      flow.steps.length <= 1
+        ? flow
+        : { ...flow, steps: flow.steps.filter((step) => step.id !== stepId) },
+    );
+
   /** Any edit to a table, against the latest copy of it. Written as one
    *  helper because every one of them has to leave the grid rectangular:
    *  a column added to the header is a cell added to every row, and a column
@@ -498,6 +522,16 @@ export function FormBuilder({
     />
   );
 
+  const addFlowTool = (
+    <ToolbarButton
+      key="flow"
+      onClick={() => addBlock(newFlow())}
+      icon={<Workflow className="size-3.5" aria-hidden />}
+      label="chart"
+      title="Add a flow chart at the end"
+    />
+  );
+
   const addTableTool = (
     <ToolbarButton
       key="table"
@@ -578,6 +612,114 @@ export function FormBuilder({
                     aria-label="Section heading"
                     className="w-full bg-transparent px-3 py-1.5 text-base font-medium text-primary placeholder:font-normal placeholder:text-muted-foreground focus:outline-none"
                   />
+                )}
+
+                {block.kind === "flow" && (
+                  // Narrower than the sheet and centred, the way it will be
+                  // printed: a chart is read down, and boxes stretched to the
+                  // full width would read as rows.
+                  <div className="px-3 py-2">
+                    <div className="mx-auto max-w-md">
+                      {block.steps.map((step, stepIndex) => (
+                        <div key={step.id}>
+                          {stepIndex > 0 && (
+                            <div
+                              className="flex justify-center py-1"
+                              aria-hidden
+                            >
+                              <ArrowDown className="size-4 text-muted-foreground" />
+                            </div>
+                          )}
+                          <div className="group/step relative flex items-start gap-1 rounded-md border border-border px-2.5 py-1">
+                            <ValueField
+                              line={step}
+                              numbers={numbers}
+                              flagged={flagged}
+                              markChecks={markChecks}
+                              selectedGap={selectedGap}
+                              onSelectGap={setSelectedGap}
+                              letterOf={letterOf}
+                              placeholder={
+                                stepIndex === 0 ? "First step" : "Then…"
+                              }
+                              registerInput={register(`${step.id}#0`)}
+                              onEnter={() => addStep(block.id)}
+                              onChange={(parts) =>
+                                editFlow(block.id, (flow) => ({
+                                  ...flow,
+                                  steps: flow.steps.map((s2) =>
+                                    s2.id === step.id ? { ...s2, parts } : s2,
+                                  ),
+                                }))
+                              }
+                              renderGapActions={(gapId) => {
+                                const gap = step.parts.find(
+                                  (part) =>
+                                    part.kind === "gap" && part.id === gapId,
+                                );
+                                if (!gap || gap.kind !== "gap") return null;
+                                return (
+                                  <GapActions
+                                    gapId={gapId}
+                                    replayStartMs={gap.replayStartMs ?? null}
+                                    replayEndMs={gap.replayEndMs ?? null}
+                                    markCheck={markChecks?.get(gapId)}
+                                    box={box}
+                                    chosen={gap.optionId ?? null}
+                                    onChoose={(optionId) =>
+                                      patchGapById(gapId, { optionId })
+                                    }
+                                    onMark={
+                                      onMarkAudio
+                                        ? () =>
+                                            onMarkAudio(
+                                              markPhrases(gap),
+                                              (range) =>
+                                                patchGapById(gapId, {
+                                                  replayStartMs: range.startMs,
+                                                  replayEndMs: range.endMs,
+                                                }),
+                                            )
+                                        : undefined
+                                    }
+                                    onClearMark={() =>
+                                      patchGapById(gapId, {
+                                        replayStartMs: null,
+                                        replayEndMs: null,
+                                      })
+                                    }
+                                    onUnblank={() => {
+                                      setSelectedGap(null);
+                                      unblank(gapId);
+                                    }}
+                                  />
+                                );
+                              }}
+                            />
+                            {block.steps.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => removeStep(block.id, step.id)}
+                                aria-label={`Remove step ${stepIndex + 1}`}
+                                title="Remove this step"
+                                className="absolute top-1 right-1 flex size-7 shrink-0 items-center justify-center rounded-md bg-card text-muted-foreground opacity-0 shadow-sm transition-opacity group-hover/step:opacity-100 hover:text-destructive focus-visible:opacity-100"
+                              >
+                                <X className="size-3.5" aria-hidden />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+
+                      <div className="mt-1.5 flex justify-center">
+                        <GrowButton
+                          onClick={() => addStep(block.id)}
+                          label="step"
+                          title="Add a step to the chart"
+                        />
+                      </div>
+                    </div>
+                  </div>
                 )}
 
                 {block.kind === "table" && (
@@ -1024,8 +1166,8 @@ export function FormBuilder({
             short-answer questions. Whichever this task is mostly made of
             leads; the other is still there, because a real paper mixes them. */}
         {labelFirst
-          ? [addRowTool, addLineTool, addTableTool]
-          : [addLineTool, addRowTool, addTableTool]}
+          ? [addRowTool, addLineTool, addTableTool, addFlowTool]
+          : [addLineTool, addRowTool, addTableTool, addFlowTool]}
         <ToolbarButton
           onClick={() => {
             const block: DocBlock = { id: newId(), kind: "heading", text: "" };
