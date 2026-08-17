@@ -55,29 +55,6 @@ export function FormCompletionGroup({
       <p className="text-sm text-foreground">{group.instructions}</p>
       {rubric && <p className="text-xs text-muted-foreground">{rubric}</p>}
 
-      {box.length > 0 && (
-        <>
-          <ul className="space-y-1 rounded-lg border border-border bg-background p-3">
-            {box.map((text, index) => (
-              <li key={index} className="flex items-baseline gap-2 text-sm">
-                <span
-                  aria-hidden
-                  className="flex size-5 shrink-0 items-center justify-center self-center rounded-full border border-border text-[11px] font-semibold text-muted-foreground"
-                >
-                  {matchLetter(index)}
-                </span>
-                <span className="text-foreground">{text}</span>
-              </li>
-            ))}
-          </ul>
-          {group.config.allow_reuse && (
-            <p className="text-xs text-muted-foreground">
-              NB You may use any letter more than once.
-            </p>
-          )}
-        </>
-      )}
-
       <div className="rounded-lg border border-border bg-background p-4">
         <FormLayout
           blocks={blocks}
@@ -169,6 +146,32 @@ export function FormCompletionGroup({
           }}
         />
       </div>
+
+      {/* Under the text, where the paper prints it: "complete the summary
+          below using the list of words below". The editor puts it in the same
+          place, so what the author lays out is what the candidate sits. */}
+      {box.length > 0 && (
+        <>
+          <ul className="space-y-1 rounded-lg border border-border bg-background p-3">
+            {box.map((text, index) => (
+              <li key={index} className="flex items-baseline gap-2 text-sm">
+                <span
+                  aria-hidden
+                  className="flex size-5 shrink-0 items-center justify-center self-center rounded-full border border-border text-[11px] font-semibold text-muted-foreground"
+                >
+                  {matchLetter(index)}
+                </span>
+                <span className="text-foreground">{text}</span>
+              </li>
+            ))}
+          </ul>
+          {group.config.allow_reuse && (
+            <p className="text-xs text-muted-foreground">
+              NB You may use any letter more than once.
+            </p>
+          )}
+        </>
+      )}
     </div>
   );
 }

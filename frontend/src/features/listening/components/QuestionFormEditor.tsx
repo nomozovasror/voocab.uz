@@ -381,23 +381,6 @@ export function QuestionFormEditor({
       {/* No separate preview: the builder is already laid out as the form, so
           a second copy below it would only be somewhere for the two to
           disagree. */}
-      {/* Above the sheet, because the letters have to exist before a gap can
-          be answered by one — and because that is where the author's eye goes
-          first when the paper says "using the list of words below". */}
-      {boxed && (
-        <div className="mb-3">
-          <OptionsBox
-            options={options}
-            onChange={onOptionsChange}
-            onRemove={onRemoveOption}
-            label="Options to choose from"
-            trailing={
-              <ReuseToggle value={allowReuse} onChange={onAllowReuseChange} />
-            }
-          />
-        </div>
-      )}
-
       <div ref={formRef}>
         <FormBuilder
           doc={doc}
@@ -411,6 +394,24 @@ export function QuestionFormEditor({
           extraTools={extraTools}
         />
       </div>
+
+      {/* Under the sheet, where the paper prints it: "complete the summary
+          below using the list of words below". Above it, the box was the first
+          thing on a block whose point is the text — and the author reads the
+          text first, then reaches for the letters. */}
+      {boxed && (
+        <div className="mt-3">
+          <OptionsBox
+            options={options}
+            onChange={onOptionsChange}
+            onRemove={onRemoveOption}
+            label="Options to choose from"
+            trailing={
+              <ReuseToggle value={allowReuse} onChange={onAllowReuseChange} />
+            }
+          />
+        </div>
+      )}
 
       {showsIssues && (
         <ul className="mt-2 space-y-1">
