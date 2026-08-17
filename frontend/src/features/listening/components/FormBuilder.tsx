@@ -598,17 +598,10 @@ export function FormBuilder({
                               )}
                             </th>
                           ))}
-                          <th scope="col" className="w-8 p-0 align-middle">
-                            <button
-                              type="button"
-                              onClick={() => addColumn(block.id)}
-                              aria-label="Add a column"
-                              title="Add a column"
-                              className="flex size-8 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-primary"
-                            >
-                              <Plus className="size-3.5" aria-hidden />
-                            </button>
-                          </th>
+                          {/* Left empty. The block's own menu is pinned to
+                              the top right corner, and anything put here sat
+                              underneath it. */}
+                          <th scope="col" className="w-8 p-0" />
                         </tr>
                       </thead>
                       <tbody>
@@ -689,19 +682,22 @@ export function FormBuilder({
                       </tbody>
                     </table>
 
-                    <button
-                      type="button"
-                      onClick={() => addTableRow(block.id)}
-                      title="Add a row to the table"
-                      className="group/addrow mt-1 flex items-center gap-1.5 text-left"
-                    >
-                      <span className="flex size-5 items-center justify-center rounded border border-dashed border-border text-muted-foreground transition-colors group-hover/addrow:border-primary group-hover/addrow:text-primary">
-                        <Plus className="size-3" aria-hidden />
-                      </span>
-                      <span className="text-sm text-muted-foreground/60 transition-colors group-hover/addrow:text-foreground">
-                        add a row
-                      </span>
-                    </button>
+                    {/* Both under the grid and centred on it: they are the
+                        two ways it grows, and neither belongs to any one row
+                        or column. Centred rather than tucked into the left
+                        corner, where "add a row" read as another cell. */}
+                    <div className="mt-1.5 flex items-center justify-center gap-4 pr-8">
+                      <GrowButton
+                        onClick={() => addTableRow(block.id)}
+                        label="row"
+                        title="Add a row to the table"
+                      />
+                      <GrowButton
+                        onClick={() => addColumn(block.id)}
+                        label="column"
+                        title="Add a column to the table"
+                      />
+                    </div>
                   </div>
                 )}
 
@@ -987,6 +983,35 @@ export function FormBuilder({
         {extraTools}
       </div>
     </div>
+  );
+}
+
+/** One of the two ways a table grows. Drawn like the builder's other "add
+ *  one more" affordances — a dashed marker and a quiet label — rather than as
+ *  a toolbar button: it belongs to this grid, not to the sheet. */
+function GrowButton({
+  onClick,
+  label,
+  title,
+}: {
+  onClick: () => void;
+  label: string;
+  title: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className="group/grow flex items-center gap-1.5"
+    >
+      <span className="flex size-5 shrink-0 items-center justify-center rounded border border-dashed border-border text-muted-foreground transition-colors group-hover/grow:border-primary group-hover/grow:text-primary">
+        <Plus className="size-3" aria-hidden />
+      </span>
+      <span className="text-sm text-muted-foreground/60 transition-colors group-hover/grow:text-foreground">
+        {label}
+      </span>
+    </button>
   );
 }
 
