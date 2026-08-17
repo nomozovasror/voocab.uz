@@ -305,10 +305,21 @@ function groupOrderSignature(part: PartState): string {
     .join(",");
 }
 
+/** Whether this group is one of the completion tasks — the ones holding a
+ *  document of gaps rather than lettered questions.
+ *
+ *  A guard over the group rather than a comparison to a type name, and that
+ *  is the whole point: written as `type === "form_completion"` it silently
+ *  answered no for the four tasks added beside it, and nine places asked it.
+ *  Written this way a sixth is picked up by all of them on its own. */
+function isCompletionGroup(group: GroupState): group is FormGroupState {
+  return group.type !== null && isCompletion(group.type);
+}
+
 /** How many questions a group holds, whichever kind it is. A group with no
  *  kind holds none. */
 function groupQuestionCount(group: GroupState): number {
-  if (group.type === "form_completion") return docGaps(group.doc).length;
+  if (isCompletionGroup(group)) return docGaps(group.doc).length;
   if (group.type === "multiple_choice") return group.questions.length;
   if (group.type === "matching") return group.items.length;
   return 0;
@@ -326,7 +337,7 @@ function groupNumberSpan(group: GroupState): number {
 
 /** Whether the author has put anything of their own into this group. */
 function isGroupEmpty(group: GroupState): boolean {
-  if (group.type === "form_completion") return isDocEmpty(group.doc);
+  if (isCompletionGroup(group)) return isDocEmpty(group.doc);
   if (group.type === "multiple_choice") return isChoiceGroupEmpty(group.questions);
   if (group.type === "matching") {
     return isMatchingGroupEmpty(group.options, group.items);
@@ -655,7 +666,7 @@ export default function StudioListeningEditorPage() {
   const editGroupDoc = useCallback(
     (key: string, edit: (current: DocBlock[]) => DocBlock[]) => {
       updateGroup(key, (group) =>
-        group.type === "form_completion"
+        isCompletionGroup(group)
           ? { ...group, doc: edit(group.doc) }
           : group,
       );
@@ -1500,7 +1511,7 @@ export default function StudioListeningEditorPage() {
       // The syntax and mcq modules own what "complete" means, so the publish
       // gate and the editor's own inline warnings can never disagree.
       const issue =
-        group.type === "form_completion"
+        isCompletionGroup(group)
           ? docPublishIssues(group.doc, startNumber - 1)[0]
           : group.type === "multiple_choice"
             ? choicePublishIssues(
@@ -1664,7 +1675,7 @@ export default function StudioListeningEditorPage() {
     const run = groupRun(state.parts);
 
     const gaps = run.flatMap(({ group }) =>
-      group.type === "form_completion" ? docGaps(group.doc) : [],
+      isCompletionGroup(group) ? docGaps(group.doc) : [],
     );
     const answered = gaps.filter((g) => g.answers.some((a) => a.trim()));
     const unmarked = answered.filter((g) => g.replayStartMs == null);
@@ -1834,7 +1845,7 @@ export default function StudioListeningEditorPage() {
   const marksForTranscript = useMemo(
     () =>
       run.flatMap(({ group, startNumber }) => {
-        if (group.type === "form_completion") {
+        if (isCompletionGroup(group)) {
           return answerMarks(group.doc, startNumber - 1);
         }
         if (group.type === "multiple_choice") return choiceMarks(group.questions);
@@ -1846,7 +1857,7 @@ export default function StudioListeningEditorPage() {
   const markChecksByGroup = useMemo(() => {
     const byGroup = new Map<string, ReturnType<typeof checkMarks>>();
     for (const { group } of run) {
-      if (group.type !== "form_completion") continue;
+      if (!isCompletionGroup(group)) continue;
       byGroup.set(group.key, checkMarks(group.doc, transcriptSegments));
     }
     return byGroup;
@@ -1857,7 +1868,7 @@ export default function StudioListeningEditorPage() {
   const authoredGapCount = useMemo(
     () =>
       run.reduce((total, { group }) => {
-        if (group.type === "form_completion") {
+        if (isCompletionGroup(group)) {
           return (
             total +
             docGaps(group.doc).filter((g) => g.answers.some((a) => a.trim()))
@@ -2417,7 +2428,7 @@ export default function StudioListeningEditorPage() {
                           rubric={group.rubric}
                           onRubricChange={(rubric) =>
                             updateGroup(group.key, (g) =>
-                              g.type === "form_completion"
+                              isCompletionGroup(g)
                                 ? {
                                     ...g,
                                     rubric,
