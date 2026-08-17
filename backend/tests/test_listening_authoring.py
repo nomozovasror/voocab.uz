@@ -659,3 +659,37 @@ async def test_renaming_the_task_keeps_its_gaps_and_changing_the_kind_does_not()
             assert after.isdisjoint(before)
     finally:
         await _cleanup(material.id, email)
+
+
+@pytest.mark.parametrize(
+    "task",
+    [
+        "form_completion",
+        "note_completion",
+        "sentence_completion",
+        "summary_completion",
+        "short_answer",
+        "table_completion",
+    ],
+)
+def test_every_completion_task_routes_to_the_one_schema(task: str) -> None:
+    """Six names, one payload. The tagged union discriminates on `type`, so
+    each of them has to be listed there — a name missing from the literal is
+    not a validation error the author could act on, it is a 422 on every save
+    of a task the editor happily offers."""
+    from pydantic import TypeAdapter
+
+    from app.schemas.listening import QuestionGroupIn
+
+    group = TypeAdapter(QuestionGroupIn).validate_python(
+        {
+            "type": task,
+            "instructions": "Complete it.",
+            "config": {"template": "+ Tour | Price\n+ Harbour | {{1}}"},
+            "questions": [{"number": 1, "correct_answers": ["£12"]}],
+        }
+    )
+    assert group.type == task
+    # Not a choice or matching payload, whichever completion task it is: the
+    # template and its gaps are all any of them carry.
+    assert group.config.template.startswith("+ Tour")

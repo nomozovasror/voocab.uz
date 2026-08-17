@@ -61,6 +61,58 @@ export function FormLayout({ blocks, renderGap, className }: FormLayoutProps) {
           );
         }
 
+        if (block.kind === "table") {
+          // An all-blank header row isn't drawn: that is how a table without
+          // one is written, and an empty band across the top of the grid
+          // would be a header saying nothing.
+          const hasHead = block.head.some((cell) => cell.trim());
+          return (
+            // Scrolls inside itself. A four-column table on a phone is wider
+            // than the page, and the page is not the thing that should move.
+            <div key={i} className="my-2 overflow-x-auto">
+              <table className="w-full border-collapse">
+                {hasHead && (
+                  <thead>
+                    <tr>
+                      {block.head.map((cell, c) => (
+                        <th
+                          key={c}
+                          scope="col"
+                          className="border border-border bg-foreground/5 px-2.5 py-1.5 text-left font-medium text-foreground"
+                        >
+                          {cell}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                )}
+                <tbody>
+                  {block.rows.map((row, r) => (
+                    <tr key={r}>
+                      {row.map((cell, c) => (
+                        <td
+                          key={c}
+                          className="border border-border px-2.5 py-1.5 align-top leading-7 text-foreground"
+                        >
+                          {cell.parts.map((part, k) =>
+                            part.kind === "text" ? (
+                              <Fragment key={k}>{part.text}</Fragment>
+                            ) : (
+                              <Fragment key={k}>
+                                {renderGap(part.number)}
+                              </Fragment>
+                            ),
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        }
+
         return (
           <div key={i} className="flex gap-3 py-0.5">
             {/* Full strength, like the value beside it: on the paper a label

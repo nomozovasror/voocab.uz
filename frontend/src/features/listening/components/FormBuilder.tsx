@@ -10,6 +10,7 @@ import {
   Heading,
   Minus,
   Plus,
+  Table,
   Trash2,
   Type,
   Undo2,
@@ -31,6 +32,8 @@ import {
   gapNumbers,
   newId,
   newRow,
+  newTable,
+  newTableRow,
   newTextLine,
   type DocBlock,
   type DocLine,
@@ -360,6 +363,78 @@ export function FormBuilder({
     );
   };
 
+  /** Any edit to a table, against the latest copy of it. Written as one
+   *  helper because every one of them has to leave the grid rectangular:
+   *  a column added to the header is a cell added to every row, and a column
+   *  removed takes its cell out of each. A ragged table renders as a grid with
+   *  holes, and the holes move as soon as anything is typed. */
+  const editTable = (
+    blockId: string,
+    edit: (table: Extract<DocBlock, { kind: "table" }>) => DocBlock,
+  ) =>
+    onChange((current) =>
+      current.map((b) => (b.id === blockId && b.kind === "table" ? edit(b) : b)),
+    );
+
+  const patchCell = (
+    blockId: string,
+    rowId: string,
+    cellId: string,
+    parts: DocPart[],
+  ) =>
+    editTable(blockId, (table) => ({
+      ...table,
+      rows: table.rows.map((row) =>
+        row.id === rowId
+          ? {
+              ...row,
+              cells: row.cells.map((cell) =>
+                cell.id === cellId ? { ...cell, parts } : cell,
+              ),
+            }
+          : row,
+      ),
+    }));
+
+  const addColumn = (blockId: string) =>
+    editTable(blockId, (table) => ({
+      ...table,
+      head: [...table.head, ""],
+      rows: table.rows.map((row) => ({
+        ...row,
+        cells: [...row.cells, newTextLine()],
+      })),
+    }));
+
+  const removeColumn = (blockId: string, index: number) =>
+    editTable(blockId, (table) =>
+      table.head.length <= 1
+        ? table
+        : {
+            ...table,
+            head: table.head.filter((_cell, i) => i !== index),
+            rows: table.rows.map((row) => ({
+              ...row,
+              cells: row.cells.filter((_cell, i) => i !== index),
+            })),
+          },
+    );
+
+  const addTableRow = (blockId: string) => {
+    const block = doc.find((b) => b.id === blockId);
+    if (!block || block.kind !== "table") return;
+    const row = newTableRow(block.head.length);
+    pendingFocus.current = `${row.cells[0].id}#0`;
+    editTable(blockId, (table) => ({ ...table, rows: [...table.rows, row] }));
+  };
+
+  const removeTableRow = (blockId: string, rowId: string) =>
+    editTable(blockId, (table) =>
+      table.rows.length <= 1
+        ? table
+        : { ...table, rows: table.rows.filter((row) => row.id !== rowId) },
+    );
+
   const removeLine = (blockId: string, lineId: string) => {
     const block = doc.find((b) => b.id === blockId);
     if (!block || block.kind !== "row" || block.lines.length <= 1) return;
@@ -393,6 +468,16 @@ export function FormBuilder({
       icon={<AlignLeft className="size-3.5" aria-hidden />}
       label="line"
       title="Add a full-width line at the end — for notes, sentences and short answers"
+    />
+  );
+
+  const addTableTool = (
+    <ToolbarButton
+      key="table"
+      onClick={() => addBlock(newTable())}
+      icon={<Table className="size-3.5" aria-hidden />}
+      label="table"
+      title="Add a table at the end"
     />
   );
 
@@ -466,6 +551,158 @@ export function FormBuilder({
                     aria-label="Section heading"
                     className="w-full bg-transparent px-3 py-1.5 text-base font-medium text-primary placeholder:font-normal placeholder:text-muted-foreground focus:outline-none"
                   />
+                )}
+
+                {block.kind === "table" && (
+                  // A real table, so the columns size themselves to what is in
+                  // them the way the printed grid does. The trailing narrow
+                  // column is the controls': a plus in its header adds a
+                  // column, an × on each row takes that row out.
+                  <div className="overflow-x-auto px-3 py-2">
+                    <table className="w-full border-collapse">
+                      <thead>
+                        <tr>
+                          {block.head.map((cell, index) => (
+                            <th
+                              key={index}
+                              scope="col"
+                              className="group/col relative border border-border bg-foreground/5 p-0 text-left align-middle"
+                            >
+                              <input
+                                type="text"
+                                value={cell}
+                                onChange={(e) =>
+                                  editTable(block.id, (table) => ({
+                                    ...table,
+                                    head: table.head.map((h, i) =>
+                                      i === index ? e.target.value : h,
+                                    ),
+                                  }))
+                                }
+                                placeholder="Column"
+                                aria-label={`Column ${index + 1} heading`}
+                                className="w-full bg-transparent px-2.5 py-1.5 pr-7 text-base font-medium text-foreground placeholder:font-normal placeholder:text-muted-foreground/50 focus:outline-none"
+                              />
+                              {/* One column is the fewest a table can have;
+                                  below that there is no grid. */}
+                              {block.head.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => removeColumn(block.id, index)}
+                                  aria-label={`Remove column ${index + 1}`}
+                                  title="Remove this column"
+                                  className="absolute top-1/2 right-1 flex size-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover/col:opacity-100 hover:text-destructive focus-visible:opacity-100"
+                                >
+                                  <X className="size-3.5" aria-hidden />
+                                </button>
+                              )}
+                            </th>
+                          ))}
+                          <th scope="col" className="w-8 p-0 align-middle">
+                            <button
+                              type="button"
+                              onClick={() => addColumn(block.id)}
+                              aria-label="Add a column"
+                              title="Add a column"
+                              className="flex size-8 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-primary"
+                            >
+                              <Plus className="size-3.5" aria-hidden />
+                            </button>
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {block.rows.map((row, rowIndex) => (
+                          <tr key={row.id} className="group/row">
+                            {row.cells.map((cell) => (
+                              <td
+                                key={cell.id}
+                                className="border border-border px-2.5 py-1 align-top"
+                              >
+                                <ValueField
+                                  line={cell}
+                                  numbers={numbers}
+                                  flagged={flagged}
+                                  markChecks={markChecks}
+                                  selectedGap={selectedGap}
+                                  onSelectGap={setSelectedGap}
+                                  registerInput={register(`${cell.id}#0`)}
+                                  onEnter={() => addTableRow(block.id)}
+                                  onChange={(parts) =>
+                                    patchCell(block.id, row.id, cell.id, parts)
+                                  }
+                                  renderGapActions={(gapId) => {
+                                    const gap = cell.parts.find(
+                                      (p) => p.kind === "gap" && p.id === gapId,
+                                    );
+                                    if (!gap || gap.kind !== "gap") return null;
+                                    return (
+                                      <GapActions
+                                        gapId={gapId}
+                                        replayStartMs={gap.replayStartMs ?? null}
+                                        replayEndMs={gap.replayEndMs ?? null}
+                                        markCheck={markChecks?.get(gapId)}
+                                        onMark={
+                                          onMarkAudio
+                                            ? () =>
+                                                onMarkAudio(
+                                                  gap.answers,
+                                                  (range) =>
+                                                    patchGapById(gapId, {
+                                                      replayStartMs: range.startMs,
+                                                      replayEndMs: range.endMs,
+                                                    }),
+                                                )
+                                            : undefined
+                                        }
+                                        onClearMark={() =>
+                                          patchGapById(gapId, {
+                                            replayStartMs: null,
+                                            replayEndMs: null,
+                                          })
+                                        }
+                                        onUnblank={() => {
+                                          setSelectedGap(null);
+                                          unblank(gapId);
+                                        }}
+                                      />
+                                    );
+                                  }}
+                                />
+                              </td>
+                            ))}
+                            <td className="w-8 p-0 align-middle">
+                              {block.rows.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => removeTableRow(block.id, row.id)}
+                                  aria-label={`Remove row ${rowIndex + 1}`}
+                                  title="Remove this row"
+                                  className="flex size-8 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover/row:opacity-100 hover:text-destructive focus-visible:opacity-100"
+                                >
+                                  <X className="size-3.5" aria-hidden />
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+
+                    <button
+                      type="button"
+                      onClick={() => addTableRow(block.id)}
+                      title="Add a row to the table"
+                      className="group/addrow mt-1 flex items-center gap-1.5 text-left"
+                    >
+                      <span className="flex size-5 items-center justify-center rounded border border-dashed border-border text-muted-foreground transition-colors group-hover/addrow:border-primary group-hover/addrow:text-primary">
+                        <Plus className="size-3" aria-hidden />
+                      </span>
+                      <span className="text-sm text-muted-foreground/60 transition-colors group-hover/addrow:text-foreground">
+                        add a row
+                      </span>
+                    </button>
+                  </div>
                 )}
 
                 {block.kind === "row" && (
@@ -718,7 +955,9 @@ export function FormBuilder({
             whole width — the notes, the sentences, the summary, the
             short-answer questions. Whichever this task is mostly made of
             leads; the other is still there, because a real paper mixes them. */}
-        {labelFirst ? [addRowTool, addLineTool] : [addLineTool, addRowTool]}
+        {labelFirst
+          ? [addRowTool, addLineTool, addTableTool]
+          : [addLineTool, addRowTool, addTableTool]}
         <ToolbarButton
           onClick={() => {
             const block: DocBlock = { id: newId(), kind: "heading", text: "" };

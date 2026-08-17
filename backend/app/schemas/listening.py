@@ -32,7 +32,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-#: The tasks answered by writing the missing words. One payload shape, five
+#: The tasks answered by writing the missing words. One payload shape, six
 #: names, because that is how the paper prints them and how an author thinks
 #: about them — see :data:`app.models.question_group.COMPLETION_TYPES`.
 CompletionType = Literal[
@@ -41,6 +41,7 @@ CompletionType = Literal[
     "sentence_completion",
     "summary_completion",
     "short_answer",
+    "table_completion",
 ]
 
 QuestionGroupType = Literal[
@@ -49,6 +50,7 @@ QuestionGroupType = Literal[
     "sentence_completion",
     "summary_completion",
     "short_answer",
+    "table_completion",
     "multiple_choice",
     "matching",
 ]
@@ -387,7 +389,7 @@ class FormCompletionGroupIn(_QuestionGroupInBase):
     questions, authored and validated as one atomic unit (§5 — no per-gap
     endpoint).
 
-    One schema for all five completion tasks. They carry the same fields and
+    One schema for all six completion tasks. They carry the same fields and
     are checked the same way — what differs between a form and a set of notes
     is the shape of the template, which is the author's business and not
     something to validate. The discriminator accepts all five so a payload is

@@ -6,6 +6,7 @@ import {
   ListChecks,
   Pilcrow,
   Rows3,
+  Table,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type {
@@ -41,11 +42,12 @@ export const QUESTION_TYPE_LABEL: Record<QuestionGroupType, string> = {
   sentence_completion: "Sentence completion",
   summary_completion: "Summary completion",
   short_answer: "Short answer",
+  table_completion: "Table completion",
   multiple_choice: "Multiple choice",
   matching: "Matching",
 };
 
-/** What each type is, for the moment of choosing between them. The five
+/** What each type is, for the moment of choosing between them. The six
  *  completion tasks are one document underneath, so what these say is what
  *  actually tells them apart: the shape of the sheet. */
 export const QUESTION_TYPE_BLURB: Record<QuestionGroupType, string> = {
@@ -54,6 +56,7 @@ export const QUESTION_TYPE_BLURB: Record<QuestionGroupType, string> = {
   sentence_completion: "Separate sentences, each with a gap",
   summary_completion: "A paragraph with gaps in it",
   short_answer: "Questions answered in a few words",
+  table_completion: "A grid with gaps in its cells",
   multiple_choice: "Lettered options, one or several right",
   matching: "One box of options, answering a list of items",
 };
@@ -67,6 +70,7 @@ export const QUESTION_TYPE_RUBRIC: Record<CompletionType, string> = {
   sentence_completion: "Complete the sentences below.",
   summary_completion: "Complete the summary below.",
   short_answer: "Answer the questions below.",
+  table_completion: "Complete the table below.",
 };
 
 /** And one mark per type, for the same reason: a type is recognised by its
@@ -80,6 +84,7 @@ export const QUESTION_TYPE_ICON: Record<QuestionGroupType, LucideIcon> = {
   // different from the sentences above it: it is one block of prose.
   summary_completion: Pilcrow,
   short_answer: CircleQuestionMark,
+  table_completion: Table,
   multiple_choice: ListChecks,
   matching: ArrowLeftRight,
 };
@@ -90,10 +95,16 @@ const PART_TYPES: QuestionGroupType[][] = [
   // Part 1 — a transactional conversation: the form, the notes taken from it,
   // and the short answers that sometimes follow. Never multiple choice, never
   // matching.
-  ["form_completion", "note_completion", "short_answer"],
+  ["form_completion", "note_completion", "table_completion", "short_answer"],
   // Part 2 — map/plan labelling (not built), matching, multiple choice,
   // note and sentence completion.
-  ["multiple_choice", "matching", "note_completion", "sentence_completion"],
+  [
+    "multiple_choice",
+    "matching",
+    "note_completion",
+    "sentence_completion",
+    "table_completion",
+  ],
   // Part 3 — multiple choice most of all, then matching, then the completion
   // tasks a discussion lends itself to.
   [
@@ -111,6 +122,7 @@ const PART_TYPES: QuestionGroupType[][] = [
     "note_completion",
     "summary_completion",
     "sentence_completion",
+    "table_completion",
     "multiple_choice",
   ],
 ];
@@ -131,13 +143,13 @@ export function questionTypesForPart(orderIndex: number): QuestionGroupType[] {
 
 //: What each part asks that we can't author yet — a list of choices should
 //: read as "these are the ones built", not "these are the ones allowed".
-//: What is left is the three that need a layout the completion sheet can't
-//: express: a grid, an image, a chart of boxes and arrows.
+//: What is left needs something the completion sheet still can't draw: an
+//: image, or a chart of boxes and arrows.
 const MISSING_TYPES: (string | null)[] = [
-  "table completion",
-  "map/plan labelling and table completion",
   null,
-  "diagram labelling, table completion and flow-chart completion",
+  "map/plan labelling",
+  null,
+  "diagram labelling and flow-chart completion",
 ];
 
 /** What this part characteristically asks that we can't author yet, phrased

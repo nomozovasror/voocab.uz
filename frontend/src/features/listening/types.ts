@@ -84,7 +84,7 @@ export interface PartOut {
 }
 
 /** The tasks answered by writing the missing words. One document, one
- *  payload, five names — because that is how the paper prints them and how an
+ *  payload, six names — because that is how the paper prints them and how an
  *  author thinks about them. What differs is the wording of the rubric and the
  *  shape the sheet takes; what doesn't is anything the server checks. */
 export type CompletionType =
@@ -92,7 +92,8 @@ export type CompletionType =
   | "note_completion"
   | "sentence_completion"
   | "summary_completion"
-  | "short_answer";
+  | "short_answer"
+  | "table_completion";
 
 export type QuestionGroupType =
   | CompletionType

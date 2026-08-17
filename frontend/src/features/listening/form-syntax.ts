@@ -42,6 +42,19 @@ import type {
  *     ## Museum tour
  *     - Meet outside the {{1}} at 4 pm
  *     - Tour lasts {{2}} minutes
+ *
+ * A table is a run of `+` lines, cells separated by the same bar. The first
+ * of the run is the header row — which is what a table's first row is on the
+ * paper, and leaving it blank is how a table without one is written:
+ *
+ *     + Tour | Price | Departs
+ *     + Harbour trip | £12 | {{1}}
+ *     + City walk | {{2}} | 11 am
+ *
+ * The `+` is what makes them unambiguous. A bar-delimited line on its own
+ * already means something here — a label and its value, or, with nothing
+ * before the bar, a continuation of the row above — so a table's rows have to
+ * say that is what they are.
  */
 
 // ── Layout model (what gets rendered, by the builder and the take page) ───
@@ -59,6 +72,10 @@ export type FormBlock =
   | { kind: "title"; text: string }
   | { kind: "heading"; text: string }
   | { kind: "row"; label: string; lines: FormLine[] }
+  /** A grid. `head` is the header row, given rather than answered — a table
+   *  completion never gaps its own headers. Every body row carries one cell
+   *  per column, padded on the way in so the grid is always rectangular. */
+  | { kind: "table"; head: string[]; rows: FormLine[][] }
   /** A rule across the form. On the printed page these separate groups of
    *  fields rather than every row, so they are placed, never implied. */
   | { kind: "divider" }
@@ -88,6 +105,26 @@ function separatorIndex(line: string): number {
     if (line[i] === "|") return i;
   }
   return -1;
+}
+
+/** Every `|`-separated field of a line, taking escaped bars as text. For a
+ *  table row, where the bar is a column boundary rather than the one break
+ *  between a label and its value. */
+function splitCells(line: string): string[] {
+  const cells: string[] = [];
+  let start = 0;
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (line[i] === "|") {
+      cells.push(line.slice(start, i));
+      start = i + 1;
+    }
+  }
+  cells.push(line.slice(start));
+  return cells.map((cell) => cell.trim());
 }
 
 // ── Parsing a stored template into layout ────────────────────────────────
@@ -123,23 +160,29 @@ function parseBlocks(
 ): FormBlock[] {
   const blocks: FormBlock[] = [];
   let openRow: Extract<FormBlock, { kind: "row" }> | null = null;
+  let openTable: Extract<FormBlock, { kind: "table" }> | null = null;
+  /** Anything that isn't another cell closes both. */
+  const closeBlocks = () => {
+    openRow = null;
+    openTable = null;
+  };
 
   for (const raw of masked.split("\n")) {
     const line = raw.replace(/\s+$/, "");
     if (!line.trim()) {
-      openRow = null;
+      closeBlocks();
       blocks.push({ kind: "space" });
       continue;
     }
 
     const trimmed = line.trim();
     if (/^-{3,}$/.test(trimmed)) {
-      openRow = null;
+      closeBlocks();
       blocks.push({ kind: "divider" });
       continue;
     }
     if (trimmed.startsWith("## ")) {
-      openRow = null;
+      closeBlocks();
       blocks.push({
         kind: "heading",
         text: unescapePipes(trimmed.slice(3).trim()),
@@ -147,10 +190,33 @@ function parseBlocks(
       continue;
     }
     if (trimmed.startsWith("# ")) {
-      openRow = null;
+      closeBlocks();
       blocks.push({ kind: "title", text: unescapePipes(trimmed.slice(2).trim()) });
       continue;
     }
+    if (trimmed === "+" || trimmed.startsWith("+ ")) {
+      const cells = splitCells(trimmed.slice(1).trim());
+      openRow = null;
+      if (openTable) {
+        // A cell is a line, which is what lets the editor put the same value
+        // field in one as it puts in a form's value.
+        openTable.rows.push(
+          cells.map((cell) => ({ bullet: false, parts: splitParts(cell, numberOf) })),
+        );
+      } else {
+        // The first row of a run is the header. That is what a table's first
+        // row is on the paper, and it is why a headerless one is written by
+        // leaving these blank rather than by leaving the line out.
+        openTable = {
+          kind: "table",
+          head: cells.map(unescapePipes),
+          rows: [],
+        };
+        blocks.push(openTable);
+      }
+      continue;
+    }
+    openTable = null;
 
     const bar = separatorIndex(trimmed);
     const label = bar >= 0 ? trimmed.slice(0, bar).trim() : "";
@@ -173,6 +239,21 @@ function parseBlocks(
 
   while (blocks.length > 0 && blocks[blocks.length - 1].kind === "space") {
     blocks.pop();
+  }
+
+  // Squared off after the fact rather than refused: a template written
+  // elsewhere, or one an edit left ragged, still has to render as a grid, and
+  // a row a cell short is a row with an empty cell.
+  for (const block of blocks) {
+    if (block.kind !== "table") continue;
+    const columns = Math.max(
+      block.head.length,
+      ...block.rows.map((row) => row.length),
+    );
+    while (block.head.length < columns) block.head.push("");
+    for (const row of block.rows) {
+      while (row.length < columns) row.push({ bullet: false, parts: [] });
+    }
   }
   return blocks;
 }
@@ -213,11 +294,20 @@ export interface DocLine {
   parts: DocPart[];
 }
 
+export interface DocTableRow {
+  id: string;
+  /** One per column. A cell is a line, so the builder puts the same value
+   *  field in it that it puts in a form's value, and a gap works the same way
+   *  wherever it is. */
+  cells: DocLine[];
+}
+
 export type DocBlock =
   | { id: string; kind: "title"; text: string }
   | { id: string; kind: "heading"; text: string }
   | { id: string; kind: "divider" }
-  | { id: string; kind: "row"; label: string; lines: DocLine[] };
+  | { id: string; kind: "row"; label: string; lines: DocLine[] }
+  | { id: string; kind: "table"; head: string[]; rows: DocTableRow[] };
 
 let idCounter = 0;
 export function newId(): string {
@@ -238,16 +328,40 @@ export function newRow(label = ""): Extract<DocBlock, { kind: "row" }> {
   return { id: newId(), kind: "row", label, lines: [newTextLine()] };
 }
 
+/** How wide and deep a table starts. Three columns and two body rows is the
+ *  commonest shape on the paper, and a grid with something in every direction
+ *  is quicker to read than one cell asking to be grown. */
+const TABLE_COLUMNS = 3;
+const TABLE_ROWS = 2;
+
+export function newTableRow(columns: number): DocTableRow {
+  return {
+    id: newId(),
+    cells: Array.from({ length: columns }, () => newTextLine()),
+  };
+}
+
+export function newTable(): DocBlock {
+  return {
+    id: newId(),
+    kind: "table",
+    head: Array.from({ length: TABLE_COLUMNS }, () => ""),
+    rows: Array.from({ length: TABLE_ROWS }, () => newTableRow(TABLE_COLUMNS)),
+  };
+}
+
 /** The sheet a new group starts as.
  *
- *  A form starts as a labelled row; every other completion task starts as one
- *  full-width line, bulleted for notes because that is how notes are printed.
+ *  A form starts as a labelled row, a table as a grid; every other completion
+ *  task starts as one full-width line, bulleted for notes because that is how
+ *  notes are printed.
  *
  *  A starting point, not a constraint. Every block is reachable from every
  *  task — an author writing notes with a labelled row among them is writing
  *  the paper in front of them, and the five tasks are one document underneath
  *  precisely so that costs nothing. */
 export function newDoc(type: CompletionType = "form_completion"): DocBlock[] {
+  if (type === "table_completion") return [newTable()];
   const row = newRow();
   if (type !== "note_completion") return [row];
   return [{ ...row, lines: [{ ...row.lines[0], bullet: true }] }];
@@ -264,20 +378,24 @@ export interface DocGap {
 
 export function docGaps(doc: DocBlock[]): DocGap[] {
   const gaps: DocGap[] = [];
+  const take = (line: DocLine) => {
+    for (const part of line.parts) {
+      if (part.kind !== "gap") continue;
+      gaps.push({
+        id: part.id,
+        number: gaps.length + 1,
+        answers: part.answers,
+        replayStartMs: part.replayStartMs,
+        replayEndMs: part.replayEndMs,
+      });
+    }
+  };
   for (const block of doc) {
-    if (block.kind !== "row") continue;
-    for (const line of block.lines) {
-      for (const part of line.parts) {
-        if (part.kind === "gap") {
-          gaps.push({
-            id: part.id,
-            number: gaps.length + 1,
-            answers: part.answers,
-            replayStartMs: part.replayStartMs,
-            replayEndMs: part.replayEndMs,
-          });
-        }
-      }
+    // Reading order, which is the order the paper numbers them in: down the
+    // rows, left to right across each.
+    if (block.kind === "row") block.lines.forEach(take);
+    else if (block.kind === "table") {
+      for (const row of block.rows) row.cells.forEach(take);
     }
   }
   return gaps;
@@ -321,6 +439,15 @@ export function docToGroup(doc: DocBlock[]): {
       lines.push(`## ${escapePipes(block.text)}`);
       continue;
     }
+    if (block.kind === "table") {
+      lines.push(`+ ${block.head.map(escapePipes).join(" | ")}`);
+      for (const row of block.rows) {
+        lines.push(
+          `+ ${row.cells.map((cell) => lineToText(cell, numberOf)).join(" | ")}`,
+        );
+      }
+      continue;
+    }
     block.lines.forEach((line, i) => {
       const body = lineToText(line, numberOf);
       if (i === 0) {
@@ -345,6 +472,30 @@ export function docToGroup(doc: DocBlock[]): {
   return { template: lines.join("\n").trim(), questions };
 }
 
+/** One rendered line back into an editable one, with the answers and marks
+ *  its gaps had. Shared by a form's values and a table's cells: a cell is a
+ *  line, so there is one conversion rather than two that can drift. */
+function docLine(
+  line: FormLine,
+  byNumber: Map<number, ListeningQuestion>,
+): DocLine {
+  return {
+    id: newId(),
+    bullet: line.bullet,
+    parts: line.parts.map((part) =>
+      part.kind === "text"
+        ? { kind: "text" as const, text: part.text }
+        : {
+            kind: "gap" as const,
+            id: newId(),
+            answers: byNumber.get(part.number)?.correct_answers ?? [],
+            replayStartMs: byNumber.get(part.number)?.replay_start_ms ?? null,
+            replayEndMs: byNumber.get(part.number)?.replay_end_ms ?? null,
+          },
+    ),
+  };
+}
+
 /** The inverse, for reopening a saved material. */
 export function docFromGroup(
   template: string,
@@ -363,25 +514,23 @@ export function docFromGroup(
       doc.push({ id: newId(), kind: block.kind, text: block.text });
       continue;
     }
+    if (block.kind === "table") {
+      doc.push({
+        id: newId(),
+        kind: "table",
+        head: block.head,
+        rows: block.rows.map((cells) => ({
+          id: newId(),
+          cells: cells.map((cell) => docLine(cell, byNumber)),
+        })),
+      });
+      continue;
+    }
     doc.push({
       id: newId(),
       kind: "row",
       label: block.label,
-      lines: block.lines.map((line) => ({
-        id: newId(),
-        bullet: line.bullet,
-        parts: line.parts.map((part) =>
-          part.kind === "text"
-            ? { kind: "text" as const, text: part.text }
-            : {
-                kind: "gap" as const,
-                id: newId(),
-                answers: byNumber.get(part.number)?.correct_answers ?? [],
-                replayStartMs: byNumber.get(part.number)?.replay_start_ms ?? null,
-                replayEndMs: byNumber.get(part.number)?.replay_end_ms ?? null,
-              },
-        ),
-      })),
+      lines: block.lines.map((line) => docLine(line, byNumber)),
     });
   }
 
@@ -391,24 +540,32 @@ export function docFromGroup(
 /** The document as layout, for rendering it exactly as the take page will. */
 export function docToLayout(doc: DocBlock[]): FormBlock[] {
   const numbers = gapNumbers(doc);
-  return doc.map((block) =>
-    block.kind === "divider"
-      ? { kind: "divider" as const }
-      : block.kind === "row"
-        ? {
-          kind: "row" as const,
-          label: block.label,
-          lines: block.lines.map((line) => ({
-            bullet: line.bullet,
-            parts: line.parts.map((part) =>
-              part.kind === "text"
-                ? { kind: "text" as const, text: part.text }
-                : { kind: "gap" as const, number: numbers.get(part.id) ?? 0 },
-            ),
-          })),
-        }
-      : { kind: block.kind, text: block.text },
-  );
+  const line = (l: DocLine): FormLine => ({
+    bullet: l.bullet,
+    parts: l.parts.map((part) =>
+      part.kind === "text"
+        ? { kind: "text" as const, text: part.text }
+        : { kind: "gap" as const, number: numbers.get(part.id) ?? 0 },
+    ),
+  });
+  return doc.map((block) => {
+    if (block.kind === "divider") return { kind: "divider" as const };
+    if (block.kind === "row") {
+      return {
+        kind: "row" as const,
+        label: block.label,
+        lines: block.lines.map(line),
+      };
+    }
+    if (block.kind === "table") {
+      return {
+        kind: "table" as const,
+        head: block.head,
+        rows: block.rows.map((row) => row.cells.map(line)),
+      };
+    }
+    return { kind: block.kind, text: block.text };
+  });
 }
 
 // ── Validation ───────────────────────────────────────────────────────────
@@ -469,13 +626,19 @@ export function isGroupPersistable(doc: DocBlock[]): boolean {
 
 /** Whether the author has put anything of their own in yet. */
 export function isDocEmpty(doc: DocBlock[]): boolean {
+  const blank = (line: DocLine) =>
+    line.parts.every((p) => p.kind === "text" && p.text.trim() === "");
   return doc.every((block) => {
     if (block.kind === "divider") return true;
+    if (block.kind === "table") {
+      return (
+        block.head.every((cell) => !cell.trim()) &&
+        block.rows.every((row) => row.cells.every(blank))
+      );
+    }
     if (block.kind !== "row") return block.text.trim() === "";
     if (block.label.trim()) return false;
-    return block.lines.every((line) =>
-      line.parts.every((p) => p.kind === "text" && p.text.trim() === ""),
-    );
+    return block.lines.every(blank);
   });
 }
 

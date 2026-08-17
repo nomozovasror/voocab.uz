@@ -16,8 +16,8 @@ import type { AnswerRubric, CompletionType } from "@/features/listening/types";
 interface QuestionFormEditorProps {
   /** Which completion task this group is. It decides what the group is
    *  called, what the instruction line offers as a placeholder, and which of
-   *  the builder's two "add something" buttons leads — and nothing else, since
-   *  the five tasks are one document underneath. */
+   *  the builder's "add something" buttons lead with — and nothing else, since
+   *  the six tasks are one document underneath. */
   task: CompletionType;
   doc: DocBlock[];
   /** Applied against the latest document — see FormBuilder's note. */
