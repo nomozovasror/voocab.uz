@@ -508,3 +508,213 @@ async def test_publishing_asks_for_a_box_that_can_answer_every_item() -> None:
             assert said == "Attach the audio recording."
     finally:
         await _cleanup(material.id, email)
+
+
+# --- A completion task with a box --------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_summary_with_a_box_is_answered_and_graded_in_letters() -> None:
+    """"Complete the summary using the list of words, A–H" is matching whose
+    items are gaps in a paragraph. The same summary without the box is answered
+    in words — so what decides is the box, not the group's type, and grading
+    that read the type alone would compare a submitted letter against the
+    words of an option and mark every answer wrong."""
+    owner_email = "boxed-owner@example.com"
+    taker_email = "boxed-taker@example.com"
+    owner = await _make_user(owner_email)
+    taker = await _make_user(taker_email)
+    material = await _make_material(owner.id)
+    owner_token = create_access_token(str(owner.id))
+    taker_token = create_access_token(str(taker.id))
+
+    try:
+        async with _client() as client:
+            part_id = await _seed_part(client, owner_token, material.id)
+            r = await client.post(
+                f"/api/parts/{part_id}/question-groups",
+                json={
+                    "type": "summary_completion",
+                    "instructions": "Complete the summary using the list of words.",
+                    "config": {
+                        "template": "The tour leaves from the {{1}} and ends at the {{2}}.",
+                        "options": ["harbour", "museum", "station"],
+                        "allow_reuse": False,
+                    },
+                    "questions": [
+                        {
+                            "number": 1,
+                            "correct_answers": ["a"],
+                            "replay_start_ms": 1_000,
+                            "replay_end_ms": 4_000,
+                        },
+                        {
+                            "number": 2,
+                            "correct_answers": ["c"],
+                            "replay_start_ms": 8_000,
+                            "replay_end_ms": 11_000,
+                        },
+                    ],
+                },
+                cookies={"access_token": owner_token},
+            )
+            assert r.status_code == 201, r.text
+            body = r.json()
+            assert body["config"]["options"] == ["harbour", "museum", "station"]
+            ids = [q["id"] for q in body["questions"]]
+
+            # A letter the box hasn't got is refused, the same as it is for a
+            # matching item — and so is answering one gap with two letters.
+            for answers in (["f"], ["a", "b"]):
+                bad = await client.patch(
+                    f"/api/question-groups/{body['id']}",
+                    json={
+                        "type": "summary_completion",
+                        "instructions": "Complete the summary.",
+                        "config": {
+                            "template": "The tour leaves from the {{1}}.",
+                            "options": ["harbour", "museum"],
+                        },
+                        "questions": [{"number": 1, "correct_answers": answers}],
+                    },
+                    cookies={"access_token": owner_token},
+                )
+                assert bad.status_code == 422, bad.text
+        await _make_public(material.id)
+
+        async with _client() as client:
+            r_take = await client.get(
+                f"/api/materials/{material.id}/take",
+                cookies={"access_token": taker_token},
+            )
+            assert r_take.status_code == 200, r_take.text
+            group = r_take.json()["parts"][0]["question_groups"][0]
+            # The box reaches the candidate — they cannot answer without it —
+            # and the key does not.
+            assert group["config"]["options"] == ["harbour", "museum", "station"]
+            assert "correct_answers" not in r_take.text
+
+            r_attempt = await client.post(
+                f"/api/materials/{material.id}/attempts",
+                json={
+                    "answers": [
+                        {"question_id": ids[0], "given_answer": "A"},
+                        {"question_id": ids[1], "given_answer": "harbour"},
+                    ]
+                },
+                cookies={"access_token": taker_token},
+            )
+            assert r_attempt.status_code == 200, r_attempt.text
+            result = r_attempt.json()
+            by_id = {r["question_id"]: r for r in result["results"]}
+            # The letter is right whatever its case; the option's own words are
+            # not an answer here, because the paper asked for a letter.
+            assert by_id[ids[0]]["is_correct"] is True
+            assert by_id[ids[1]]["is_correct"] is False
+            assert result["score"] == 1
+            assert result["total_questions"] == 2
+    finally:
+        await _cleanup(material.id, owner_email, taker_email)
+
+
+@pytest.mark.asyncio
+async def test_publishing_holds_a_boxed_summary_to_the_same_rules_as_matching() -> None:
+    email = "boxed-publish@example.com"
+    owner = await _make_user(email)
+    material = await _make_material(owner.id)
+    token = create_access_token(str(owner.id))
+
+    try:
+        async with _client() as client:
+            part_id = await _seed_part(client, token, material.id)
+            r = await client.post(
+                f"/api/parts/{part_id}/question-groups",
+                json={
+                    "type": "summary_completion",
+                    "instructions": "Complete the summary using the list of words.",
+                    "config": {
+                        "template": "It leaves the {{1}} and returns to the {{2}}.",
+                        "options": ["harbour"],
+                        "allow_reuse": False,
+                    },
+                    "questions": [
+                        {"number": 1, "correct_answers": ["a"]},
+                        {"number": 2, "correct_answers": []},
+                    ],
+                },
+                cookies={"access_token": token},
+            )
+            assert r.status_code == 201, r.text
+            group_id = r.json()["id"]
+
+            said = " ".join(await _blockers(material.id))
+            assert "at least two options" in said
+            # Worded for a box: there is no field to type an answer into.
+            assert "Question 2 is without a letter from the box" in said
+            assert "not linked to the audio" in said
+
+            # Two gaps on one letter, where each letter answers one gap.
+            r_two = await client.patch(
+                f"/api/question-groups/{group_id}",
+                json={
+                    "type": "summary_completion",
+                    "instructions": "Complete the summary using the list of words.",
+                    "config": {
+                        "template": "It leaves the {{1}} and returns to the {{2}}.",
+                        "options": ["harbour", "museum"],
+                        "allow_reuse": False,
+                    },
+                    "questions": [
+                        {
+                            "number": 1,
+                            "correct_answers": ["a"],
+                            "replay_start_ms": 1_000,
+                            "replay_end_ms": 4_000,
+                        },
+                        {
+                            "number": 2,
+                            "correct_answers": ["a"],
+                            "replay_start_ms": 8_000,
+                            "replay_end_ms": 11_000,
+                        },
+                    ],
+                },
+                cookies={"access_token": token},
+            )
+            assert r_two.status_code == 200, r_two.text
+            said = " ".join(await _blockers(material.id))
+            assert "already uses" in said
+
+            # Letting a letter be reused settles it: the recording may well
+            # name the same place twice.
+            r_reuse = await client.patch(
+                f"/api/question-groups/{group_id}",
+                json={
+                    "type": "summary_completion",
+                    "instructions": "Complete the summary using the list of words.",
+                    "config": {
+                        "template": "It leaves the {{1}} and returns to the {{2}}.",
+                        "options": ["harbour", "museum"],
+                        "allow_reuse": True,
+                    },
+                    "questions": [
+                        {
+                            "number": 1,
+                            "correct_answers": ["a"],
+                            "replay_start_ms": 1_000,
+                            "replay_end_ms": 4_000,
+                        },
+                        {
+                            "number": 2,
+                            "correct_answers": ["a"],
+                            "replay_start_ms": 8_000,
+                            "replay_end_ms": 11_000,
+                        },
+                    ],
+                },
+                cookies={"access_token": token},
+            )
+            assert r_reuse.status_code == 200, r_reuse.text
+            assert await _blockers(material.id) == ["Attach the audio recording."]
+    finally:
+        await _cleanup(material.id, email)

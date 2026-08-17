@@ -420,8 +420,8 @@ async def get_material_questions(
 # --- Consumption read tree (§7, §3.4) ---------------------------------------
 
 
-#: The types whose ``correct_answers`` is an answer key of option letters
-#: rather than a list of accepted phrasings. What separates them is not
+#: The types whose ``correct_answers`` is always an answer key of option
+#: letters rather than a list of accepted phrasings. What separates them is not
 #: whether the question has options — a matching item's are its group's — but
 #: what the candidate submits: a letter, matched as a set, against words,
 #: matched after normalization.
@@ -430,17 +430,28 @@ LETTERED_TYPES = frozenset(
 )
 
 
-def answers_are_letters(group_type: str) -> bool:
-    """Whether this group's questions are answered by picking a letter."""
-    return group_type in LETTERED_TYPES
+def group_options(group: QuestionGroup) -> list[str]:
+    """The box of options this group's questions are answered from, in the
+    order they are lettered. Empty where there is none.
 
-
-def matching_options(group: QuestionGroup) -> list[str]:
-    """The box of options a matching group's items are answered from, in the
-    order they are lettered. Empty for anything else, and for a box the author
-    hasn't written into."""
+    One accessor for both the tasks that have a box: matching, where the box is
+    the whole point, and a completion task printed with a word list, where it
+    turns every gap into a letter. They store it under the same key because it
+    is the same thing."""
     options = (group.config or {}).get("options")
     return [str(option) for option in options] if isinstance(options, list) else []
+
+
+def answers_are_letters(group: QuestionGroup) -> bool:
+    """Whether this group's questions are answered by picking a letter.
+
+    The type says so for multiple choice and matching. For a completion task
+    the BOX says so: "complete the summary using the list of words, A–H" is
+    answered in letters, and the same summary without a list is answered in
+    words. So this takes the group, not its type — the type alone cannot tell
+    you, and grading that assumed it could would compare a letter against the
+    words of an option and mark every answer wrong."""
+    return group.type in LETTERED_TYPES or bool(group_options(group))
 
 
 def choice_select_count(group: QuestionGroup) -> int:

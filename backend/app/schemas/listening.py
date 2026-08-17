@@ -150,9 +150,10 @@ AnswerRubric = Literal[
 
 
 class QuestionGroupConfig(BaseModel):
-    """``form_completion`` presentation payload: the gap-fill template. Gaps
-    are ``{{N}}`` tokens, 1-indexed and contiguous — validated against the
-    question set on :class:`FormCompletionGroupIn`."""
+    """A completion task's presentation payload: the gap-fill template, and —
+    for the form the paper prints with a word list — the box its gaps are
+    answered from. Gaps are ``{{N}}`` tokens, 1-indexed and contiguous —
+    validated against the question set on :class:`FormCompletionGroupIn`."""
 
     #: Blank means an empty form — one the author has opened and not yet
     #: written into. Refusing it made the first save of a new group fail,
@@ -161,6 +162,18 @@ class QuestionGroupConfig(BaseModel):
     #: are held to agreeing with each other, blank included.
     template: str = ""
     answer_rubric: AnswerRubric | None = None
+    #: "Complete the summary using the list of words, A–H." Empty is the
+    #: ordinary completion task, where the candidate writes the words they
+    #: heard; non-empty turns every gap in this group into a letter, and the
+    #: answer key with it.
+    #:
+    #: Same two fields, same names, as :class:`MatchingConfig` — because it is
+    #: the same thing. A boxed summary is matching whose items are gaps in a
+    #: paragraph instead of a list, and reading them through one accessor
+    #: (``app.services.listening.group_options``) is what keeps grading from
+    #: having to know which of the two it is looking at.
+    options: list[str] = Field(default_factory=list, max_length=MAX_OPTIONS)
+    allow_reuse: bool = False
 
 
 class MultipleChoiceConfig(BaseModel):
@@ -224,21 +237,29 @@ class _QuestionInBase(BaseModel):
 
 
 class QuestionIn(_QuestionInBase):
-    """One gap in a form. ``correct_answers`` is the list of accepted
-    variants, and at least one is required: a gap nobody can answer isn't a
-    draft of anything, and the editor holds a half-written form back rather
-    than sending one."""
+    """One gap in a completion task. ``correct_answers`` is the list of
+    accepted variants — or, where the group has a box, the one letter the gap
+    is answered by.
 
-    correct_answers: list[str] = Field(min_length=1)
+    Empty is allowed, and that is a change: a gap with no answer used to be
+    refused here, on the reasoning that nobody could answer it and so it was
+    not a draft of anything. A boxed task makes that plainly untrue. There the
+    gap is made first and the letter chosen afterwards, so every gap is
+    unanswered for as long as it takes to reach for the box — and refusing it
+    meant a whole summary went unsaved while it was being written.
+
+    Blank entries are still refused. An empty list is a gap nobody has
+    answered yet; a list holding ``""`` is a claim that the answer is nothing.
+    Publishing requires an answer either way (services/publishing.py)."""
+
+    correct_answers: list[str] = Field(default_factory=list)
 
     @field_validator("correct_answers")
     @classmethod
     def _clean_answers(cls, v: list[str]) -> list[str]:
         cleaned = [a.strip() for a in v]
-        if not cleaned or any(not a for a in cleaned):
-            raise ValueError(
-                "correct_answers must be non-empty and contain no blank entries"
-            )
+        if any(not a for a in cleaned):
+            raise ValueError("correct_answers must contain no blank entries")
         return cleaned
 
 
@@ -401,6 +422,33 @@ class FormCompletionGroupIn(_QuestionGroupInBase):
     #: typically go in before the answers do. Empty is a draft, not an error;
     #: publishing is where "add at least one question" is enforced.
     questions: list[QuestionIn] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _answers_name_real_options(self) -> "FormCompletionGroupIn":
+        """With a box, a gap's answer is a letter from it — one letter, and one
+        the box has. Without a box this says nothing: the answers are words,
+        and which words are acceptable is the author's business.
+
+        A gap with no letter yet is fine, as everywhere else here: unfinished
+        is stored, incoherent is refused."""
+        if not self.config.options:
+            return self
+        available = {option_letter(i) for i in range(len(self.config.options))}
+        for question in self.questions:
+            letters = [a.strip().lower() for a in question.correct_answers]
+            if len(letters) > 1:
+                raise ValueError(
+                    f"gap {question.number} is answered from a box, so it takes "
+                    "one letter"
+                )
+            unknown = [letter for letter in letters if letter not in available]
+            if unknown:
+                raise ValueError(
+                    f"gap {question.number} names an option that doesn't exist: "
+                    f"{', '.join(unknown)}"
+                )
+            question.correct_answers = letters
+        return self
 
     @model_validator(mode="after")
     def _tokens_match_questions(self) -> "FormCompletionGroupIn":

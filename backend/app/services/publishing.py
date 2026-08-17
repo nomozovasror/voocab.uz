@@ -100,7 +100,9 @@ async def _listening_blockers(
                     _matching_blockers(label, group, questions, numbered_so_far)
                 )
             else:
-                blockers.extend(_gap_blockers(label, questions, numbered_so_far))
+                blockers.extend(
+                    _gap_blockers(label, group, questions, numbered_so_far)
+                )
 
             numbered_so_far += len(questions) * marks
 
@@ -110,11 +112,14 @@ async def _listening_blockers(
     return blockers
 
 
-def _gap_blockers(label: str, questions: list[Question], offset: int) -> list[str]:
-    """What a form-completion group still needs. ``offset`` is how many
-    questions come before this group in the material, so the numbers quoted
-    are the ones printed beside the gaps."""
-    blockers: list[str] = []
+def _gap_blockers(
+    label: str, group: QuestionGroup, questions: list[Question], offset: int
+) -> list[str]:
+    """What a completion group still needs. ``offset`` is how many questions
+    come before this group in the material, so the numbers quoted are the ones
+    printed beside the gaps."""
+    boxed = bool(listening_service.group_options(group))
+    blockers = _box_blockers(label, group, questions, offset)
 
     unanswered = [
         offset + q.number
@@ -122,7 +127,13 @@ def _gap_blockers(label: str, questions: list[Question], offset: int) -> list[st
         if not any(a.strip() for a in q.correct_answers)
     ]
     if unanswered:
-        blockers.append(f"{label}: {_numbers(unanswered)} without an accepted answer.")
+        # A gap answered from a box wants a letter, not words. Saying "an
+        # accepted answer" there would send the author looking for a field to
+        # type one into.
+        blockers.append(
+            f"{label}: {_numbers(unanswered)} "
+            + ("without a letter from the box." if boxed else "without an accepted answer.")
+        )
 
     # Where the answer is said is what the learner gets back with their
     # result — the reason to re-listen rather than just be told they were
@@ -213,6 +224,61 @@ def _choice_blockers(
     return blockers
 
 
+def _box_blockers(
+    label: str,
+    group: QuestionGroup,
+    questions: list[Question],
+    offset: int,
+) -> list[str]:
+    """What a box of options still needs, for either task that has one:
+    matching, where the box is the whole point, and a completion task printed
+    with a word list, where it turns every gap into a letter.
+
+    All of it is about the group rather than any one question — the box is
+    printed once above the set — except the last, which is the one thing a
+    shared box makes possible: two questions claiming the same letter where
+    each letter answers only one."""
+    blockers: list[str] = []
+    options = listening_service.group_options(group)
+    allow_reuse = bool((group.config or {}).get("allow_reuse"))
+    if not options:
+        return blockers
+
+    if len(options) < 2:
+        blockers.append(f"{label}: add at least two options to choose from.")
+    elif any(not option.strip() for option in options):
+        blockers.append(f"{label}: an option to choose from has nothing in it.")
+    # Without reuse each option answers at most one question, so a box shorter
+    # than the list is a group that cannot be completed however long the author
+    # works at it. With reuse allowed it is ordinary — three options and eight
+    # questions is a common Part 3 set.
+    elif not allow_reuse and len(options) < len(questions):
+        blockers.append(
+            f"{label}: {len(questions)} questions and only {len(options)} "
+            "options to answer them from — add more options, or allow a letter "
+            "to be used more than once."
+        )
+
+    if not allow_reuse:
+        # Every question after the first to claim a letter another already has.
+        # The first keeps it: something has to, and the one the author wrote
+        # earlier is the likelier of the two to be the one they meant.
+        taken: set[str] = set()
+        repeated: list[int] = []
+        for question in sorted(questions, key=lambda q: q.number):
+            for letter in question.correct_answers:
+                if letter in taken:
+                    repeated.append(offset + question.number)
+                taken.add(letter)
+        if repeated:
+            blockers.append(
+                f"{label}: {_numbers(repeated)} answered with a letter another "
+                "question already uses."
+            )
+
+    return blockers
+
+
 def _matching_blockers(
     label: str,
     group: QuestionGroup,
@@ -229,24 +295,7 @@ def _matching_blockers(
     Each item is one number and one mark, so the numbers quoted here are
     simply ``offset + q.number`` — the arithmetic a "choose two" forces on
     :func:`_choice_blockers` has nothing to do here."""
-    blockers: list[str] = []
-    options = listening_service.matching_options(group)
-    allow_reuse = bool((group.config or {}).get("allow_reuse"))
-
-    if len(options) < 2:
-        blockers.append(f"{label}: add at least two options to match from.")
-    elif any(not option.strip() for option in options):
-        blockers.append(f"{label}: an option to match from has nothing in it.")
-    # Without reuse each option answers at most one item, so a box shorter
-    # than the list of items is a group that cannot be completed however long
-    # the author works at it. With reuse allowed it is ordinary — three
-    # options and eight items is a common Part 3 set.
-    elif not allow_reuse and len(options) < len(questions):
-        blockers.append(
-            f"{label}: {len(questions)} questions and only {len(options)} "
-            "options to match them to — add more options, or allow a letter "
-            "to be used more than once."
-        )
+    blockers = _box_blockers(label, group, questions, offset)
 
     def numbers(matching) -> list[int]:
         return [offset + q.number for q in questions if matching(q)]
@@ -258,23 +307,6 @@ def _matching_blockers(
     unanswered = numbers(lambda q: not q.correct_answers)
     if unanswered:
         blockers.append(f"{label}: {_numbers(unanswered)} without an answer.")
-
-    if not allow_reuse:
-        # Every item after the first to claim a letter another already has.
-        # The first keeps it: something has to, and the one the author wrote
-        # earlier is the likelier of the two to be the one they meant.
-        taken: set[str] = set()
-        repeated: list[int] = []
-        for question in sorted(questions, key=lambda q: q.number):
-            for letter in question.correct_answers:
-                if letter in taken:
-                    repeated.append(offset + question.number)
-                taken.add(letter)
-        if repeated:
-            blockers.append(
-                f"{label}: {_numbers(repeated)} matched to a letter another "
-                "question already uses."
-            )
 
     unmarked = numbers(lambda q: q.replay_start_ms is None)
     if unmarked:

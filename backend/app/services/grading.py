@@ -22,6 +22,7 @@ from sqlmodel import select
 from app.core.database import AsyncSession
 from app.models.attempt import Attempt, AttemptStatus
 from app.models.question import Question
+from app.models.question_group import QuestionGroup
 from app.models.question_attempt import QuestionAttempt
 from app.schemas.listening import AnswerIn
 from app.services import listening as listening_service
@@ -65,15 +66,19 @@ def grade_choice(given_answer: str, correct_answers: list[str]) -> bool:
     return chosen == {normalize_answer(letter) for letter in correct_answers}
 
 
-def grade_question(question: Question, given_answer: str, group_type: str) -> bool:
+def grade_question(
+    question: Question, given_answer: str, group: QuestionGroup
+) -> bool:
     """Grade one answer the way its group is meant to be graded.
 
     Which way that is is the GROUP's, not the question's. It was the
     question's — a question with options is a lettered one — until matching
     put the options on the group and left its items looking, from the row
-    alone, exactly like gap-fills. Nothing extra is loaded to ask: the walk
+    alone, exactly like gap-fills. It is not even the group's TYPE: the same
+    summary is answered in words or in letters depending on whether it is
+    printed with a box. Nothing extra is loaded to ask either way — the walk
     that collects the questions already has their groups in hand."""
-    if listening_service.answers_are_letters(group_type):
+    if listening_service.answers_are_letters(group):
         return grade_choice(given_answer, question.correct_answers)
     return grade_answer(given_answer, question.correct_answers)
 
@@ -155,7 +160,7 @@ async def submit_attempt(
         marks = listening_service.question_marks(group)
         total_marks += marks
         given = given_by_question_id.get(question.id, "")
-        correct = grade_question(question, given, group.type)
+        correct = grade_question(question, given, group)
         if correct:
             earned += marks
         session.add(
