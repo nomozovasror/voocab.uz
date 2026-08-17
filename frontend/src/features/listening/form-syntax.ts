@@ -1,4 +1,8 @@
-import type { ListeningQuestion, QuestionIn } from "@/features/listening/types";
+import type {
+  CompletionType,
+  ListeningQuestion,
+  QuestionIn,
+} from "@/features/listening/types";
 
 /**
  * The form-completion document: what the builder edits, and how it becomes
@@ -234,8 +238,19 @@ export function newRow(label = ""): Extract<DocBlock, { kind: "row" }> {
   return { id: newId(), kind: "row", label, lines: [newTextLine()] };
 }
 
-export function newDoc(): DocBlock[] {
-  return [newRow()];
+/** The sheet a new group starts as.
+ *
+ *  A form starts as a labelled row; every other completion task starts as one
+ *  full-width line, bulleted for notes because that is how notes are printed.
+ *
+ *  A starting point, not a constraint. Every block is reachable from every
+ *  task — an author writing notes with a labelled row among them is writing
+ *  the paper in front of them, and the five tasks are one document underneath
+ *  precisely so that costs nothing. */
+export function newDoc(type: CompletionType = "form_completion"): DocBlock[] {
+  const row = newRow();
+  if (type !== "note_completion") return [row];
+  return [{ ...row, lines: [{ ...row.lines[0], bullet: true }] }];
 }
 
 /** Every gap in document order — which is what numbers them. */

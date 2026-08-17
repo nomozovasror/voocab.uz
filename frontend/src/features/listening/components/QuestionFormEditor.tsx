@@ -4,13 +4,21 @@ import { cn } from "@/lib/utils";
 import { FormBuilder } from "@/features/listening/components/FormBuilder";
 import { GroupHeader } from "@/features/listening/components/GroupHeader";
 import { questionRangeLabel } from "@/features/listening/numbering";
-import { QUESTION_TYPE_LABEL } from "@/features/listening/parts";
+import {
+  QUESTION_TYPE_LABEL,
+  QUESTION_TYPE_RUBRIC,
+} from "@/features/listening/parts";
 import { docGaps, docPublishIssues } from "@/features/listening/form-syntax";
 import { ANSWER_RUBRICS, deriveRubric } from "@/features/listening/rubric";
 import type { DocBlock } from "@/features/listening/form-syntax";
-import type { AnswerRubric } from "@/features/listening/types";
+import type { AnswerRubric, CompletionType } from "@/features/listening/types";
 
 interface QuestionFormEditorProps {
+  /** Which completion task this group is. It decides what the group is
+   *  called, what the instruction line offers as a placeholder, and which of
+   *  the builder's two "add something" buttons leads — and nothing else, since
+   *  the five tasks are one document underneath. */
+  task: CompletionType;
   doc: DocBlock[];
   /** Applied against the latest document — see FormBuilder's note. */
   onChange: (edit: (current: DocBlock[]) => DocBlock[]) => void;
@@ -55,6 +63,7 @@ function Brackets({ children }: { children?: React.ReactNode }) {
 }
 
 export function QuestionFormEditor({
+  task,
   doc,
   onChange,
   instructions,
@@ -146,7 +155,7 @@ export function QuestionFormEditor({
       <GroupHeader
         range={questionRangeLabel(startNumber - 1, gaps.length)}
         count={gaps.length}
-        typeLabel={QUESTION_TYPE_LABEL.form_completion}
+        typeLabel={QUESTION_TYPE_LABEL[task]}
         onMoveUp={onMoveUp}
         onMoveDown={onMoveDown}
         onDelete={onDelete}
@@ -161,7 +170,7 @@ export function QuestionFormEditor({
           type="text"
           value={instructions}
           onChange={(e) => onInstructionsChange(e.target.value)}
-          placeholder="Complete the form below."
+          placeholder={QUESTION_TYPE_RUBRIC[task]}
           aria-label="Instructions"
           className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none"
         />
@@ -245,6 +254,7 @@ export function QuestionFormEditor({
           flaggedGaps={flaggedGaps}
           markChecks={markChecks}
           onMarkAudio={onMarkAudio}
+          labelFirst={task === "form_completion"}
           extraTools={extraTools}
         />
       </div>

@@ -84,6 +84,11 @@ interface FormBuilderProps {
     answers: string[],
     apply: (range: { startMs: number; endMs: number }) => void,
   ) => void;
+  /** Whether this task is one with a label column — a form. It decides which
+   *  of the two "add something" buttons leads, and it opens the column on the
+   *  row a brand-new form starts with. Nothing else: every block stays
+   *  reachable from every task. */
+  labelFirst?: boolean;
   /** Controls that belong to the group rather than to the form — adding
    *  another group after this one. They sit on the same row as the rest so
    *  everything that adds something is in one place. */
@@ -97,6 +102,7 @@ export function FormBuilder({
   flaggedGaps,
   markChecks,
   onMarkAudio,
+  labelFirst,
   extraTools,
 }: FormBuilderProps) {
   const numbers = new Map(
@@ -299,7 +305,16 @@ export function FormBuilder({
    *  So this is the open field, and only that. It is not persisted and is not
    *  meant to be: a row reopened tomorrow with an empty label is a full-width
    *  line, which is exactly what it is. */
-  const [labelling, setLabelling] = useState<Set<string>>(new Set());
+  const [labelling, setLabelling] = useState<Set<string>>(() =>
+    // A form opens with its label column showing, because the row it opens
+    // with is the only thing on the sheet and there is nothing else to infer
+    // it from. Narrow on purpose: a form reopened later has its labels
+    // written, and any row in it the author deliberately left labelless is a
+    // full-width line and stays one.
+    labelFirst && doc.length === 1 && doc[0].kind === "row" && !doc[0].label
+      ? new Set([doc[0].id])
+      : new Set(),
+  );
 
   /** The row whose label column has just been opened from the menu, waiting
    *  for the caret.
@@ -348,6 +363,33 @@ export function FormBuilder({
       lines: block.lines.filter((l) => l.id !== lineId),
     });
   };
+
+  const addRowTool = (
+    <ToolbarButton
+      key="row"
+      onClick={() => {
+        const row = newRow();
+        editLabelling(row.id, true);
+        addBlock(row, `label#${row.id}`);
+      }}
+      icon={<Plus className="size-3.5" aria-hidden />}
+      label="row"
+      title="Add a labelled row at the end — for a form"
+    />
+  );
+
+  const addLineTool = (
+    <ToolbarButton
+      key="line"
+      onClick={() => {
+        const row = newRow();
+        addBlock(row, `${row.lines[0].id}#0`);
+      }}
+      icon={<AlignLeft className="size-3.5" aria-hidden />}
+      label="line"
+      title="Add a full-width line at the end — for notes, sentences and short answers"
+    />
+  );
 
   return (
     <div>
@@ -677,26 +719,9 @@ export function FormBuilder({
             shapes on the paper and neither is a special case of the other. A
             row has a label column — the form and the table. A line runs the
             whole width — the notes, the sentences, the summary, the
-            short-answer questions. */}
-        <ToolbarButton
-          onClick={() => {
-            const row = newRow();
-            editLabelling(row.id, true);
-            addBlock(row, `label#${row.id}`);
-          }}
-          icon={<Plus className="size-3.5" aria-hidden />}
-          label="row"
-          title="Add a labelled row at the end — for a form"
-        />
-        <ToolbarButton
-          onClick={() => {
-            const row = newRow();
-            addBlock(row, `${row.lines[0].id}#0`);
-          }}
-          icon={<AlignLeft className="size-3.5" aria-hidden />}
-          label="line"
-          title="Add a full-width line at the end — for notes, sentences and short answers"
-        />
+            short-answer questions. Whichever this task is mostly made of
+            leads; the other is still there, because a real paper mixes them. */}
+        {labelFirst ? [addRowTool, addLineTool] : [addLineTool, addRowTool]}
         <ToolbarButton
           onClick={() => {
             const block: DocBlock = { id: newId(), kind: "heading", text: "" };

@@ -95,9 +95,11 @@ import { FormHelpCard } from "@/features/listening/components/FormHelpCard";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { ANSWER_RUBRICS, deriveRubric } from "@/features/listening/rubric";
 import type { StudioListeningList } from "@/features/studio/types";
+import { isCompletion } from "@/features/listening/types";
 import type {
   AnswerRubric,
   AudioSegment,
+  CompletionType,
   QuestionGroupIn,
   QuestionGroupType,
   Visibility,
@@ -121,7 +123,11 @@ interface GroupStateBase {
 }
 
 interface FormGroupState extends GroupStateBase {
-  type: "form_completion";
+  /** Which of the five completion tasks it is. One document and one payload
+   *  whichever it is — the type is what the author picked and what the paper
+   *  calls it, and it decides the name, the rubric placeholder and the shape
+   *  the sheet starts as. */
+  type: CompletionType;
   wordLimit: number | null;
   rubric: AnswerRubric | null;
   doc: DocBlock[];
@@ -276,7 +282,7 @@ function groupPayload(group: GroupState): QuestionGroupIn | null {
   if (!isGroupPersistable(group.doc)) return null;
   const { template, questions } = docToGroup(group.doc);
   return {
-    type: "form_completion",
+    type: group.type,
     instructions: group.instructions.trim(),
     word_limit: group.wordLimit,
     config: {
@@ -348,7 +354,7 @@ function newGroup(type: QuestionGroupType | null): GroupState {
       items: newMatchItems(),
     };
   }
-  return { ...base, type, wordLimit: null, rubric: null, doc: newDoc() };
+  return { ...base, type, wordLimit: null, rubric: null, doc: newDoc(type) };
 }
 
 /** A part's first group. Where the part has only one kind of question it can
@@ -744,12 +750,14 @@ export default function StudioListeningEditorPage() {
                     ...matchingFromApi(group),
                   };
                 }
-                // Anything else is read as a form: a type this build doesn't
-                // know is better shown as its template — which every group
-                // has a field for — than dropped.
+                // Anything else is a completion task, including a type this
+                // build doesn't know: every group has a template, so showing
+                // it as one is better than dropping the questions.
                 return {
                   ...base,
-                  type: "form_completion",
+                  type: isCompletion(group.type as QuestionGroupType)
+                    ? (group.type as CompletionType)
+                    : "form_completion",
                   wordLimit: group.word_limit,
                   rubric: group.config.answer_rubric ?? null,
                   doc: docFromGroup(group.config.template ?? "", group.questions),
@@ -2399,6 +2407,7 @@ export default function StudioListeningEditorPage() {
                         />
                       ) : (
                         <QuestionFormEditor
+                          task={group.type}
                           doc={group.doc}
                           onChange={(edit) => editGroupDoc(group.key, edit)}
                           instructions={group.instructions}

@@ -1,6 +1,17 @@
-import { ArrowLeftRight, ListChecks, Rows3 } from "lucide-react";
+import {
+  AlignLeft,
+  ArrowLeftRight,
+  CircleQuestionMark,
+  List,
+  ListChecks,
+  Pilcrow,
+  Rows3,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { QuestionGroupType } from "@/features/listening/types";
+import type {
+  CompletionType,
+  QuestionGroupType,
+} from "@/features/listening/types";
 
 /**
  * What each part of an IELTS Listening test asks, and what we can build of
@@ -25,21 +36,37 @@ import type { QuestionGroupType } from "@/features/listening/types";
 /** One name per type, so the header, the menu and the chooser can't drift
  *  into calling the same thing three things. */
 export const QUESTION_TYPE_LABEL: Record<QuestionGroupType, string> = {
-  //: Not "Form completion", which is one of the several things it builds.
-  //: A form, notes, sentences, a summary and short-answer questions are the
-  //: same task to a candidate — write the missing words — and the same
-  //: document to author: gaps in lines, with or without a label column.
-  //: Naming it after one of them left the other four looking unavailable.
-  form_completion: "Completion",
+  form_completion: "Form completion",
+  note_completion: "Note completion",
+  sentence_completion: "Sentence completion",
+  summary_completion: "Summary completion",
+  short_answer: "Short answer",
   multiple_choice: "Multiple choice",
   matching: "Matching",
 };
 
-/** What each type is, for the moment of choosing between them. */
+/** What each type is, for the moment of choosing between them. The five
+ *  completion tasks are one document underneath, so what these say is what
+ *  actually tells them apart: the shape of the sheet. */
 export const QUESTION_TYPE_BLURB: Record<QuestionGroupType, string> = {
-  form_completion: "Gaps to fill in — a form, notes, a summary, short answers",
+  form_completion: "A form with its labels down the side",
+  note_completion: "Headed notes, in bullet points",
+  sentence_completion: "Separate sentences, each with a gap",
+  summary_completion: "A paragraph with gaps in it",
+  short_answer: "Questions answered in a few words",
   multiple_choice: "Lettered options, one or several right",
   matching: "One box of options, answering a list of items",
+};
+
+/** The instruction line each task is printed under. Offered as the
+ *  placeholder, so an author who types nothing still sees what belongs
+ *  there — and one who types their own is not fighting a default. */
+export const QUESTION_TYPE_RUBRIC: Record<CompletionType, string> = {
+  form_completion: "Complete the form below.",
+  note_completion: "Complete the notes below.",
+  sentence_completion: "Complete the sentences below.",
+  summary_completion: "Complete the summary below.",
+  short_answer: "Answer the questions below.",
 };
 
 /** And one mark per type, for the same reason: a type is recognised by its
@@ -47,6 +74,12 @@ export const QUESTION_TYPE_BLURB: Record<QuestionGroupType, string> = {
  *  those have to be the same icon. */
 export const QUESTION_TYPE_ICON: Record<QuestionGroupType, LucideIcon> = {
   form_completion: Rows3,
+  note_completion: List,
+  sentence_completion: AlignLeft,
+  // A paragraph mark, because that is the whole of what makes a summary
+  // different from the sentences above it: it is one block of prose.
+  summary_completion: Pilcrow,
+  short_answer: CircleQuestionMark,
   multiple_choice: ListChecks,
   matching: ArrowLeftRight,
 };
@@ -54,19 +87,32 @@ export const QUESTION_TYPE_ICON: Record<QuestionGroupType, LucideIcon> = {
 // Listed with the part's dominant type first, since that is the order they
 // are offered in and the one the author reaches for most.
 const PART_TYPES: QuestionGroupType[][] = [
-  // Part 1 — a completion task almost every time: the form, and the short
-  // answers that sometimes follow it. Never multiple choice, never matching.
-  ["form_completion"],
+  // Part 1 — a transactional conversation: the form, the notes taken from it,
+  // and the short answers that sometimes follow. Never multiple choice, never
+  // matching.
+  ["form_completion", "note_completion", "short_answer"],
   // Part 2 — map/plan labelling (not built), matching, multiple choice,
-  // note/sentence/table completion.
-  ["multiple_choice", "matching", "form_completion"],
-  // Part 3 — multiple choice most of all, then matching,
-  // note/sentence/summary/table completion.
-  ["multiple_choice", "matching", "form_completion"],
-  // Part 4 — note/summary/sentence completion dominates, then multiple
-  // choice; diagram labelling (not built). Matching is rare enough here that
-  // offering it would be offering a way to write an unusual paper.
-  ["form_completion", "multiple_choice"],
+  // note and sentence completion.
+  ["multiple_choice", "matching", "note_completion", "sentence_completion"],
+  // Part 3 — multiple choice most of all, then matching, then the completion
+  // tasks a discussion lends itself to.
+  [
+    "multiple_choice",
+    "matching",
+    "sentence_completion",
+    "note_completion",
+    "summary_completion",
+  ],
+  // Part 4 — an academic monologue: note and summary completion dominate,
+  // then sentence completion and multiple choice; diagram labelling (not
+  // built). Matching is rare enough here that offering it would be offering a
+  // way to write an unusual paper.
+  [
+    "note_completion",
+    "summary_completion",
+    "sentence_completion",
+    "multiple_choice",
+  ],
 ];
 
 /** Every type this part may be given, in the order they're offered. A part
@@ -74,44 +120,35 @@ const PART_TYPES: QuestionGroupType[][] = [
  *  everything rather than to nothing. */
 export function questionTypesForPart(orderIndex: number): QuestionGroupType[] {
   return (
-    PART_TYPES[orderIndex] ?? ["form_completion", "multiple_choice", "matching"]
+    PART_TYPES[orderIndex] ?? [
+      "note_completion",
+      "sentence_completion",
+      "multiple_choice",
+      "matching",
+    ]
   );
 }
 
-//: What each part asks that we can't author yet — a short list of choices
-//: should read as "these are the ones built", not "these are the ones
-//: allowed". What is left is the three that need a layout the completion
-//: sheet can't express: a grid, an image, a chart of boxes and arrows.
-//:
-//: Notes, sentences, summaries and short answers are NOT here any more.
-//: They are completion tasks with no label column, which is what a row with
-//: no label already was — so Part 3 asks for nothing this editor can't build.
+//: What each part asks that we can't author yet — a list of choices should
+//: read as "these are the ones built", not "these are the ones allowed".
+//: What is left is the three that need a layout the completion sheet can't
+//: express: a grid, an image, a chart of boxes and arrows.
 const MISSING_TYPES: (string | null)[] = [
   "table completion",
-  "map/plan labelling",
+  "map/plan labelling and table completion",
   null,
-  "diagram labelling and table completion",
+  "diagram labelling, table completion and flow-chart completion",
 ];
-
-/** "a, b and c" — the last pair joined by "and" rather than a comma, because
- *  this is read as a sentence. */
-function listed(names: string[]): string {
-  if (names.length <= 2) return names.join(" and ");
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-}
 
 /** What this part characteristically asks that we can't author yet, phrased
  *  for the author. Undefined where there is nothing missing — a note saying
- *  so would be a note about nothing. */
+ *  so would be a note about nothing.
+ *
+ *  It names only what is missing. It used to list what was available too,
+ *  which was worth saying when that was two things and is not now that it is
+ *  four or five: the cards are on the same screen, saying it better. */
 export function missingTypeNote(orderIndex: number): string | undefined {
   const missing = MISSING_TYPES[orderIndex];
   if (!missing) return undefined;
-  const types = questionTypesForPart(orderIndex);
-  const available = listed(
-    types.map((type) => QUESTION_TYPE_LABEL[type].toLowerCase()),
-  );
-  return (
-    `${missing} ${missing.includes(" and ") ? "aren't" : "isn't"} built yet — ` +
-    `${available} ${types.length > 1 ? "are" : "is"} what's available here.`
-  );
+  return `${missing} ${missing.includes(" and ") ? "aren't" : "isn't"} built yet.`;
 }

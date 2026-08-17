@@ -83,10 +83,27 @@ export interface PartOut {
   created_at: string;
 }
 
-export type QuestionGroupType =
+/** The tasks answered by writing the missing words. One document, one
+ *  payload, five names — because that is how the paper prints them and how an
+ *  author thinks about them. What differs is the wording of the rubric and the
+ *  shape the sheet takes; what doesn't is anything the server checks. */
+export type CompletionType =
   | "form_completion"
+  | "note_completion"
+  | "sentence_completion"
+  | "summary_completion"
+  | "short_answer";
+
+export type QuestionGroupType =
+  | CompletionType
   | "multiple_choice"
   | "matching";
+
+/** Whether this task is answered by writing words rather than by picking a
+ *  letter — which is what decides which builder it gets. */
+export function isCompletion(type: QuestionGroupType): type is CompletionType {
+  return type !== "multiple_choice" && type !== "matching";
+}
 
 export interface ListeningQuestion {
   id: string;
@@ -181,7 +198,7 @@ export interface ChoiceConfig {
 }
 
 export interface FormGroupIn {
-  type: "form_completion";
+  type: CompletionType;
   instructions: string;
   word_limit?: number | null;
   config: FormConfig;
