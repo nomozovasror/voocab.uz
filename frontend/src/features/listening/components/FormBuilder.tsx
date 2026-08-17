@@ -298,13 +298,18 @@ export function FormBuilder({
    *
    *  What a row is, once it is stored, is decided by its label: with one it is
    *  a form row, without one it runs the full width as a note or a sentence.
-   *  That leaves the field with nowhere to live in between — a label being
-   *  typed is empty for as long as it takes to type the first letter, and a
-   *  column that vanished under the caret would be unusable.
+   *  That leaves the field with nowhere to live in between — a label is empty
+   *  for as long as it takes to type the first letter of it.
    *
-   *  So this is the open field, and only that. It is not persisted and is not
-   *  meant to be: a row reopened tomorrow with an empty label is a full-width
-   *  line, which is exactly what it is. */
+   *  A row stays here until the author says otherwise, which is "Remove
+   *  label" in its menu. It used to leave on blur, on the reading that a
+   *  label left empty was never wanted — but blur is every click anywhere
+   *  else, so adding a row and then reaching for the section button, or
+   *  simply for the row's own value, collapsed the column out from under a
+   *  row that had been asked for a moment earlier.
+   *
+   *  Not persisted, and not meant to be: a row reopened tomorrow with an
+   *  empty label is a full-width line, which is exactly what it is. */
   const [labelling, setLabelling] = useState<Set<string>>(() =>
     // A form opens with its label column showing, because the row it opens
     // with is the only thing on the sheet and there is nothing else to infer
@@ -494,14 +499,6 @@ export function FormBuilder({
                                     label: e.target.value,
                                   })
                                 }
-                                onBlur={() => {
-                                  // Left empty, it was never a label. The
-                                  // column closes and the row is what it
-                                  // stores as: a full-width line.
-                                  if (!block.label.trim()) {
-                                    editLabelling(block.id, false);
-                                  }
-                                }}
                                 onKeyDown={(e) => {
                                   if (e.key !== "Enter") return;
                                   e.preventDefault();
