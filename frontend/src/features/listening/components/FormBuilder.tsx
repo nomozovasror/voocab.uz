@@ -562,55 +562,70 @@ export function FormBuilder({
                     <table className="w-full border-collapse">
                       <thead>
                         <tr>
-                          {block.head.map((cell, index) => (
-                            <th
-                              key={index}
-                              scope="col"
-                              className="group/col relative border border-border bg-foreground/5 p-0 text-left align-middle"
-                            >
-                              <input
-                                type="text"
-                                value={cell}
-                                onChange={(e) =>
-                                  editTable(block.id, (table) => ({
-                                    ...table,
-                                    head: table.head.map((h, i) =>
-                                      i === index ? e.target.value : h,
-                                    ),
-                                  }))
-                                }
-                                placeholder="Column"
-                                aria-label={`Column ${index + 1} heading`}
-                                className="w-full bg-transparent px-2.5 py-1.5 pr-7 text-base font-medium text-foreground placeholder:font-normal placeholder:text-muted-foreground/50 focus:outline-none"
-                              />
-                              {/* One column is the fewest a table can have;
-                                  below that there is no grid. */}
-                              {block.head.length > 1 && (
-                                <button
-                                  type="button"
-                                  onClick={() => removeColumn(block.id, index)}
-                                  aria-label={`Remove column ${index + 1}`}
-                                  title="Remove this column"
-                                  className="absolute top-1/2 right-1 flex size-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover/col:opacity-100 hover:text-destructive focus-visible:opacity-100"
-                                >
-                                  <X className="size-3.5" aria-hidden />
-                                </button>
-                              )}
-                            </th>
-                          ))}
-                          {/* Left empty. The block's own menu is pinned to
-                              the top right corner, and anything put here sat
-                              underneath it. */}
-                          <th scope="col" className="w-8 p-0" />
+                          {block.head.map((cell, index) => {
+                            // The last column shares its corner with the
+                            // block's own menu, which is pinned there. Its
+                            // controls step aside by the width of one button
+                            // rather than the grid giving up a whole column to
+                            // them — that column was empty whenever nothing
+                            // was hovered, which is most of the time, and read
+                            // as the table stopping short of the sheet.
+                            const last = index === block.head.length - 1;
+                            return (
+                              <th
+                                key={index}
+                                scope="col"
+                                className="group/col relative border border-border bg-foreground/5 p-0 text-left align-middle"
+                              >
+                                <input
+                                  type="text"
+                                  value={cell}
+                                  onChange={(e) =>
+                                    editTable(block.id, (table) => ({
+                                      ...table,
+                                      head: table.head.map((h, i) =>
+                                        i === index ? e.target.value : h,
+                                      ),
+                                    }))
+                                  }
+                                  placeholder="Column"
+                                  aria-label={`Column ${index + 1} heading`}
+                                  className={cn(
+                                    "w-full bg-transparent px-2.5 py-1.5 text-base font-medium text-foreground placeholder:font-normal placeholder:text-muted-foreground/50 focus:outline-none",
+                                    last ? "pr-16" : "pr-7",
+                                  )}
+                                />
+                                {/* One column is the fewest a table can have;
+                                    below that there is no grid. */}
+                                {block.head.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => removeColumn(block.id, index)}
+                                    aria-label={`Remove column ${index + 1}`}
+                                    title="Remove this column"
+                                    className={cn(
+                                      "absolute top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover/col:opacity-100 hover:text-destructive focus-visible:opacity-100",
+                                      last ? "right-9" : "right-1",
+                                    )}
+                                  >
+                                    <X className="size-3.5" aria-hidden />
+                                  </button>
+                                )}
+                              </th>
+                            );
+                          })}
                         </tr>
                       </thead>
                       <tbody>
                         {block.rows.map((row, rowIndex) => (
                           <tr key={row.id} className="group/row">
-                            {row.cells.map((cell) => (
+                            {row.cells.map((cell, cellIndex) => (
                               <td
                                 key={cell.id}
-                                className="border border-border px-2.5 py-1 align-top"
+                                className={cn(
+                                  "relative border border-border px-2.5 py-1 align-top",
+                                  cellIndex === row.cells.length - 1 && "pr-9",
+                                )}
                               >
                                 <ValueField
                                   line={cell}
@@ -662,21 +677,26 @@ export function FormBuilder({
                                     );
                                   }}
                                 />
+                                {/* Over the last cell rather than in a column
+                                    of its own, on the card's background so it
+                                    stays readable there — the same way a
+                                    form's line control does it. */}
+                                {cellIndex === row.cells.length - 1 &&
+                                  block.rows.length > 1 && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        removeTableRow(block.id, row.id)
+                                      }
+                                      aria-label={`Remove row ${rowIndex + 1}`}
+                                      title="Remove this row"
+                                      className="absolute top-1 right-1 flex size-7 items-center justify-center rounded-md bg-card text-muted-foreground opacity-0 shadow-sm transition-opacity group-hover/row:opacity-100 hover:text-destructive focus-visible:opacity-100"
+                                    >
+                                      <X className="size-3.5" aria-hidden />
+                                    </button>
+                                  )}
                               </td>
                             ))}
-                            <td className="w-8 p-0 align-middle">
-                              {block.rows.length > 1 && (
-                                <button
-                                  type="button"
-                                  onClick={() => removeTableRow(block.id, row.id)}
-                                  aria-label={`Remove row ${rowIndex + 1}`}
-                                  title="Remove this row"
-                                  className="flex size-8 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover/row:opacity-100 hover:text-destructive focus-visible:opacity-100"
-                                >
-                                  <X className="size-3.5" aria-hidden />
-                                </button>
-                              )}
-                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -686,7 +706,7 @@ export function FormBuilder({
                         two ways it grows, and neither belongs to any one row
                         or column. Centred rather than tucked into the left
                         corner, where "add a row" read as another cell. */}
-                    <div className="mt-1.5 flex items-center justify-center gap-4 pr-8">
+                    <div className="mt-1.5 flex items-center justify-center gap-4">
                       <GrowButton
                         onClick={() => addTableRow(block.id)}
                         label="row"
