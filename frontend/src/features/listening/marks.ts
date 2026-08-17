@@ -1,4 +1,4 @@
-import { docGaps, type DocBlock } from "@/features/listening/form-syntax";
+import { docGaps, type DocBlock, type DocGap } from "@/features/listening/form-syntax";
 import type { AudioSegment } from "@/features/listening/types";
 
 /**
@@ -35,13 +35,28 @@ function normalize(text: string): string {
     .trim();
 }
 
-/** Every gap the author has marked, with the answers to check against.
+/** Every gap the author has marked, with the words that go against it.
  *  `offset` is how many questions come before this group in the material —
  *  the transcript labels marks with the number on the page, not the one the
- *  group stores. */
-export function answerMarks(doc: DocBlock[], offset = 0): AnswerMark[] {
+ *  group stores.
+ *
+ *  `wordsOf` is how a gap answered from a box gets shown. Its answer is a
+ *  letter, so it has no words of its own; the ones worth showing are the
+ *  chosen option's. They are for SHOWING only — `checkMarks` below calls this
+ *  without an override on purpose, so a boxed gap is never held to containing
+ *  them. A boxed answer is a paraphrase far more often than a quotation, which
+ *  is the whole reason the paper prints a box: the recording says "a lovely
+ *  little place right on the water" and the option says "harbour". Checked, it
+ *  would warn about nearly every correctly marked gap. */
+export function answerMarks(
+  doc: DocBlock[],
+  offset = 0,
+  wordsOf?: (gap: DocGap) => string[],
+): AnswerMark[] {
   return docGaps(doc).flatMap((gap) => {
-    const answers = gap.answers.map((a) => a.trim()).filter(Boolean);
+    const answers = (wordsOf ? wordsOf(gap) : gap.answers)
+      .map((a) => a.trim())
+      .filter(Boolean);
     if (gap.replayStartMs == null || gap.replayEndMs == null) return [];
     if (answers.length === 0) return [];
     return [

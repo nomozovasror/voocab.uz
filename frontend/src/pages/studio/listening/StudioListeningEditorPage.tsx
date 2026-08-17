@@ -1931,7 +1931,18 @@ export default function StudioListeningEditorPage() {
     () =>
       run.flatMap(({ group, startNumber }) => {
         if (isCompletionGroup(group)) {
-          return answerMarks(group.doc, startNumber - 1);
+          // A boxed gap has no words of its own — its answer is a letter — so
+          // what goes in the transcript is the chosen option's. Without this
+          // its mark showed nowhere at all: the author linked 1:08 and the
+          // left pane said nothing about it.
+          const words = new Map(group.options.map((o) => [o.id, o.text]));
+          return answerMarks(
+            group.doc,
+            startNumber - 1,
+            group.options.length > 0
+              ? (gap) => [words.get(gap.optionId ?? "") ?? ""]
+              : undefined,
+          );
         }
         if (group.type === "multiple_choice") return choiceMarks(group.questions);
         if (group.type === "matching") return matchingMarks(group.items);
@@ -1943,6 +1954,10 @@ export default function StudioListeningEditorPage() {
     const byGroup = new Map<string, ReturnType<typeof checkMarks>>();
     for (const { group } of run) {
       if (!isCompletionGroup(group)) continue;
+      // Not for a boxed group. Whether the marked seconds contain the answer
+      // is a fair question of a gap the candidate writes into and a useless
+      // one of a gap they pick a letter for — see `answerMarks`.
+      if (group.options.length > 0) continue;
       byGroup.set(group.key, checkMarks(group.doc, transcriptSegments));
     }
     return byGroup;

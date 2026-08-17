@@ -268,6 +268,19 @@ export function FormBuilder({
     );
   };
 
+  /** What to search the transcript for when the author asks where a gap is
+   *  said. Its accepted answers, or — where the group has a box — the words of
+   *  the option it is answered by, since the letter itself is never spoken.
+   *
+   *  Only ever an offer. A boxed answer is usually a paraphrase, so the search
+   *  will often come up empty and the author picks the line themselves; that
+   *  is the same bargain matching makes. */
+  const markPhrases = (gap: Extract<DocPart, { kind: "gap" }>): string[] => {
+    if (!box) return gap.answers;
+    const text = box.find((o) => o.id === gap.optionId)?.text.trim();
+    return text ? [text] : [];
+  };
+
   const letterOf = box
     ? (optionId: string) => box.find((o) => o.id === optionId)?.letter
     : undefined;
@@ -660,7 +673,7 @@ export function FormBuilder({
                                           onMarkAudio
                                             ? () =>
                                                 onMarkAudio(
-                                                  gap.answers,
+                                                  markPhrases(gap),
                                                   (range) =>
                                                     patchGapById(gapId, {
                                                       replayStartMs: range.startMs,
@@ -856,11 +869,13 @@ export function FormBuilder({
                                   onMark={
                                     onMarkAudio
                                       ? () =>
-                                          onMarkAudio(gap.answers, (range) =>
-                                            patchGapById(gapId, {
-                                              replayStartMs: range.startMs,
-                                              replayEndMs: range.endMs,
-                                            }),
+                                          onMarkAudio(
+                                            markPhrases(gap),
+                                            (range) =>
+                                              patchGapById(gapId, {
+                                                replayStartMs: range.startMs,
+                                                replayEndMs: range.endMs,
+                                              }),
                                           )
                                       : undefined
                                   }
