@@ -563,14 +563,6 @@ export function FormBuilder({
                       <thead>
                         <tr>
                           {block.head.map((cell, index) => {
-                            // The last column shares its corner with the
-                            // block's own menu, which is pinned there. Its
-                            // controls step aside by the width of one button
-                            // rather than the grid giving up a whole column to
-                            // them — that column was empty whenever nothing
-                            // was hovered, which is most of the time, and read
-                            // as the table stopping short of the sheet.
-                            const last = index === block.head.length - 1;
                             return (
                               <th
                                 key={index}
@@ -590,10 +582,7 @@ export function FormBuilder({
                                   }
                                   placeholder="Column"
                                   aria-label={`Column ${index + 1} heading`}
-                                  className={cn(
-                                    "w-full bg-transparent px-2.5 py-1.5 text-base font-medium text-foreground placeholder:font-normal placeholder:text-muted-foreground/50 focus:outline-none",
-                                    last ? "pr-16" : "pr-7",
-                                  )}
+                                  className="w-full bg-transparent px-2.5 py-1.5 pr-7 text-base font-medium text-foreground placeholder:font-normal placeholder:text-muted-foreground/50 focus:outline-none"
                                 />
                                 {/* One column is the fewest a table can have;
                                     below that there is no grid. */}
@@ -603,10 +592,7 @@ export function FormBuilder({
                                     onClick={() => removeColumn(block.id, index)}
                                     aria-label={`Remove column ${index + 1}`}
                                     title="Remove this column"
-                                    className={cn(
-                                      "absolute top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover/col:opacity-100 hover:text-destructive focus-visible:opacity-100",
-                                      last ? "right-9" : "right-1",
-                                    )}
+                                    className="absolute top-1/2 right-1 flex size-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity group-hover/col:opacity-100 hover:text-destructive focus-visible:opacity-100"
                                   >
                                     <X className="size-3.5" aria-hidden />
                                   </button>
@@ -702,11 +688,14 @@ export function FormBuilder({
                       </tbody>
                     </table>
 
-                    {/* Both under the grid and centred on it: they are the
-                        two ways it grows, and neither belongs to any one row
-                        or column. Centred rather than tucked into the left
-                        corner, where "add a row" read as another cell. */}
-                    <div className="mt-1.5 flex items-center justify-center gap-4">
+                    {/* The table's own control strip, under the grid.
+                        Centred: the two ways it grows belong to the whole
+                        table, not to any one row or column. The block's
+                        actions ride at its right end rather than in a button
+                        floating over the grid's top corner — a table has no
+                        spare corner, which is the same reason a rule draws
+                        its own controls on itself. */}
+                    <div className="relative mt-1.5 flex items-center justify-center gap-4">
                       <GrowButton
                         onClick={() => addTableRow(block.id)}
                         label="row"
@@ -717,6 +706,26 @@ export function FormBuilder({
                         label="column"
                         title="Add a column to the table"
                       />
+                      <span className="absolute right-0 flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within/block:opacity-100 group-hover/block:opacity-100">
+                        <RuleButton
+                          label="Move up"
+                          onClick={() => moveBlock(block.id, -1)}
+                          disabled={blockIndex === 0}
+                          icon={<ChevronUp className="size-3.5" aria-hidden />}
+                        />
+                        <RuleButton
+                          label="Move down"
+                          onClick={() => moveBlock(block.id, 1)}
+                          disabled={blockIndex === doc.length - 1}
+                          icon={<ChevronDown className="size-3.5" aria-hidden />}
+                        />
+                        <RuleButton
+                          label="Delete this table"
+                          onClick={() => replaceBlock(block.id, null)}
+                          danger
+                          icon={<Trash2 className="size-3.5" aria-hidden />}
+                        />
+                      </span>
                     </div>
                   </div>
                 )}
@@ -867,8 +876,10 @@ export function FormBuilder({
 
               {/* One trigger rather than four buttons: a 36px gutter is what
                   a row's height affords, and four icons only ever fitted by
-                  sitting on top of the text. */}
-              {block.kind !== "divider" && (
+                  sitting on top of the text.
+                  Not for a rule or a table: both draw their own controls on
+                  themselves, because neither has a corner to spare. */}
+              {block.kind !== "divider" && block.kind !== "table" && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button
