@@ -286,6 +286,16 @@ export type DocPart =
        *  it. Travels with the gap for the same reason the answers do. */
       replayStartMs?: number | null;
       replayEndMs?: number | null;
+      /** The option this gap is answered by, where the group is printed with
+       *  a box — by option ID, never by letter.
+       *
+       *  A letter is a position, so it moves the moment an option is inserted
+       *  above it; a gap remembering "c" would silently reattach to whatever
+       *  ended up third. Letters appear only at the edges: on the page, and
+       *  in what gets sent. Null until the author picks one, which is the
+       *  ordinary state of every gap in a boxed task while the text around it
+       *  is still being written. */
+      optionId?: string | null;
     };
 
 export interface DocLine {
@@ -374,6 +384,8 @@ export interface DocGap {
   answers: string[];
   replayStartMs?: number | null;
   replayEndMs?: number | null;
+  /** The option answering it, where the group has a box. */
+  optionId?: string | null;
 }
 
 export function docGaps(doc: DocBlock[]): DocGap[] {
@@ -387,6 +399,7 @@ export function docGaps(doc: DocBlock[]): DocGap[] {
         answers: part.answers,
         replayStartMs: part.replayStartMs,
         replayEndMs: part.replayEndMs,
+        optionId: part.optionId,
       });
     }
   };
@@ -402,6 +415,43 @@ export function docGaps(doc: DocBlock[]): DocGap[] {
 }
 
 /** Gap id → its 1-based number, for rendering. */
+/** Every gap that pointed at this option, unanswered.
+ *
+ *  Called when an option leaves the box, and it has to be one edit with that
+ *  removal: a gap naming a letter the box hasn't got is a payload the server
+ *  refuses outright, so the two landing separately would leave the group
+ *  unable to save at all. */
+export function clearGapOption(
+  doc: DocBlock[],
+  optionId: string,
+): DocBlock[] {
+  const line = (l: DocLine): DocLine => ({
+    ...l,
+    parts: l.parts.map((part) =>
+      part.kind === "gap" && part.optionId === optionId
+        ? { ...part, optionId: null }
+        : part,
+    ),
+  });
+  return doc.map((block) => {
+    if (block.kind === "row") return { ...block, lines: block.lines.map(line) };
+    if (block.kind === "table") {
+      return {
+        ...block,
+        rows: block.rows.map((row) => ({ ...row, cells: row.cells.map(line) })),
+      };
+    }
+    return block;
+  });
+}
+
+/** Whether this gap has an answer, which depends on what an answer is here:
+ *  a letter from the group's box, or the words the author typed between the
+ *  brackets. */
+export function gapAnswered(gap: DocGap, boxed = false): boolean {
+  return boxed ? !!gap.optionId : gap.answers.some((a) => a.trim());
+}
+
 export function gapNumbers(doc: DocBlock[]): Map<string, number> {
   return new Map(docGaps(doc).map((g) => [g.id, g.number]));
 }
@@ -417,7 +467,15 @@ function lineToText(line: DocLine, numberOf: (id: string) => number): string {
 
 /** Document → what the API stores. Numbering is positional, so the tokens are
  *  always contiguous from 1 and always match the questions. */
-export function docToGroup(doc: DocBlock[]): {
+export function docToGroup(
+  doc: DocBlock[],
+  /** Option ID -> its letter, for a group printed with a box. Given, a gap's
+   *  answer is the one letter it was matched to; withheld, it is the accepted
+   *  words the author typed between the brackets. Two meanings for one field,
+   *  which is what the paper does: "write the missing word" against "write
+   *  the correct letter". */
+  letterOf?: (optionId: string) => string | undefined,
+): {
   template: string;
   questions: QuestionIn[];
 } {
@@ -462,9 +520,18 @@ export function docToGroup(doc: DocBlock[]): {
     });
   }
 
+  const answersOf = (gap: DocGap): string[] => {
+    if (!letterOf) return gap.answers.map((a) => a.trim()).filter(Boolean);
+    // An option that has since been deleted is simply no answer. It cannot
+    // normally happen — dropping an option clears the gaps that pointed at it
+    // — but sending a letter the box hasn't got fails the whole save, and a
+    // group that has stopped saving is far worse than an answer to set again.
+    const letter = gap.optionId ? letterOf(gap.optionId) : undefined;
+    return letter ? [letter] : [];
+  };
   const questions: QuestionIn[] = docGaps(doc).map((gap) => ({
     number: gap.number,
-    correct_answers: gap.answers.map((a) => a.trim()).filter(Boolean),
+    correct_answers: answersOf(gap),
     replay_start_ms: gap.replayStartMs ?? null,
     replay_end_ms: gap.replayEndMs ?? null,
   }));
@@ -478,21 +545,28 @@ export function docToGroup(doc: DocBlock[]): {
 function docLine(
   line: FormLine,
   byNumber: Map<number, ListeningQuestion>,
+  optionIdOf?: (letter: string) => string | undefined,
 ): DocLine {
   return {
     id: newId(),
     bullet: line.bullet,
-    parts: line.parts.map((part) =>
-      part.kind === "text"
-        ? { kind: "text" as const, text: part.text }
-        : {
-            kind: "gap" as const,
-            id: newId(),
-            answers: byNumber.get(part.number)?.correct_answers ?? [],
-            replayStartMs: byNumber.get(part.number)?.replay_start_ms ?? null,
-            replayEndMs: byNumber.get(part.number)?.replay_end_ms ?? null,
-          },
-    ),
+    parts: line.parts.map((part) => {
+      if (part.kind === "text") return { kind: "text" as const, text: part.text };
+      const question = byNumber.get(part.number);
+      const stored = question?.correct_answers ?? [];
+      return {
+        kind: "gap" as const,
+        id: newId(),
+        // With a box the stored answer is a letter, and the words the author
+        // reads are the option's — so nothing goes in the brackets.
+        answers: optionIdOf ? [] : stored,
+        optionId: optionIdOf
+          ? (optionIdOf(stored[0]?.trim().toLowerCase() ?? "") ?? null)
+          : null,
+        replayStartMs: question?.replay_start_ms ?? null,
+        replayEndMs: question?.replay_end_ms ?? null,
+      };
+    }),
   };
 }
 
@@ -500,6 +574,8 @@ function docLine(
 export function docFromGroup(
   template: string,
   questions: ListeningQuestion[],
+  /** Letter -> the option it stands for, for a group printed with a box. */
+  optionIdOf?: (letter: string) => string | undefined,
 ): DocBlock[] {
   const byNumber = new Map(questions.map((q) => [q.number, q]));
   const doc: DocBlock[] = [];
@@ -521,7 +597,7 @@ export function docFromGroup(
         head: block.head,
         rows: block.rows.map((cells) => ({
           id: newId(),
-          cells: cells.map((cell) => docLine(cell, byNumber)),
+          cells: cells.map((cell) => docLine(cell, byNumber, optionIdOf)),
         })),
       });
       continue;
@@ -530,7 +606,7 @@ export function docFromGroup(
       id: newId(),
       kind: "row",
       label: block.label,
-      lines: block.lines.map((line) => docLine(line, byNumber)),
+      lines: block.lines.map((line) => docLine(line, byNumber, optionIdOf)),
     });
   }
 
@@ -576,15 +652,32 @@ export function docToLayout(doc: DocBlock[]): FormBlock[] {
  *  `offset` is how many questions come before this group in the material, so
  *  the numbers quoted are the ones printed beside the gaps rather than the
  *  1..N this group happens to store. */
-export function docIssues(doc: DocBlock[], offset = 0): string[] {
+export function docIssues(
+  doc: DocBlock[],
+  offset = 0,
+  /** Whether this group is printed with a box. It changes what a gap is
+   *  missing — a letter rather than words — and so what to say about it. */
+  boxed = false,
+): string[] {
   const gaps = docGaps(doc);
   if (gaps.length === 0) {
-    return ["No questions yet — put an answer in brackets, like [Chinese]."];
+    return [
+      boxed
+        ? "No questions yet — put empty brackets, [], where a gap goes."
+        : "No questions yet — put an answer in brackets, like [Chinese].",
+    ];
   }
   const unanswered = gaps
-    .filter((g) => !g.answers.some((a) => a.trim()))
+    .filter((g) => !gapAnswered(g, boxed))
     .map((g) => g.number + offset);
   if (unanswered.length === 0) return [];
+  if (boxed) {
+    return [
+      unanswered.length === 1
+        ? `Question ${unanswered[0]} has no letter from the box yet.`
+        : `Questions ${unanswered.join(", ")} have no letter from the box yet.`,
+    ];
+  }
   return [
     unanswered.length === 1
       ? `Question ${unanswered[0]} has no accepted answer yet.`
@@ -596,8 +689,12 @@ export function docIssues(doc: DocBlock[], offset = 0): string[] {
  *  must also be linked to the moment it is said. Kept apart from `docIssues`
  *  so a half-finished draft still autosaves — an author shouldn't have to
  *  mark the audio before they're allowed to write the next row. */
-export function docPublishIssues(doc: DocBlock[], offset = 0): string[] {
-  const issues = docIssues(doc, offset);
+export function docPublishIssues(
+  doc: DocBlock[],
+  offset = 0,
+  boxed = false,
+): string[] {
+  const issues = docIssues(doc, offset, boxed);
   if (issues.length > 0) return issues;
   const unmarked = docGaps(doc)
     .filter((g) => g.replayStartMs == null)
@@ -608,20 +705,6 @@ export function docPublishIssues(doc: DocBlock[], offset = 0): string[] {
       ? `Question ${unmarked[0]} isn't linked to the audio yet.`
       : `Questions ${unmarked.join(", ")} aren't linked to the audio yet.`,
   ];
-}
-
-/** Whether this form can be persisted without tripping the server's 422s.
- *  Gates autosave, so an incomplete draft simply isn't sent yet rather than
- *  erroring on every keystroke.
- *
- *  Only one thing holds a form back: a gap with no accepted answer, which the
- *  server refuses because a gap nobody can answer isn't a draft of anything.
- *  Everything else about an unfinished form — no instructions, no gaps at
- *  all, nothing but a heading — is a form being written, and saving it is the
- *  whole point. This used to also require instructions and at least one gap,
- *  which meant the beginning of a group was never stored at all. */
-export function isGroupPersistable(doc: DocBlock[]): boolean {
-  return docGaps(doc).every((gap) => gap.answers.some((a) => a.trim()));
 }
 
 /** Whether the author has put anything of their own in yet. */

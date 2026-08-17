@@ -33,6 +33,10 @@ interface ValueFieldProps {
   /** Numbers with no accepted answer. */
   flagged: Set<number>;
   markChecks?: Map<string, { found: boolean; heardAtMs: number | null }>;
+  /** Option ID -> its letter, where the group is printed with a box. Given, a
+   *  chip reads as the letter answering it rather than as the words in the
+   *  brackets, because that is what the candidate will write there. */
+  letterOf?: (optionId: string) => string | undefined;
   /** The actions for the selected chip, drawn over it. */
   renderGapActions?: (gapId: string) => React.ReactNode;
   selectedGap?: string | null;
@@ -147,6 +151,7 @@ function paint(
   numbers: Map<string, number>,
   flagged: Set<number>,
   markChecks?: Map<string, { found: boolean; heardAtMs: number | null }>,
+  letterOf?: (optionId: string) => string | undefined,
 ): void {
   root.replaceChildren();
   for (const part of parts) {
@@ -158,7 +163,15 @@ function paint(
     const number = numbers.get(part.id) ?? 0;
     const marked = part.replayStartMs != null;
     const mismatch = marked && markChecks?.get(part.id)?.found === false;
-    const written = part.answers.filter((a) => a.trim());
+    // With a box the answer is a letter, so that is what the chip says. An
+    // unanswered one shows the shape of one rather than the word "answer":
+    // there is nothing to type here, only a letter to pick.
+    const letter = letterOf && part.optionId ? letterOf(part.optionId) : undefined;
+    const written = letterOf
+      ? letter
+        ? [letter.toUpperCase()]
+        : []
+      : part.answers.filter((a) => a.trim());
     const tone = flagged.has(number)
       ? CHIP_TONES.noAnswer
       : !marked
@@ -179,7 +192,11 @@ function paint(
 
     const answer = document.createElement("span");
     answer.className = written.length ? "text-base" : "text-base italic opacity-70";
-    answer.textContent = written.length ? written.join(" / ") : "answer";
+    answer.textContent = written.length
+      ? written.join(" / ")
+      : letterOf
+        ? "?"
+        : "answer";
 
     chip.append(label, answer);
     root.append(chip);
@@ -194,6 +211,7 @@ export function ValueField({
   numbers,
   flagged,
   markChecks,
+  letterOf,
   renderGapActions,
   selectedGap,
   onSelectGap,
@@ -210,7 +228,16 @@ export function ValueField({
     line.parts.every((p) => p.kind === "text" && !p.text),
   );
 
-  const signature = JSON.stringify(line.parts) + JSON.stringify([...numbers]);
+  const signature =
+    JSON.stringify(line.parts) +
+    JSON.stringify([...numbers]) +
+    // A letter changes when an option above it is inserted or deleted, and
+    // the chip has to be repainted for it — the parts themselves don't move.
+    (letterOf
+      ? line.parts
+          .map((p) => (p.kind === "gap" ? letterOf(p.optionId ?? "") : ""))
+          .join(",")
+      : "");
 
   // Repaint only when something the field didn't type changes: a bracket it
   // turned into a chip, a mark applied from the transcript, a renumber, the
@@ -231,10 +258,10 @@ export function ValueField({
     const caret = caretRef.current ?? (focused ? caretOffset(root) : null);
     caretRef.current = null;
 
-    paint(root, line.parts, numbers, flagged, markChecks);
+    paint(root, line.parts, numbers, flagged, markChecks, letterOf);
     setEmpty(line.parts.every((p) => p.kind === "text" && !p.text));
     if (caret !== null) placeCaret(root, caret);
-  }, [signature, line.parts, numbers, flagged, markChecks]);
+  }, [signature, line.parts, numbers, flagged, markChecks, letterOf]);
 
   const handleInput = () => {
     const root = rootRef.current;
@@ -269,7 +296,7 @@ export function ValueField({
           rootRef.current = el;
           registerInput?.(el);
           if (el && el.childNodes.length === 0 && !empty) {
-            paint(el, partsRef.current, numbers, flagged, markChecks);
+            paint(el, partsRef.current, numbers, flagged, markChecks, letterOf);
           }
         }}
         contentEditable

@@ -3,6 +3,7 @@ import { Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FormLayout } from "@/features/listening/components/FormLayout";
 import { parseTemplateLayout } from "@/features/listening/form-syntax";
+import { matchLetter } from "@/features/listening/matching";
 import { rubricSentence } from "@/features/listening/rubric";
 import type { QuestionResult, TakeQuestionGroup } from "@/features/listening/types";
 
@@ -31,6 +32,10 @@ export function FormCompletionGroup({
   disabled,
 }: FormCompletionGroupProps) {
   const rubric = rubricSentence(group.config.answer_rubric, group.word_limit);
+  // "Complete the summary using the list of words, A–H." With a box there is
+  // nothing to type: each gap takes one of these letters, which is why the box
+  // has to reach the candidate — they cannot answer without reading it.
+  const box = group.config.options ?? [];
 
   const byNumber = useMemo(() => {
     const map = new Map<number, (typeof group.questions)[number]>();
@@ -50,6 +55,29 @@ export function FormCompletionGroup({
       <p className="text-sm text-foreground">{group.instructions}</p>
       {rubric && <p className="text-xs text-muted-foreground">{rubric}</p>}
 
+      {box.length > 0 && (
+        <>
+          <ul className="space-y-1 rounded-lg border border-border bg-background p-3">
+            {box.map((text, index) => (
+              <li key={index} className="flex items-baseline gap-2 text-sm">
+                <span
+                  aria-hidden
+                  className="flex size-5 shrink-0 items-center justify-center self-center rounded-full border border-border text-[11px] font-semibold text-muted-foreground"
+                >
+                  {matchLetter(index)}
+                </span>
+                <span className="text-foreground">{text}</span>
+              </li>
+            ))}
+          </ul>
+          {group.config.allow_reuse && (
+            <p className="text-xs text-muted-foreground">
+              NB You may use any letter more than once.
+            </p>
+          )}
+        </>
+      )}
+
       <div className="rounded-lg border border-border bg-background p-4">
         <FormLayout
           blocks={blocks}
@@ -61,19 +89,45 @@ export function FormCompletionGroup({
             const shown = startNumber + n - 1;
             const result = results?.[question.id];
             const graded = result !== undefined;
+            const fieldTone = cn(
+              graded &&
+                (result.is_correct
+                  ? "border-success text-success"
+                  : "border-destructive text-destructive"),
+            );
             return (
               <span className="mx-1 inline-flex items-baseline gap-1 align-baseline">
                 <span aria-hidden className="text-xs font-semibold text-muted-foreground">
                   {shown}
                 </span>
+                {box.length > 0 ? (
+                  // A native select, inline in the prose: the letters are a
+                  // closed list, and a field to type one into would invite a
+                  // word the paper didn't ask for.
+                  <select
+                    className={cn(
+                      "rounded-md border border-border bg-background px-2 py-0.5 text-sm text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                      fieldTone,
+                    )}
+                    value={answers[question.id] ?? ""}
+                    onChange={(e) => onChange(question.id, e.target.value)}
+                    disabled={disabled}
+                    aria-label={`Answer ${shown}`}
+                    aria-invalid={graded && !result.is_correct}
+                  >
+                    <option value="">—</option>
+                    {box.map((_text, i) => (
+                      <option key={i} value={matchLetter(i)}>
+                        {matchLetter(i).toUpperCase()}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
                 <input
                   type="text"
                   className={cn(
                     "w-32 rounded-md border border-border bg-background px-2 py-0.5 text-sm text-foreground placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-                    graded &&
-                      (result.is_correct
-                        ? "border-success text-success"
-                        : "border-destructive text-destructive"),
+                    fieldTone,
                   )}
                   value={answers[question.id] ?? ""}
                   onChange={(e) => onChange(question.id, e.target.value)}
@@ -81,9 +135,16 @@ export function FormCompletionGroup({
                   aria-label={`Answer ${shown}`}
                   aria-invalid={graded && !result.is_correct}
                 />
+                )}
                 {graded && !result.is_correct && (
                   <span className="text-xs text-muted-foreground">
-                    (accepted: {result.correct_answers.join(", ")})
+                    (
+                    {box.length > 0
+                      ? result.correct_answers
+                          .map((letter) => letter.trim().toUpperCase())
+                          .join(", ")
+                      : `accepted: ${result.correct_answers.join(", ")}`}
+                    )
                   </span>
                 )}
                 {/* Only where the author marked it — a review that offered

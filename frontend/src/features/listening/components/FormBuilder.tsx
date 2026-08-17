@@ -92,6 +92,11 @@ interface FormBuilderProps {
    *  row a brand-new form starts with. Nothing else: every block stays
    *  reachable from every task. */
   labelFirst?: boolean;
+  /** The box this group's gaps are answered from, where the paper prints one.
+   *  Given, a gap is answered by pressing a letter rather than by typing words
+   *  between the brackets — so the letters ride in each gap's own toolbar,
+   *  which is the only place a gap has room for them. */
+  box?: { id: string; letter: string; text: string }[];
   /** Controls that belong to the group rather than to the form — adding
    *  another group after this one. They sit on the same row as the rest so
    *  everything that adds something is in one place. */
@@ -106,6 +111,7 @@ export function FormBuilder({
   markChecks,
   onMarkAudio,
   labelFirst,
+  box,
   extraTools,
 }: FormBuilderProps) {
   const numbers = new Map(
@@ -262,13 +268,21 @@ export function FormBuilder({
     );
   };
 
+  const letterOf = box
+    ? (optionId: string) => box.find((o) => o.id === optionId)?.letter
+    : undefined;
+
   /** Patches a gap wherever it is, by id. The value cell edits its own parts
    *  as text, so positions are its business, not this one's — and a mark can
    *  come back a click or two after it was asked for, by which time they may
    *  have moved. */
   const patchGapById = (
     gapId: string,
-    patch: { replayStartMs: number | null; replayEndMs: number | null },
+    patch: {
+      replayStartMs?: number | null;
+      replayEndMs?: number | null;
+      optionId?: string | null;
+    },
   ) => {
     onChange((current) =>
       current.map((b) =>
@@ -620,6 +634,7 @@ export function FormBuilder({
                                   markChecks={markChecks}
                                   selectedGap={selectedGap}
                                   onSelectGap={setSelectedGap}
+                                  letterOf={letterOf}
                                   registerInput={register(`${cell.id}#0`)}
                                   onEnter={() => addTableRow(block.id)}
                                   onChange={(parts) =>
@@ -636,6 +651,11 @@ export function FormBuilder({
                                         replayStartMs={gap.replayStartMs ?? null}
                                         replayEndMs={gap.replayEndMs ?? null}
                                         markCheck={markChecks?.get(gapId)}
+                                        box={box}
+                                        chosen={gap.optionId ?? null}
+                                        onChoose={(optionId) =>
+                                          patchGapById(gapId, { optionId })
+                                        }
                                         onMark={
                                           onMarkAudio
                                             ? () =>
@@ -803,6 +823,7 @@ export function FormBuilder({
                             markChecks={markChecks}
                             selectedGap={selectedGap}
                             onSelectGap={setSelectedGap}
+                            letterOf={letterOf}
                             placeholder={
                               lineIndex > 0
                                 ? undefined
@@ -827,6 +848,11 @@ export function FormBuilder({
                                   replayStartMs={gap.replayStartMs ?? null}
                                   replayEndMs={gap.replayEndMs ?? null}
                                   markCheck={markChecks?.get(gapId)}
+                                  box={box}
+                                  chosen={gap.optionId ?? null}
+                                  onChoose={(optionId) =>
+                                    patchGapById(gapId, { optionId })
+                                  }
                                   onMark={
                                     onMarkAudio
                                       ? () =>
@@ -1087,6 +1113,9 @@ function GapActions({
   replayStartMs,
   replayEndMs,
   markCheck,
+  box,
+  chosen,
+  onChoose,
   onMark,
   onClearMark,
   onUnblank,
@@ -1095,6 +1124,12 @@ function GapActions({
   replayStartMs: number | null;
   replayEndMs: number | null;
   markCheck?: { found: boolean; heardAtMs: number | null };
+  /** The box, where this group has one. Its letters go here because a gap
+   *  sits inside a sentence: there is nowhere beside it to put eight
+   *  buttons, and this toolbar is already what a gap is asked about. */
+  box?: { id: string; letter: string; text: string }[];
+  chosen?: string | null;
+  onChoose?: (optionId: string | null) => void;
   onMark?: () => void;
   onClearMark: () => void;
   onUnblank: () => void;
@@ -1125,6 +1160,38 @@ function GapActions({
       className="absolute z-30 -translate-y-full pb-1"
     >
       <span className="flex w-max items-center gap-1 rounded-lg border border-border bg-card p-1 shadow-lg">
+        {/* The box first: with one, choosing the letter IS answering the gap,
+            and everything else here is about an answer that already exists. */}
+        {box && box.length > 0 && (
+          <>
+            <span className="flex items-center gap-0.5">
+              {box.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() =>
+                    onChoose?.(chosen === option.id ? null : option.id)
+                  }
+                  aria-pressed={chosen === option.id}
+                  title={
+                    chosen === option.id
+                      ? `${option.letter.toUpperCase()} — ${option.text || "not written yet"}. Press to unset.`
+                      : `${option.letter.toUpperCase()} — ${option.text || "not written yet"}`
+                  }
+                  className={cn(
+                    "flex size-7 items-center justify-center rounded-md border text-xs font-semibold transition-colors",
+                    chosen === option.id
+                      ? "border-success/50 bg-success/15 text-success"
+                      : "border-transparent text-muted-foreground hover:bg-foreground/8 hover:text-foreground",
+                  )}
+                >
+                  {option.letter}
+                </button>
+              ))}
+            </span>
+            <span className="mx-0.5 h-5 w-px bg-border" aria-hidden />
+          </>
+        )}
         <GapAction
           label={
             marked

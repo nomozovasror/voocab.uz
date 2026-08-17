@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, CircleAlert, SquareDashed } from "lucide-react";
+import { Check, ChevronDown, CircleAlert, SquareDashed } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FormBuilder } from "@/features/listening/components/FormBuilder";
 import { GroupHeader } from "@/features/listening/components/GroupHeader";
@@ -8,7 +8,17 @@ import {
   QUESTION_TYPE_LABEL,
   QUESTION_TYPE_RUBRIC,
 } from "@/features/listening/parts";
-import { docGaps, docPublishIssues } from "@/features/listening/form-syntax";
+import {
+  docGaps,
+  docPublishIssues,
+  gapAnswered,
+} from "@/features/listening/form-syntax";
+import { OptionsBox } from "@/features/listening/components/OptionsBox";
+import {
+  matchLetter,
+  newMatchOptions,
+  type MatchOption,
+} from "@/features/listening/matching";
 import { ANSWER_RUBRICS, deriveRubric } from "@/features/listening/rubric";
 import type { DocBlock } from "@/features/listening/form-syntax";
 import type { AnswerRubric, CompletionType } from "@/features/listening/types";
@@ -26,6 +36,15 @@ interface QuestionFormEditorProps {
   onInstructionsChange: (v: string) => void;
   rubric: AnswerRubric | null;
   onRubricChange: (v: AnswerRubric | null) => void;
+  /** The box this group's gaps are answered from, where the paper prints one.
+   *  Empty is the ordinary task, answered in the words the candidate heard. */
+  options: MatchOption[];
+  onOptionsChange: (edit: (current: MatchOption[]) => MatchOption[]) => void;
+  /** Dropping an option has to clear the gaps that pointed at it, so it is
+   *  one edit over both halves rather than two that could land apart. */
+  onRemoveOption: (optionId: string) => void;
+  allowReuse: boolean;
+  onAllowReuseChange: (v: boolean) => void;
   /** The number the first gap of this group carries on the page. */
   startNumber: number;
   /** Set while a publish attempt is blocked on this group, so the offending
@@ -46,8 +65,91 @@ interface QuestionFormEditorProps {
   canMoveDown?: boolean;
 }
 
-function flaggedGapCount(gaps: { answers: string[] }[]): number {
-  return gaps.filter((g) => !g.answers.some((a) => a.trim())).length;
+/** Whether this task is printed with a list of words to choose from.
+ *
+ *  It sits where "Answer length" does, and replaces it, because the two are
+ *  the same question asked of the two forms of the task: how long may the
+ *  answer be, against there being no answer to write at all — only a letter to
+ *  pick. */
+function BoxToggle({
+  value,
+  onChange,
+}: {
+  value: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={value}
+      onClick={() => onChange(!value)}
+      title={
+        value
+          ? "The paper says: choose your answers from the box"
+          : "Answers are written in, not chosen from a list"
+      }
+      className={cn(
+        "flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+        value
+          ? "border-primary/40 bg-primary/10 text-primary"
+          : "border-border text-muted-foreground hover:bg-foreground/4 hover:text-foreground",
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border transition-colors",
+          value ? "border-primary bg-primary/20" : "border-border",
+        )}
+      >
+        {value && <Check className="size-2.5" aria-hidden />}
+      </span>
+      answers from a box
+    </button>
+  );
+}
+
+/** Whether one option may answer more than one gap — the paper's "NB you may
+ *  use any letter more than once". The same switch matching has, in the box
+ *  they share. */
+function ReuseToggle({
+  value,
+  onChange,
+}: {
+  value: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={value}
+      onClick={() => onChange(!value)}
+      title={
+        value
+          ? "The paper says: NB You may use any letter more than once"
+          : "Each option answers one gap"
+      }
+      className={cn(
+        "flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs transition-colors",
+        value
+          ? "bg-primary/12 text-primary"
+          : "text-muted-foreground/70 hover:bg-foreground/6 hover:text-foreground",
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border transition-colors",
+          value ? "border-primary bg-primary/20" : "border-border",
+        )}
+      >
+        {value && <Check className="size-2.5" aria-hidden />}
+      </span>
+      reuse letters
+    </button>
+  );
 }
 
 /** The syntax itself, drawn rather than described. The sentence around it
@@ -70,6 +172,11 @@ export function QuestionFormEditor({
   onInstructionsChange,
   rubric,
   onRubricChange,
+  options,
+  onOptionsChange,
+  onRemoveOption,
+  allowReuse,
+  onAllowReuseChange,
   startNumber,
   showIssues,
   markChecks,
@@ -83,17 +190,31 @@ export function QuestionFormEditor({
   canMoveDown,
 }: QuestionFormEditorProps) {
   const offset = startNumber - 1;
+  const boxed = options.length > 0;
   const issues = useMemo(
-    () => docPublishIssues(doc, offset),
-    [doc, offset],
+    () => docPublishIssues(doc, offset, boxed),
+    [doc, offset, boxed],
   );
   const gaps = useMemo(() => docGaps(doc), [doc]);
+  /** The box as the builder needs it: each option with the letter it currently
+   *  wears. Worked out here, from position, so the letters exist in exactly
+   *  one place and nothing downstream stores one. */
+  const box = useMemo(
+    () =>
+      options.map((option, index) => ({
+        id: option.id,
+        letter: matchLetter(index),
+        text: option.text,
+      })),
+    [options],
+  );
 
   // "No gaps yet" is true of every form the moment it's begun, so it waits
   // for a publish attempt. A gap left without an answer is a real mistake and
   // is called out as soon as it exists.
   const showsIssues =
-    issues.length > 0 && (showIssues || flaggedGapCount(gaps) > 0);
+    issues.length > 0 &&
+    (showIssues || gaps.filter((g) => !gapAnswered(g, boxed)).length > 0);
 
   // What is selected inside a value right now. Held here rather than in the
   // builder so the offer to turn it into an answer can sit with the rubric,
@@ -141,10 +262,8 @@ export function QuestionFormEditor({
 
   const flaggedGaps = useMemo(
     () =>
-      gaps
-        .filter((g) => !g.answers.some((a) => a.trim()))
-        .map((g) => g.number + offset),
-    [gaps, offset],
+      gaps.filter((g) => !gapAnswered(g, boxed)).map((g) => g.number + offset),
+    [gaps, offset, boxed],
   );
 
   // `inert` rather than only dimming and blocking the pointer: without it
@@ -175,12 +294,22 @@ export function QuestionFormEditor({
           className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none"
         />
         <label className="flex items-center gap-2 pl-1 text-xs text-muted-foreground">
-          <span className="whitespace-nowrap">Answer length</span>
+          {/* How long an answer may be is not a question you can ask about a
+              letter, so with a box this makes way for the switch that turns
+              the box on. */}
+          {!boxed && <span className="whitespace-nowrap">Answer length</span>}
           {/* A native select for the behaviour — keyboard, mobile, no menu to
               reimplement — with its own chrome stripped and the app's put
               back, so it stops looking like something the browser drew. The
               open list itself is the OS's and can't be styled. */}
-          <span className="relative inline-flex items-center">
+          <BoxToggle
+            value={boxed}
+            onChange={(on) =>
+              onOptionsChange(() => (on ? newMatchOptions() : []))
+            }
+          />
+
+          <span className={cn("relative inline-flex items-center", boxed && "hidden")}>
             <select
               value={rubric ?? ""}
               onChange={(e) =>
@@ -228,6 +357,12 @@ export function QuestionFormEditor({
               <SquareDashed className="size-3.5 shrink-0" aria-hidden />
               Mark as answer
             </button>
+          ) : boxed ? (
+            <span className="flex min-w-0 items-center gap-1.5 truncate text-foreground">
+              Put
+              <Brackets />
+              where a gap goes, then press a letter on it
+            </span>
           ) : (
             <span className="flex min-w-0 items-center gap-1.5 truncate text-foreground">
               Write the answer in
@@ -246,6 +381,23 @@ export function QuestionFormEditor({
       {/* No separate preview: the builder is already laid out as the form, so
           a second copy below it would only be somewhere for the two to
           disagree. */}
+      {/* Above the sheet, because the letters have to exist before a gap can
+          be answered by one — and because that is where the author's eye goes
+          first when the paper says "using the list of words below". */}
+      {boxed && (
+        <div className="mb-3">
+          <OptionsBox
+            options={options}
+            onChange={onOptionsChange}
+            onRemove={onRemoveOption}
+            label="Options to choose from"
+            trailing={
+              <ReuseToggle value={allowReuse} onChange={onAllowReuseChange} />
+            }
+          />
+        </div>
+      )}
+
       <div ref={formRef}>
         <FormBuilder
           doc={doc}
@@ -255,6 +407,7 @@ export function QuestionFormEditor({
           markChecks={markChecks}
           onMarkAudio={onMarkAudio}
           labelFirst={task === "form_completion"}
+          box={boxed ? box : undefined}
           extraTools={extraTools}
         />
       </div>

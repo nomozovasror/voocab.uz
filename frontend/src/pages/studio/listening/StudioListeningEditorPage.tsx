@@ -30,12 +30,13 @@ import {
   type AnswerOccurrence,
 } from "@/features/listening/marks";
 import {
+  clearGapOption,
   docFromGroup,
   docGaps,
   docPublishIssues,
   docToGroup,
+  gapAnswered,
   isDocEmpty,
-  isGroupPersistable,
   newDoc,
   newId,
   type DocBlock,
@@ -55,6 +56,7 @@ import {
 } from "@/features/listening/mcq";
 import {
   isMatchingGroupEmpty,
+  matchLetter,
   matchingFromApi,
   matchingIssues,
   matchingMarks,
@@ -62,6 +64,7 @@ import {
   matchingPublishIssues,
   matchingToApi,
   newMatchItems,
+  newMatchOption,
   newMatchOptions,
   removeMatchOption,
   type MatchItem,
@@ -131,6 +134,14 @@ interface FormGroupState extends GroupStateBase {
   wordLimit: number | null;
   rubric: AnswerRubric | null;
   doc: DocBlock[];
+  /** The box its gaps are answered from, where the paper prints one:
+   *  "complete the summary using the list of words, A–H". Empty is the
+   *  ordinary completion task, answered in the words the candidate heard.
+   *
+   *  The same shape matching's box has, because it is the same thing — and
+   *  held by option id rather than by letter for the same reason. */
+  options: MatchOption[];
+  allowReuse: boolean;
 }
 
 interface ChoiceGroupState extends GroupStateBase {
@@ -279,8 +290,14 @@ function groupPayload(group: GroupState): QuestionGroupIn | null {
     };
   }
 
-  if (!isGroupPersistable(group.doc)) return null;
-  const { template, questions } = docToGroup(group.doc);
+  const boxed = group.options.length > 0;
+  const letters = new Map(
+    group.options.map((option, index) => [option.id, matchLetter(index)]),
+  );
+  const { template, questions } = docToGroup(
+    group.doc,
+    boxed ? (optionId) => letters.get(optionId) : undefined,
+  );
   return {
     type: group.type,
     instructions: group.instructions.trim(),
@@ -289,7 +306,12 @@ function groupPayload(group: GroupState): QuestionGroupIn | null {
       template,
       // Left on auto, the rubric the answers imply is stored: the take page
       // has no answers to work it out from.
-      answer_rubric: group.rubric ?? deriveRubric(group.doc),
+      //
+      // Never for a boxed task: how long an answer may be is not a question
+      // you can ask about a letter, any more than it is of a choice.
+      answer_rubric: boxed ? null : (group.rubric ?? deriveRubric(group.doc)),
+      options: matchingOptionsToApi(group.options),
+      allow_reuse: group.allowReuse,
     },
     questions,
   };
@@ -365,7 +387,18 @@ function newGroup(type: QuestionGroupType | null): GroupState {
       items: newMatchItems(),
     };
   }
-  return { ...base, type, wordLimit: null, rubric: null, doc: newDoc(type) };
+  return {
+    ...base,
+    type,
+    wordLimit: null,
+    rubric: null,
+    doc: newDoc(type),
+    // No box to begin with, whichever task it is: the ordinary form of every
+    // one of them is answered in words, and the box is what the author asks
+    // for when their paper has one.
+    options: [],
+    allowReuse: false,
+  };
 }
 
 /** A part's first group. Where the part has only one kind of question it can
@@ -705,6 +738,35 @@ export default function StudioListeningEditorPage() {
     [updateGroup],
   );
 
+  const editGroupOptionList = useCallback(
+    (key: string, edit: (current: MatchOption[]) => MatchOption[]) => {
+      updateGroup(key, (group) =>
+        isCompletionGroup(group)
+          ? { ...group, options: edit(group.options) }
+          : group,
+      );
+    },
+    [updateGroup],
+  );
+
+  /** Dropping an option from a completion group's box. The gaps that pointed
+   *  at it lose their answer with it: a gap naming a letter the box hasn't got
+   *  is a payload the server refuses outright, so the group would stop saving
+   *  from here on. */
+  const dropCompletionOption = useCallback(
+    (key: string, optionId: string) => {
+      updateGroup(key, (group) => {
+        if (!isCompletionGroup(group)) return group;
+        return {
+          ...group,
+          options: group.options.filter((option) => option.id !== optionId),
+          doc: clearGapOption(group.doc, optionId),
+        };
+      });
+    },
+    [updateGroup],
+  );
+
   /** Dropping an option from a matching group's box. One edit rather than
    *  two, because the answers pointing at it have to go with it: a payload
    *  naming a letter the box hasn't got is refused outright, so the two
@@ -764,6 +826,12 @@ export default function StudioListeningEditorPage() {
                 // Anything else is a completion task, including a type this
                 // build doesn't know: every group has a template, so showing
                 // it as one is better than dropping the questions.
+                const options = (group.config.options ?? []).map((text) =>
+                  newMatchOption(text),
+                );
+                const byLetter = new Map(
+                  options.map((option, index) => [matchLetter(index), option.id]),
+                );
                 return {
                   ...base,
                   type: isCompletion(group.type as QuestionGroupType)
@@ -771,7 +839,15 @@ export default function StudioListeningEditorPage() {
                     : "form_completion",
                   wordLimit: group.word_limit,
                   rubric: group.config.answer_rubric ?? null,
-                  doc: docFromGroup(group.config.template ?? "", group.questions),
+                  doc: docFromGroup(
+                    group.config.template ?? "",
+                    group.questions,
+                    options.length > 0
+                      ? (letter) => byLetter.get(letter)
+                      : undefined,
+                  ),
+                  options,
+                  allowReuse: group.config.allow_reuse ?? false,
                 };
               })
           : [firstGroup(p.order_index)],
@@ -1512,7 +1588,11 @@ export default function StudioListeningEditorPage() {
       // gate and the editor's own inline warnings can never disagree.
       const issue =
         isCompletionGroup(group)
-          ? docPublishIssues(group.doc, startNumber - 1)[0]
+          ? docPublishIssues(
+              group.doc,
+              startNumber - 1,
+              group.options.length > 0,
+            )[0]
           : group.type === "multiple_choice"
             ? choicePublishIssues(
                 group.questions,
@@ -1675,9 +1755,14 @@ export default function StudioListeningEditorPage() {
     const run = groupRun(state.parts);
 
     const gaps = run.flatMap(({ group }) =>
-      isCompletionGroup(group) ? docGaps(group.doc) : [],
+      isCompletionGroup(group)
+        ? docGaps(group.doc).map((gap) => ({
+            ...gap,
+            answered: gapAnswered(gap, group.options.length > 0),
+          }))
+        : [],
     );
-    const answered = gaps.filter((g) => g.answers.some((a) => a.trim()));
+    const answered = gaps.filter((g) => g.answered);
     const unmarked = answered.filter((g) => g.replayStartMs == null);
 
     const choiceGroups = run.filter(
@@ -1869,10 +1954,10 @@ export default function StudioListeningEditorPage() {
     () =>
       run.reduce((total, { group }) => {
         if (isCompletionGroup(group)) {
+          const boxed = group.options.length > 0;
           return (
             total +
-            docGaps(group.doc).filter((g) => g.answers.some((a) => a.trim()))
-              .length
+            docGaps(group.doc).filter((g) => gapAnswered(g, boxed)).length
           );
         }
         if (group.type === "multiple_choice") {
@@ -2420,6 +2505,19 @@ export default function StudioListeningEditorPage() {
                         <QuestionFormEditor
                           task={group.type}
                           doc={group.doc}
+                          options={group.options}
+                          onOptionsChange={(edit) =>
+                            editGroupOptionList(group.key, edit)
+                          }
+                          onRemoveOption={(optionId) =>
+                            dropCompletionOption(group.key, optionId)
+                          }
+                          allowReuse={group.allowReuse}
+                          onAllowReuseChange={(allowReuse) =>
+                            updateGroup(group.key, (g) =>
+                              isCompletionGroup(g) ? { ...g, allowReuse } : g,
+                            )
+                          }
                           onChange={(edit) => editGroupDoc(group.key, edit)}
                           instructions={group.instructions}
                           onInstructionsChange={(instructions) =>
