@@ -17,7 +17,7 @@ Usage (from the ``backend/`` directory):
 
 Each file in ``--dir`` is: hashed (SHA-256) -> deduped against existing
 ``AudioBlob`` rows (already-transcribed files are skipped, not re-stored or
-re-transcribed) -> if new, stored via the configured ``AudioStorage`` backend
+re-transcribed) -> if new, stored via the configured ``MediaStorage`` backend
 (R2 in prod, local disk in dev — whatever ``app.core.config.settings`` points
 at on the machine this runs on) -> transcribed with faster-whisper
 (``large-v3``, GPU, word-level timestamps, ``language="en"`` locked — no
@@ -43,7 +43,12 @@ from app.core.database import async_session_factory
 from app.models.user import User
 from app.services import audio as audio_service
 from app.services.asr import TranscriptResult, TranscriptSegment, WordTiming
-from app.services.storage import AUDIO_CONTENT_TYPES, audio_storage_key, get_storage
+from app.services.storage import (
+    AUDIO_CONTENT_TYPES,
+    audio_storage_key,
+    get_storage,
+    sha256_hex,
+)
 
 logger = logging.getLogger("scripts.seed_audio")
 
@@ -128,7 +133,7 @@ async def ingest_file(
         logger.warning("%s: skipping, empty file", path.name)
         return
 
-    sha256 = audio_service.sha256_hex(data)
+    sha256 = sha256_hex(data)
     key = audio_storage_key(sha256, mime_type)
 
     async with async_session_factory() as session:

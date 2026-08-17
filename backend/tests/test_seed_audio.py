@@ -2,7 +2,7 @@
 transcriber (no faster-whisper, no GPU needed). Drives ingest_file() exactly
 the way the real script would, just with transcribe= swapped out.
 
-Storage: uses the real (local, in this sandbox) AudioStorage backend so the
+Storage: uses the real (local, in this sandbox) MediaStorage backend so the
 dedup path is exercised end-to-end; the written file is removed afterward.
 """
 
@@ -19,7 +19,7 @@ from app.models.audio_blob import AudioBlob, TranscriptStatus
 from app.models.audio_segment import AudioSegment
 from app.models.user import User
 from app.services.asr import TranscriptResult, TranscriptSegment, WordTiming
-from app.services.audio import sha256_hex
+from app.services.storage import sha256_hex
 from scripts.seed_audio import ingest_file
 
 FIXTURE_RESULT = TranscriptResult(

@@ -1,6 +1,7 @@
-"""Object storage for uploaded media (audio clips today).
+"""Object storage for uploaded media: the recordings, and the pictures a map
+or diagram task is labelled on.
 
-``AudioStorage`` is a hash-keyed abstraction over two backends, chosen by
+``MediaStorage`` is a hash-keyed abstraction over two backends, chosen by
 config:
 * **R2 / S3** in production (``settings.use_r2``) — objects go to the bucket
   and are served from ``settings.r2_public_base_url``.
@@ -9,13 +10,18 @@ config:
   (see main.py).
 
 Keys are content-addressed: derived from the SHA-256 of the bytes (see
-``audio_storage_key``), never a random UUID. Identical bytes always resolve to
-the identical key, which is what makes ``put`` idempotent/dedup-safe.
+``audio_storage_key`` and ``image_storage_key``), never a random UUID.
+Identical bytes always resolve to the identical key, which is what makes
+``put`` idempotent/dedup-safe. The two kinds of media are kept in separate
+prefixes rather than one flat space — the hash alone would be unambiguous, but
+``audio/`` and ``images/`` is what makes a bucket readable to whoever inherits
+it, and lets a lifecycle rule apply to one and not the other.
 
 boto3 is synchronous, so its calls run in a threadpool to keep the event loop
 free; local file IO is offloaded the same way for consistency.
 """
 
+import hashlib
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol
@@ -23,6 +29,13 @@ from typing import Any, Protocol
 from fastapi.concurrency import run_in_threadpool
 
 from app.core.config import settings
+
+
+def sha256_hex(data: bytes) -> str:
+    """The content address of these bytes. Lives here because that is what a
+    storage key is made of, and because both media pipelines need it."""
+    return hashlib.sha256(data).hexdigest()
+
 
 # Allowed audio uploads: extension -> MIME type.
 AUDIO_CONTENT_TYPES: dict[str, str] = {
@@ -33,6 +46,16 @@ AUDIO_CONTENT_TYPES: dict[str, str] = {
     ".ogg": "audio/ogg",
     ".oga": "audio/ogg",
     ".webm": "audio/webm",
+}
+
+#: Allowed image uploads: MIME type -> extension, and keyed that way round
+#: because an image's type is read from its own header rather than from its
+#: filename (see :mod:`app.services.image_codec`). There is no extension to
+#: look up — the bytes said what they are.
+IMAGE_CONTENT_TYPES: dict[str, str] = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
 }
 
 # Reverse lookup used only to add a cosmetic extension suffix to storage keys
@@ -52,8 +75,17 @@ def audio_storage_key(sha256: str, mime_type: str) -> str:
     return f"audio/{sha256}{ext}"
 
 
-class AudioStorage(Protocol):
-    """Storage backend for content-addressed audio blobs.
+def image_storage_key(sha256: str, mime_type: str) -> str:
+    """The content-addressed storage key for an image blob. Same contract as
+    :func:`audio_storage_key`, under its own prefix."""
+    ext = IMAGE_CONTENT_TYPES.get(mime_type, "")
+    return f"images/{sha256}{ext}"
+
+
+class MediaStorage(Protocol):
+    """Storage backend for content-addressed blobs — audio or image alike.
+    The key carries the prefix, so nothing below this line knows or needs to
+    know which kind it is holding.
 
     All methods are async for a consistent interface across backends, even
     where an implementation (e.g. building a URL string) has no actual I/O.
@@ -87,8 +119,8 @@ def _s3_client() -> Any:
 
 
 class LocalStorage:
-    """Dev backend: files under ``settings.media_root``, keyed by
-    ``audio_storage_key``. Served by the app's ``/media`` static mount."""
+    """Dev backend: files under ``settings.media_root``, at the key the
+    caller derived. Served by the app's ``/media`` static mount."""
 
     def _root(self) -> Path:
         root = Path(settings.media_root)
@@ -120,8 +152,8 @@ class LocalStorage:
 
 
 class R2Storage:
-    """Prod backend: Cloudflare R2 (S3-compatible), keyed by
-    ``audio_storage_key``. Served from ``settings.r2_public_base_url``."""
+    """Prod backend: Cloudflare R2 (S3-compatible), at the key the caller
+    derived. Served from ``settings.r2_public_base_url``."""
 
     async def exists(self, key: str) -> bool:
         from botocore.exceptions import ClientError
@@ -167,7 +199,7 @@ class R2Storage:
 
 
 @lru_cache(maxsize=1)
-def get_storage() -> AudioStorage:
+def get_storage() -> MediaStorage:
     """The configured storage backend, selected the same way as
     ``settings.use_r2`` (R2 when fully configured, else local disk)."""
     return R2Storage() if settings.use_r2 else LocalStorage()

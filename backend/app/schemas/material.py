@@ -128,3 +128,21 @@ class AudioUploadRead(BaseModel):
     blob_id: uuid.UUID
     sha256: str
     transcript_status: str
+
+
+class ImageUploadRead(BaseModel):
+    """An uploaded picture, as much of it as the editor needs to show the
+    thing it just sent and to name it in a group's config.
+
+    ``id`` is what gets stored; ``url`` and the two dimensions are derived
+    from the blob on every read, so nothing that could go stale is persisted
+    inside a group. The type and size come back because the author may want to
+    know what was accepted — the file's own header decided both, not its
+    name."""
+
+    id: uuid.UUID
+    url: str
+    width: int
+    height: int
+    mime_type: str
+    size_bytes: int

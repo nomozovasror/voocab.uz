@@ -11,7 +11,6 @@ fall back to re-reading the now-existing row, rather than erroring or
 double-inserting.
 """
 
-import hashlib
 import uuid
 
 from sqlalchemy.exc import IntegrityError
@@ -22,10 +21,6 @@ from app.models.audio_asset import AudioAsset
 from app.models.audio_blob import AudioBlob, TranscriptStatus
 from app.models.audio_segment import AudioSegment
 from app.services.asr import TranscriptResult
-
-
-def sha256_hex(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
 
 
 async def get_or_create_blob(

@@ -18,8 +18,7 @@ from app.main import app
 from app.models.audio_asset import AudioAsset
 from app.models.audio_blob import AudioBlob
 from app.models.user import User
-from app.services.audio import sha256_hex
-from app.services.storage import audio_storage_key
+from app.services.storage import audio_storage_key, sha256_hex
 
 MAX_AUDIO_BYTES = 60 * 1024 * 1024
 

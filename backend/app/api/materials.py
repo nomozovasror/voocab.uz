@@ -27,6 +27,7 @@ from app.models.audio_blob import AudioBlob
 from app.models.material import Material
 from app.schemas.material import (
     AudioUploadRead,
+    ImageUploadRead,
     MaterialCreate,
     MaterialDetail,
     MaterialRead,
@@ -35,6 +36,8 @@ from app.schemas.material import (
 )
 from app.services import audio as audio_service
 from app.services import audio_codec
+from app.services import image_codec
+from app.services import images as images_service
 from app.services import listening as listening_service
 from app.services import materials as materials_service
 from app.services import publishing as publishing_service
@@ -43,6 +46,13 @@ from app.services import storage
 router = APIRouter(prefix="/api", tags=["materials"])
 
 MAX_AUDIO_BYTES = 60 * 1024 * 1024  # 60 MB
+
+#: A map or diagram is line art, a few hundred kilobytes of it. The cap is
+#: generous enough for a photographed page from a book — which is how an
+#: author is most likely to get one — and nowhere near the recording's.
+MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB
+MAX_IMAGE_SIDE = 8000
+_TOO_LARGE = "Picture exceeds 5 MB"
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
@@ -133,7 +143,7 @@ async def upload_audio(
     if unplayable is not None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, unplayable)
 
-    sha256 = audio_service.sha256_hex(data)
+    sha256 = storage.sha256_hex(data)
     key = storage.audio_storage_key(sha256, content_type)
 
     blob, created = await audio_service.get_or_create_blob(
@@ -159,6 +169,95 @@ async def upload_audio(
         blob_id=blob.id,
         sha256=blob.sha256,
         transcript_status=blob.transcript_status,
+    )
+
+
+@router.post("/uploads/image", response_model=ImageUploadRead)
+async def upload_image(
+    request: Request,
+    user: CurrentUser,
+    session: SessionDep,
+    file: UploadFile = File(...),
+) -> ImageUploadRead:
+    """Ingest a picture for a map, plan or diagram task: identify it from its
+    own header, hash it, dedup against existing blobs, and hand back what the
+    editor needs to draw it.
+
+    The same shape as :func:`upload_audio` and deliberately so — the two caps
+    differ, and there is no owner row to claim, but hash-first, store-only-if-
+    new, and never-rewrite-on-a-dedup-hit are the same three rules.
+
+    What is NOT the same is who decides the format. Audio's extension names a
+    container we then look inside; here the filename is not consulted at all
+    (see :mod:`app.services.image_codec`). An ``.svg`` renamed to ``.png``
+    would otherwise be stored and served from our own origin as a document
+    full of executable markup, and no extension check can catch that.
+    """
+    # Cheap DoS reduction: reject from the declared Content-Length before
+    # buffering the body. Not authoritative — a client can omit or lie about
+    # it — so the post-read len(data) check below is the real guard.
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > MAX_IMAGE_BYTES:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY, _TOO_LARGE
+                )
+        except ValueError:
+            pass  # malformed header; fall through to the authoritative check
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Empty file")
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, _TOO_LARGE)
+
+    read = image_codec.read_image(data)
+    if read is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"This file isn't a picture we can use. Upload a "
+            f"{image_codec.FORMAT_NAMES} image.",
+        )
+    content_type, width, height = read
+    # The header alone decides how large a canvas the candidate's browser is
+    # asked to paint, and a few hundred bytes of PNG can claim 30000x30000. No
+    # picture drawn for a listening paper is anywhere near the cap, so this
+    # only ever catches something that would have been unusable anyway.
+    if width > MAX_IMAGE_SIDE or height > MAX_IMAGE_SIDE:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"This picture is {width}×{height}. Scale it down so neither side "
+            f"is over {MAX_IMAGE_SIDE} pixels.",
+        )
+
+    sha256 = storage.sha256_hex(data)
+    key = storage.image_storage_key(sha256, content_type)
+
+    blob, created = await images_service.get_or_create_blob(
+        session,
+        sha256=sha256,
+        storage_key=key,
+        size_bytes=len(data),
+        mime_type=content_type,
+        width=width,
+        height=height,
+    )
+    if created:
+        # Only on a genuine insert: a dedup hit already has its bytes, and
+        # put() being idempotent is not a reason to do the work again.
+        await storage.get_storage().put(key, data, content_type)
+
+    await session.commit()
+    await session.refresh(blob)
+
+    return ImageUploadRead(
+        id=blob.id,
+        url=await storage.get_storage().url(blob.storage_key),
+        width=blob.width,
+        height=blob.height,
+        mime_type=blob.mime_type,
+        size_bytes=blob.size_bytes,
     )
 
 
