@@ -13,21 +13,27 @@ import {
   docPublishIssues,
   gapAnswered,
 } from "@/features/listening/form-syntax";
+import { GroupPicture } from "@/features/listening/components/GroupPicture";
 import { OptionsBox } from "@/features/listening/components/OptionsBox";
 import {
   matchLetter,
   newMatchOptions,
+  pictureLetterBox,
   type MatchOption,
 } from "@/features/listening/matching";
 import { ANSWER_RUBRICS, deriveRubric } from "@/features/listening/rubric";
-import type { DocBlock } from "@/features/listening/form-syntax";
-import type { AnswerRubric, CompletionType } from "@/features/listening/types";
+import type { DocBlock, LetterSource } from "@/features/listening/form-syntax";
+import type {
+  AnswerRubric,
+  CompletionType,
+  GroupImage,
+} from "@/features/listening/types";
 
 interface QuestionFormEditorProps {
   /** Which completion task this group is. It decides what the group is
    *  called, what the instruction line offers as a placeholder, and which of
    *  the builder's "add something" buttons lead with — and nothing else, since
-   *  the six tasks are one document underneath. */
+   *  the nine tasks are one document underneath. */
   task: CompletionType;
   doc: DocBlock[];
   /** Applied against the latest document — see FormBuilder's note. */
@@ -45,6 +51,22 @@ interface QuestionFormEditorProps {
   onRemoveOption: (optionId: string) => void;
   allowReuse: boolean;
   onAllowReuseChange: (v: boolean) => void;
+  /** Everything the picture half of a labelling task needs — and absent for
+   *  the seven tasks that don't have one, which is what this block being one
+   *  optional prop rather than nine loose ones says. */
+  picture?: {
+    image: GroupImage | null;
+    /** How many letters are drawn on it. Zero is the other real form of the
+     *  task: numbered blanks, answered in the words the candidate heard. */
+    letters: number;
+    adapt: boolean;
+    uploading: boolean;
+    error?: string | null;
+    onUpload: (file: File) => void;
+    onRemove: () => void;
+    onLettersChange: (n: number) => void;
+    onAdaptChange: (v: boolean) => void;
+  };
   /** The number the first gap of this group carries on the page. */
   startNumber: number;
   /** Set while a publish attempt is blocked on this group, so the offending
@@ -152,6 +174,51 @@ function ReuseToggle({
   );
 }
 
+/** How far up the alphabet a picture's letters run — or that there are none,
+ *  and the candidate writes what they heard.
+ *
+ *  It stands where the box switch does on the other tasks, and for the same
+ *  reason: it is the same question. What differs is that a picture's letters
+ *  can't be typed here — they were drawn by whoever drew the map — so all
+ *  there is to say about them is how many.
+ *
+ *  Twelve is where it stops. A real map is lettered A-H at most, and a list
+ *  running to Z would be a list nobody scrolls to the bottom of. */
+const MAX_PICTURE_LETTERS = 12;
+
+function LettersControl({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+}) {
+  return (
+    <span className="relative inline-flex items-center">
+      <select
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        aria-label="Letters on the picture"
+        title="How many letters are drawn on the picture"
+        className="appearance-none rounded-md border border-border bg-transparent py-1 pr-7 pl-2.5 text-xs text-foreground transition-colors hover:border-foreground/30 focus-visible:border-ring focus-visible:outline-none"
+      >
+        <option value={0}>answers written in</option>
+        {Array.from({ length: MAX_PICTURE_LETTERS - 1 }, (_, i) => i + 2).map(
+          (count) => (
+            <option key={count} value={count}>
+              letters A–{matchLetter(count - 1).toUpperCase()}
+            </option>
+          ),
+        )}
+      </select>
+      <ChevronDown
+        aria-hidden
+        className="pointer-events-none absolute right-2 size-3.5 text-muted-foreground"
+      />
+    </span>
+  );
+}
+
 /** The syntax itself, drawn rather than described. The sentence around it
  *  is what an author reads once; the brackets are what they have to
  *  remember, so they get the weight — the same tint a gap wears in the form
@@ -177,6 +244,7 @@ export function QuestionFormEditor({
   onRemoveOption,
   allowReuse,
   onAllowReuseChange,
+  picture,
   startNumber,
   showIssues,
   markChecks,
@@ -191,22 +259,40 @@ export function QuestionFormEditor({
 }: QuestionFormEditorProps) {
   const offset = startNumber - 1;
   const boxed = options.length > 0;
+  /** Whether a gap here is answered by picking a letter rather than by
+   *  writing words, and if so from where — a box of words under the task, or
+   *  the letters drawn on its picture. One question, because everything that
+   *  asks it treats the two the same: what a gap needs before it counts as
+   *  answered, and whether "how long may the answer be" is a question worth
+   *  asking at all. Which of the two it is only matters when telling the
+   *  author where to look. */
+  const lettered: LetterSource = boxed
+    ? "box"
+    : (picture?.letters ?? 0) > 0
+      ? "picture"
+      : false;
   const issues = useMemo(
-    () => docPublishIssues(doc, offset, boxed),
-    [doc, offset, boxed],
+    () => docPublishIssues(doc, offset, lettered),
+    [doc, offset, lettered],
   );
   const gaps = useMemo(() => docGaps(doc), [doc]);
   /** The box as the builder needs it: each option with the letter it currently
    *  wears. Worked out here, from position, so the letters exist in exactly
-   *  one place and nothing downstream stores one. */
+   *  one place and nothing downstream stores one.
+   *
+   *  A picture's letters arrive the same way and are the same thing — a row of
+   *  letters to press on a gap — except that they have no words, since what
+   *  letter C means is a place on the drawing. */
   const box = useMemo(
     () =>
-      options.map((option, index) => ({
-        id: option.id,
-        letter: matchLetter(index),
-        text: option.text,
-      })),
-    [options],
+      boxed
+        ? options.map((option, index) => ({
+            id: option.id,
+            letter: matchLetter(index),
+            text: option.text,
+          }))
+        : pictureLetterBox(picture?.letters ?? 0),
+    [options, boxed, picture?.letters],
   );
 
   // "No gaps yet" is true of every form the moment it's begun, so it waits
@@ -214,7 +300,7 @@ export function QuestionFormEditor({
   // is called out as soon as it exists.
   const showsIssues =
     issues.length > 0 &&
-    (showIssues || gaps.filter((g) => !gapAnswered(g, boxed)).length > 0);
+    (showIssues || gaps.filter((g) => !gapAnswered(g, !!lettered)).length > 0);
 
   // What is selected inside a value right now. Held here rather than in the
   // builder so the offer to turn it into an answer can sit with the rubric,
@@ -262,8 +348,10 @@ export function QuestionFormEditor({
 
   const flaggedGaps = useMemo(
     () =>
-      gaps.filter((g) => !gapAnswered(g, boxed)).map((g) => g.number + offset),
-    [gaps, offset, boxed],
+      gaps
+        .filter((g) => !gapAnswered(g, !!lettered))
+        .map((g) => g.number + offset),
+    [gaps, offset, lettered],
   );
 
   // `inert` rather than only dimming and blocking the pointer: without it
@@ -294,22 +382,44 @@ export function QuestionFormEditor({
           className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none"
         />
         <label className="flex items-center gap-2 pl-1 text-xs text-muted-foreground">
+          {/* First, ahead of the answer-length label, because it is the
+              question that decides whether that label applies at all: with
+              letters there is no answer to write.
+
+              A labelling task's letters are on its picture, so that is the
+              only box it is offered. The word-list form of it exists on
+              paper, rarely, and the server would store it — but two controls
+              that must never both be on is a trap, and this is the one an
+              author reaches for. */}
+          {picture && (
+            <LettersControl
+              value={picture.letters}
+              onChange={picture.onLettersChange}
+            />
+          )}
           {/* How long an answer may be is not a question you can ask about a
-              letter, so with a box this makes way for the switch that turns
-              the box on. */}
-          {!boxed && <span className="whitespace-nowrap">Answer length</span>}
+              letter, so once the answers are letters this makes way for
+              whichever control turned them into letters. */}
+          {!lettered && <span className="whitespace-nowrap">Answer length</span>}
           {/* A native select for the behaviour — keyboard, mobile, no menu to
               reimplement — with its own chrome stripped and the app's put
               back, so it stops looking like something the browser drew. The
               open list itself is the OS's and can't be styled. */}
-          <BoxToggle
-            value={boxed}
-            onChange={(on) =>
-              onOptionsChange(() => (on ? newMatchOptions() : []))
-            }
-          />
+          {!picture && (
+            <BoxToggle
+              value={boxed}
+              onChange={(on) =>
+                onOptionsChange(() => (on ? newMatchOptions() : []))
+              }
+            />
+          )}
 
-          <span className={cn("relative inline-flex items-center", boxed && "hidden")}>
+          <span
+            className={cn(
+              "relative inline-flex items-center",
+              lettered && "hidden",
+            )}
+          >
             <select
               value={rubric ?? ""}
               onChange={(e) =>
@@ -357,7 +467,7 @@ export function QuestionFormEditor({
               <SquareDashed className="size-3.5 shrink-0" aria-hidden />
               Mark as answer
             </button>
-          ) : boxed ? (
+          ) : lettered ? (
             <span className="flex min-w-0 items-center gap-1.5 truncate text-foreground">
               Put
               <Brackets />
@@ -378,6 +488,21 @@ export function QuestionFormEditor({
         </label>
       </div>
 
+      {/* Above the labels, where the paper prints it — and because the labels
+          are written while looking at it. */}
+      {picture && (
+        <GroupPicture
+          image={picture.image}
+          onUpload={picture.onUpload}
+          onRemove={picture.onRemove}
+          uploading={picture.uploading}
+          error={picture.error}
+          adapt={picture.adapt}
+          onAdaptChange={picture.onAdaptChange}
+          noun={task === "map_labelling" ? "map" : "diagram"}
+        />
+      )}
+
       {/* No separate preview: the builder is already laid out as the form, so
           a second copy below it would only be somewhere for the two to
           disagree. */}
@@ -390,7 +515,7 @@ export function QuestionFormEditor({
           markChecks={markChecks}
           onMarkAudio={onMarkAudio}
           labelFirst={task === "form_completion"}
-          box={boxed ? box : undefined}
+          box={box.length > 0 ? box : undefined}
           extraTools={extraTools}
         />
       </div>

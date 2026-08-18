@@ -42,6 +42,45 @@ export function matchLetter(index: number): string {
   return OPTION_LETTERS[index] ?? "?";
 }
 
+// ── Letters drawn on a picture ───────────────────────────────────────────
+//
+// A map or diagram labelled A-H is answered from a box like any other; what
+// makes it different is that the box is a picture, so its options have no
+// words and nothing to store. Only a count.
+//
+// Everything downstream — the builder's letter row, the gap that remembers
+// which one was picked, the payload — is written against options with ids, so
+// rather than teach all of it a second way to be lettered, the count is turned
+// into options whose id IS the letter. They are stable by construction, which
+// is what the document needs: a gap stores the id it was given, and a gap
+// stored yesterday has to still point at the same letter today.
+
+const PICTURE_OPTION_PREFIX = "picture:";
+
+/** The picture's letters, in the shape the builder's box expects. No text,
+ *  because there is none: what letter C means is a place on the drawing. */
+export function pictureLetterBox(
+  count: number,
+): { id: string; letter: string; text: string }[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: PICTURE_OPTION_PREFIX + matchLetter(index),
+    letter: matchLetter(index),
+    text: "",
+  }));
+}
+
+/** The letter an id stands for, for the payload. */
+export function pictureOptionLetter(optionId: string): string | undefined {
+  return optionId.startsWith(PICTURE_OPTION_PREFIX)
+    ? optionId.slice(PICTURE_OPTION_PREFIX.length)
+    : undefined;
+}
+
+/** And back, for reading a saved group in. */
+export function pictureOptionId(letter: string): string {
+  return PICTURE_OPTION_PREFIX + letter;
+}
+
 // ── The editable document ────────────────────────────────────────────────
 
 /** One line of the box the whole group is answered from. */

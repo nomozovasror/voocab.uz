@@ -44,6 +44,29 @@ export interface AudioUpload {
   transcript_status: string;
 }
 
+/** An uploaded picture. `id` is what a group stores; the rest is what the
+ *  editor needs to draw the thing it just sent — and the two dimensions are
+ *  what let the page hold the right box for it before the bytes arrive. */
+export interface ImageUpload {
+  id: string;
+  url: string;
+  width: number;
+  height: number;
+  mime_type: string;
+  size_bytes: number;
+}
+
+/** A picture as a group holds it: the id, which is the only part the server
+ *  stores, plus what it takes to draw it. Assembled either from an upload
+ *  response or from a group's resolved config — the same four things, under
+ *  two sets of names, which is the reason to have one shape for them. */
+export interface GroupImage {
+  id: string;
+  url: string;
+  width: number;
+  height: number;
+}
+
 // --- Authoring tree: Part -> QuestionGroup -> Question ----------------------
 
 export interface ListeningPart {
@@ -94,7 +117,9 @@ export type CompletionType =
   | "summary_completion"
   | "short_answer"
   | "table_completion"
-  | "flow_chart_completion";
+  | "flow_chart_completion"
+  | "map_labelling"
+  | "diagram_labelling";
 
 export type QuestionGroupType =
   | CompletionType
@@ -105,6 +130,13 @@ export type QuestionGroupType =
  *  letter — which is what decides which builder it gets. */
 export function isCompletion(type: QuestionGroupType): type is CompletionType {
   return type !== "multiple_choice" && type !== "matching";
+}
+
+/** The two completion tasks answered on a picture. Everything else about them
+ *  is a completion task — the document, the gaps, the payload — so this is the
+ *  question "does this group draw a picture", asked wherever one would go. */
+export function isLabelling(type: QuestionGroupType | null): boolean {
+  return type === "map_labelling" || type === "diagram_labelling";
 }
 
 export interface ListeningQuestion {
@@ -187,6 +219,25 @@ export interface GroupConfig {
   options?: string[];
   /** matching only: "you may use any letter more than once". */
   allow_reuse?: boolean;
+
+  // --- map/diagram labelling ------------------------------------------------
+  /** The picture the labels go on, as the id of an uploaded image. The id is
+   *  the only part of it the server stores. */
+  image?: string | null;
+  /** Whether to fit the picture to the page's colours rather than print it as
+   *  uploaded. Almost every map is black line art on white, which in dark mode
+   *  is a lit sheet punched into the page. */
+  image_adapt?: boolean;
+  /** How many letters are drawn on the picture. Zero is the form of the task
+   *  where the candidate writes what they heard into numbered blanks. */
+  image_letters?: number;
+  /** Derived on every read, never stored: a URL stored beside the id would be
+   *  a fact about which bucket the app pointed at that day. Absent until a
+   *  picture is attached — and absent on a group that has one but doesn't draw
+   *  it, which is what a labelling task renamed to notes is. */
+  image_url?: string;
+  image_width?: number;
+  image_height?: number;
 }
 
 export interface FormConfig extends GroupConfig {

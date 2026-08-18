@@ -3,32 +3,46 @@ import { Loader2, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
- * Where the recording comes in.
+ * Where an uploaded file comes in.
  *
- * Two places ask for it and they are the same ask: the opening step, where
- * it is the only thing on the page, and the player pane, which shows this
- * instead of a waveform until there is something to draw. The difference
- * between them is how much room they have, which is `size` and nothing else.
+ * Three places ask for one and they are the same ask: the opening step, where
+ * the recording is the only thing on the page; the player pane, which shows
+ * this instead of a waveform until there is something to draw; and a map or
+ * diagram task, which shows it instead of the picture. What differs between
+ * them is what they accept, what they say, and how much room they have — so
+ * those are props and the rest is shared.
  */
 
-interface AudioDropzoneProps {
+interface MediaDropzoneProps {
   onUpload: (file: File) => void;
   /** Anything in flight — the upload itself, or the save that attaches it.
    *  Both leave the author with nothing to do but wait, so both look alike. */
   busy: boolean;
   /** What the waiting is, when it is worth naming. */
   busyLabel?: string;
+  /** The file input's filter. Only ever a filter: what a file actually IS is
+   *  decided by the server, from its header for a picture and from its
+   *  container for a recording. */
+  accept: string;
+  /** What to drop here. */
+  prompt: string;
+  /** Which formats, in the words an author uses for them. */
+  hint: string;
   /** `stage` is the opening step's version: the page has nothing else on it,
-   *  so the target is worth the height. */
-  size?: "pane" | "stage";
+   *  so the target is worth the height. `inline` sits inside a block that
+   *  already has other things in it. */
+  size?: "pane" | "stage" | "inline";
 }
 
-export function AudioDropzone({
+export function MediaDropzone({
   onUpload,
   busy,
   busyLabel,
+  accept,
+  prompt,
+  hint,
   size = "pane",
-}: AudioDropzoneProps) {
+}: MediaDropzoneProps) {
   const [dragOver, setDragOver] = useState(false);
 
   return (
@@ -46,7 +60,7 @@ export function AudioDropzone({
       }}
       className={cn(
         "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-6 text-center text-muted-foreground transition-colors",
-        size === "stage" ? "py-20" : "py-14",
+        size === "stage" ? "py-20" : size === "pane" ? "py-14" : "py-8",
         dragOver ? "border-primary text-foreground" : "border-border",
         busy && "pointer-events-none opacity-60",
       )}
@@ -56,13 +70,11 @@ export function AudioDropzone({
       ) : (
         <Upload className="size-5" aria-hidden />
       )}
-      <span>
-        {busy && busyLabel ? busyLabel : "drop audio here, or click to browse"}
-      </span>
-      <span className="text-xs text-muted-foreground">mp3, wav, m4a</span>
+      <span>{busy && busyLabel ? busyLabel : prompt}</span>
+      <span className="text-xs text-muted-foreground">{hint}</span>
       <input
         type="file"
-        accept="audio/*"
+        accept={accept}
         className="hidden"
         disabled={busy}
         onChange={(e) => {

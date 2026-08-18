@@ -40,6 +40,7 @@ import {
   newDoc,
   newId,
   type DocBlock,
+  type LetterSource,
 } from "@/features/listening/form-syntax";
 import {
   choiceIssues,
@@ -57,6 +58,8 @@ import {
 import {
   isMatchingGroupEmpty,
   matchLetter,
+  pictureOptionId,
+  pictureOptionLetter,
   matchingFromApi,
   matchingIssues,
   matchingMarks,
@@ -76,7 +79,6 @@ import {
   questionSpan,
 } from "@/features/listening/numbering";
 import {
-  missingTypeNote,
   questionTypesForPart,
 } from "@/features/listening/parts";
 import {
@@ -98,11 +100,12 @@ import { FormHelpCard } from "@/features/listening/components/FormHelpCard";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { ANSWER_RUBRICS, deriveRubric } from "@/features/listening/rubric";
 import type { StudioListeningList } from "@/features/studio/types";
-import { isCompletion } from "@/features/listening/types";
+import { isCompletion, isLabelling } from "@/features/listening/types";
 import type {
   AnswerRubric,
   AudioSegment,
   CompletionType,
+  GroupImage,
   QuestionGroupIn,
   QuestionGroupType,
   Visibility,
@@ -142,6 +145,20 @@ interface FormGroupState extends GroupStateBase {
    *  held by option id rather than by letter for the same reason. */
   options: MatchOption[];
   allowReuse: boolean;
+  /** The picture a map or diagram task is answered on, resolved so it can be
+   *  drawn. Null on the seven tasks that don't have one, and on a labelling
+   *  task whose author hasn't uploaded it yet.
+   *
+   *  Kept across a change of type rather than dropped, the way an unmarked
+   *  option keeps the moment it was marked at: an author who renames a map
+   *  task to notes and back should find their picture where they left it. Only
+   *  the two labelling types draw it. */
+  image: GroupImage | null;
+  /** Fit it to the page's colours rather than print it as uploaded. */
+  imageAdapt: boolean;
+  /** How many letters are drawn on it. Above zero, the picture IS the box:
+   *  every gap in the group is answered by one of its letters. */
+  imageLetters: number;
 }
 
 interface ChoiceGroupState extends GroupStateBase {
@@ -291,12 +308,20 @@ function groupPayload(group: GroupState): QuestionGroupIn | null {
   }
 
   const boxed = group.options.length > 0;
+  // Letters drawn on a picture are a box whose options have no words, so the
+  // only difference here is where the letter comes from: an option's position
+  // in the box, or the id the letter was made into.
+  const lettered = boxed || (isLabelling(group.type) && group.imageLetters > 0);
   const letters = new Map(
     group.options.map((option, index) => [option.id, matchLetter(index)]),
   );
   const { template, questions } = docToGroup(
     group.doc,
-    boxed ? (optionId) => letters.get(optionId) : undefined,
+    boxed
+      ? (optionId) => letters.get(optionId)
+      : lettered
+        ? pictureOptionLetter
+        : undefined,
   );
   return {
     type: group.type,
@@ -307,11 +332,18 @@ function groupPayload(group: GroupState): QuestionGroupIn | null {
       // Left on auto, the rubric the answers imply is stored: the take page
       // has no answers to work it out from.
       //
-      // Never for a boxed task: how long an answer may be is not a question
-      // you can ask about a letter, any more than it is of a choice.
-      answer_rubric: boxed ? null : (group.rubric ?? deriveRubric(group.doc)),
+      // Never where the answers are letters: how long an answer may be is not
+      // a question you can ask about a letter, any more than it is of a
+      // choice.
+      answer_rubric: lettered ? null : (group.rubric ?? deriveRubric(group.doc)),
       options: matchingOptionsToApi(group.options),
       allow_reuse: group.allowReuse,
+      // Sent by every completion task, not only the two that draw one. A map
+      // renamed to notes keeps its picture in config — the server ignores it
+      // there, and renaming back finds it still attached.
+      image: group.image?.id ?? null,
+      image_adapt: group.imageAdapt,
+      image_letters: group.imageLetters,
     },
     questions,
   };
@@ -338,6 +370,18 @@ function isCompletionGroup(group: GroupState): group is FormGroupState {
   return group.type !== null && isCompletion(group.type);
 }
 
+/** Whether this group's gaps are answered by picking a letter rather than by
+ *  writing words, and if so from where. Everything that asks treats the two
+ *  sources the same: what a gap needs before it counts as answered, whether
+ *  "how long may the answer be" is a question worth asking, and whether
+ *  checking the marked seconds against the answer would mean anything. Which
+ *  of the two it is only matters when telling the author where to look. */
+function groupLetterSource(group: FormGroupState): LetterSource {
+  if (group.options.length > 0) return "box";
+  if (isLabelling(group.type) && group.imageLetters > 0) return "picture";
+  return false;
+}
+
 /** How many questions a group holds, whichever kind it is. A group with no
  *  kind holds none. */
 function groupQuestionCount(group: GroupState): number {
@@ -357,9 +401,13 @@ function groupNumberSpan(group: GroupState): number {
   return groupQuestionCount(group);
 }
 
-/** Whether the author has put anything of their own into this group. */
+/** Whether the author has put anything of their own into this group.
+ *
+ *  An uploaded picture counts, and has to: a group the autosave finds empty is
+ *  a group it deletes, and uploading the map before writing a single label is
+ *  the obvious order to work in. */
 function isGroupEmpty(group: GroupState): boolean {
-  if (isCompletionGroup(group)) return isDocEmpty(group.doc);
+  if (isCompletionGroup(group)) return isDocEmpty(group.doc) && !group.image;
   if (group.type === "multiple_choice") return isChoiceGroupEmpty(group.questions);
   if (group.type === "matching") {
     return isMatchingGroupEmpty(group.options, group.items);
@@ -395,9 +443,14 @@ function newGroup(type: QuestionGroupType | null): GroupState {
     doc: newDoc(type),
     // No box to begin with, whichever task it is: the ordinary form of every
     // one of them is answered in words, and the box is what the author asks
-    // for when their paper has one.
+    // for when their paper has one. A labelling task starts the same way —
+    // with a picture to upload and its blanks answered in words — until the
+    // author says how many letters are drawn on it.
     options: [],
     allowReuse: false,
+    image: null,
+    imageAdapt: true,
+    imageLetters: 0,
   };
 }
 
@@ -506,6 +559,11 @@ export default function StudioListeningEditorPage() {
   /** Why the last upload was refused, for the opening sequence to show where
    *  the author is actually looking. */
   const [uploadError, setUploadError] = useState<string | null>(null);
+  /** Which group's picture is in flight, and what the last attempt said. By
+   *  group key, because two labelling groups in one material are ordinary and
+   *  one uploading must not put the other's block into a waiting state. */
+  const [imageUploading, setImageUploading] = useState<string | null>(null);
+  const [imageErrors, setImageErrors] = useState<Record<string, string>>({});
   // The server's own refusal, which can name things the local checklist
   // can't know about. Shown on the publish button's list.
   const [publishError, setPublishError] = useState<string | null>(null);
@@ -767,6 +825,41 @@ export default function StudioListeningEditorPage() {
     [updateGroup],
   );
 
+  /** How many letters are drawn on this group's picture.
+   *
+   *  Lowering it strands every gap answered by a letter that is no longer
+   *  there — and a gap naming a letter that doesn't exist is a payload the
+   *  server refuses outright, so the group would stop saving from here on.
+   *  They lose their answer with the letter, the way a gap does when the
+   *  option it pointed at is deleted from a box. */
+  const setImageLetters = useCallback(
+    (key: string, letters: number) => {
+      updateGroup(key, (group) => {
+        if (!isCompletionGroup(group)) return group;
+        let doc = group.doc;
+        for (let index = letters; index < group.imageLetters; index += 1) {
+          doc = clearGapOption(doc, pictureOptionId(matchLetter(index)));
+        }
+        return { ...group, imageLetters: letters, doc };
+      });
+    },
+    [updateGroup],
+  );
+
+  /** Taking the picture away. The letters go with it: they were drawn on it,
+   *  so without it there is nothing for a gap's letter to point at — and the
+   *  answers pointing at them would be answers to a question nobody can
+   *  see. */
+  const removeGroupImage = useCallback(
+    (key: string) => {
+      setImageLetters(key, 0);
+      updateGroup(key, (group) =>
+        isCompletionGroup(group) ? { ...group, image: null } : group,
+      );
+    },
+    [setImageLetters, updateGroup],
+  );
+
   /** Dropping an option from a matching group's box. One edit rather than
    *  two, because the answers pointing at it have to go with it: a payload
    *  naming a letter the box hasn't got is refused outright, so the two
@@ -832,11 +925,30 @@ export default function StudioListeningEditorPage() {
                 const byLetter = new Map(
                   options.map((option, index) => [matchLetter(index), option.id]),
                 );
+                const type = isCompletion(group.type as QuestionGroupType)
+                  ? (group.type as CompletionType)
+                  : "form_completion";
+                const imageLetters = group.config.image_letters ?? 0;
+                // Resolved by the server for any group carrying an id, so a
+                // picture survives the group being renamed to something that
+                // doesn't draw it — and renaming back finds it still there.
+                // Null only when there is genuinely no picture, or when the
+                // row behind it has gone.
+                const image =
+                  group.config.image &&
+                  group.config.image_url &&
+                  group.config.image_width &&
+                  group.config.image_height
+                    ? {
+                        id: group.config.image,
+                        url: group.config.image_url,
+                        width: group.config.image_width,
+                        height: group.config.image_height,
+                      }
+                    : null;
                 return {
                   ...base,
-                  type: isCompletion(group.type as QuestionGroupType)
-                    ? (group.type as CompletionType)
-                    : "form_completion",
+                  type,
                   wordLimit: group.word_limit,
                   rubric: group.config.answer_rubric ?? null,
                   doc: docFromGroup(
@@ -844,10 +956,15 @@ export default function StudioListeningEditorPage() {
                     group.questions,
                     options.length > 0
                       ? (letter) => byLetter.get(letter)
-                      : undefined,
+                      : isLabelling(type) && imageLetters > 0
+                        ? pictureOptionId
+                        : undefined,
                   ),
                   options,
                   allowReuse: group.config.allow_reuse ?? false,
+                  image,
+                  imageAdapt: group.config.image_adapt ?? true,
+                  imageLetters,
                 };
               })
           : [firstGroup(p.order_index)],
@@ -1536,6 +1653,44 @@ export default function StudioListeningEditorPage() {
     }
   };
 
+  /** The picture for one labelling group. Uploaded on its own, like the
+   *  recording — the group then stores the id, and the ordinary autosave is
+   *  what attaches it.
+   *
+   *  The failure is held per group rather than in a toast: the server refuses
+   *  a file for reasons the author can act on ("upload a PNG, JPEG or WebP",
+   *  "scale it down"), and that sentence belongs beside the block it is about,
+   *  where it stays until they have dealt with it. */
+  const handleImageUpload = async (key: string, file: File) => {
+    setImageUploading(key);
+    setImageErrors((errors) => {
+      const next = { ...errors };
+      delete next[key];
+      return next;
+    });
+    try {
+      const image = await listeningApi.uploadImage(file);
+      updateGroup(key, (group) =>
+        isCompletionGroup(group)
+          ? {
+              ...group,
+              image: {
+                id: image.id,
+                url: image.url,
+                width: image.width,
+                height: image.height,
+              },
+            }
+          : group,
+      );
+      scheduleSave(true);
+    } catch (e) {
+      setImageErrors((errors) => ({ ...errors, [key]: getErrorMessage(e) }));
+    } finally {
+      setImageUploading((current) => (current === key ? null : current));
+    }
+  };
+
   // Every group the author has started needs instructions and finished
   // questions; the material needs at least one question somewhere. "Started"
   // = they have typed something into it — an untouched, still-empty group is
@@ -1591,7 +1746,7 @@ export default function StudioListeningEditorPage() {
           ? docPublishIssues(
               group.doc,
               startNumber - 1,
-              group.options.length > 0,
+              groupLetterSource(group),
             )[0]
           : group.type === "multiple_choice"
             ? choicePublishIssues(
@@ -1758,7 +1913,7 @@ export default function StudioListeningEditorPage() {
       isCompletionGroup(group)
         ? docGaps(group.doc).map((gap) => ({
             ...gap,
-            answered: gapAnswered(gap, group.options.length > 0),
+            answered: gapAnswered(gap, !!groupLetterSource(group)),
           }))
         : [],
     );
@@ -1931,16 +2086,21 @@ export default function StudioListeningEditorPage() {
     () =>
       run.flatMap(({ group, startNumber }) => {
         if (isCompletionGroup(group)) {
-          // A boxed gap has no words of its own — its answer is a letter — so
-          // what goes in the transcript is the chosen option's. Without this
-          // its mark showed nowhere at all: the author linked 1:08 and the
-          // left pane said nothing about it.
+          // A gap answered by letter has no words of its own, so what goes in
+          // the transcript is the option's — and where the letters are on a
+          // picture, where there are no words either, the letter itself.
+          // Without something to show, the mark appeared nowhere at all: the
+          // author linked 1:08 and the left pane said nothing about it.
           const words = new Map(group.options.map((o) => [o.id, o.text]));
           return answerMarks(
             group.doc,
             startNumber - 1,
-            group.options.length > 0
-              ? (gap) => [words.get(gap.optionId ?? "") ?? ""]
+            groupLetterSource(group)
+              ? (gap) => {
+                  const id = gap.optionId ?? "";
+                  const letter = pictureOptionLetter(id);
+                  return [letter ? letter.toUpperCase() : (words.get(id) ?? "")];
+                }
               : undefined,
           );
         }
@@ -1954,10 +2114,10 @@ export default function StudioListeningEditorPage() {
     const byGroup = new Map<string, ReturnType<typeof checkMarks>>();
     for (const { group } of run) {
       if (!isCompletionGroup(group)) continue;
-      // Not for a boxed group. Whether the marked seconds contain the answer
-      // is a fair question of a gap the candidate writes into and a useless
-      // one of a gap they pick a letter for — see `answerMarks`.
-      if (group.options.length > 0) continue;
+      // Not where the answers are letters. Whether the marked seconds contain
+      // the answer is a fair question of a gap the candidate writes into and a
+      // useless one of a gap they pick a letter for — see `answerMarks`.
+      if (groupLetterSource(group)) continue;
       byGroup.set(group.key, checkMarks(group.doc, transcriptSegments));
     }
     return byGroup;
@@ -1969,10 +2129,10 @@ export default function StudioListeningEditorPage() {
     () =>
       run.reduce((total, { group }) => {
         if (isCompletionGroup(group)) {
-          const boxed = group.options.length > 0;
+          const lettered = !!groupLetterSource(group);
           return (
             total +
-            docGaps(group.doc).filter((g) => gapAnswered(g, boxed)).length
+            docGaps(group.doc).filter((g) => gapAnswered(g, lettered)).length
           );
         }
         if (group.type === "multiple_choice") {
@@ -2095,7 +2255,6 @@ export default function StudioListeningEditorPage() {
       groupKey: group.key,
       partLabel: partLabel(part),
       types: questionTypesForPart(part.orderIndex),
-      note: missingTypeNote(part.orderIndex),
       chosen: group.type,
     })),
   );
@@ -2393,11 +2552,9 @@ export default function StudioListeningEditorPage() {
         >
           <div ref={sectionsRef} className="space-y-8">
           {sortedParts.map((part) => {
-            // What this part of the exam can be given, and what it's known
-            // for that isn't built yet. Both are the part's business, so
-            // they're worked out once here rather than per group.
+            // What this part of the exam can be given. The part's business,
+            // so it is worked out once here rather than per group.
             const partTypes = questionTypesForPart(part.orderIndex);
-            const note = missingTypeNote(part.orderIndex);
             return (
               <section key={part.key} className="space-y-6">
                 {/* The part heads its groups rather than sharing a line with
@@ -2407,11 +2564,6 @@ export default function StudioListeningEditorPage() {
                   <h3 className="text-base font-medium text-foreground">
                     {partLabel(part)}
                   </h3>
-                  {note && (
-                    <p className="rounded-md bg-foreground/6 px-3 py-2 text-xs text-muted-foreground">
-                      {note}
-                    </p>
-                  )}
                 </div>
 
                 {part.groups.map((group, index) => {
@@ -2439,7 +2591,6 @@ export default function StudioListeningEditorPage() {
                       {group.type === null ? (
                         <GroupTypeChooser
                           types={partTypes}
-                          note={missingTypeNote(part.orderIndex)}
                           onChoose={(type) => chooseGroupType(group.key, type)}
                           onRemove={() => removeGroup(part.key, group.key)}
                           disabled={!hasAudioEverAttached}
@@ -2532,6 +2683,28 @@ export default function StudioListeningEditorPage() {
                             updateGroup(group.key, (g) =>
                               isCompletionGroup(g) ? { ...g, allowReuse } : g,
                             )
+                          }
+                          picture={
+                            isLabelling(group.type)
+                              ? {
+                                  image: group.image,
+                                  letters: group.imageLetters,
+                                  adapt: group.imageAdapt,
+                                  uploading: imageUploading === group.key,
+                                  error: imageErrors[group.key],
+                                  onUpload: (file) =>
+                                    handleImageUpload(group.key, file),
+                                  onRemove: () => removeGroupImage(group.key),
+                                  onLettersChange: (letters) =>
+                                    setImageLetters(group.key, letters),
+                                  onAdaptChange: (imageAdapt) =>
+                                    updateGroup(group.key, (g) =>
+                                      isCompletionGroup(g)
+                                        ? { ...g, imageAdapt }
+                                        : g,
+                                    ),
+                                }
+                              : undefined
                           }
                           onChange={(edit) => editGroupDoc(group.key, edit)}
                           instructions={group.instructions}

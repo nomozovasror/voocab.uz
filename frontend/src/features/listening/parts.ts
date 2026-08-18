@@ -2,8 +2,10 @@ import {
   AlignLeft,
   ArrowLeftRight,
   CircleQuestionMark,
+  Cog,
   List,
   ListChecks,
+  Map,
   Pilcrow,
   Rows3,
   Table,
@@ -30,9 +32,10 @@ import type {
  * part, and nothing here is enforced there. It is the difference between a
  * tool that knows the exam and a tool that makes you know it.
  *
- * The lists below are what a part can be given TODAY — the intersection of
- * what the exam uses there and what is built. `missingTypeNote` names the
- * rest, so a short list reads as "not yet" rather than "not allowed".
+ * The lists below were once an intersection — what the exam uses there, and
+ * what was built — with a note beside them naming the types that weren't. Both
+ * halves of that are gone: every type the exam uses is built, so a part's list
+ * is simply what belongs in it.
  */
 
 /** One name per type, so the header, the menu and the chooser can't drift
@@ -45,6 +48,8 @@ export const QUESTION_TYPE_LABEL: Record<QuestionGroupType, string> = {
   short_answer: "Short answer",
   table_completion: "Table completion",
   flow_chart_completion: "Flow-chart completion",
+  map_labelling: "Map labelling",
+  diagram_labelling: "Diagram labelling",
   multiple_choice: "Multiple choice",
   matching: "Matching",
 };
@@ -60,6 +65,8 @@ export const QUESTION_TYPE_BLURB: Record<QuestionGroupType, string> = {
   short_answer: "Questions answered in a few words",
   table_completion: "A grid with gaps in its cells",
   flow_chart_completion: "A process, as boxes with arrows between them",
+  map_labelling: "Places named on a map or plan",
+  diagram_labelling: "Parts named on a drawing of a thing",
   multiple_choice: "Lettered options, one or several right",
   matching: "One box of options, answering a list of items",
 };
@@ -75,6 +82,8 @@ export const QUESTION_TYPE_RUBRIC: Record<CompletionType, string> = {
   short_answer: "Answer the questions below.",
   table_completion: "Complete the table below.",
   flow_chart_completion: "Complete the flow chart below.",
+  map_labelling: "Label the map below.",
+  diagram_labelling: "Label the diagram below.",
 };
 
 /** And one mark per type, for the same reason: a type is recognised by its
@@ -90,6 +99,11 @@ export const QUESTION_TYPE_ICON: Record<QuestionGroupType, LucideIcon> = {
   short_answer: CircleQuestionMark,
   table_completion: Table,
   flow_chart_completion: Workflow,
+  map_labelling: Map,
+  // A machine part rather than a picture frame: what a diagram task labels is
+  // the thing drawn, and the frame around it is the one thing every one of
+  // these types would have in common.
+  diagram_labelling: Cog,
   multiple_choice: ListChecks,
   matching: ArrowLeftRight,
 };
@@ -101,9 +115,11 @@ const PART_TYPES: QuestionGroupType[][] = [
   // and the short answers that sometimes follow. Never multiple choice, never
   // matching.
   ["form_completion", "note_completion", "table_completion", "short_answer"],
-  // Part 2 — map/plan labelling (not built), matching, multiple choice,
-  // note and sentence completion.
+  // Part 2 — a monologue about a place, so map/plan labelling first: it is
+  // the one type this part has that no other does. Then matching, multiple
+  // choice, and the completion tasks.
   [
+    "map_labelling",
     "multiple_choice",
     "matching",
     "note_completion",
@@ -120,15 +136,16 @@ const PART_TYPES: QuestionGroupType[][] = [
     "summary_completion",
   ],
   // Part 4 — an academic monologue: note and summary completion dominate,
-  // then sentence completion and multiple choice; diagram labelling (not
-  // built). Matching is rare enough here that offering it would be offering a
-  // way to write an unusual paper.
+  // then sentence completion, the diagram a process lecture labels, and
+  // multiple choice. Matching is rare enough here that offering it would be
+  // offering a way to write an unusual paper.
   [
     "note_completion",
     "summary_completion",
     "sentence_completion",
     "table_completion",
     "flow_chart_completion",
+    "diagram_labelling",
     "multiple_choice",
   ],
 ];
@@ -145,28 +162,4 @@ export function questionTypesForPart(orderIndex: number): QuestionGroupType[] {
       "matching",
     ]
   );
-}
-
-//: What each part asks that we can't author yet — a list of choices should
-//: read as "these are the ones built", not "these are the ones allowed".
-//: What is left needs the one thing the completion sheet still can't draw: an
-//: image to put labels on.
-const MISSING_TYPES: (string | null)[] = [
-  null,
-  "map/plan labelling",
-  null,
-  "diagram labelling",
-];
-
-/** What this part characteristically asks that we can't author yet, phrased
- *  for the author. Undefined where there is nothing missing — a note saying
- *  so would be a note about nothing.
- *
- *  It names only what is missing. It used to list what was available too,
- *  which was worth saying when that was two things and is not now that it is
- *  four or five: the cards are on the same screen, saying it better. */
-export function missingTypeNote(orderIndex: number): string | undefined {
-  const missing = MISSING_TYPES[orderIndex];
-  if (!missing) return undefined;
-  return `${missing} ${missing.includes(" and ") ? "aren't" : "isn't"} built yet.`;
 }

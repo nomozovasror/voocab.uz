@@ -6,7 +6,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatClock } from "@/features/studio/format";
-import { AudioDropzone } from "@/features/listening/components/AudioDropzone";
+import { MediaDropzone } from "@/features/listening/components/MediaDropzone";
 import { PartsPicker } from "@/features/listening/components/PartsPicker";
 import { QuestionTypeChoices } from "@/features/listening/components/QuestionTypeChoices";
 import {
@@ -42,8 +42,6 @@ export interface SetupChoice {
   groupKey: string;
   partLabel: string;
   types: QuestionGroupType[];
-  /** What the part is known for that isn't built yet. */
-  note?: string;
   /** Already settled, either by the author just now or because the part only
    *  takes one kind. */
   chosen: QuestionGroupType | null;
@@ -246,8 +244,11 @@ export function EditorSetup({
 
         {step === "audio" && (
           <div className="setup-rise" style={{ "--i": 2 } as CSSProperties}>
-            <AudioDropzone
+            <MediaDropzone
               size="stage"
+              accept="audio/*"
+              prompt="drop audio here, or click to browse"
+              hint="mp3, wav, m4a"
               onUpload={onUpload}
               busy={uploading || attaching}
               busyLabel={uploading ? "uploading…" : "attaching it…"}
@@ -312,11 +313,6 @@ export function EditorSetup({
                             onChoose(choice.groupKey, type);
                           }}
                         />
-                        {choice.note && (
-                          <p className="mt-3 text-xs text-muted-foreground">
-                            {choice.note}
-                          </p>
-                        )}
                       </div>
                     ) : (
                       <SettledChoice

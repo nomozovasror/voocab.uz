@@ -37,7 +37,7 @@ import {
 import { cn } from "@/lib/utils";
 import { formatClock } from "@/features/studio/format";
 import { mediaUrl } from "@/features/listening/api";
-import { AudioDropzone } from "@/features/listening/components/AudioDropzone";
+import { MediaDropzone } from "@/features/listening/components/MediaDropzone";
 import {
   useAudioAsset,
   useUpdateSegmentText,
@@ -1412,7 +1412,13 @@ export const AudioEditorPane = forwardRef<
   if (!audioUrl) {
     return (
       <div>
-        <AudioDropzone onUpload={onUpload} busy={uploading} />
+        <MediaDropzone
+          accept="audio/*"
+          prompt="drop audio here, or click to browse"
+          hint="mp3, wav, m4a"
+          onUpload={onUpload}
+          busy={uploading}
+        />
       </div>
     );
   }

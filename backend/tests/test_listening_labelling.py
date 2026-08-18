@@ -511,10 +511,11 @@ async def test_renaming_a_map_task_to_notes_stops_its_letters_counting() -> None
             # A rename keeps the questions: gap 3 of a map and gap 3 of the
             # notes it becomes are the same question.
             assert [q["id"] for q in body["questions"]] == question_ids
-            # And keeps the picture, unresolved: notes draw none, so there is
-            # no URL to hand over.
+            # And keeps the picture, drawable: an editor that reloaded it as
+            # an id with nothing behind it would have no choice but to drop it
+            # on the next save, and renaming back is meant to find it there.
             assert body["config"]["image"] == str(image.id)
-            assert "image_url" not in body["config"]
+            assert body["config"]["image_url"].endswith(image.storage_key)
 
         async with async_session_factory() as session:
             group = await session.get(QuestionGroup, uuid.UUID(group_id))

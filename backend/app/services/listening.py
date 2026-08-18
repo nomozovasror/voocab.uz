@@ -468,24 +468,30 @@ def group_options(group: QuestionGroup) -> list[str]:
     return [str(option) for option in options] if isinstance(options, list) else []
 
 
+def _parse_image_id(stored: object) -> uuid.UUID | None:
+    """A stored image id, or None where there isn't a usable one. JSONB holds
+    whatever was written, so this has to cope with something that isn't an id
+    at all: that reads as "no picture", which is what the author will see and
+    can fix."""
+    if not stored:
+        return None
+    try:
+        return uuid.UUID(str(stored))
+    except ValueError:
+        return None
+
+
 def group_image(group: QuestionGroup) -> uuid.UUID | None:
     """The picture this group's questions are answered on, where it has one.
 
     Only for the two types that draw one. A picture left in the config of a
     group that has since been renamed to notes is not drawn, and answering
     "which picture is this task on" with it would be answering about a task
-    that no longer has one."""
+    that no longer has one — which is exactly what publishing must not do, or
+    a set of notes would be held to a labelling task's requirements."""
     if group.type not in LABELLING_TYPES:
         return None
-    stored = (group.config or {}).get("image")
-    if not stored:
-        return None
-    try:
-        return uuid.UUID(str(stored))
-    except ValueError:
-        # Written by hand, or by a client that sent something else. Reads as
-        # "no picture", which is what the author will see and can fix.
-        return None
+    return _parse_image_id((group.config or {}).get("image"))
 
 
 def image_letter_count(group: QuestionGroup) -> int:
@@ -567,9 +573,16 @@ async def group_config_out(session: AsyncSession, group: QuestionGroup) -> dict:
     says which picture it wants, so nothing is lost by reloading once the bytes
     are back — and a whole part failing to load because one image row went
     missing is a much worse day than a part that loads with a gap in it.
+
+    Resolved for any group carrying an id, not only the two types that draw
+    one — which is why this doesn't go through :func:`group_image`, whose
+    question is the narrower "what picture is this task answered on". A map
+    task renamed to notes keeps its picture in config, and an editor that
+    reloaded it as an id with nothing behind it would have no choice but to
+    drop it on the next save. Renaming back is meant to find it still there.
     """
     config = dict(group.config or {})
-    image_id = group_image(group)
+    image_id = _parse_image_id((group.config or {}).get("image"))
     if image_id is None:
         return config
     blob = await images_service.get_blob(session, image_id)

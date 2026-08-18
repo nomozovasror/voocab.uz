@@ -707,6 +707,12 @@ export function docToLayout(doc: DocBlock[]): FormBlock[] {
 
 // ── Validation ───────────────────────────────────────────────────────────
 
+/** Where a group's gaps get their letters, for the messages that have to name
+ *  it. A word list printed under the task, the letters drawn on its picture,
+ *  or neither — in which case the answers are words and there is no box to
+ *  send anyone looking for. */
+export type LetterSource = false | "box" | "picture";
+
 /** What still has to be filled in, phrased for the author. Empty means it's
  *  publishable.
  *
@@ -716,27 +722,30 @@ export function docToLayout(doc: DocBlock[]): FormBlock[] {
 export function docIssues(
   doc: DocBlock[],
   offset = 0,
-  /** Whether this group is printed with a box. It changes what a gap is
-   *  missing — a letter rather than words — and so what to say about it. */
-  boxed = false,
+  /** Where this group's letters come from, or false where its gaps are
+   *  answered in words. It changes what a gap is missing — a letter rather
+   *  than words — and, since the two kinds of box are in different places on
+   *  the page, where to tell the author to look for one. */
+  lettered: LetterSource = false,
 ): string[] {
   const gaps = docGaps(doc);
   if (gaps.length === 0) {
     return [
-      boxed
+      lettered
         ? "No questions yet — put empty brackets, [], where a gap goes."
         : "No questions yet — put an answer in brackets, like [Chinese].",
     ];
   }
   const unanswered = gaps
-    .filter((g) => !gapAnswered(g, boxed))
+    .filter((g) => !gapAnswered(g, !!lettered))
     .map((g) => g.number + offset);
   if (unanswered.length === 0) return [];
-  if (boxed) {
+  if (lettered) {
+    const from = lettered === "picture" ? "the picture" : "the box";
     return [
       unanswered.length === 1
-        ? `Question ${unanswered[0]} has no letter from the box yet.`
-        : `Questions ${unanswered.join(", ")} have no letter from the box yet.`,
+        ? `Question ${unanswered[0]} has no letter from ${from} yet.`
+        : `Questions ${unanswered.join(", ")} have no letter from ${from} yet.`,
     ];
   }
   return [
@@ -753,9 +762,9 @@ export function docIssues(
 export function docPublishIssues(
   doc: DocBlock[],
   offset = 0,
-  boxed = false,
+  lettered: LetterSource = false,
 ): string[] {
-  const issues = docIssues(doc, offset, boxed);
+  const issues = docIssues(doc, offset, lettered);
   if (issues.length > 0) return issues;
   const unmarked = docGaps(doc)
     .filter((g) => g.replayStartMs == null)

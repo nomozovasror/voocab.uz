@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FormLayout } from "@/features/listening/components/FormLayout";
+import { TaskPicture } from "@/features/listening/components/TaskPicture";
 import { parseTemplateLayout } from "@/features/listening/form-syntax";
 import { matchLetter } from "@/features/listening/matching";
 import { rubricSentence } from "@/features/listening/rubric";
@@ -36,6 +37,11 @@ export function FormCompletionGroup({
   // nothing to type: each gap takes one of these letters, which is why the box
   // has to reach the candidate — they cannot answer without reading it.
   const box = group.config.options ?? [];
+  // A map or diagram lettered A-H is the same box with its options drawn onto
+  // a picture instead of listed: how many letters is all there is to send,
+  // since what letter C means is a place on the drawing. So the count feeds
+  // the same select, and everything below asks `letters` rather than the box.
+  const letters = box.length || (group.config.image_letters ?? 0);
 
   const byNumber = useMemo(() => {
     const map = new Map<number, (typeof group.questions)[number]>();
@@ -56,6 +62,20 @@ export function FormCompletionGroup({
       {rubric && <p className="text-xs text-muted-foreground">{rubric}</p>}
 
       <div className="rounded-lg border border-border bg-background p-4">
+        {/* Above the labels, where the paper prints it. Its size is known
+            before the bytes arrive, so nothing under it moves as it lands. */}
+        {group.config.image_url &&
+          group.config.image_width &&
+          group.config.image_height && (
+            <TaskPicture
+              url={group.config.image_url}
+              width={group.config.image_width}
+              height={group.config.image_height}
+              adapt={group.config.image_adapt ?? true}
+              alt="The picture this task is labelled on"
+              className="mb-4"
+            />
+          )}
         <FormLayout
           blocks={blocks}
           renderGap={(n) => {
@@ -77,7 +97,7 @@ export function FormCompletionGroup({
                 <span aria-hidden className="text-xs font-semibold text-muted-foreground">
                   {shown}
                 </span>
-                {box.length > 0 ? (
+                {letters > 0 ? (
                   // A native select, inline in the prose: the letters are a
                   // closed list, and a field to type one into would invite a
                   // word the paper didn't ask for.
@@ -93,7 +113,7 @@ export function FormCompletionGroup({
                     aria-invalid={graded && !result.is_correct}
                   >
                     <option value="">—</option>
-                    {box.map((_text, i) => (
+                    {Array.from({ length: letters }, (_, i) => (
                       <option key={i} value={matchLetter(i)}>
                         {matchLetter(i).toUpperCase()}
                       </option>
@@ -116,7 +136,7 @@ export function FormCompletionGroup({
                 {graded && !result.is_correct && (
                   <span className="text-xs text-muted-foreground">
                     (
-                    {box.length > 0
+                    {letters > 0
                       ? result.correct_answers
                           .map((letter) => letter.trim().toUpperCase())
                           .join(", ")

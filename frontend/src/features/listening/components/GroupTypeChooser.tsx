@@ -8,9 +8,9 @@ import type { QuestionGroupType } from "@/features/listening/types";
  *
  * It stands where the group will stand, in the part it belongs to, because
  * the answer depends on which part that is: Part 1 is a completion task and
- * is never asked at all, Part 2 has no map labelling to offer yet. Asking in
- * the dialog before the editor opened would have meant asking once for a
- * whole test and getting it wrong for three quarters of it.
+ * is never asked at all, Part 2 leads with the map that only it labels.
+ * Asking in the dialog before the editor opened would have meant asking once
+ * for a whole test and getting it wrong for three quarters of it.
  *
  * This is the question asked of a group added mid-edit. The same question for
  * a material's opening groups is asked by EditorSetup, before the editor is
@@ -27,9 +27,6 @@ interface GroupTypeChooserProps {
   /** Dropping the group without choosing. Always offered — a part with no
    *  groups left has its own way back in. */
   onRemove: () => void;
-  /** What this part is known for that isn't built yet, so a short list of
-   *  choices reads as "not yet" rather than "not allowed". */
-  note?: string;
   disabled?: boolean;
 }
 
@@ -37,7 +34,6 @@ export function GroupTypeChooser({
   types,
   onChoose,
   onRemove,
-  note,
   disabled,
 }: GroupTypeChooserProps) {
   return (
@@ -64,10 +60,6 @@ export function GroupTypeChooser({
       </div>
 
       <QuestionTypeChoices types={types} onChoose={onChoose} />
-
-      {note && (
-        <p className="mt-3 text-xs text-muted-foreground">{note}</p>
-      )}
     </div>
   );
 }

@@ -7,6 +7,7 @@ import type {
   AttemptSubmit,
   AudioAssetDetail,
   AudioUpload,
+  ImageUpload,
   ListeningMaterial,
   ListeningMaterialCreate,
   ListeningMaterialDetail,
@@ -25,13 +26,15 @@ export function mediaUrl(url: string): string {
   return /^https?:\/\//.test(url) ? url : apiUrl(url);
 }
 
-/** Upload an audio clip; returns the asset to attach to a material. */
-async function uploadAudio(file: File): Promise<AudioUpload> {
+/** POST one file as multipart, and read the failure back in the server's own
+ *  words. Not `api.post`: that sends JSON, and the browser has to be left to
+ *  set the multipart Content-Type itself so it can put the boundary in. */
+async function uploadFile<T>(path: string, file: File): Promise<T> {
   const form = new FormData();
   form.append("file", file);
   let res: Response;
   try {
-    res = await fetch(apiUrl("/api/uploads/audio"), {
+    res = await fetch(apiUrl(path), {
       method: "POST",
       credentials: "include",
       body: form, // browser sets multipart Content-Type + boundary
@@ -49,11 +52,23 @@ async function uploadAudio(file: File): Promise<AudioUpload> {
     }
     throw new ApiError(res.status, detail || "Upload failed");
   }
-  return (await res.json()) as AudioUpload;
+  return (await res.json()) as T;
 }
+
+/** Upload an audio clip; returns the asset to attach to a material. */
+const uploadAudio = (file: File) =>
+  uploadFile<AudioUpload>("/api/uploads/audio", file);
+
+/** Upload a picture for a map or diagram task. What comes back is the id to
+ *  store on the group, plus what it takes to draw it straight away — the
+ *  format was decided by the file's own header, not by its name, so what was
+ *  accepted may not be what the extension claimed. */
+const uploadImage = (file: File) =>
+  uploadFile<ImageUpload>("/api/uploads/image", file);
 
 export const listeningApi = {
   uploadAudio,
+  uploadImage,
 
   materials: {
     list: (scope: "mine" | "public" = "mine") =>
