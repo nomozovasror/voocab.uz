@@ -21,16 +21,18 @@ class QuestionGroupType(enum.StrEnum):
     SHORT_ANSWER = "short_answer"
     TABLE_COMPLETION = "table_completion"
     FLOW_CHART_COMPLETION = "flow_chart_completion"
+    MAP_LABELLING = "map_labelling"
+    DIAGRAM_LABELLING = "diagram_labelling"
     MULTIPLE_CHOICE = "multiple_choice"
     MATCHING = "matching"
 
 
-#: The tasks that are answered by writing the missing words. They are one
+#: The tasks that are answered by filling in what's missing. They are one
 #: thing to the server — a template with ``{{N}}`` gaps, graded against
-#: accepted phrasings — and six things to the author, because a candidate is
-#: told to "complete the notes" or "answer the questions" and an author works
-#: from a paper that says so. Keeping them apart is what stops one name
-#: standing for six tasks and making five of them look unavailable.
+#: accepted phrasings or against letters — and nine things to the author,
+#: because a candidate is told to "complete the notes" or "label the map" and
+#: an author works from a paper that says so. Keeping them apart is what stops
+#: one name standing for nine tasks and making eight of them look unavailable.
 COMPLETION_TYPES = frozenset(
     {
         QuestionGroupType.FORM_COMPLETION,
@@ -40,7 +42,23 @@ COMPLETION_TYPES = frozenset(
         QuestionGroupType.SHORT_ANSWER,
         QuestionGroupType.TABLE_COMPLETION,
         QuestionGroupType.FLOW_CHART_COMPLETION,
+        QuestionGroupType.MAP_LABELLING,
+        QuestionGroupType.DIAGRAM_LABELLING,
     }
+)
+
+#: The two that are answered on a picture. They are completion tasks in every
+#: way that matters to the server — a list of gaps, numbered, answered in words
+#: or in letters — and what makes them their own pair is that the thing being
+#: labelled is an uploaded image rather than typed text, so ``config`` carries a
+#: picture and publishing insists on it.
+#:
+#: Two names rather than one for the same reason the seven above are seven: a
+#: paper says "Label the map below" in Part 2 and "Label the diagram below" in
+#: Part 4, and an author looking for the second should not have to know it is
+#: the first wearing a different hat.
+LABELLING_TYPES = frozenset(
+    {QuestionGroupType.MAP_LABELLING, QuestionGroupType.DIAGRAM_LABELLING}
 )
 
 
@@ -66,6 +84,10 @@ class QuestionGroup(SQLModel, table=True):
       shape the template takes — a form has a label column, notes and
       sentences run the full width, a table is a grid, a flow chart is a chain
       of boxes — and in nothing else.
+    * ``map_labelling`` / ``diagram_labelling``: the same template, plus the
+      picture the labels are on and how many letters are drawn on it. The
+      picture is the group's because the paper prints it once, above the whole
+      set, which is the same reason matching's box is.
     * ``matching``: the box of lettered options every question under it is
       answered from. The box is the group's because the paper prints it once
       above the whole set, and because "you may use any letter more than once"

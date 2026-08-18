@@ -22,7 +22,11 @@ import uuid
 from app.core.database import AsyncSession
 from app.models.material import Material
 from app.models.question import Question
-from app.models.question_group import QuestionGroup, QuestionGroupType
+from app.models.question_group import (
+    LABELLING_TYPES,
+    QuestionGroup,
+    QuestionGroupType,
+)
 from app.services import listening as listening_service
 from app.services import materials as materials_service
 
@@ -119,7 +123,9 @@ def _gap_blockers(
     come before this group in the material, so the numbers quoted are the ones
     printed beside the gaps."""
     boxed = bool(listening_service.group_options(group))
+    lettered_picture = listening_service.image_letter_count(group) > 0
     blockers = _box_blockers(label, group, questions, offset)
+    blockers.extend(_picture_blockers(label, group, questions, offset))
 
     unanswered = [
         offset + q.number
@@ -127,13 +133,17 @@ def _gap_blockers(
         if not any(a.strip() for a in q.correct_answers)
     ]
     if unanswered:
-        # A gap answered from a box wants a letter, not words. Saying "an
+        # A gap answered by letter wants a letter, not words. Saying "an
         # accepted answer" there would send the author looking for a field to
-        # type one into.
-        blockers.append(
-            f"{label}: {_numbers(unanswered)} "
-            + ("without a letter from the box." if boxed else "without an accepted answer.")
-        )
+        # type one into — and which of the two kinds of letter it is decides
+        # where they should be looking instead.
+        if boxed:
+            missing = "without a letter from the box."
+        elif lettered_picture:
+            missing = "without a letter from the picture."
+        else:
+            missing = "without an accepted answer."
+        blockers.append(f"{label}: {_numbers(unanswered)} {missing}")
 
     # Where the answer is said is what the learner gets back with their
     # result — the reason to re-listen rather than just be told they were
@@ -260,21 +270,85 @@ def _box_blockers(
         )
 
     if not allow_reuse:
-        # Every question after the first to claim a letter another already has.
-        # The first keeps it: something has to, and the one the author wrote
-        # earlier is the likelier of the two to be the one they meant.
-        taken: set[str] = set()
-        repeated: list[int] = []
-        for question in sorted(questions, key=lambda q: q.number):
-            for letter in question.correct_answers:
-                if letter in taken:
-                    repeated.append(offset + question.number)
-                taken.add(letter)
+        repeated = _repeated_letters(questions, offset)
         if repeated:
             blockers.append(
                 f"{label}: {_numbers(repeated)} answered with a letter another "
                 "question already uses."
             )
+
+    return blockers
+
+
+def _repeated_letters(questions: list[Question], offset: int) -> list[int]:
+    """Every question after the first to claim a letter another already has.
+
+    The first keeps it: something has to, and the one the author wrote earlier
+    is the likelier of the two to be the one they meant.
+
+    Shared by the two things that hand out letters — a box of words and a
+    lettered picture — because it is the same mistake either way."""
+    taken: set[str] = set()
+    repeated: list[int] = []
+    for question in sorted(questions, key=lambda q: q.number):
+        for letter in question.correct_answers:
+            if letter in taken:
+                repeated.append(offset + question.number)
+            taken.add(letter)
+    return repeated
+
+
+def _picture_blockers(
+    label: str,
+    group: QuestionGroup,
+    questions: list[Question],
+    offset: int,
+) -> list[str]:
+    """What a map or diagram task needs beyond what every completion task
+    needs: the picture, and — where the letters are drawn on it — enough of
+    them to answer with.
+
+    The picture is required. It is the one thing that makes this task the task:
+    "Label the map below" with no map below is not an unfinished question, it is
+    an instruction to look at nothing.
+
+    Letters on the picture are optional, and their absence is not a draft. A
+    real paper prints both: a map with numbered blanks and "write no more than
+    two words", and a map with A–H drawn on it. Zero letters means the first
+    one, and there is nothing further to check."""
+    if group.type not in LABELLING_TYPES:
+        return []
+
+    blockers: list[str] = []
+    if listening_service.group_image(group) is None:
+        blockers.append(f"{label}: attach the picture the labels go on.")
+
+    letters = listening_service.image_letter_count(group)
+    if not letters:
+        return blockers
+
+    if letters < 2:
+        blockers.append(
+            f"{label}: the picture is marked as having one letter — with only "
+            "one there is nothing to choose between."
+        )
+    elif letters < len(questions):
+        blockers.append(
+            f"{label}: {len(questions)} questions and only {letters} letters on "
+            "the picture — draw more letters on it, or say how many there "
+            "really are."
+        )
+
+    # Always checked, and with no "allow letters to be used again" escape,
+    # unlike a word box. A letter on a map marks one place on it, so two
+    # questions answered "C" is two questions with the same answer — which is
+    # a mistake in the key, not a task that permits reuse.
+    repeated = _repeated_letters(questions, offset)
+    if repeated:
+        blockers.append(
+            f"{label}: {_numbers(repeated)} answered with a letter another "
+            "question already uses."
+        )
 
     return blockers
 

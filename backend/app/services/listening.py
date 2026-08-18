@@ -21,6 +21,7 @@ from app.models.part import Part
 from app.models.question import Question
 from app.models.question_attempt import QuestionAttempt
 from app.models.question_group import (
+    LABELLING_TYPES,
     QuestionGroup,
     QuestionGroupType,
     same_question_kind,
@@ -32,6 +33,8 @@ from app.schemas.listening import (
     PartUpdate,
     QuestionGroupIn,
 )
+from app.services import images as images_service
+from app.services import storage
 
 
 # --- Part ---------------------------------------------------------------
@@ -247,6 +250,24 @@ def _question_config(question) -> dict | None:
     }
 
 
+async def _check_image_exists(session: AsyncSession, data: QuestionGroupIn) -> None:
+    """A group naming a picture must name one that is actually stored.
+
+    The schema can't check this — it has no session — and nothing else would:
+    ``config`` is JSONB, so an id that was never uploaded, or was uploaded to a
+    different environment, would be written happily and come back as a broken
+    picture above the questions with nothing anywhere saying why.
+    """
+    image_id = getattr(data.config, "image", None)
+    if image_id is None:
+        return
+    if await images_service.get_blob(session, image_id) is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "That picture isn't stored here — upload it again.",
+        )
+
+
 async def create_question_group(
     session: AsyncSession, part_id: uuid.UUID, data: QuestionGroupIn
 ) -> QuestionGroup:
@@ -258,6 +279,7 @@ async def create_question_group(
     the middle leaves the indices sparse (0, 2), and counting would have put
     the next group at 2 — straight into the unique constraint, for a 409 the
     author did nothing to deserve."""
+    await _check_image_exists(session, data)
     existing = await get_question_groups(session, part_id)
     group = QuestionGroup(
         part_id=part_id,
@@ -265,7 +287,10 @@ async def create_question_group(
         type=data.type,
         instructions=data.instructions,
         word_limit=data.word_limit,
-        config=data.config.model_dump(),
+        # ``mode="json"`` because this lands in JSONB: the picture's id is a
+        # UUID on the model and has to be a string in the column, and psycopg's
+        # encoder has no opinion about how to write one.
+        config=data.config.model_dump(mode="json"),
     )
     session.add(group)
     await session.flush()  # assign group.id
@@ -308,11 +333,12 @@ async def replace_question_group(
     so nothing is kept across that change. Renaming the task is not that: gap
     3 of a form and gap 3 of the notes it becomes are the same question, with
     the same answers, marked at the same moment (see ``same_question_kind``)."""
+    await _check_image_exists(session, data)
     retype = not same_question_kind(group.type, data.type)
     group.type = data.type
     group.instructions = data.instructions
     group.word_limit = data.word_limit
-    group.config = data.config.model_dump()
+    group.config = data.config.model_dump(mode="json")  # see create_question_group
     session.add(group)
 
     existing = {q.number: q for q in await get_questions(session, group.id)}
@@ -442,16 +468,62 @@ def group_options(group: QuestionGroup) -> list[str]:
     return [str(option) for option in options] if isinstance(options, list) else []
 
 
+def group_image(group: QuestionGroup) -> uuid.UUID | None:
+    """The picture this group's questions are answered on, where it has one.
+
+    Only for the two types that draw one. A picture left in the config of a
+    group that has since been renamed to notes is not drawn, and answering
+    "which picture is this task on" with it would be answering about a task
+    that no longer has one."""
+    if group.type not in LABELLING_TYPES:
+        return None
+    stored = (group.config or {}).get("image")
+    if not stored:
+        return None
+    try:
+        return uuid.UUID(str(stored))
+    except ValueError:
+        # Written by hand, or by a client that sent something else. Reads as
+        # "no picture", which is what the author will see and can fix.
+        return None
+
+
+def image_letter_count(group: QuestionGroup) -> int:
+    """How many letters are drawn on this group's picture. Zero where there
+    are none — including for every type that isn't a labelling one, for the
+    same reason :func:`group_image` refuses to answer for them: a count left
+    behind by a rename would otherwise turn a set of notes into letters
+    nobody can see."""
+    if group.type not in LABELLING_TYPES:
+        return 0
+    count = (group.config or {}).get("image_letters")
+    return count if isinstance(count, int) and count > 0 else 0
+
+
+def letter_count(group: QuestionGroup) -> int:
+    """How many letters this group's questions are answered from, or 0 where
+    they are answered in words.
+
+    One question, two places it can be answered from, and they are the same
+    statement about the group: a box of words printed above the task, or the
+    letters drawn on its picture. Unifying them here is what lets grading,
+    publishing and the take page each ask once — the alternative was every
+    caller knowing which of the two kinds of box it was looking at, and
+    getting it wrong for whichever kind arrived second."""
+    return len(group_options(group)) or image_letter_count(group)
+
+
 def answers_are_letters(group: QuestionGroup) -> bool:
     """Whether this group's questions are answered by picking a letter.
 
     The type says so for multiple choice and matching. For a completion task
     the BOX says so: "complete the summary using the list of words, A–H" is
     answered in letters, and the same summary without a list is answered in
-    words. So this takes the group, not its type — the type alone cannot tell
-    you, and grading that assumed it could would compare a letter against the
-    words of an option and mark every answer wrong."""
-    return group.type in LETTERED_TYPES or bool(group_options(group))
+    words. A map's letters are the same box drawn onto a picture. So this takes
+    the group, not its type — the type alone cannot tell you, and grading that
+    assumed it could would compare a letter against the words of an option and
+    mark every answer wrong."""
+    return group.type in LETTERED_TYPES or letter_count(group) > 0
 
 
 def choice_select_count(group: QuestionGroup) -> int:
@@ -475,6 +547,39 @@ def question_marks(group: QuestionGroup) -> int:
     if group.type != QuestionGroupType.MULTIPLE_CHOICE:
         return 1
     return choice_select_count(group)
+
+
+async def group_config_out(session: AsyncSession, group: QuestionGroup) -> dict:
+    """A group's ``config`` as a client reads it: whatever the author stored,
+    plus the picture turned into something that can be drawn.
+
+    The id is what's persisted, and the URL and size are derived on every read
+    rather than written beside it. A URL stored in JSONB would be a fact about
+    which bucket the app was pointing at on the day it was saved — move from
+    local disk to R2, or change the public hostname, and every group written
+    before the move would keep asking for a picture that isn't there any more.
+
+    The derived keys are read-only by construction: they are added here and
+    dropped on the way back in, since :class:`QuestionGroupConfig` doesn't
+    declare them and pydantic ignores what it doesn't know.
+
+    A missing blob leaves them off entirely rather than raising. The group still
+    says which picture it wants, so nothing is lost by reloading once the bytes
+    are back — and a whole part failing to load because one image row went
+    missing is a much worse day than a part that loads with a gap in it.
+    """
+    config = dict(group.config or {})
+    image_id = group_image(group)
+    if image_id is None:
+        return config
+    blob = await images_service.get_blob(session, image_id)
+    if blob is None:
+        return config
+    return config | {
+        "image_url": await storage.get_storage().url(blob.storage_key),
+        "image_width": blob.width,
+        "image_height": blob.height,
+    }
 
 
 def _take_question(question: Question, group: QuestionGroup) -> dict:
@@ -525,7 +630,7 @@ async def get_take_tree(session: AsyncSession, material_id: uuid.UUID) -> list[d
                     "type": group.type,
                     "instructions": group.instructions,
                     "word_limit": group.word_limit,
-                    "config": group.config,
+                    "config": await group_config_out(session, group),
                     "questions": questions,
                 }
             )
@@ -595,7 +700,7 @@ async def get_author_tree(
                     "type": group.type,
                     "instructions": group.instructions,
                     "word_limit": group.word_limit,
-                    "config": group.config,
+                    "config": await group_config_out(session, group),
                     "questions": questions,
                 }
             )

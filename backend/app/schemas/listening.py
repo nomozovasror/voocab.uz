@@ -32,7 +32,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-#: The tasks answered by writing the missing words. One payload shape, six
+#: The tasks answered by filling in what's missing. One payload shape, nine
 #: names, because that is how the paper prints them and how an author thinks
 #: about them — see :data:`app.models.question_group.COMPLETION_TYPES`.
 CompletionType = Literal[
@@ -43,7 +43,12 @@ CompletionType = Literal[
     "short_answer",
     "table_completion",
     "flow_chart_completion",
+    "map_labelling",
+    "diagram_labelling",
 ]
+
+#: The two of those that are answered on an uploaded picture.
+LABELLING_TYPES = frozenset({"map_labelling", "diagram_labelling"})
 
 QuestionGroupType = Literal[
     "form_completion",
@@ -53,6 +58,8 @@ QuestionGroupType = Literal[
     "short_answer",
     "table_completion",
     "flow_chart_completion",
+    "map_labelling",
+    "diagram_labelling",
     "multiple_choice",
     "matching",
 ]
@@ -152,10 +159,11 @@ AnswerRubric = Literal[
 
 
 class QuestionGroupConfig(BaseModel):
-    """A completion task's presentation payload: the gap-fill template, and —
-    for the form the paper prints with a word list — the box its gaps are
-    answered from. Gaps are ``{{N}}`` tokens, 1-indexed and contiguous —
-    validated against the question set on :class:`FormCompletionGroupIn`."""
+    """A completion task's presentation payload: the gap-fill template, plus
+    whatever the gaps are answered from where they aren't answered in words —
+    the box of a word list, or the letters drawn on a picture. Gaps are
+    ``{{N}}`` tokens, 1-indexed and contiguous — validated against the question
+    set on :class:`FormCompletionGroupIn`."""
 
     #: Blank means an empty form — one the author has opened and not yet
     #: written into. Refusing it made the first save of a new group fail,
@@ -176,6 +184,36 @@ class QuestionGroupConfig(BaseModel):
     #: having to know which of the two it is looking at.
     options: list[str] = Field(default_factory=list, max_length=MAX_OPTIONS)
     allow_reuse: bool = False
+
+    #: The picture a map or diagram task is labelled on: an
+    #: :class:`app.models.image_blob.ImageBlob` id, from a prior POST
+    #: /api/uploads/image. That the id names a picture which exists is checked
+    #: where a session is in view (app/services/listening.py) — a schema can't
+    #: ask the database.
+    #:
+    #: Carried on the shared config rather than on a labelling-only one, and
+    #: kept across a change of type rather than refused: an author who renames
+    #: a map task to notes and back should find their picture still attached,
+    #: the same way an unmarked option keeps the moment it was marked at. Only
+    #: the two labelling types draw it, so a stray picture on a set of notes is
+    #: dead weight in JSONB and nothing more.
+    image: uuid.UUID | None = None
+    #: Whether to fit the picture to the page's colours instead of printing it
+    #: as uploaded. Almost every map is black line art on white, which in dark
+    #: mode is a lit sheet punched into the page; inverting it gives our own ink
+    #: on our own background. The bytes can't tell us whether that will help —
+    #: a photographed page wants it, a coloured plan does not — so it is the
+    #: author's switch, per picture.
+    image_adapt: bool = True
+    #: How many letters are drawn on the picture. Zero is the ordinary labelling
+    #: task, where the candidate writes what they heard into numbered blanks;
+    #: above zero, the picture IS the box — the letters are on it, and every gap
+    #: in this group is answered by one of them.
+    #:
+    #: A count and not a list, because unlike a word box there is nothing to
+    #: type: the letters were drawn by whoever drew the map, and all the server
+    #: needs to know is how far up the alphabet they run.
+    image_letters: int = Field(default=0, ge=0, le=MAX_OPTIONS)
 
 
 class MultipleChoiceConfig(BaseModel):
@@ -412,10 +450,10 @@ class FormCompletionGroupIn(_QuestionGroupInBase):
     questions, authored and validated as one atomic unit (§5 — no per-gap
     endpoint).
 
-    One schema for all six completion tasks. They carry the same fields and
+    One schema for all nine completion tasks. They carry the same fields and
     are checked the same way — what differs between a form and a set of notes
     is the shape of the template, which is the author's business and not
-    something to validate. The discriminator accepts all five so a payload is
+    something to validate. The discriminator accepts all nine so a payload is
     still routed here by name rather than by trial."""
 
     type: CompletionType = "form_completion"
@@ -425,29 +463,65 @@ class FormCompletionGroupIn(_QuestionGroupInBase):
     #: publishing is where "add at least one question" is enforced.
     questions: list[QuestionIn] = Field(default_factory=list)
 
+    @property
+    def letter_count(self) -> int:
+        """How many letters this group's gaps are answered from, or 0 where
+        they are answered in words.
+
+        Two places it can come from and they are the same statement: a word box
+        printed above the task, or letters drawn on the picture. A picture only
+        counts for the types that draw one — a leftover count on a set of notes
+        would otherwise turn its gaps into letters nobody can see."""
+        if self.config.options:
+            return len(self.config.options)
+        if self.type in LABELLING_TYPES:
+            return self.config.image_letters
+        return 0
+
     @model_validator(mode="after")
-    def _answers_name_real_options(self) -> "FormCompletionGroupIn":
-        """With a box, a gap's answer is a letter from it — one letter, and one
-        the box has. Without a box this says nothing: the answers are words,
-        and which words are acceptable is the author's business.
+    def _one_thing_to_answer_from(self) -> "FormCompletionGroupIn":
+        """A word box and lettered picture at once is not a task with two ways
+        in — it is a group where nobody, the author included, can say what
+        letter B means."""
+        if (
+            self.config.options
+            and self.config.image_letters
+            and self.type in LABELLING_TYPES
+        ):
+            raise ValueError(
+                "a labelling task is answered either from a list of words or "
+                "from the letters on the picture, not from both"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _answers_name_letters_that_exist(self) -> "FormCompletionGroupIn":
+        """Where the gaps are answered by letter, each takes one — and one that
+        is actually there to pick. Where they are answered in words this says
+        nothing: which words are acceptable is the author's business.
 
         A gap with no letter yet is fine, as everywhere else here: unfinished
         is stored, incoherent is refused."""
-        if not self.config.options:
+        count = self.letter_count
+        if not count:
             return self
-        available = {option_letter(i) for i in range(len(self.config.options))}
+        available = {option_letter(i) for i in range(count)}
+        # "the box" or "the picture", because an author told their answer names
+        # an option that doesn't exist should not have to work out which of the
+        # two the task has.
+        source = "the picture" if not self.config.options else "the box"
         for question in self.questions:
             letters = [a.strip().lower() for a in question.correct_answers]
             if len(letters) > 1:
                 raise ValueError(
-                    f"gap {question.number} is answered from a box, so it takes "
-                    "one letter"
+                    f"gap {question.number} is answered from {source}, so it "
+                    "takes one letter"
                 )
             unknown = [letter for letter in letters if letter not in available]
             if unknown:
                 raise ValueError(
-                    f"gap {question.number} names an option that doesn't exist: "
-                    f"{', '.join(unknown)}"
+                    f"gap {question.number} names a letter {source} doesn't "
+                    f"have: {', '.join(unknown)}"
                 )
             question.correct_answers = letters
         return self

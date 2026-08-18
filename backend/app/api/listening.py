@@ -66,7 +66,10 @@ async def _group_out(session: AsyncSession, group: QuestionGroup) -> QuestionGro
         type=group.type,
         instructions=group.instructions,
         word_limit=group.word_limit,
-        config=group.config,
+        # Resolved rather than raw, so the response to the save that attached a
+        # picture already carries a URL to draw it from — the editor shouldn't
+        # have to reload the material to see what it just uploaded.
+        config=await listening_service.group_config_out(session, group),
         questions=[
             QuestionOut(
                 id=q.id,
