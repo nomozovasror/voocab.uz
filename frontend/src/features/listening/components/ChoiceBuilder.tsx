@@ -326,8 +326,8 @@ function QuestionBlock({
                 aria-pressed={correct}
                 aria-label={
                   correct
-                    ? `${letter} is a correct answer — press to unmark`
-                    : `Mark ${letter} as a correct answer and say where it is given`
+                    ? `${letter.toUpperCase()} is a correct answer — press to unmark`
+                    : `Mark ${letter.toUpperCase()} as a correct answer and say where it is given`
                 }
                 title={
                   correct
@@ -345,7 +345,7 @@ function QuestionBlock({
                     : "border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground",
                 )}
               >
-                {letter}
+                {letter.toUpperCase()}
               </button>
               <input
                 type="text"
@@ -359,7 +359,7 @@ function QuestionBlock({
                   onAddOption();
                 }}
                 placeholder="option"
-                aria-label={`Option ${letter} of question ${number}`}
+                aria-label={`Option ${letter.toUpperCase()} of question ${number}`}
                 className="min-w-0 flex-1 border-b border-transparent bg-transparent pb-0.5 text-base text-foreground placeholder:text-muted-foreground/50 hover:border-border focus:border-primary focus:outline-none"
               />
               {/* Two is the fewest a question can have; below that there is
@@ -376,7 +376,7 @@ function QuestionBlock({
                   <button
                     type="button"
                     onClick={() => onRemoveOption(option.id)}
-                    aria-label={`Remove option ${letter}`}
+                    aria-label={`Remove option ${letter.toUpperCase()}`}
                     title="Remove this option"
                     className="flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover/option:opacity-100 hover:text-destructive focus-visible:opacity-100"
                   >

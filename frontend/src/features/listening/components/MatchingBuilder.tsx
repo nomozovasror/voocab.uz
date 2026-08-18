@@ -197,7 +197,7 @@ export function MatchingBuilder({
                     aria-hidden
                     className="flex size-6 shrink-0 items-center justify-center rounded-full border border-border text-xs font-semibold text-muted-foreground"
                   >
-                    {letter}
+                    {letter.toUpperCase()}
                   </span>
                   <input
                     type="text"
@@ -217,7 +217,7 @@ export function MatchingBuilder({
                       appendOption();
                     }}
                     placeholder="option"
-                    aria-label={`Option ${letter}`}
+                    aria-label={`Option ${letter.toUpperCase()}`}
                     className="min-w-0 flex-1 border-b border-transparent bg-transparent pb-0.5 text-base text-foreground placeholder:text-muted-foreground/50 hover:border-border focus:border-primary focus:outline-none"
                   />
                   {/* Two is the fewest a box can have; below that there is
@@ -228,7 +228,7 @@ export function MatchingBuilder({
                       <button
                         type="button"
                         onClick={() => onRemoveOption(option.id)}
-                        aria-label={`Remove option ${letter}`}
+                        aria-label={`Remove option ${letter.toUpperCase()}`}
                         title="Remove this option, and any answer using it"
                         className="flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover/option:opacity-100 hover:text-destructive focus-visible:opacity-100"
                       >
@@ -467,8 +467,8 @@ function ItemRow({
               aria-pressed={chosen}
               aria-label={
                 chosen
-                  ? `Question ${number} is matched to ${letter} — press to unmatch`
-                  : `Match question ${number} to ${letter} and say where it is given`
+                  ? `Question ${number} is matched to ${letter.toUpperCase()} — press to unmatch`
+                  : `Match question ${number} to ${letter.toUpperCase()} and say where it is given`
               }
               title={
                 chosen
@@ -486,7 +486,7 @@ function ItemRow({
                     : "border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground",
               )}
             >
-              {letter}
+              {letter.toUpperCase()}
             </button>
           );
         })}

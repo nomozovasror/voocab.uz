@@ -71,7 +71,7 @@ export function MatchingGroup({
               aria-hidden
               className="flex size-5 shrink-0 items-center justify-center self-center rounded-full border border-border text-[11px] font-semibold text-muted-foreground"
             >
-              {matchLetter(index)}
+              {matchLetter(index).toUpperCase()}
             </span>
             <span className="text-foreground">{text}</span>
           </li>
@@ -173,7 +173,7 @@ function MatchingItem({
                 disabled={disabled}
                 className="sr-only"
               />
-              <span aria-hidden>{letter}</span>
+              <span aria-hidden>{letter.toUpperCase()}</span>
               <span className="sr-only">
                 Question {number}, option {letter.toUpperCase()}
               </span>

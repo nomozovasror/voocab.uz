@@ -530,6 +530,10 @@ export function QuestionFormEditor({
           // written like one.
           blankPerRow={(picture?.letters ?? 0) > 0}
           box={box.length > 0 ? box : undefined}
+          // A letter on a picture marks one place on it, so it answers one
+          // question and there is no switch to say otherwise. A box of words
+          // has one, and it is the author's.
+          lettersUsedOnce={picture ? true : !allowReuse}
           extraTools={extraTools}
         />
       </div>

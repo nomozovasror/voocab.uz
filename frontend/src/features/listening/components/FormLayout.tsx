@@ -9,6 +9,11 @@ interface FormLayoutProps {
    *  on the take page. Keeping the layout and the gap separate is what lets
    *  the author preview the exact shape the candidate will sit. */
   renderGap: (number: number) => ReactNode;
+  /** Whether every line of this sheet is one thing named and one letter — a
+   *  labelling task. It swaps which of the two columns is the fixed one: the
+   *  answer side holds a letter and nothing else, so the names take the room.
+   *  The editor lays it out the same way, off the same fact. */
+  blankPerRow?: boolean;
   className?: string;
 }
 
@@ -28,7 +33,12 @@ interface FormLayoutProps {
  * of the sheet, which is a form with the labels rubbed out rather than the
  * thing the paper actually prints.
  */
-export function FormLayout({ blocks, renderGap, className }: FormLayoutProps) {
+export function FormLayout({
+  blocks,
+  renderGap,
+  blankPerRow,
+  className,
+}: FormLayoutProps) {
   return (
     <div className={cn("text-sm text-foreground", className)}>
       {blocks.map((block, i) => {
@@ -151,11 +161,23 @@ export function FormLayout({ blocks, renderGap, className }: FormLayoutProps) {
                 held-open column is what made every note and every sentence
                 start a quarter of the way across the page. */}
             {block.label.trim() && (
-              <div className="w-64 shrink-0 text-foreground">
+              <div
+                className={cn(
+                  "text-foreground",
+                  blankPerRow ? "min-w-0 flex-1" : "w-64 shrink-0",
+                )}
+              >
                 {block.label}
               </div>
             )}
-            <div className="min-w-0 flex-1 space-y-1">
+            <div
+              className={cn(
+                "space-y-1",
+                block.label.trim() && blankPerRow
+                  ? "w-40 shrink-0"
+                  : "min-w-0 flex-1",
+              )}
+            >
               {block.lines.map((line, j) => (
                 <div key={j} className={cn("flex gap-1.5", line.bullet && "pl-0")}>
                   {line.bullet && (

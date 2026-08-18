@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   AlignLeft,
   ArrowDown,
@@ -31,6 +31,7 @@ import { ToolbarButton } from "@/features/listening/components/BuilderTools";
 import { ValueField } from "@/features/listening/components/ValueField";
 import { formatClock } from "@/features/studio/format";
 import {
+  docGaps,
   gapNumbers,
   newId,
   newFlow,
@@ -111,6 +112,11 @@ interface FormBuilderProps {
    *  between the brackets — so the letters ride in each gap's own toolbar,
    *  which is the only place a gap has room for them. */
   box?: { id: string; letter: string; text: string }[];
+  /** Whether a letter answers at most one gap here. Given, a letter another
+   *  gap already holds is not offered to this one: there is nothing left for
+   *  it to answer, and a row of letters that shrinks as the sheet is filled in
+   *  is also the shortest way to see how much is left. */
+  lettersUsedOnce?: boolean;
   /** Controls that belong to the group rather than to the form — adding
    *  another group after this one. They sit on the same row as the rest so
    *  everything that adds something is in one place. */
@@ -127,6 +133,7 @@ export function FormBuilder({
   labelFirst,
   blankPerRow,
   box,
+  lettersUsedOnce,
   extraTools,
 }: FormBuilderProps) {
   const numbers = new Map(
@@ -299,6 +306,17 @@ export function FormBuilder({
   const letterOf = box
     ? (optionId: string) => box.find((o) => o.id === optionId)?.letter
     : undefined;
+
+  /** Every letter already spoken for, so the picker can leave them out. Read
+   *  off the document rather than tracked, because that is where the answers
+   *  live and there is no second copy of them to fall out of step. */
+  const takenOptions = new Set<string>(
+    lettersUsedOnce
+      ? docGaps(doc)
+          .map((gap) => gap.optionId)
+          .filter((id): id is string => !!id)
+      : [],
+  );
 
   /** Patches a gap wherever it is, by id. The value cell edits its own parts
    *  as text, so positions are its business, not this one's — and a mark can
@@ -599,7 +617,10 @@ export function FormBuilder({
           trigger at the row's end costs a corner of the value it may sit over,
           which is cheaper than a permanently empty lane or a sheet that stops
           short of everything else. */}
-      <div className="rounded-lg border border-border bg-card [&>*:first-child]:rounded-t-lg [&>*:last-child]:rounded-b-lg">
+      <div
+        data-sheet
+        className="rounded-lg border border-border bg-card [&>*:first-child]:rounded-t-lg [&>*:last-child]:rounded-b-lg"
+      >
         {doc.map((block, blockIndex) => {
           const labelShown = showsLabel(block);
           return (
@@ -715,6 +736,7 @@ export function FormBuilder({
                                     replayEndMs={gap.replayEndMs ?? null}
                                     markCheck={markChecks?.get(gapId)}
                                     box={box}
+                                    taken={takenOptions}
                                     chosen={gap.optionId ?? null}
                                     onChoose={(optionId) =>
                                       patchGapById(gapId, { optionId })
@@ -857,6 +879,7 @@ export function FormBuilder({
                                         replayEndMs={gap.replayEndMs ?? null}
                                         markCheck={markChecks?.get(gapId)}
                                         box={box}
+                                        taken={takenOptions}
                                         chosen={gap.optionId ?? null}
                                         onChoose={(optionId) =>
                                           patchGapById(gapId, { optionId })
@@ -971,7 +994,21 @@ export function FormBuilder({
                             is what pushed every note a quarter of the way
                             across the sheet. */}
                         {labelShown && (
-                          <div className="w-64 shrink-0">
+                          <div
+                            className={cn(
+                              // On a labelling sheet the column beside this
+                              // one holds a letter and nothing else, so the
+                              // name takes everything left over rather than a
+                              // quarter of the sheet. Everywhere else the
+                              // label column is the fixed one: a form's values
+                              // have to line up down the page, and a column
+                              // sized to its contents would jog left and right
+                              // per row.
+                              blankPerRow
+                                ? "min-w-0 flex-1"
+                                : "w-64 shrink-0",
+                            )}
+                          >
                             {lineIndex === 0 && (
                               <input
                                 type="text"
@@ -1017,7 +1054,10 @@ export function FormBuilder({
 
                         <div
                           className={cn(
-                            "flex min-w-0 flex-1 items-center gap-1 px-3 py-1",
+                            "flex items-center gap-1 px-3 py-1",
+                            labelShown && blankPerRow
+                              ? "w-40 shrink-0"
+                              : "min-w-0 flex-1",
                             labelShown && "border-l border-border/60",
                           )}
                         >
@@ -1062,6 +1102,7 @@ export function FormBuilder({
                                   replayEndMs={gap.replayEndMs ?? null}
                                   markCheck={markChecks?.get(gapId)}
                                   box={box}
+                                  taken={takenOptions}
                                   chosen={gap.optionId ?? null}
                                   onChoose={(optionId) =>
                                     patchGapById(gapId, { optionId })
@@ -1331,6 +1372,7 @@ function GapActions({
   replayEndMs,
   markCheck,
   box,
+  taken,
   chosen,
   onChoose,
   onMark,
@@ -1345,6 +1387,9 @@ function GapActions({
    *  sits inside a sentence: there is nowhere beside it to put eight
    *  buttons, and this toolbar is already what a gap is asked about. */
   box?: { id: string; letter: string; text: string }[];
+  /** Option ids already answering some gap, where a letter answers only one.
+   *  Empty where letters may be reused, so nothing is hidden then. */
+  taken?: Set<string>;
   chosen?: string | null;
   onChoose?: (optionId: string | null) => void;
   onMark?: () => void;
@@ -1353,10 +1398,17 @@ function GapActions({
 }) {
   const marked = replayStartMs != null;
   const mismatch = marked && markCheck?.found === false;
+  /** The letters still worth offering: the ones nothing else has taken, plus
+   *  whichever this gap holds — which has to stay, or there would be no way to
+   *  see what was chosen and no way to press it off again. */
+  const offered = (box ?? []).filter(
+    (option) => option.id === chosen || !taken?.has(option.id),
+  );
   const [position, setPosition] = useState<{
     left: number;
     top: number;
   } | null>(null);
+  const toolbarRef = useRef<HTMLSpanElement>(null);
 
   // Anchored to the chip by measurement rather than by nesting: nothing React
   // renders may live inside the editable region, or typing near it would
@@ -1368,10 +1420,32 @@ function GapActions({
     setPosition({ left: chip.offsetLeft, top: chip.offsetTop });
   }, [gapId]);
 
+  // Then pulled back inside the sheet if it doesn't fit. A gap near the right
+  // edge is the ordinary case on a labelling sheet — the answer column is a
+  // narrow strip there — and a toolbar eight letters wide starting at the chip
+  // runs off the page, taking half the alphabet with it.
+  //
+  // Measured against the SHEET rather than against whatever the toolbar is
+  // positioned inside, which is the column the chip sits in and is itself
+  // narrower than the toolbar: clamping to that put the left edge at zero and
+  // left the overflow exactly where it was. Screen coordinates, so it holds
+  // whichever ancestor turns out to be the positioned one.
+  useLayoutEffect(() => {
+    const el = toolbarRef.current;
+    const sheet = el?.closest<HTMLElement>("[data-sheet]");
+    if (!el || !sheet || !position) return;
+    const overflow =
+      el.getBoundingClientRect().right - sheet.getBoundingClientRect().right;
+    if (overflow > 0) {
+      setPosition({ ...position, left: position.left - overflow });
+    }
+  }, [position]);
+
   if (!position) return null;
 
   return (
     <span
+      ref={toolbarRef}
       data-gap={gapId}
       style={{ left: position.left, top: position.top }}
       className="absolute z-30 -translate-y-full pb-1"
@@ -1379,10 +1453,10 @@ function GapActions({
       <span className="flex w-max items-center gap-1 rounded-lg border border-border bg-card p-1 shadow-lg">
         {/* The box first: with one, choosing the letter IS answering the gap,
             and everything else here is about an answer that already exists. */}
-        {box && box.length > 0 && (
+        {offered.length > 0 && (
           <>
             <span className="flex items-center gap-0.5">
-              {box.map((option) => (
+              {offered.map((option) => (
                 <button
                   key={option.id}
                   type="button"
@@ -1402,7 +1476,7 @@ function GapActions({
                       : "border-transparent text-muted-foreground hover:bg-foreground/8 hover:text-foreground",
                   )}
                 >
-                  {option.letter}
+                  {option.letter.toUpperCase()}
                 </button>
               ))}
             </span>

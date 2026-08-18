@@ -199,7 +199,7 @@ function ChoiceQuestion({
                       : "border-border",
               )}
             >
-              {letter}
+              {letter.toUpperCase()}
             </span>
             {text}
           </label>
@@ -226,7 +226,7 @@ function ChoiceQuestion({
                 className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-primary"
               >
                 <Volume2 className="size-3.5" aria-hidden />
-                hear {letter}
+                hear {letter.toUpperCase()}
               </button>
             );
           })}

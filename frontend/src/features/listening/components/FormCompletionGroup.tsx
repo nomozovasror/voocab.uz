@@ -78,6 +78,7 @@ export function FormCompletionGroup({
           )}
         <FormLayout
           blocks={blocks}
+          blankPerRow={(group.config.image_letters ?? 0) > 0}
           renderGap={(n) => {
             const question = byNumber.get(n);
             // A token with no question behind it can only come from a
@@ -179,7 +180,7 @@ export function FormCompletionGroup({
                   aria-hidden
                   className="flex size-5 shrink-0 items-center justify-center self-center rounded-full border border-border text-[11px] font-semibold text-muted-foreground"
                 >
-                  {matchLetter(index)}
+                  {matchLetter(index).toUpperCase()}
                 </span>
                 <span className="text-foreground">{text}</span>
               </li>
