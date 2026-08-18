@@ -368,6 +368,29 @@ export function newRow(label = ""): Extract<DocBlock, { kind: "row" }> {
   return { id: newId(), kind: "row", label, lines: [newTextLine()] };
 }
 
+/** A row that is already one question: a name to write on the left, one blank
+ *  on the right.
+ *
+ *  This is the whole of a labelling sheet. "Write the correct letter next to
+ *  questions 15-20" prints a list — *15 coffee room ......., 16 warehouse
+ *  .......* — where every line has exactly one answer and no line has anything
+ *  else. Built out of the ordinary row plus typed brackets, an author had to
+ *  know that `[]` is how a blank is made before they could write the first
+ *  item; born with the blank in it, the sheet is a list they type down and the
+ *  brackets never come up.
+ *
+ *  Still an ordinary row underneath, so it stores, parses and renders like any
+ *  other — and an author who wants two blanks on a line, or a sentence around
+ *  one, can still type them. */
+export function newLabelRow(label = ""): Extract<DocBlock, { kind: "row" }> {
+  const line: DocLine = {
+    id: newId(),
+    bullet: false,
+    parts: [{ kind: "gap", id: newId(), answers: [] }],
+  };
+  return { id: newId(), kind: "row", label, lines: [line] };
+}
+
 /** How wide and deep a table starts. Three columns and two body rows is the
  *  commonest shape on the paper, and a grid with something in every direction
  *  is quicker to read than one cell asking to be grown. */
@@ -415,9 +438,45 @@ export function newTable(): DocBlock {
 export function newDoc(type: CompletionType = "form_completion"): DocBlock[] {
   if (type === "table_completion") return [newTable()];
   if (type === "flow_chart_completion") return [newFlow()];
+  // A labelling sheet is a list of things to name, so it starts as the first
+  // line of one — blank included, since every line of it has exactly one.
+  if (type === "map_labelling" || type === "diagram_labelling") {
+    return [newLabelRow()];
+  }
   const row = newRow();
   if (type !== "note_completion") return [row];
   return [{ ...row, lines: [{ ...row.lines[0], bullet: true }] }];
+}
+
+/** Drops every blank nobody has answered, leaving the text around it.
+ *
+ *  For one moment only: a labelling sheet being turned from letters to words.
+ *  The blanks on a lettered sheet are made by the page, and the page made them
+ *  because a letter is chosen rather than typed; without letters they become
+ *  chips with nothing in them that cannot be typed into either, so the author
+ *  would have to delete each one before writing an answer where it stood.
+ *
+ *  Answered gaps are kept. Those are the ones the author wrote themselves, in
+ *  brackets, and they mean the same thing in both forms of the task. */
+export function clearEmptyGaps(doc: DocBlock[]): DocBlock[] {
+  const prune = (line: DocLine): DocLine => ({
+    ...line,
+    parts: line.parts.filter(
+      (part) =>
+        part.kind !== "gap" || part.answers.some((answer) => answer.trim()),
+    ),
+  });
+  return doc.map((block) => {
+    if (block.kind === "row") return { ...block, lines: block.lines.map(prune) };
+    if (block.kind === "flow") return { ...block, steps: block.steps.map(prune) };
+    if (block.kind === "table") {
+      return {
+        ...block,
+        rows: block.rows.map((row) => ({ ...row, cells: row.cells.map(prune) })),
+      };
+    }
+    return block;
+  });
 }
 
 /** Every gap in document order — which is what numbers them. */

@@ -30,6 +30,7 @@ import {
   type AnswerOccurrence,
 } from "@/features/listening/marks";
 import {
+  clearEmptyGaps,
   clearGapOption,
   docFromGroup,
   docGaps,
@@ -59,6 +60,7 @@ import {
   isMatchingGroupEmpty,
   matchLetter,
   pictureOptionId,
+  pictureOptionIdOf,
   pictureOptionLetter,
   matchingFromApi,
   matchingIssues,
@@ -370,6 +372,12 @@ function isCompletionGroup(group: GroupState): group is FormGroupState {
   return group.type !== null && isCompletion(group.type);
 }
 
+/** How many letters a labelling task assumes are drawn on its picture until
+ *  the author says otherwise. Eight is what a real map is lettered to more
+ *  often than any other number; the control that changes it sits at the top of
+ *  the group, where the answer length does on every other task. */
+const DEFAULT_PICTURE_LETTERS = 8;
+
 /** Whether this group's gaps are answered by picking a letter rather than by
  *  writing words, and if so from where. Everything that asks treats the two
  *  sources the same: what a gap needs before it counts as answered, whether
@@ -450,7 +458,13 @@ function newGroup(type: QuestionGroupType | null): GroupState {
     allowReuse: false,
     image: null,
     imageAdapt: true,
-    imageLetters: 0,
+    // A labelling task starts lettered, because that is what the paper almost
+    // always prints — "write the correct letter, A-H, next to questions 15-20"
+    // — and because it is the form the sheet can lay out for the author: every
+    // line one thing to name, with its blank already in it. The other form,
+    // where the numbers are on the picture and the answers are written in, is
+    // one select away and turns the sheet back into an ordinary one.
+    imageLetters: isLabelling(type) ? DEFAULT_PICTURE_LETTERS : 0,
   };
 }
 
@@ -840,6 +854,12 @@ export default function StudioListeningEditorPage() {
         for (let index = letters; index < group.imageLetters; index += 1) {
           doc = clearGapOption(doc, pictureOptionId(matchLetter(index)));
         }
+        // Turning the letters off turns the sheet back into an ordinary
+        // completion task, where a blank is made by typing an answer in
+        // brackets. The blanks the lettered sheet made for the author would
+        // otherwise be left behind as chips they can't type into and would
+        // have to delete one by one. Anything they wrote themselves stays.
+        if (letters === 0) doc = clearEmptyGaps(doc);
         return { ...group, imageLetters: letters, doc };
       });
     },
@@ -957,7 +977,7 @@ export default function StudioListeningEditorPage() {
                     options.length > 0
                       ? (letter) => byLetter.get(letter)
                       : isLabelling(type) && imageLetters > 0
-                        ? pictureOptionId
+                        ? pictureOptionIdOf(imageLetters)
                         : undefined,
                   ),
                   options,

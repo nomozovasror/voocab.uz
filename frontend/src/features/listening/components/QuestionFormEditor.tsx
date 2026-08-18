@@ -467,6 +467,13 @@ export function QuestionFormEditor({
               <SquareDashed className="size-3.5 shrink-0" aria-hidden />
               Mark as answer
             </button>
+          ) : picture && picture.letters > 0 ? (
+            // Not the bracket sentence. On this sheet the blank arrives with
+            // the line, so an author never has to make one — telling them how
+            // to would be teaching a step the page has already taken.
+            <span className="flex min-w-0 items-center gap-1.5 truncate text-foreground">
+              Name each place, then press its letter on the blank
+            </span>
           ) : lettered ? (
             <span className="flex min-w-0 items-center gap-1.5 truncate text-foreground">
               Put
@@ -515,6 +522,13 @@ export function QuestionFormEditor({
           markChecks={markChecks}
           onMarkAudio={onMarkAudio}
           labelFirst={task === "form_completion"}
+          // Only where the answers are letters. A blank the author fills by
+          // pressing a letter is one the page can make for them; a blank they
+          // fill by writing words is not — the chip can't be typed into, so a
+          // ready-made one would have to be deleted before the answer could go
+          // in. That form of the task is an ordinary completion sheet, and is
+          // written like one.
+          blankPerRow={(picture?.letters ?? 0) > 0}
           box={box.length > 0 ? box : undefined}
           extraTools={extraTools}
         />

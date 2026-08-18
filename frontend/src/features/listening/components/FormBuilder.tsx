@@ -34,6 +34,7 @@ import {
   gapNumbers,
   newId,
   newFlow,
+  newLabelRow,
   newRow,
   newTable,
   newTableRow,
@@ -95,6 +96,16 @@ interface FormBuilderProps {
    *  row a brand-new form starts with. Nothing else: every block stays
    *  reachable from every task. */
   labelFirst?: boolean;
+  /** Whether every line of this sheet is one question with one blank — which
+   *  is what a labelling task is, and nothing else is.
+   *
+   *  It changes how a line is BORN, not what a line may be: the row comes with
+   *  its blank already in it and the caret in the name beside it, so the sheet
+   *  is typed down as a list. Without it an author had to know that `[]` is
+   *  how a blank is made before they could write the first item — which is
+   *  reasonable to ask of someone writing a form around gaps, and not of
+   *  someone writing "coffee room". Everything else stays available. */
+  blankPerRow?: boolean;
   /** The box this group's gaps are answered from, where the paper prints one.
    *  Given, a gap is answered by pressing a letter rather than by typing words
    *  between the brackets — so the letters ride in each gap's own toolbar,
@@ -114,6 +125,7 @@ export function FormBuilder({
   markChecks,
   onMarkAudio,
   labelFirst,
+  blankPerRow,
   box,
   extraTools,
 }: FormBuilderProps) {
@@ -376,14 +388,34 @@ export function FormBuilder({
       return next;
     });
 
-  const showsLabel = (block: DocBlock): boolean =>
-    block.kind === "row" && (block.label.trim() !== "" || labelling.has(block.id));
+  const showsLabel = (block: DocBlock): boolean => {
+    if (block.kind !== "row") return false;
+    if (block.label.trim() !== "" || labelling.has(block.id)) return true;
+    // On a labelling sheet a row with a blank in it IS a question, and the
+    // thing being named goes in the column beside it — so the column is open
+    // whether or not a name has been typed yet. Read off the blank rather than
+    // remembered, so it holds after a reload too; a line the author added with
+    // no blank is prose and stays full width.
+    return (
+      !!blankPerRow &&
+      block.lines.some((line) => line.parts.some((part) => part.kind === "gap"))
+    );
+  };
 
   /** Adds a block below, shaped like the one being worked in: Enter at the end
    *  of a form row starts another form row, and Enter at the end of a note
    *  starts another note. The caret goes wherever there is something to type
    *  next — the label, or straight into the text where there is no label. */
   const addSibling = (afterId: string, withLabel: boolean) => {
+    // On a labelling sheet the next line is the next question, blank and all,
+    // and what there is to type in it is the name — so the caret goes to the
+    // label whether or not this row had one.
+    if (blankPerRow) {
+      const row = newLabelRow();
+      editLabelling(row.id, true);
+      insertAfter(afterId, row, `label#${row.id}`);
+      return;
+    }
     const row = newRow();
     if (withLabel) editLabelling(row.id, true);
     insertAfter(
@@ -494,6 +526,24 @@ export function FormBuilder({
       lines: block.lines.filter((l) => l.id !== lineId),
     });
   };
+
+  /** The one tool a labelling sheet needs: another thing to name. It replaces
+   *  the row/line pair at the head of the toolbar rather than joining them —
+   *  on this sheet there is only one shape, and offering three would be
+   *  offering two ways to get it wrong. */
+  const addLabelTool = (
+    <ToolbarButton
+      key="label"
+      onClick={() => {
+        const row = newLabelRow();
+        editLabelling(row.id, true);
+        addBlock(row, `label#${row.id}`);
+      }}
+      icon={<Plus className="size-3.5" aria-hidden />}
+      label="question"
+      title="Add another thing to name, with its blank"
+    />
+  );
 
   const addRowTool = (
     <ToolbarButton
@@ -939,12 +989,20 @@ export function FormBuilder({
                                 onKeyDown={(e) => {
                                   if (e.key !== "Enter") return;
                                   e.preventDefault();
+                                  // On a labelling sheet the value holds only
+                                  // the blank, so there is nothing to move
+                                  // into: Enter starts the next question, the
+                                  // way it does at the end of any other line.
+                                  if (blankPerRow) {
+                                    addSibling(block.id, true);
+                                    return;
+                                  }
                                   pendingFocus.current = `${block.lines[0].id}#0`;
                                   // No edit — the pendingFocus effect just
                                   // needs a render to move into the value.
                                   onChange((current) => [...current]);
                                 }}
-                                placeholder="Label"
+                                placeholder={blankPerRow ? "Name it" : "Label"}
                                 aria-label="Row label"
                                 title={block.label}
                                 // The same line box as the value beside it
@@ -1165,9 +1223,11 @@ export function FormBuilder({
             whole width — the notes, the sentences, the summary, the
             short-answer questions. Whichever this task is mostly made of
             leads; the other is still there, because a real paper mixes them. */}
-        {labelFirst
-          ? [addRowTool, addLineTool, addTableTool, addFlowTool]
-          : [addLineTool, addRowTool, addTableTool, addFlowTool]}
+        {blankPerRow
+          ? [addLabelTool, addLineTool]
+          : labelFirst
+            ? [addRowTool, addLineTool, addTableTool, addFlowTool]
+            : [addLineTool, addRowTool, addTableTool, addFlowTool]}
         <ToolbarButton
           onClick={() => {
             const block: DocBlock = { id: newId(), kind: "heading", text: "" };

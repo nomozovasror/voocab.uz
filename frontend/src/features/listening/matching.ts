@@ -76,9 +76,30 @@ export function pictureOptionLetter(optionId: string): string | undefined {
     : undefined;
 }
 
-/** And back, for reading a saved group in. */
+/** The id for a letter, for building one from a count. */
 export function pictureOptionId(letter: string): string {
   return PICTURE_OPTION_PREFIX + letter;
+}
+
+/** And back, for reading a saved group in: the lookup that turns a stored
+ *  letter into the option it stands for, or nothing.
+ *
+ *  Nothing covers two cases and both matter. A gap with no answer yet stores
+ *  no letter, and handing the empty string to `pictureOptionId` would build
+ *  `picture:` — an id no letter has, which reads everywhere downstream as an
+ *  answered gap. And a letter the picture no longer has — the count came down
+ *  since — points at a letter that isn't offered, which would go back to the
+ *  server on the next save and be refused.
+ *
+ *  A word box gets this for free: its lookup is a Map, and a Map misses. */
+export function pictureOptionIdOf(
+  count: number,
+): (letter: string) => string | undefined {
+  const available = new Set(
+    Array.from({ length: count }, (_, index) => matchLetter(index)),
+  );
+  return (letter) =>
+    available.has(letter) ? PICTURE_OPTION_PREFIX + letter : undefined;
 }
 
 // ── The editable document ────────────────────────────────────────────────
