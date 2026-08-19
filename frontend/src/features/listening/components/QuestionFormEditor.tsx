@@ -89,51 +89,6 @@ interface QuestionFormEditorProps {
   canMoveDown?: boolean;
 }
 
-/** Whether this task is printed with a list of words to choose from.
- *
- *  It sits where "Answer length" does, and replaces it, because the two are
- *  the same question asked of the two forms of the task: how long may the
- *  answer be, against there being no answer to write at all — only a letter to
- *  pick. */
-function BoxToggle({
-  value,
-  onChange,
-}: {
-  value: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={value}
-      onClick={() => onChange(!value)}
-      title={
-        value
-          ? "The paper says: choose your answers from the box"
-          : "Answers are written in, not chosen from a list"
-      }
-      className={cn(
-        "flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-        value
-          ? "border-primary/40 bg-primary/10 text-primary"
-          : "border-border text-muted-foreground hover:bg-foreground/4 hover:text-foreground",
-      )}
-    >
-      <span
-        aria-hidden
-        className={cn(
-          "flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border transition-colors",
-          value ? "border-primary bg-primary/20" : "border-border",
-        )}
-      >
-        {value && <Check className="size-2.5" aria-hidden />}
-      </span>
-      answers from a box
-    </button>
-  );
-}
-
 /** Whether one option may answer more than one gap — the paper's "NB you may
  *  use any letter more than once". The same switch matching has, in the box
  *  they share. */
@@ -176,22 +131,23 @@ function ReuseToggle({
   );
 }
 
-/** How a picture task is answered. Three ways, because the paper prints
- *  three, and every one of them turns up in a real Listening paper:
+/** What this task's gaps are answered from. Every completion task has this
+ *  question and only the picture ones have three answers to it:
  *
- *  * **written in** — the numbers are on the drawing and the candidate writes
- *    what they heard. "Label the diagram below. Write NO MORE THAN TWO WORDS
- *    for each answer." The commonest diagram.
- *  * **letters on the picture** — A–J are drawn on it and a list of names is
- *    printed underneath. "Write the correct letter, A–J, next to questions
+ *  * **written in** — the candidate writes what they heard between the
+ *    brackets. Every ordinary completion task, and the commonest diagram:
+ *    "Label the diagram below. Write NO MORE THAN TWO WORDS for each answer."
+ *  * **from a box** — a lettered list of words is printed with the task.
+ *    "Choose FIVE answers from the box and write the correct letter, A–H."
+ *  * **letters A–x** — only where there is a picture, because that is where
+ *    the letters are drawn. "Write the correct letter, A–J, next to questions
  *    15–20." The commonest map.
- *  * **a box of words** — the numbers are on the drawing and a lettered list
- *    of words sits beside it. "Choose FIVE answers from the box and write the
- *    correct letter, A–H, next to questions 31–35."
  *
- *  One control rather than a switch and a select side by side: they are one
- *  question with three answers, and two controls that must never both be on is
- *  a trap to build rather than a choice to offer.
+ *  One control rather than a switch beside a select: they are one question,
+ *  and two controls that must never both be on is a trap to build rather than
+ *  a choice to offer. Its options are short values, not phrases, so it reads
+ *  as "Answers [written in]" — the same shape as the answer length beside it,
+ *  which is what stops the row looking assembled out of spare parts.
  *
  *  Twelve letters is where it stops. A real picture is lettered A–J at most,
  *  and a list running to Z would be a list nobody scrolls to the bottom of. */
@@ -200,10 +156,14 @@ const MAX_PICTURE_LETTERS = 12;
 function AnswerSourceControl({
   letters,
   boxed,
+  withPicture,
   onChange,
 }: {
   letters: number;
   boxed: boolean;
+  /** Whether to offer the letters. Without a picture there is nowhere for
+   *  them to be drawn. */
+  withPicture: boolean;
   onChange: (source: "words" | "box" | number) => void;
 }) {
   const value = boxed ? "box" : letters > 0 ? String(letters) : "words";
@@ -213,23 +173,22 @@ function AnswerSourceControl({
         value={value}
         onChange={(e) => {
           const next = e.target.value;
-          onChange(
-            next === "words" || next === "box" ? next : Number(next),
-          );
+          onChange(next === "words" || next === "box" ? next : Number(next));
         }}
-        aria-label="How this picture is answered"
-        title="How the candidate answers this picture"
+        aria-label="What the answers are"
+        title="What the candidate answers with"
         className="appearance-none rounded-md border border-border bg-transparent py-1 pr-7 pl-2.5 text-xs text-foreground transition-colors hover:border-foreground/30 focus-visible:border-ring focus-visible:outline-none"
       >
-        <option value="words">answers written in</option>
-        {Array.from({ length: MAX_PICTURE_LETTERS - 1 }, (_, i) => i + 2).map(
-          (count) => (
-            <option key={count} value={count}>
-              letters A–{matchLetter(count - 1).toUpperCase()} on the picture
-            </option>
-          ),
-        )}
-        <option value="box">answers from a box of words</option>
+        <option value="words">written in</option>
+        <option value="box">from a box</option>
+        {withPicture &&
+          Array.from({ length: MAX_PICTURE_LETTERS - 1 }, (_, i) => i + 2).map(
+            (count) => (
+              <option key={count} value={count}>
+                letters A–{matchLetter(count - 1).toUpperCase()}
+              </option>
+            ),
+          )}
       </select>
       <ChevronDown
         aria-hidden
@@ -401,86 +360,84 @@ export function QuestionFormEditor({
           aria-label="Instructions"
           className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none"
         />
-        {/* Wraps rather than clips. It used to be held to one line, which was
-            right when it held two controls and a sentence — but a picture task
-            adds a third, and the sentence is what a truncating row drops
-            first. What it says is how a gap is made, so an author reading it
-            for the first time is exactly the author who then can't see it. */}
-        <label className="flex flex-wrap items-center gap-x-2 gap-y-1.5 pl-1 text-xs text-muted-foreground">
-          {/* First, ahead of the answer-length label, because it is the
-              question that decides whether that label applies at all: with
-              letters there is no answer to write. */}
-          {picture && (
-            <AnswerSourceControl
-              letters={picture.letters}
-              boxed={boxed}
-              onChange={picture.onAnswerSourceChange}
-            />
-          )}
-          {/* How long an answer may be is not a question you can ask about a
-              letter, so once the answers are letters this makes way for
-              whichever control turned them into letters. */}
-          {!lettered && <span className="whitespace-nowrap">Answer length</span>}
-          {/* A native select for the behaviour — keyboard, mobile, no menu to
-              reimplement — with its own chrome stripped and the app's put
-              back, so it stops looking like something the browser drew. The
-              open list itself is the OS's and can't be styled. */}
-          {!picture && (
-            <BoxToggle
-              value={boxed}
-              onChange={(on) =>
-                onOptionsChange(() => (on ? newMatchOptions() : []))
-              }
-            />
-          )}
+        {/* Two settings and a sentence, and they were all three in one row.
+            They are not three of a kind: the settings are what the paper says,
+            the sentence is how to type it — so the settings share a row and
+            the sentence gets its own, deliberately rather than by wrapping
+            when it happens not to fit.
 
-          <span
-            className={cn(
-              "relative inline-flex items-center",
-              lettered && "hidden",
-            )}
-          >
-            <select
-              value={rubric ?? ""}
-              onChange={(e) =>
-                onRubricChange(
-                  e.target.value === ""
-                    ? null
-                    : (e.target.value as AnswerRubric),
-                )
-              }
-              aria-label="Answer length"
-              // Capped, because a native select takes the width of its widest
-              // option and the widest here is "auto — up to three words and/or
-              // a number". Left alone it is half the row wide while showing
-              // the word "auto", which is what pushed everything after it out
-              // of sight. The open list is the OS's and is never cut off.
-              className="max-w-52 appearance-none truncate rounded-md border border-border bg-transparent py-1 pr-7 pl-2.5 text-xs text-foreground transition-colors hover:border-foreground/30 focus-visible:border-ring focus-visible:outline-none"
-            >
-              <option value="">
-              {derivedLabel ? `auto — ${derivedLabel}` : "auto"}
-            </option>
-              {ANSWER_RUBRICS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <ChevronDown
-              aria-hidden
-              className="pointer-events-none absolute right-2 size-3.5 text-muted-foreground"
+            Both settings read "label [value]" now. One of them used to be a
+            select whose options were whole phrases and the other a labelled
+            value, which is what made the row look assembled out of spare
+            parts. */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pl-1 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1.5">
+            <span className="whitespace-nowrap">Answers</span>
+            <AnswerSourceControl
+              letters={picture?.letters ?? 0}
+              boxed={boxed}
+              withPicture={picture !== undefined}
+              onChange={(source) => {
+                // A picture task's change is the group's to make — the letters
+                // and the box are two of three states, and moving between them
+                // has to reach the answers already chosen. Everywhere else the
+                // box is the only thing that moves.
+                if (picture) picture.onAnswerSourceChange(source);
+                else onOptionsChange(() => (source === "box" ? newMatchOptions() : []));
+              }}
             />
           </span>
 
-          {/* One place, two things, never both. With a word selected it is
-              the button that acts on it; without one it is the sentence that
-              explains how to do the same thing by typing. They are the two
-              halves of the same instruction, so they take turns rather than
-              sit side by side — and the row never grows a second line.
+          {/* How long an answer may be is not a question you can ask about a
+              letter, so once the answers are letters this makes way. */}
+          {!lettered && (
+            <span className="flex items-center gap-1.5">
+              <span className="whitespace-nowrap">Answer length</span>
+              {/* A native select for the behaviour — keyboard, mobile, no menu
+                  to reimplement — with its own chrome stripped and the app's
+                  put back, so it stops looking like something the browser
+                  drew. The open list itself is the OS's and can't be styled. */}
+              <span className="relative inline-flex items-center">
+                <select
+                  value={rubric ?? ""}
+                  onChange={(e) =>
+                    onRubricChange(
+                      e.target.value === ""
+                        ? null
+                        : (e.target.value as AnswerRubric),
+                    )
+                  }
+                  aria-label="Answer length"
+                  className="max-w-52 appearance-none truncate rounded-md border border-border bg-transparent py-1 pr-7 pl-2.5 text-xs text-foreground transition-colors hover:border-foreground/30 focus-visible:border-ring focus-visible:outline-none"
+                >
+                  <option value="">
+                    {derivedLabel ? `auto — ${derivedLabel}` : "auto"}
+                  </option>
+                  {ANSWER_RUBRICS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown
+                  aria-hidden
+                  className="pointer-events-none absolute right-2 size-3.5 text-muted-foreground"
+                />
+              </span>
+            </span>
+          )}
+        </div>
 
-              The selection is named in the tooltip rather than in the label:
-              spelled out inline, a long phrase pushed this row onto two
-              lines. */}
+        {/* One place, two things, never both. With a word selected it is the
+            button that acts on it; without one it is the sentence that
+            explains how to do the same thing by typing. They are the two
+            halves of the same instruction, so they take turns rather than sit
+            side by side.
+
+            The selection is named in the tooltip rather than in the label: a
+            long phrase spelled out inline made this jump about as it was
+            typed. */}
+        <div className="flex min-h-6 items-center pl-1 text-xs text-muted-foreground">
           {selectedText ? (
             <button
               type="button"
@@ -517,7 +474,7 @@ export function QuestionFormEditor({
               <Brackets>10, ten</Brackets>
             </span>
           )}
-        </label>
+        </div>
       </div>
 
       {/* Above the labels, where the paper prints it — and because the labels
