@@ -21,6 +21,7 @@ from app.api.materials import (
     settle_visibility,
 )
 from app.core.database import AsyncSession, get_session
+from app.models.attempt import Attempt
 from app.models.material import Material
 from app.models.part import Part
 from app.models.question_group import QuestionGroup
@@ -35,7 +36,6 @@ from app.schemas.listening import (
     QuestionGroupOrderIn,
     QuestionGroupOut,
     QuestionOut,
-    QuestionResultOut,
 )
 from app.services import grading as grading_service
 from app.services import listening as listening_service
@@ -294,14 +294,34 @@ async def submit_attempt(
     ``correct_answers`` here is intentional post-submit feedback, not a
     leak."""
     await _load_owned_or_public(session, material_id, user.id)
-    attempt, results = await grading_service.submit_attempt(
+    attempt = await grading_service.submit_attempt(
         session,
         user_id=user.id,
         material_id=material_id,
-        answers=data.answers,
+        data=data,
     )
-    return AttemptResultOut(
-        score=int(attempt.score or 0),
-        total_questions=attempt.total_questions or 0,
-        results=[QuestionResultOut(**r) for r in results],
+    return AttemptResultOut.model_validate(
+        await grading_service.attempt_result(session, attempt)
+    )
+
+
+@router.get("/attempts/{attempt_id}", response_model=AttemptResultOut)
+async def get_attempt(
+    attempt_id: uuid.UUID, user: CurrentUser, session: SessionDep
+) -> AttemptResultOut:
+    """One of the caller's own attempts, in full.
+
+    What makes this endpoint necessary is the refresh key: the result of a
+    submit lives in the response to that submit, and a review screen that only
+    ever exists in a variable is a review screen that a reload throws away.
+
+    Someone else's attempt is a 404 rather than a 403 — this is a different
+    person's answers and mistakes, and confirming which ids exist would leak
+    the shape of their practice. There is no author exception: owning the
+    material does not make a learner's attempt yours to read."""
+    attempt = await session.get(Attempt, attempt_id)
+    if attempt is None or attempt.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Attempt not found")
+    return AttemptResultOut.model_validate(
+        await grading_service.attempt_result(session, attempt)
     )

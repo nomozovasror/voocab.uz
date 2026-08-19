@@ -342,17 +342,65 @@ export interface MaterialTake {
 
 // --- Consumption: submit + grade --------------------------------------------
 
+/** How one answer was arrived at, as the page watched it happen.
+ *
+ *  Milliseconds since the session started, never wall-clock: the server
+ *  distrusts the browser's clock (rightly) but is happy with the distance
+ *  between two of its own readings. Every field is optional — none of this
+ *  reaches grading, so a page that measures nothing is marked identically. */
+export interface AnswerTiming {
+  first_answered_ms?: number;
+  last_changed_ms?: number;
+  changes?: number;
+  /** Typed answers only. A letter or a radio button is chosen in one click,
+   *  and the deciding was done while looking somewhere else. */
+  focus_ms?: number;
+}
+
 export interface AnswerIn {
   question_id: string;
   given_answer: string;
+  timing?: AnswerTiming;
+}
+
+/** One continuous run of playback: from where play started (or where a seek
+ *  landed) to where the audio stopped.
+ *
+ *  Do NOT merge these before sending. Two identical spans mean the learner
+ *  played that stretch twice, and the repetition is the entire signal — the
+ *  server counts them against the moments the author marked to work out which
+ *  answers were hard to hear. Merged, that is indistinguishable from playing
+ *  it once. */
+export interface ListenedSpan {
+  start_ms: number;
+  end_ms: number;
 }
 
 export interface AttemptSubmit {
   answers: AnswerIn[];
+  listened?: ListenedSpan[];
+  seeks_back?: number;
+  /** How long the page has been open. A duration rather than a start time,
+   *  so the server can subtract it from its own clock instead of trusting
+   *  ours. */
+  elapsed_ms?: number;
+}
+
+/** One line of the transcript across an answer's moment — the author's
+ *  corrected text, not the ASR's raw guess. */
+export interface TranscriptLine {
+  start_ms: number;
+  end_ms: number;
+  text: string;
 }
 
 export interface QuestionResult {
   question_id: string;
+  /** The number printed beside it, so a results page opened on its own can
+   *  name the questions without also fetching the material. */
+  number: number;
+  /** What the learner actually typed, kept raw. */
+  given_answer: string;
   is_correct: boolean;
   correct_answers: string[];
   /** Released with the grading feedback, for the same reason the accepted
@@ -364,11 +412,19 @@ export interface QuestionResult {
    *  two" is answered in two places and sending back one of them would send
    *  the learner to half of why they were wrong. */
   option_replay?: Record<string, [number, number]>;
+  /** Every transcript line this answer's moment touches, in playback order.
+   *  Empty when the author marked no range, or when the recording has no
+   *  transcript yet — practice doesn't wait for one. */
+  transcript?: TranscriptLine[];
 }
 
 export interface AttemptResult {
+  attempt_id: string;
+  material_id: string;
+  material_title: string;
   score: number;
   total_questions: number;
+  submitted_at: string | null;
   results: QuestionResult[];
 }
 

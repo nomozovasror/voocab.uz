@@ -749,6 +749,24 @@ class MaterialTakeOut(BaseModel):
 # --- Consumption: submit + grade (§7) ---------------------------------------
 
 
+class AnswerTimingIn(BaseModel):
+    """How one answer was arrived at, as the page watched it happen.
+
+    Every field is optional and every field is a measurement, not an input to
+    grading: nothing here can make a wrong answer right, so a client that
+    reports nothing (or nonsense) costs the statistics and not the mark. That
+    is why there is no attempt to verify any of it.
+
+    Times are milliseconds since the session started, never wall-clock — the
+    browser's clock is often wrong, but the distance between two of its own
+    readings isn't."""
+
+    first_answered_ms: int | None = Field(default=None, ge=0)
+    last_changed_ms: int | None = Field(default=None, ge=0)
+    changes: int | None = Field(default=None, ge=0)
+    focus_ms: int | None = Field(default=None, ge=0)
+
+
 class AnswerIn(BaseModel):
     """One submitted answer. ``given_answer`` is stored raw (unmodified) —
     normalization happens only for comparison, in app/services/grading.py,
@@ -756,10 +774,56 @@ class AnswerIn(BaseModel):
 
     question_id: uuid.UUID
     given_answer: str = ""
+    #: Optional. Travels with the answer because it is a fact about this
+    #: answer; a parallel list keyed by question id would be the same data
+    #: with one more way to get out of step.
+    timing: AnswerTimingIn | None = None
+
+
+class ListenedSpanIn(BaseModel):
+    """One continuous run of playback: from where the learner pressed play (or
+    landed after a seek) to where the audio stopped.
+
+    Deliberately NOT merged by the client. Two identical spans mean the same
+    stretch was played twice, and that repetition is the whole signal — merged
+    into one span it would be indistinguishable from playing it once."""
+
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _forwards(self) -> "ListenedSpanIn":
+        if self.end_ms < self.start_ms:
+            raise ValueError("end_ms must not precede start_ms")
+        return self
 
 
 class AttemptSubmit(BaseModel):
     answers: list[AnswerIn] = Field(default_factory=list)
+    #: Every stretch of audio the learner played, in the order they played it.
+    #: Capped: a session that produced more than this many separate plays has
+    #: told us what it had to tell us, and the cap is what keeps a broken
+    #: client from posting a megabyte of spans.
+    listened: list[ListenedSpanIn] = Field(default_factory=list, max_length=500)
+    #: Backward drags of the playhead. A count rather than a list of jumps:
+    #: where they jumped FROM is already recoverable from ``listened``.
+    seeks_back: int | None = Field(default=None, ge=0)
+    #: How long the page has been open, in milliseconds. A duration and not a
+    #: start timestamp on purpose — the server subtracts it from its own clock
+    #: rather than believing the client's, so a device set to next year still
+    #: records a sane attempt.
+    elapsed_ms: int | None = Field(default=None, ge=0)
+
+
+class TranscriptLineOut(BaseModel):
+    """One line of the transcript, as the AUTHOR left it: the ASR's
+    segmentation with the author's corrections laid over the top. The ASR's
+    raw guess is never what a learner is shown — if the author fixed a
+    misheard word, the review has to agree with the answer key."""
+
+    start_ms: int
+    end_ms: int
+    text: str
 
 
 class QuestionResultOut(BaseModel):
@@ -769,6 +833,13 @@ class QuestionResultOut(BaseModel):
     feedback."""
 
     question_id: uuid.UUID
+    #: The number printed beside it, so a results page loaded on its own —
+    #: from a link, after a refresh — can name the questions without also
+    #: fetching the material.
+    number: int
+    #: What the learner actually put. Stored on the attempt, so a review
+    #: opened days later still shows it.
+    given_answer: str
     is_correct: bool
     correct_answers: list[str]
     #: Safe to send here for the same reason as ``correct_answers``: the
@@ -782,9 +853,23 @@ class QuestionResultOut(BaseModel):
     replay_start_ms: int | None
     replay_end_ms: int | None
     option_replay: dict[str, list[int]] = Field(default_factory=dict)
+    #: The transcript across this answer's moment — every line the marked
+    #: range touches, in playback order. Empty when the author marked no
+    #: range, or when the recording has no transcript yet (practice doesn't
+    #: wait for one; the review just has less to show).
+    transcript: list[TranscriptLineOut] = Field(default_factory=list)
 
 
 class AttemptResultOut(BaseModel):
+    """The whole result of one attempt, and the same object whether it was
+    just submitted or fetched back later by id. One shape, one serializer:
+    a results page that survives a refresh is not allowed to be a slightly
+    different page."""
+
+    attempt_id: uuid.UUID
+    material_id: uuid.UUID
+    material_title: str
     score: int
     total_questions: int
+    submitted_at: datetime | None = None
     results: list[QuestionResultOut]

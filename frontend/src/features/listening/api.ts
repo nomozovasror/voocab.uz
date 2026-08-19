@@ -135,6 +135,13 @@ export const listeningApi = {
       json: data,
     }),
 
+  /** One of the caller's own attempts, in full. What makes it necessary is
+   *  the refresh key: a result that only lives in the response to the submit
+   *  is a result a reload throws away. Someone else's attempt is a 404, the
+   *  material's author included. */
+  attempt: (attemptId: string) =>
+    api.get<AttemptResult>(`/api/attempts/${attemptId}`),
+
   // --- Editor support: the transcript source behind an uploaded clip -------
   audioAssets: {
     get: (assetId: string) => api.get<AudioAssetDetail>(`/api/audio-assets/${assetId}`),

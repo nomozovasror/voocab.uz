@@ -47,3 +47,19 @@ class Attempt(SQLModel, table=True):
     completed_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
+
+    # --- How the recording was used (listening) ------------------------------
+    #
+    # Nullable rather than defaulting to 0, and that distinction is the point:
+    # NULL means the attempt predates this measurement, 0 means the learner
+    # genuinely never pressed play. A statistic built on "0 for everything
+    # before August" would be a lie told by a DEFAULT clause.
+
+    #: Total audio actually played, overlaps counted once — listening to the
+    #: same minute three times is one minute of recording, three times heard.
+    #: Derived server-side from the spans the client reports, never taken as a
+    #: number of its own: two numbers that must agree eventually won't.
+    listened_ms: int | None = Field(default=None)
+    #: How many times the learner dragged the playhead backwards. The plainest
+    #: signal of "I missed that" there is.
+    seeks_back: int | None = Field(default=None)
