@@ -1,20 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Loader2 } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { PageLoader } from "@/components/ui/spinner";
 import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
 import { mediaUrl } from "@/features/listening/api";
 import { useSubmitAttempt, useTakeMaterial } from "@/features/listening/queries";
-import { ChoiceGroup } from "@/features/listening/components/ChoiceGroup";
-import { FormCompletionGroup } from "@/features/listening/components/FormCompletionGroup";
-import { MatchingGroup } from "@/features/listening/components/MatchingGroup";
+import {
+  PartChips,
+  QuestionPaper,
+} from "@/features/listening/components/QuestionPaper";
 import {
   TakeAudio,
   type TakeAudioHandle,
 } from "@/features/listening/components/TakeAudio";
-import { questionSpan } from "@/features/listening/numbering";
+import { questionSpan, sorted } from "@/features/listening/numbering";
+import { usePartSpy } from "@/features/listening/use-part-spy";
 import { PRACTICE } from "@/features/listening/take-config";
 import {
   MAX_SPANS,
@@ -27,7 +28,6 @@ import {
   toSubmit,
   type TakeSession,
 } from "@/features/listening/take-session";
-import type { MaterialTake } from "@/features/listening/types";
 
 /**
  * Practice: the material, its recording, and nothing between the two.
@@ -44,32 +44,6 @@ import type { MaterialTake } from "@/features/listening/types";
  * mark; it is collected because an attempt that has already happened can
  * never be measured afterwards.
  */
-
-/** Where each group's numbering starts, by group id.
- *
- *  Questions are stored numbered 1..N inside their own group; what the
- *  candidate reads runs across the whole material, so a part of "Questions
- *  1–6" followed by "Questions 7–10" is one walk of the tree in order.
- *  Worked out here rather than sent, because it is the same walk the editor
- *  does — one rule in two places beats two numbers that can disagree.
- *
- *  What accumulates is numbers, not questions: a "Choose TWO letters" is
- *  printed as *Questions 23 and 24* and takes both. */
-function groupNumbering(material: MaterialTake): Map<string, number> {
-  const startAt = new Map<string, number>();
-  let seen = 0;
-  for (const part of sorted(material.parts)) {
-    for (const group of sorted(part.question_groups)) {
-      startAt.set(group.id, seen + 1);
-      seen += group.questions.length * questionSpan(group.config.answers_per_question);
-    }
-  }
-  return startAt;
-}
-
-function sorted<T extends { order_index: number }>(items: T[]): T[] {
-  return items.slice().sort((a, b) => a.order_index - b.order_index);
-}
 
 export default function ListeningTakePage() {
   const { id } = useParams<{ id: string }>();
@@ -91,9 +65,9 @@ export default function ListeningTakePage() {
   const session = useRef<TakeSession>(restored.current ?? newSession());
   const [resumed, setResumed] = useState(() => restored.current !== null);
   const [confirming, setConfirming] = useState(false);
-  const [activePart, setActivePart] = useState<string | null>(null);
 
   const parts = useMemo(() => (material ? sorted(material.parts) : []), [material]);
+  const activePart = usePartSpy(parts);
 
   /** Every question on the paper, with how many of the paper's NUMBERS it
    *  takes. Not just a list of ids, because "3 of 25 answered" over a test
@@ -112,11 +86,6 @@ export default function ListeningTakePage() {
   }, [parts]);
 
   const allQuestionIds = useMemo(() => paper.map((r) => r.id), [paper]);
-
-  const startNumbers = useMemo(
-    () => (material ? groupNumbering(material) : new Map<string, number>()),
-    [material],
-  );
 
   const total = paper.reduce((n, row) => n + row.span, 0);
   // A "choose TWO" with one letter picked is half answered, and says so. It
@@ -233,38 +202,6 @@ export default function ListeningTakePage() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Which part is being read, for the header. A scroll position rather than a
-  // navigation step: every part is on the page, and the chips are a way back
-  // to one, not a wizard.
-  useEffect(() => {
-    if (parts.length < 2) return;
-    // What is on screen has to be kept, not recomputed from each callback.
-    // An observer reports only the sections whose visibility CHANGED, so a
-    // part tall enough to fill the whole band — one with a map in it — stops
-    // being mentioned at all, and a handler that reads only the latest batch
-    // goes on pointing at whichever part happened to change last.
-    const onScreen = new Set<string>();
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          const id = entry.target.id.replace("part-", "");
-          if (entry.isIntersecting) onScreen.add(id);
-          else onScreen.delete(id);
-        }
-        // The first in the material's own order, not the one nearest the top
-        // of the viewport: reading runs downwards, and a part half off the
-        // top of the screen is still the part being read.
-        setActivePart(parts.find((p) => onScreen.has(p.id))?.id ?? null);
-      },
-      { rootMargin: "-30% 0px -60% 0px" },
-    );
-    for (const part of parts) {
-      const el = document.getElementById(`part-${part.id}`);
-      if (el) observer.observe(el);
-    }
-    return () => observer.disconnect();
-  }, [parts]);
-
   // --- Submitting -----------------------------------------------------------
 
   const send = () => {
@@ -349,24 +286,7 @@ export default function ListeningTakePage() {
             onSpan={onSpan}
             onSeekBack={onSeekBack}
           />
-          {parts.length > 1 && (
-            <div className="mt-2 flex flex-wrap gap-1">
-              {parts.map((part, i) => (
-                <a
-                  key={part.id}
-                  href={`#part-${part.id}`}
-                  className={cn(
-                    "rounded-md px-2 py-1 text-xs transition-colors",
-                    activePart === part.id
-                      ? "bg-primary/12 text-primary"
-                      : "text-muted-foreground hover:bg-foreground/8 hover:text-foreground",
-                  )}
-                >
-                  part {i + 1}
-                </a>
-              ))}
-            </div>
-          )}
+          <PartChips parts={parts} active={activePart} />
         </div>
       )}
 
@@ -389,61 +309,27 @@ export default function ListeningTakePage() {
       )}
 
       {/* One focus listener for the whole paper. React's onFocus/onBlur are
-          focusin/focusout, so they bubble from the inputs inside. */}
-      <div
-        className="mt-6 space-y-10"
-        onFocus={(e) => {
-          const qid = (e.target as HTMLElement).dataset?.question;
-          if (!qid) return;
-          closeFocus();
-          held.current = {
-            qid,
-            at: Date.now(),
-            was: session.current.answers[qid] ?? "",
-          };
-        }}
-        onBlur={(e) => {
-          if ((e.target as HTMLElement).dataset?.question) closeFocus();
-        }}
-      >
-        {parts.map((part, i) => (
-          // scroll-mt clears the whole sticky block — app header, audio, and
-          // the chips that did the jumping — because a jump that lands the
-          // part's own heading underneath the bar that sent you there looks
-          // like it went somewhere else.
-          <section key={part.id} id={`part-${part.id}`} className="scroll-mt-52">
-            <h2 className="mb-4 border-b border-border pb-2 text-xs tracking-[0.14em] text-muted-foreground uppercase">
-              part {i + 1}
-              {part.title && part.title.toLowerCase() !== `part ${i + 1}` && (
-                <span className="ml-2 normal-case tracking-normal">
-                  {part.title}
-                </span>
-              )}
-            </h2>
-            <div className="space-y-8">
-              {sorted(part.question_groups).map((group) => {
-                const shared = {
-                  group,
-                  answers,
-                  onChange: onAnswer,
-                  startNumber: startNumbers.get(group.id) ?? 1,
-                  disabled: submitMut.isPending,
-                };
-                // Anything this build doesn't know about is rendered as a
-                // form: every group has a template field, so showing it is
-                // better than leaving the questions out of the paper
-                // entirely.
-                return group.type === "multiple_choice" ? (
-                  <ChoiceGroup key={group.id} {...shared} />
-                ) : group.type === "matching" ? (
-                  <MatchingGroup key={group.id} {...shared} />
-                ) : (
-                  <FormCompletionGroup key={group.id} {...shared} />
-                );
-              })}
-            </div>
-          </section>
-        ))}
+          focusin/focusout, so they bubble up from the inputs inside. */}
+      <div className="mt-6">
+        <QuestionPaper
+          material={material}
+          answers={answers}
+          onChange={onAnswer}
+          disabled={submitMut.isPending}
+          onFocus={(e) => {
+            const qid = (e.target as HTMLElement).dataset?.question;
+            if (!qid) return;
+            closeFocus();
+            held.current = {
+              qid,
+              at: Date.now(),
+              was: session.current.answers[qid] ?? "",
+            };
+          }}
+          onBlur={(e) => {
+            if ((e.target as HTMLElement).dataset?.question) closeFocus();
+          }}
+        />
       </div>
 
       <div className="mt-12 border-t border-border pt-6">

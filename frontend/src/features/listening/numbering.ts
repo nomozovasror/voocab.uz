@@ -60,3 +60,45 @@ export function questionNumbersShort(start: number, span: number): string {
   if (span <= 1) return String(start);
   return `${start}–${start + span - 1}`;
 }
+
+// ── Walking a material ────────────────────────────────────────────────────
+
+/** Parts, or groups, in the order the author put them. Both the take page and
+ *  the review walk the tree, and both have to walk it the same way or the
+ *  numbers stop agreeing. */
+export function sorted<T extends { order_index: number }>(items: T[]): T[] {
+  return items.slice().sort((a, b) => a.order_index - b.order_index);
+}
+
+/** Where each group's numbering starts, by group id.
+ *
+ *  Questions are stored numbered 1..N inside their own group; what the
+ *  candidate reads runs across the whole material, so a part of "Questions
+ *  1–6" followed by "Questions 7–10" is one walk of the tree in order.
+ *  Worked out here rather than sent, because it is the same walk the editor
+ *  makes — one rule in two places beats two numbers that can disagree.
+ *
+ *  What accumulates is numbers, not questions: a "Choose TWO letters" is
+ *  printed as *Questions 23 and 24* and takes both. */
+export function groupNumbering(material: {
+  parts: {
+    order_index: number;
+    question_groups: {
+      id: string;
+      order_index: number;
+      config: { answers_per_question?: number | null };
+      questions: unknown[];
+    }[];
+  }[];
+}): Map<string, number> {
+  const startAt = new Map<string, number>();
+  let seen = 0;
+  for (const part of sorted(material.parts)) {
+    for (const group of sorted(part.question_groups)) {
+      startAt.set(group.id, seen + 1);
+      seen +=
+        group.questions.length * questionSpan(group.config.answers_per_question);
+    }
+  }
+  return startAt;
+}
