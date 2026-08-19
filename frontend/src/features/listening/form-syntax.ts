@@ -438,11 +438,13 @@ export function newTable(): DocBlock {
 export function newDoc(type: CompletionType = "form_completion"): DocBlock[] {
   if (type === "table_completion") return [newTable()];
   if (type === "flow_chart_completion") return [newFlow()];
-  // A labelling sheet is a list of things to name, so it starts as the first
-  // line of one — blank included, since every line of it has exactly one.
-  if (type === "map_labelling" || type === "diagram_labelling") {
-    return [newLabelRow()];
-  }
+  // A map is named place by place — "write the correct letter, A-J, next to
+  // questions 15-20" — so it starts as the first line of that list, blank
+  // included. A diagram is not: the commonest one prints its numbers on the
+  // drawing and asks for the words, so there is no list of names to start and
+  // no blank the page can make (see the answer-source control). It begins as
+  // an ordinary line.
+  if (type === "map_labelling") return [newLabelRow()];
   const row = newRow();
   if (type !== "note_completion") return [row];
   return [{ ...row, lines: [{ ...row.lines[0], bullet: true }] }];
@@ -533,6 +535,32 @@ export function clearGapOption(
       part.kind === "gap" && part.optionId === optionId
         ? { ...part, optionId: null }
         : part,
+    ),
+  });
+  return doc.map((block) => {
+    if (block.kind === "row") return { ...block, lines: block.lines.map(line) };
+    if (block.kind === "flow") return { ...block, steps: block.steps.map(line) };
+    if (block.kind === "table") {
+      return {
+        ...block,
+        rows: block.rows.map((row) => ({ ...row, cells: row.cells.map(line) })),
+      };
+    }
+    return block;
+  });
+}
+
+/** Every gap's letter, cleared.
+ *
+ *  For a change of what the gaps are answered FROM — a word box becoming the
+ *  letters on a picture, or the other way round. The letters that were chosen
+ *  stood for options in the old box and stand for nothing in the new one, so
+ *  keeping them would leave answers that look set and grade as absent. */
+export function clearAllGapOptions(doc: DocBlock[]): DocBlock[] {
+  const line = (l: DocLine): DocLine => ({
+    ...l,
+    parts: l.parts.map((part) =>
+      part.kind === "gap" ? { ...part, optionId: null } : part,
     ),
   });
   return doc.map((block) => {

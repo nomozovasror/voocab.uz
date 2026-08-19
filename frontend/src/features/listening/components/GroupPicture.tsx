@@ -34,6 +34,11 @@ interface GroupPictureProps {
   onAdaptChange: (v: boolean) => void;
   /** "map" or "diagram", for the prompts and the alt text. */
   noun: string;
+  /** What the author should have drawn on it before uploading: its letters,
+   *  where that is how it is answered, or the numbers the answers are written
+   *  against. Either way the marks are the picture's, not something the editor
+   *  puts on afterwards. */
+  marks: "letters" | "numbers";
 }
 
 export function GroupPicture({
@@ -45,6 +50,7 @@ export function GroupPicture({
   adapt,
   onAdaptChange,
   noun,
+  marks,
 }: GroupPictureProps) {
   if (!image) {
     return (
@@ -53,7 +59,7 @@ export function GroupPicture({
           size="inline"
           accept="image/png,image/jpeg,image/webp"
           prompt={`drop the ${noun} here, or click to browse`}
-          hint="png, jpeg or webp — with its letters already on it"
+          hint={`png, jpeg or webp — with its ${marks} already on it`}
           onUpload={onUpload}
           busy={uploading}
           busyLabel="uploading…"

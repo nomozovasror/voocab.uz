@@ -30,6 +30,7 @@ import {
   type AnswerOccurrence,
 } from "@/features/listening/marks";
 import {
+  clearAllGapOptions,
   clearEmptyGaps,
   clearGapOption,
   docFromGroup,
@@ -38,6 +39,7 @@ import {
   docToGroup,
   gapAnswered,
   isDocEmpty,
+  newLabelRow,
   newDoc,
   newId,
   type DocBlock,
@@ -372,10 +374,10 @@ function isCompletionGroup(group: GroupState): group is FormGroupState {
   return group.type !== null && isCompletion(group.type);
 }
 
-/** How many letters a labelling task assumes are drawn on its picture until
- *  the author says otherwise. Eight is what a real map is lettered to more
- *  often than any other number; the control that changes it sits at the top of
- *  the group, where the answer length does on every other task. */
+/** How many letters a map assumes are drawn on it until the author says
+ *  otherwise. Eight is what a real plan is lettered to more often than any
+ *  other number; the control that changes it sits at the top of the group,
+ *  where the answer length does on every other task. */
 const DEFAULT_PICTURE_LETTERS = 8;
 
 /** Whether this group's gaps are answered by picking a letter rather than by
@@ -458,13 +460,15 @@ function newGroup(type: QuestionGroupType | null): GroupState {
     allowReuse: false,
     image: null,
     imageAdapt: true,
-    // A labelling task starts lettered, because that is what the paper almost
-    // always prints — "write the correct letter, A-H, next to questions 15-20"
-    // — and because it is the form the sheet can lay out for the author: every
-    // line one thing to name, with its blank already in it. The other form,
-    // where the numbers are on the picture and the answers are written in, is
-    // one select away and turns the sheet back into an ordinary one.
-    imageLetters: isLabelling(type) ? DEFAULT_PICTURE_LETTERS : 0,
+    // A map starts lettered, because that is what a Part 2 plan almost always
+    // prints — "write the correct letter, A-H, next to questions 15-20" — and
+    // because it is the form the sheet can lay out for the author: every line
+    // one thing to name, with its blank already in it.
+    //
+    // A diagram does not. The commonest Part 4 diagram prints its numbers on
+    // the drawing and asks for the words, so it starts where that starts: an
+    // ordinary sheet, with the other two forms one select away.
+    imageLetters: type === "map_labelling" ? DEFAULT_PICTURE_LETTERS : 0,
   };
 }
 
@@ -846,38 +850,67 @@ export default function StudioListeningEditorPage() {
    *  server refuses outright, so the group would stop saving from here on.
    *  They lose their answer with the letter, the way a gap does when the
    *  option it pointed at is deleted from a box. */
-  const setImageLetters = useCallback(
-    (key: string, letters: number) => {
+  /** How a picture task is answered: in words, from the letters drawn on it,
+   *  or from a box of words beside it. The paper prints all three, so all
+   *  three are offered — and the whole change lands in one edit, because half
+   *  of it is what happens to the answers already there.
+   *
+   *  Changing the KIND clears every letter chosen so far. They stood for
+   *  options in the box they were picked from, and stand for nothing in the
+   *  new one; left behind they would look set and grade as absent. Changing
+   *  only how far the letters run keeps them, minus the ones that fell off the
+   *  end — the ordinary case of an author correcting the count.
+   *
+   *  Turning the answers into words also takes the page's own blanks with it:
+   *  a blank filled by typing can't be made in advance, so a ready-made one
+   *  would just be a chip to delete first. Anything written in brackets is the
+   *  author's and stays. */
+  const setAnswerSource = useCallback(
+    (key: string, source: "words" | "box" | number) => {
       updateGroup(key, (group) => {
         if (!isCompletionGroup(group)) return group;
+        const wasBoxed = group.options.length > 0;
+        const nowBoxed = source === "box";
+        const letters = typeof source === "number" ? source : 0;
+        const sameKind =
+          wasBoxed === nowBoxed && group.imageLetters > 0 === (letters > 0);
+
         let doc = group.doc;
-        for (let index = letters; index < group.imageLetters; index += 1) {
-          doc = clearGapOption(doc, pictureOptionId(matchLetter(index)));
+        if (!sameKind) {
+          doc = clearAllGapOptions(doc);
+        } else {
+          for (let index = letters; index < group.imageLetters; index += 1) {
+            doc = clearGapOption(doc, pictureOptionId(matchLetter(index)));
+          }
         }
-        // Turning the letters off turns the sheet back into an ordinary
-        // completion task, where a blank is made by typing an answer in
-        // brackets. The blanks the lettered sheet made for the author would
-        // otherwise be left behind as chips they can't type into and would
-        // have to delete one by one. Anything they wrote themselves stays.
-        if (letters === 0) doc = clearEmptyGaps(doc);
-        return { ...group, imageLetters: letters, doc };
+        if (source === "words") doc = clearEmptyGaps(doc);
+        // A sheet nobody has written in yet becomes the first line of the
+        // list this form of the task is: a thing to name, with its blank. Only
+        // when it is empty — anything the author has put here is theirs.
+        if (letters > 0 && isDocEmpty(doc)) doc = [newLabelRow()];
+
+        return {
+          ...group,
+          doc,
+          imageLetters: letters,
+          options: nowBoxed ? newMatchOptions() : [],
+        };
       });
     },
     [updateGroup],
   );
 
-  /** Taking the picture away. The letters go with it: they were drawn on it,
-   *  so without it there is nothing for a gap's letter to point at — and the
-   *  answers pointing at them would be answers to a question nobody can
-   *  see. */
+  /** Taking the picture away. Whatever it was answered from goes with it: the
+   *  letters were drawn on it, and a box of words beside a picture that isn't
+   *  there is a box beside nothing. */
   const removeGroupImage = useCallback(
     (key: string) => {
-      setImageLetters(key, 0);
+      setAnswerSource(key, "words");
       updateGroup(key, (group) =>
         isCompletionGroup(group) ? { ...group, image: null } : group,
       );
     },
-    [setImageLetters, updateGroup],
+    [setAnswerSource, updateGroup],
   );
 
   /** Dropping an option from a matching group's box. One edit rather than
@@ -2715,8 +2748,8 @@ export default function StudioListeningEditorPage() {
                                   onUpload: (file) =>
                                     handleImageUpload(group.key, file),
                                   onRemove: () => removeGroupImage(group.key),
-                                  onLettersChange: (letters) =>
-                                    setImageLetters(group.key, letters),
+                                  onAnswerSourceChange: (source) =>
+                                    setAnswerSource(group.key, source),
                                   onAdaptChange: (imageAdapt) =>
                                     updateGroup(group.key, (g) =>
                                       isCompletionGroup(g)

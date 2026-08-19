@@ -56,15 +56,17 @@ interface QuestionFormEditorProps {
    *  optional prop rather than nine loose ones says. */
   picture?: {
     image: GroupImage | null;
-    /** How many letters are drawn on it. Zero is the other real form of the
-     *  task: numbered blanks, answered in the words the candidate heard. */
+    /** How many letters are drawn on it, where that is how it is answered. */
     letters: number;
     adapt: boolean;
     uploading: boolean;
     error?: string | null;
     onUpload: (file: File) => void;
     onRemove: () => void;
-    onLettersChange: (n: number) => void;
+    /** Which of the three ways this picture is answered — see
+     *  :func:`AnswerSourceControl`. A number is that many letters drawn on
+     *  it. */
+    onAnswerSourceChange: (source: "words" | "box" | number) => void;
     onAdaptChange: (v: boolean) => void;
   };
   /** The number the first gap of this group carries on the page. */
@@ -174,42 +176,60 @@ function ReuseToggle({
   );
 }
 
-/** How far up the alphabet a picture's letters run — or that there are none,
- *  and the candidate writes what they heard.
+/** How a picture task is answered. Three ways, because the paper prints
+ *  three, and every one of them turns up in a real Listening paper:
  *
- *  It stands where the box switch does on the other tasks, and for the same
- *  reason: it is the same question. What differs is that a picture's letters
- *  can't be typed here — they were drawn by whoever drew the map — so all
- *  there is to say about them is how many.
+ *  * **written in** — the numbers are on the drawing and the candidate writes
+ *    what they heard. "Label the diagram below. Write NO MORE THAN TWO WORDS
+ *    for each answer." The commonest diagram.
+ *  * **letters on the picture** — A–J are drawn on it and a list of names is
+ *    printed underneath. "Write the correct letter, A–J, next to questions
+ *    15–20." The commonest map.
+ *  * **a box of words** — the numbers are on the drawing and a lettered list
+ *    of words sits beside it. "Choose FIVE answers from the box and write the
+ *    correct letter, A–H, next to questions 31–35."
  *
- *  Twelve is where it stops. A real map is lettered A-H at most, and a list
- *  running to Z would be a list nobody scrolls to the bottom of. */
+ *  One control rather than a switch and a select side by side: they are one
+ *  question with three answers, and two controls that must never both be on is
+ *  a trap to build rather than a choice to offer.
+ *
+ *  Twelve letters is where it stops. A real picture is lettered A–J at most,
+ *  and a list running to Z would be a list nobody scrolls to the bottom of. */
 const MAX_PICTURE_LETTERS = 12;
 
-function LettersControl({
-  value,
+function AnswerSourceControl({
+  letters,
+  boxed,
   onChange,
 }: {
-  value: number;
-  onChange: (n: number) => void;
+  letters: number;
+  boxed: boolean;
+  onChange: (source: "words" | "box" | number) => void;
 }) {
+  const value = boxed ? "box" : letters > 0 ? String(letters) : "words";
   return (
     <span className="relative inline-flex items-center">
       <select
         value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        aria-label="Letters on the picture"
-        title="How many letters are drawn on the picture"
+        onChange={(e) => {
+          const next = e.target.value;
+          onChange(
+            next === "words" || next === "box" ? next : Number(next),
+          );
+        }}
+        aria-label="How this picture is answered"
+        title="How the candidate answers this picture"
         className="appearance-none rounded-md border border-border bg-transparent py-1 pr-7 pl-2.5 text-xs text-foreground transition-colors hover:border-foreground/30 focus-visible:border-ring focus-visible:outline-none"
       >
-        <option value={0}>answers written in</option>
+        <option value="words">answers written in</option>
         {Array.from({ length: MAX_PICTURE_LETTERS - 1 }, (_, i) => i + 2).map(
           (count) => (
             <option key={count} value={count}>
-              letters A–{matchLetter(count - 1).toUpperCase()}
+              letters A–{matchLetter(count - 1).toUpperCase()} on the picture
             </option>
           ),
         )}
+        <option value="box">answers from a box of words</option>
       </select>
       <ChevronDown
         aria-hidden
@@ -392,9 +412,10 @@ export function QuestionFormEditor({
               that must never both be on is a trap, and this is the one an
               author reaches for. */}
           {picture && (
-            <LettersControl
-              value={picture.letters}
-              onChange={picture.onLettersChange}
+            <AnswerSourceControl
+              letters={picture.letters}
+              boxed={boxed}
+              onChange={picture.onAnswerSourceChange}
             />
           )}
           {/* How long an answer may be is not a question you can ask about a
@@ -507,6 +528,7 @@ export function QuestionFormEditor({
           adapt={picture.adapt}
           onAdaptChange={picture.onAdaptChange}
           noun={task === "map_labelling" ? "map" : "diagram"}
+          marks={picture.letters > 0 ? "letters" : "numbers"}
         />
       )}
 
