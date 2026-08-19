@@ -401,16 +401,15 @@ export function QuestionFormEditor({
           aria-label="Instructions"
           className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none"
         />
-        <label className="flex items-center gap-2 pl-1 text-xs text-muted-foreground">
+        {/* Wraps rather than clips. It used to be held to one line, which was
+            right when it held two controls and a sentence — but a picture task
+            adds a third, and the sentence is what a truncating row drops
+            first. What it says is how a gap is made, so an author reading it
+            for the first time is exactly the author who then can't see it. */}
+        <label className="flex flex-wrap items-center gap-x-2 gap-y-1.5 pl-1 text-xs text-muted-foreground">
           {/* First, ahead of the answer-length label, because it is the
               question that decides whether that label applies at all: with
-              letters there is no answer to write.
-
-              A labelling task's letters are on its picture, so that is the
-              only box it is offered. The word-list form of it exists on
-              paper, rarely, and the server would store it — but two controls
-              that must never both be on is a trap, and this is the one an
-              author reaches for. */}
+              letters there is no answer to write. */}
           {picture && (
             <AnswerSourceControl
               letters={picture.letters}
@@ -451,7 +450,12 @@ export function QuestionFormEditor({
                 )
               }
               aria-label="Answer length"
-              className="appearance-none rounded-md border border-border bg-transparent py-1 pr-7 pl-2.5 text-xs text-foreground transition-colors hover:border-foreground/30 focus-visible:border-ring focus-visible:outline-none"
+              // Capped, because a native select takes the width of its widest
+              // option and the widest here is "auto — up to three words and/or
+              // a number". Left alone it is half the row wide while showing
+              // the word "auto", which is what pushed everything after it out
+              // of sight. The open list is the OS's and is never cut off.
+              className="max-w-52 appearance-none truncate rounded-md border border-border bg-transparent py-1 pr-7 pl-2.5 text-xs text-foreground transition-colors hover:border-foreground/30 focus-visible:border-ring focus-visible:outline-none"
             >
               <option value="">
               {derivedLabel ? `auto — ${derivedLabel}` : "auto"}
@@ -492,17 +496,17 @@ export function QuestionFormEditor({
             // Not the bracket sentence. On this sheet the blank arrives with
             // the line, so an author never has to make one — telling them how
             // to would be teaching a step the page has already taken.
-            <span className="flex min-w-0 items-center gap-1.5 truncate text-foreground">
+            <span className="flex items-center gap-1.5 text-foreground">
               Name each place, then press its letter on the blank
             </span>
           ) : lettered ? (
-            <span className="flex min-w-0 items-center gap-1.5 truncate text-foreground">
+            <span className="flex items-center gap-1.5 text-foreground">
               Put
               <Brackets />
               where a gap goes, then press a letter on it
             </span>
           ) : (
-            <span className="flex min-w-0 items-center gap-1.5 truncate text-foreground">
+            <span className="flex items-center gap-1.5 text-foreground">
               Write the answer in
               <Brackets />
               like
