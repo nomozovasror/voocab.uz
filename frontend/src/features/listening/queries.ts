@@ -4,13 +4,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { listeningApi } from "@/features/listening/api";
-import type {
-  AttemptSubmit,
-  ListeningMaterialCreate,
-  ListeningMaterialUpdate,
-  PartCreate,
-  QuestionGroupIn,
-} from "@/features/listening/types";
+import type { AttemptSubmit } from "@/features/listening/types";
 
 const MATERIALS_KEY = ["listening-materials"] as const;
 
@@ -51,26 +45,6 @@ export function useListeningMaterial(id: string | undefined) {
   });
 }
 
-export function useCreateListeningMaterial() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: ListeningMaterialCreate) =>
-      listeningApi.materials.create(data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: MATERIALS_KEY }),
-  });
-}
-
-export function useUpdateListeningMaterial(id: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: ListeningMaterialUpdate) =>
-      listeningApi.materials.update(id, data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: MATERIALS_KEY });
-    },
-  });
-}
-
 /** Deletes a material and everything under it — parts, questions, and the
  *  attempts anyone has made on it (app/services/materials.py). Irreversible,
  *  so callers ask first.
@@ -89,59 +63,6 @@ export function useDeleteListeningMaterial() {
       void qc.invalidateQueries({ queryKey: ["studio-listening"] });
       void qc.invalidateQueries({ queryKey: ["studio-stats"] });
     },
-  });
-}
-
-export function useCreatePart(materialId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: PartCreate) =>
-      listeningApi.parts.create(materialId, data),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: materialDetailKey(materialId) }),
-  });
-}
-
-export function useDeletePart(materialId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (partId: string) => listeningApi.parts.remove(partId),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: materialDetailKey(materialId) }),
-  });
-}
-
-export function useCreateQuestionGroup(materialId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ partId, data }: { partId: string; data: QuestionGroupIn }) =>
-      listeningApi.questionGroups.create(partId, data),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: materialDetailKey(materialId) }),
-  });
-}
-
-export function useUpdateQuestionGroup(materialId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      groupId,
-      data,
-    }: {
-      groupId: string;
-      data: QuestionGroupIn;
-    }) => listeningApi.questionGroups.update(groupId, data),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: materialDetailKey(materialId) }),
-  });
-}
-
-export function useDeleteQuestionGroup(materialId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (groupId: string) => listeningApi.questionGroups.remove(groupId),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: materialDetailKey(materialId) }),
   });
 }
 

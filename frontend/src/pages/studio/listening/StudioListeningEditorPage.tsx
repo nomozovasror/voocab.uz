@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, CircleQuestionMark, Loader2, Trash2 } from "lucide-react";
+import { ArrowLeft, CircleQuestionMark, Eye, Loader2, Trash2 } from "lucide-react";
 import { useStudioHeader } from "@/components/studio/header-slots";
 import { DeleteMaterialDialog } from "@/components/studio/DeleteMaterialDialog";
 import { PublishCelebration } from "@/components/studio/PublishCelebration";
@@ -2458,6 +2458,27 @@ export default function StudioListeningEditorPage() {
         >
           <CircleQuestionMark className="size-4" aria-hidden />
         </button>
+        {/* What the candidate meets, from the editor rather than by typing the
+            URL. It opens in its own tab: the editor holds unsaved edits and a
+            scroll position, and a preview that costs you those is a preview
+            you check once.
+
+            It shows the SAVED material, which is what the take page reads —
+            autosave is a second and a half behind the last keystroke, so in
+            practice that is what is on screen here. Looking is free; only
+            pressing submit over there records an attempt. */}
+        {state.materialId && (
+          <a
+            href={`/listening/${state.materialId}`}
+            target="_blank"
+            rel="noreferrer"
+            title="See it as a candidate does"
+            aria-label="See it as a candidate does"
+            className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-foreground"
+          >
+            <Eye className="size-4" aria-hidden />
+          </a>
+        )}
         {/* Only once there is something to delete: a material that has never
             been saved is thrown away by leaving the page. Quiet until
             reached for, and it turns red only under the pointer — it sits a

@@ -362,6 +362,12 @@ export const AudioEditorPane = forwardRef<
 
   const [ready, setReady] = useState(false);
   const [decoding, setDecoding] = useState(false);
+  /** How much of the file has been fetched, 0-100, or null before the first
+   *  report. Shown beside "decoding waveform…" because forty-five seconds of
+   *  a spinner and a participle is indistinguishable from a hang — and the
+   *  two really are different: a long recording on a slow machine is working,
+   *  a percentage stuck at nothing is not. */
+  const [loadPercent, setLoadPercent] = useState<number | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Through a ref: the decode effect must not re-run — and re-decode the
   // whole file — because the page passed down a fresh closure.
@@ -777,6 +783,7 @@ export const AudioEditorPane = forwardRef<
     let decodeTimer: number | undefined;
     setReady(false);
     setDecoding(true);
+    setLoadPercent(null);
     setLoadError(null);
     setSilences([]);
     partRegionRef.current = null;
@@ -917,6 +924,11 @@ export const AudioEditorPane = forwardRef<
       ws.on("finish", () => {
         if (loopRef.current) void ws.play();
       });
+      ws.on("loading", (percent) => {
+        if (disposed) return;
+        setLoadPercent(percent);
+      });
+
       ws.on("error", (err) => {
         if (disposed) return;
         window.clearTimeout(decodeTimer);
@@ -1487,6 +1499,9 @@ export const AudioEditorPane = forwardRef<
                 aria-hidden
               />
               decoding waveform…
+              {loadPercent !== null && loadPercent < 100 && (
+                <span className="tabular-nums opacity-70">{loadPercent}%</span>
+              )}
             </div>
           )}
           {loadError && (

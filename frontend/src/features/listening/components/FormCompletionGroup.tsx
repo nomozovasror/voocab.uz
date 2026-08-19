@@ -79,7 +79,16 @@ export function FormCompletionGroup({
         <FormLayout
           blocks={blocks}
           blankPerRow={(group.config.image_letters ?? 0) > 0}
-          renderGap={(n) => {
+          // One question per line, numbered down the side, which is how a
+          // paper prints these two and only these two. Notes and a summary
+          // keep their number at the gap, because there the gap is somewhere
+          // inside a sentence rather than the whole of the line.
+          numberInMargin={
+            group.type === "sentence_completion" ||
+            group.type === "short_answer"
+          }
+          renderNumber={(n) => startNumber + n - 1}
+          renderGap={(n, numbered) => {
             const question = byNumber.get(n);
             // A token with no question behind it can only come from a
             // template we didn't author; show the gap rather than pretend.
@@ -95,9 +104,14 @@ export function FormCompletionGroup({
             );
             return (
               <span className="mx-1 inline-flex items-baseline gap-1 align-baseline">
-                <span aria-hidden className="text-xs font-semibold text-muted-foreground">
-                  {shown}
-                </span>
+                {numbered && (
+                  <span
+                    aria-hidden
+                    className="text-xs font-semibold text-muted-foreground"
+                  >
+                    {shown}
+                  </span>
+                )}
                 {letters > 0 ? (
                   // A native select, inline in the prose: the letters are a
                   // closed list, and a field to type one into would invite a

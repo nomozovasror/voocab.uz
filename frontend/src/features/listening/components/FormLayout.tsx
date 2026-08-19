@@ -7,8 +7,21 @@ interface FormLayoutProps {
   blocks: FormBlock[];
   /** How a gap is drawn — a blank rule in the editor's preview, a real input
    *  on the take page. Keeping the layout and the gap separate is what lets
-   *  the author preview the exact shape the candidate will sit. */
-  renderGap: (number: number) => ReactNode;
+   *  the author preview the exact shape the candidate will sit.
+   *
+   *  ``numbered`` is false where the layout has already printed the number in
+   *  the margin, so the gap doesn't print it a second time. */
+  renderGap: (number: number, numbered: boolean) => ReactNode;
+  /** The number as the candidate reads it — the layout knows a gap's place in
+   *  this group and nothing about where the group sits in the paper. Only
+   *  needed with ``numberInMargin``. */
+  renderNumber?: (number: number) => ReactNode;
+  /** Whether each numbered item is its own line, with its number at the left
+   *  margin. That is how a paper prints sentence completion and short-answer
+   *  questions — one question per line, numbered down the side — and it is not
+   *  how it prints notes or a summary, where the number sits at the gap
+   *  because the gap is somewhere inside a sentence. */
+  numberInMargin?: boolean;
   /** Whether every line of this sheet is one thing named and one letter — a
    *  labelling task. It swaps which of the two columns is the fixed one: the
    *  answer side holds a letter and nothing else, so the names take the room.
@@ -36,6 +49,8 @@ interface FormLayoutProps {
 export function FormLayout({
   blocks,
   renderGap,
+  renderNumber,
+  numberInMargin,
   blankPerRow,
   className,
 }: FormLayoutProps) {
@@ -88,7 +103,9 @@ export function FormLayout({
                       part.kind === "text" ? (
                         <Fragment key={k}>{part.text}</Fragment>
                       ) : (
-                        <Fragment key={k}>{renderGap(part.number)}</Fragment>
+                        <Fragment key={k}>
+                          {renderGap(part.number, true)}
+                        </Fragment>
                       ),
                     )}
                   </div>
@@ -136,7 +153,7 @@ export function FormLayout({
                               <Fragment key={k}>{part.text}</Fragment>
                             ) : (
                               <Fragment key={k}>
-                                {renderGap(part.number)}
+                                {renderGap(part.number, true)}
                               </Fragment>
                             ),
                           )}
@@ -150,6 +167,10 @@ export function FormLayout({
           );
         }
 
+        // Whether this block's lines are numbered down the side. A block with
+        // a label has its own column and is not a list of questions.
+        const hasMargin =
+          !!numberInMargin && !!renderNumber && !block.label.trim();
         return (
           <div key={i} className="flex gap-3 py-0.5">
             {/* Full strength, like the value beside it: on the paper a label
@@ -178,24 +199,47 @@ export function FormLayout({
                   : "min-w-0 flex-1",
               )}
             >
-              {block.lines.map((line, j) => (
-                <div key={j} className={cn("flex gap-1.5", line.bullet && "pl-0")}>
-                  {line.bullet && (
-                    <span aria-hidden className="text-muted-foreground">
-                      –
-                    </span>
-                  )}
-                  <div className="min-w-0 flex-1 leading-7">
-                    {line.parts.map((part, k) =>
-                      part.kind === "text" ? (
-                        <Fragment key={k}>{part.text}</Fragment>
-                      ) : (
-                        <Fragment key={k}>{renderGap(part.number)}</Fragment>
-                      ),
+              {block.lines.map((line, j) => {
+                // Only where the line IS one question. Two gaps in a sentence
+                // have two numbers and one margin, so those keep theirs where
+                // they are — and a line with none has no number to print.
+                const gaps = line.parts.filter((part) => part.kind === "gap");
+                const numbered = gaps.length === 1 && gaps[0].kind === "gap";
+                const inMargin = hasMargin && numbered;
+                return (
+                  <div
+                    key={j}
+                    className={cn("flex gap-1.5", line.bullet && "pl-0")}
+                  >
+                    {/* Held open on every line of the group, not only the ones
+                        with a number in it. These lines are a numbered list and
+                        read as one; a line that starts where the others' text
+                        starts is part of it, and a line that starts a column
+                        further left is something else. */}
+                    {hasMargin && (
+                      <span className="w-6 shrink-0 pt-0.5 text-right text-xs font-semibold tabular-nums text-muted-foreground">
+                        {inMargin && renderNumber?.(gaps[0].number)}
+                      </span>
                     )}
+                    {line.bullet && (
+                      <span aria-hidden className="text-muted-foreground">
+                        –
+                      </span>
+                    )}
+                    <div className="min-w-0 flex-1 leading-7">
+                      {line.parts.map((part, k) =>
+                        part.kind === "text" ? (
+                          <Fragment key={k}>{part.text}</Fragment>
+                        ) : (
+                          <Fragment key={k}>
+                            {renderGap(part.number, !inMargin)}
+                          </Fragment>
+                        ),
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         );

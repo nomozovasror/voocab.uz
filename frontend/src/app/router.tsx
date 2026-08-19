@@ -1,4 +1,4 @@
-import { createBrowserRouter } from "react-router-dom";
+import { Navigate, createBrowserRouter, redirect } from "react-router-dom";
 import { Layout } from "@/components/layout/Layout";
 import { StudioLayout } from "@/components/studio/StudioLayout";
 import { RequireAuth } from "@/auth/RequireAuth";
@@ -113,29 +113,30 @@ export const router = createBrowserRouter([
               ).default,
             }),
           },
+          // Where the listening studio used to live, before it was rebuilt
+          // around the editor at /studio/listening. The pages are gone; the
+          // paths stay as redirects because they are in people's history and
+          // in every link written while they existed, and because landing on
+          // the material you asked for beats landing on a 404 that says the
+          // studio moved.
           {
             path: "materials",
-            lazy: async () => ({
-              Component: (
-                await import("@/pages/studio/StudioMaterialsPage")
-              ).default,
-            }),
+            element: <Navigate to="/studio/listening" replace />,
           },
           {
             path: "materials/new",
-            lazy: async () => ({
-              Component: (
-                await import("@/pages/studio/materials/StudioNewMaterialPage")
-              ).default,
-            }),
+            element: <Navigate to="/studio/listening/new" replace />,
           },
           {
+            // A loader rather than a <Navigate> element, only because this one
+            // has to read the id: the redirect happens before anything
+            // renders, and the route needs no component of its own.
             path: "materials/:id/edit",
-            lazy: async () => ({
-              Component: (
-                await import("@/pages/studio/materials/StudioMaterialEditorPage")
-              ).default,
-            }),
+            loader: ({ params }) =>
+              redirect(
+                params.id ? `/studio/listening/${params.id}` : "/studio/listening",
+              ),
+            Component: () => null,
           },
           {
             path: "listening",

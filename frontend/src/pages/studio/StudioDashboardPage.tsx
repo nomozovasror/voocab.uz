@@ -62,8 +62,12 @@ function itemCountLabel(type: string): string {
 }
 
 function editorHref(item: { id: string; type: string }): string {
+  // A listening material opens in the listening editor. It used to open in
+  // the studio's old per-material page, which was left behind when the editor
+  // was rebuilt — so the dashboard was quietly the one door in the studio that
+  // led to an editor knowing one question type out of eleven.
   return item.type === "listening"
-    ? `/studio/materials/${item.id}/edit`
+    ? `/studio/listening/${item.id}`
     : `/materials/${item.id}/edit`;
 }
 
@@ -610,7 +614,7 @@ export default function StudioDashboardPage() {
                 up here.
               </p>
               <Link
-                to="/studio/materials/new"
+                to="/studio/listening/new"
                 className="text-label font-semibold text-primary hover:underline"
               >
                 Create your first material
