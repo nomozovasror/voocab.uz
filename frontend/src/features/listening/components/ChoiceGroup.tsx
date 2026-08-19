@@ -180,6 +180,7 @@ function ChoiceQuestion({
             <input
               type={several ? "checkbox" : "radio"}
               name={question.id}
+              data-question={question.id}
               checked={picked}
               onChange={() => pick(letter)}
               disabled={disabled || spent}

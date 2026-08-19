@@ -869,6 +869,11 @@ class AttemptResultOut(BaseModel):
     attempt_id: uuid.UUID
     material_id: uuid.UUID
     material_title: str
+    #: The recording, so the review can play the moment an answer was said
+    #: without also fetching the whole take payload for one string. There are
+    #: no clips: "hear it" is the same file, seeked.
+    audio_url: str | None = None
+    duration_ms: int | None = None
     score: int
     total_questions: int
     submitted_at: datetime | None = None

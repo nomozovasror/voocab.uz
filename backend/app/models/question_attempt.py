@@ -36,8 +36,11 @@ class QuestionAttempt(SQLModel, table=True):
     #: When they last touched it. Far from ``first_answered_ms`` means they
     #: came back to it, which is the interesting case.
     last_changed_ms: int | None = Field(default=None)
-    #: How many times the answer changed after the first one. Second-guessing,
-    #: counted.
+    #: How many VISITS to this question left it holding a different answer
+    #: than it had on arrival. Second-guessing, counted — and counted per
+    #: visit rather than per keystroke, because typing "engineer" is eight
+    #: keystrokes and one answer, and a per-keystroke counter would be
+    #: measuring how long the word is.
     changes: int | None = Field(default=None)
     #: Accumulated time the question's input held focus. Only meaningful for
     #: typed answers — a letter or a radio button is chosen in one click, and

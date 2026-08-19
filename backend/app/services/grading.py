@@ -21,6 +21,7 @@ from sqlmodel import select
 
 from app.core.database import AsyncSession
 from app.models.attempt import Attempt, AttemptStatus
+from app.models.audio_blob import AudioBlob
 from app.models.material import Material
 from app.models.question import Question
 from app.models.question_group import QuestionGroup
@@ -28,6 +29,7 @@ from app.models.question_attempt import QuestionAttempt
 from app.schemas.listening import AttemptSubmit, ListenedSpanIn
 from app.services import audio as audio_service
 from app.services import listening as listening_service
+from app.services import storage
 
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -150,6 +152,26 @@ def merged_ms(spans: list[ListenedSpanIn]) -> int:
 
 
 # --- The transcript across an answer's moment (brief §71) --------------------
+
+
+async def material_audio(session: AsyncSession, material: Material | None) -> dict:
+    """The playable recording behind a material, resolved fresh.
+
+    The URL is derived on every read and never stored: a stored one is a fact
+    about which bucket the app was pointed at the day it was written."""
+    empty = {"audio_url": None, "duration_ms": None}
+    if material is None or material.audio_asset_id is None:
+        return empty
+    asset = await audio_service.get_asset(session, material.audio_asset_id)
+    if asset is None:
+        return empty
+    blob = await session.get(AudioBlob, asset.blob_id)
+    if blob is None:
+        return empty
+    return {
+        "audio_url": await storage.get_storage().url(blob.storage_key),
+        "duration_ms": blob.duration_ms,
+    }
 
 
 async def material_transcript(session: AsyncSession, material_id: uuid.UUID) -> list[dict]:
@@ -381,6 +403,7 @@ async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
         "attempt_id": attempt.id,
         "material_id": attempt.material_id,
         "material_title": material.title if material else "",
+        **(await material_audio(session, material)),
         "score": int(attempt.score or 0),
         "total_questions": attempt.total_questions or 0,
         "submitted_at": attempt.submitted_at,

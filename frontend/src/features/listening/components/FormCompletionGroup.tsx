@@ -117,6 +117,7 @@ export function FormCompletionGroup({
                   // closed list, and a field to type one into would invite a
                   // word the paper didn't ask for.
                   <select
+                    data-question={question.id}
                     className={cn(
                       "rounded-md border border-border bg-background px-2 py-0.5 text-sm text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
                       fieldTone,
@@ -137,6 +138,11 @@ export function FormCompletionGroup({
                 ) : (
                 <input
                   type="text"
+                  // Read by the take page's focus timer, which attributes
+                  // held focus by walking up from whatever has it. One
+                  // attribute here beats threading onFocus/onBlur through
+                  // every group component and the layout between them.
+                  data-question={question.id}
                   className={cn(
                     "w-32 rounded-md border border-border bg-background px-2 py-0.5 text-sm text-foreground placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
                     fieldTone,

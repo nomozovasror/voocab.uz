@@ -4,7 +4,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { listeningApi } from "@/features/listening/api";
-import type { AttemptSubmit } from "@/features/listening/types";
+import type { AttemptResult, AttemptSubmit } from "@/features/listening/types";
 
 const MATERIALS_KEY = ["listening-materials"] as const;
 
@@ -84,6 +84,20 @@ export function useSubmitAttempt(materialId: string) {
   return useMutation({
     mutationFn: (data: AttemptSubmit) =>
       listeningApi.submitAttempt(materialId, data),
+  });
+}
+
+/** One finished attempt, by id. A submitted attempt never changes, so this is
+ *  fetched once and kept — and `initialData` lets the page that just
+ *  submitted hand over the result it already has instead of asking for it
+ *  again on the way in. */
+export function useAttempt(attemptId: string | undefined, seed?: AttemptResult) {
+  return useQuery({
+    queryKey: ["listening-attempt", attemptId],
+    queryFn: () => listeningApi.attempt(attemptId as string),
+    enabled: !!attemptId,
+    initialData: seed,
+    staleTime: Infinity,
   });
 }
 

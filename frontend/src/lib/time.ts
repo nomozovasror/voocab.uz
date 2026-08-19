@@ -1,3 +1,10 @@
+/** A position in a recording, as a player prints it: `4:07`. Rounds down, so
+ *  the clock never shows a second the audio hasn't reached. */
+export function fmtClock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
 /** Tiny local "time ago" formatter — no date library, matches the mockup's
  *  vocabulary ("2h ago", "yesterday", "3d ago", "last week", "2 weeks ago"). */
 export function timeAgo(iso: string): string {

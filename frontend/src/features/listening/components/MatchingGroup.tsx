@@ -168,6 +168,7 @@ function MatchingItem({
               <input
                 type="radio"
                 name={question.id}
+                data-question={question.id}
                 checked={picked}
                 onChange={() => onChange(letter)}
                 disabled={disabled}

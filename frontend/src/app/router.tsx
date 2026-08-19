@@ -50,6 +50,17 @@ export const router = createBrowserRouter([
             }),
           },
           {
+            // Before ``listening/:id``, or an attempt id would be read as a
+            // material id and the take page would fetch a material that
+            // doesn't exist.
+            path: "listening/attempts/:attemptId",
+            lazy: async () => ({
+              Component: (
+                await import("@/pages/listening/ListeningResultsPage")
+              ).default,
+            }),
+          },
+          {
             path: "listening/:id",
             lazy: async () => ({
               Component: (

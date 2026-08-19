@@ -351,6 +351,8 @@ export interface MaterialTake {
 export interface AnswerTiming {
   first_answered_ms?: number;
   last_changed_ms?: number;
+  /** Visits that left the answer different than they found it. Per visit,
+   *  not per keystroke: typing "engineer" is one answer. */
   changes?: number;
   /** Typed answers only. A letter or a radio button is chosen in one click,
    *  and the deciding was done while looking somewhere else. */
@@ -422,6 +424,10 @@ export interface AttemptResult {
   attempt_id: string;
   material_id: string;
   material_title: string;
+  /** The recording, so the review can replay a moment without also fetching
+   *  the take payload for one string. */
+  audio_url: string | null;
+  duration_ms: number | null;
   score: number;
   total_questions: number;
   submitted_at: string | null;
