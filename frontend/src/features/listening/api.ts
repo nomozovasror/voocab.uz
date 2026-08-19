@@ -17,6 +17,7 @@ import type {
   PartCreate,
   PartOut,
   PartUpdate,
+  PracticeMaterial,
   QuestionGroupIn,
 } from "@/features/listening/types";
 
@@ -127,6 +128,10 @@ export const listeningApi = {
   // Never call materials.get() (the author endpoint) from consumption code —
   // it carries correct_answers. `take` is structurally guaranteed answer-free
   // (backend's TakeQuestionOut has no such field at all).
+  /** What a learner can sit, with their own history against each one. Not
+   *  `materials.list` — that is the author's view and carries drafts. */
+  practice: () => api.get<PracticeMaterial[]>("/api/listening/practice"),
+
   take: (materialId: string) =>
     api.get<MaterialTake>(`/api/materials/${materialId}/take`),
 

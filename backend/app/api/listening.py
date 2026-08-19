@@ -32,6 +32,7 @@ from app.schemas.listening import (
     PartCreate,
     PartOut,
     PartUpdate,
+    PracticeMaterialOut,
     QuestionGroupIn,
     QuestionGroupOrderIn,
     QuestionGroupOut,
@@ -258,6 +259,22 @@ async def delete_question_group(
 
 
 # --- Consumption (§7) -------------------------------------------------------
+
+
+@router.get("/listening/practice", response_model=list[PracticeMaterialOut])
+async def practice_catalogue(
+    user: CurrentUser, session: SessionDep
+) -> list[PracticeMaterialOut]:
+    """What a learner can sit, and what they have already done with it.
+
+    Public materials only; an author reaches their own drafts through the
+    Studio. The history in each row is the caller's — an attempt is a record
+    of somebody's mistakes, and a catalogue is not where other people's go.
+    """
+    return [
+        PracticeMaterialOut(**row)
+        for row in await listening_service.practice_catalogue(session, user.id)
+    ]
 
 
 @router.get("/materials/{material_id}/take", response_model=MaterialTakeOut)

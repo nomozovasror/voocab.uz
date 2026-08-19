@@ -80,10 +80,28 @@ export function useTakeMaterial(id: string | undefined) {
   });
 }
 
+const PRACTICE_KEY = ["listening-practice"] as const;
+
+/** The learner's catalogue. Invalidated by every submit — the history in it
+ *  changes each time they finish something. */
+export function usePracticeCatalogue() {
+  return useQuery({
+    queryKey: PRACTICE_KEY,
+    queryFn: () => listeningApi.practice(),
+  });
+}
+
 export function useSubmitAttempt(materialId: string) {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: (data: AttemptSubmit) =>
       listeningApi.submitAttempt(materialId, data),
+    // Finishing a material changes its row in the catalogue — a score where
+    // there was none, a better one than last time. Left alone, going back to
+    // the list after a test showed it as never attempted.
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: PRACTICE_KEY });
+    },
   });
 }
 

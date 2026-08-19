@@ -746,6 +746,33 @@ class MaterialTakeOut(BaseModel):
     parts: list[TakePartOut]
 
 
+class PracticeMaterialOut(BaseModel):
+    """One row of the learner's catalogue.
+
+    Not :class:`MaterialRead`. That is the author's view — visibility, the
+    concurrency version, the transcript's segment count — and pointing the
+    practice list at it showed learners their own unfinished drafts labelled
+    "private", beside a button that opened a paper with no questions on it.
+    What a learner needs before choosing is how big the thing is, how long it
+    runs, and whether they have already done it.
+    """
+
+    id: uuid.UUID
+    title: str
+    part_count: int
+    #: Numbers on the paper, which is what a score is out of — not rows. See
+    #: ``question_marks``.
+    question_count: int
+    duration_ms: int | None = None
+
+    #: The caller's own history with this material, and nobody else's.
+    attempts: int = 0
+    best_score: int | None = None
+    #: The most recent one, so a row can lead straight back to its review.
+    last_attempt_id: uuid.UUID | None = None
+    last_attempt_at: datetime | None = None
+
+
 # --- Consumption: submit + grade (§7) ---------------------------------------
 
 

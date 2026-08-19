@@ -340,6 +340,23 @@ export interface MaterialTake {
   parts: TakePart[];
 }
 
+/** One row of the learner's catalogue. Deliberately not `ListeningMaterial`:
+ *  that is the author's view — visibility, the concurrency version — and
+ *  pointing the practice list at it showed learners their own unfinished
+ *  drafts labelled "private". */
+export interface PracticeMaterial {
+  id: string;
+  title: string;
+  part_count: number;
+  /** Numbers on the paper, which is what a score is out of. */
+  question_count: number;
+  duration_ms: number | null;
+  attempts: number;
+  best_score: number | null;
+  last_attempt_id: string | null;
+  last_attempt_at: string | null;
+}
+
 // --- Consumption: submit + grade --------------------------------------------
 
 /** How one answer was arrived at, as the page watched it happen.

@@ -14,9 +14,14 @@ gradeable and event-sourceable via ``QuestionAttempt`` (Faza 3).
 import uuid
 
 from fastapi import HTTPException, status
+from sqlalchemy import func
 from sqlmodel import select
 
 from app.core.database import AsyncSession
+from app.models.attempt import Attempt, AttemptStatus
+from app.models.audio_asset import AudioAsset
+from app.models.audio_blob import AudioBlob
+from app.models.material import Material
 from app.models.part import Part
 from app.models.question import Question
 from app.models.question_attempt import QuestionAttempt
@@ -728,3 +733,140 @@ async def get_author_tree(
             }
         )
     return tree
+
+
+# --- The learner's catalogue (brief §33) ------------------------------------
+
+
+async def practice_catalogue(
+    session: AsyncSession, user_id: uuid.UUID
+) -> list[dict]:
+    """Every listening material a learner can sit, with what it is and what
+    they have already done with it.
+
+    Public ones only. An author's unfinished drafts are reachable from the
+    Studio, which is where unfinished work belongs; listing them here put
+    "untitled listening — private" in front of the person who came to
+    practise, next to a button that opens a paper with no questions on it.
+
+    Built from four flat queries rather than a walk per material: the
+    catalogue grows with the library, and a page that costs a tree traversal
+    per row is a page that gets slower the more there is to practise.
+    """
+    materials = list(
+        (
+            await session.exec(
+                select(Material)
+                .where(
+                    Material.type == "listening",
+                    Material.visibility == "public",
+                )
+                .order_by(Material.updated_at.desc())  # type: ignore[attr-defined]
+            )
+        ).all()
+    )
+    if not materials:
+        return []
+
+    ids = [m.id for m in materials]
+
+    parts_by_material: dict[uuid.UUID, int] = {}
+    for material_id, count in (
+        await session.exec(
+            select(Part.material_id, func.count(Part.id)).where(
+                Part.material_id.in_(ids)  # type: ignore[attr-defined]
+            ).group_by(Part.material_id)  # type: ignore[arg-type]
+        )
+    ).all():
+        parts_by_material[material_id] = count
+
+    # Marks, not rows — the number a score is out of. A "choose TWO letters"
+    # is one row and two of the numbers printed down the side, and a
+    # catalogue that advertised "39 questions" for a test marked out of 40
+    # would be wrong in the one figure anybody reads.
+    marks_by_material: dict[uuid.UUID, int] = {}
+    for material_id, group, count in (
+        await session.exec(
+            select(Part.material_id, QuestionGroup, func.count(Question.id))
+            .join(QuestionGroup, QuestionGroup.part_id == Part.id)  # type: ignore[arg-type]
+            .outerjoin(Question, Question.group_id == QuestionGroup.id)  # type: ignore[arg-type]
+            .where(Part.material_id.in_(ids))  # type: ignore[attr-defined]
+            .group_by(Part.material_id, QuestionGroup.id)  # type: ignore[arg-type]
+        )
+    ).all():
+        marks_by_material[material_id] = marks_by_material.get(
+            material_id, 0
+        ) + count * question_marks(group)
+
+    # The caller's own history, and nobody else's. Ordered so the last one
+    # read wins, which is how each material ends up holding its most recent
+    # attempt without a window function.
+    history: dict[uuid.UUID, dict] = {}
+    for attempt in (
+        await session.exec(
+            select(Attempt)
+            .where(
+                Attempt.user_id == user_id,
+                Attempt.material_id.in_(ids),  # type: ignore[attr-defined]
+                Attempt.status == AttemptStatus.SUBMITTED,
+            )
+            .order_by(Attempt.submitted_at)  # type: ignore[arg-type]
+        )
+    ).all():
+        row = history.setdefault(
+            attempt.material_id, {"attempts": 0, "best_score": None}
+        )
+        row["attempts"] += 1
+        score = int(attempt.score or 0)
+        row["best_score"] = (
+            score if row["best_score"] is None else max(row["best_score"], score)
+        )
+        row["last_attempt_id"] = attempt.id
+        row["last_attempt_at"] = attempt.submitted_at
+
+    audio_by_material = await _catalogue_audio(session, materials)
+
+    return [
+        {
+            "id": m.id,
+            "title": m.title,
+            "part_count": parts_by_material.get(m.id, 0),
+            "question_count": marks_by_material.get(m.id, 0),
+            "duration_ms": audio_by_material.get(m.id),
+            "attempts": 0,
+            "best_score": None,
+            "last_attempt_id": None,
+            "last_attempt_at": None,
+            **history.get(m.id, {}),
+        }
+        for m in materials
+    ]
+
+
+async def _catalogue_audio(
+    session: AsyncSession, materials: list[Material]
+) -> dict[uuid.UUID, int | None]:
+    """How long each material's recording runs, by material id.
+
+    The duration only — no URL. A catalogue that resolved a playable link per
+    row would be handing out signed URLs for recordings nobody has opened
+    yet, and the number is the only part a learner reads before deciding.
+    """
+    asset_ids = [m.audio_asset_id for m in materials if m.audio_asset_id]
+    if not asset_ids:
+        return {}
+    durations = {
+        asset_id: duration
+        for asset_id, duration in (
+            await session.exec(
+                select(AudioAsset.id, AudioBlob.duration_ms)
+                .join(AudioBlob, AudioBlob.id == AudioAsset.blob_id)  # type: ignore[arg-type]
+                .where(AudioAsset.id.in_(asset_ids))  # type: ignore[attr-defined]
+            )
+        ).all()
+    }
+    return {
+        m.id: durations.get(m.audio_asset_id)
+        for m in materials
+        if m.audio_asset_id
+    }
