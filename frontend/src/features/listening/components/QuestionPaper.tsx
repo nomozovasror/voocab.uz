@@ -1,4 +1,5 @@
 import type { FocusEventHandler } from "react";
+import { Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ChoiceGroup } from "@/features/listening/components/ChoiceGroup";
 import { FormCompletionGroup } from "@/features/listening/components/FormCompletionGroup";
@@ -36,6 +37,11 @@ interface QuestionPaperProps {
   /** Present only after grading. Its presence is what marks the paper. */
   results?: Record<string, QuestionResult>;
   onReplay?: (startMs: number | null, endMs: number | null) => void;
+  /** Plays a whole part, where the author marked where it starts and ends.
+   *  Passed only when the rules allow moving the playhead — an exam does not
+   *  let a candidate skip to part 3 — which is why it arrives as a handler
+   *  rather than as a flag this component would have to interpret. */
+  onPlayPart?: (startMs: number | null, endMs: number | null) => void;
   disabled?: boolean;
   /** The take page measures how long each answer held focus by watching focus
    *  move through here, rather than by every group component reporting it. */
@@ -49,6 +55,7 @@ export function QuestionPaper({
   onChange,
   results,
   onReplay,
+  onPlayPart,
   disabled,
   onFocus,
   onBlur,
@@ -64,12 +71,24 @@ export function QuestionPaper({
         // part's own heading underneath the bar that sent you there looks
         // like it went somewhere else.
         <section key={part.id} id={`part-${part.id}`} className="scroll-mt-52">
-          <h2 className="mb-4 border-b border-border pb-2 text-xs tracking-[0.14em] text-muted-foreground uppercase">
+          <h2 className="mb-4 flex items-baseline gap-2 border-b border-border pb-2 text-xs tracking-[0.14em] text-muted-foreground uppercase">
             part {i + 1}
             {part.title && part.title.toLowerCase() !== `part ${i + 1}` && (
-              <span className="ml-2 normal-case tracking-normal">
-                {part.title}
-              </span>
+              <span className="normal-case tracking-normal">{part.title}</span>
+            )}
+            {/* Where the author marked the part's boundaries, the learner can
+                hear it from the top. That marking already existed and did
+                nothing: the editor asked for it and no page ever played it. */}
+            {onPlayPart && part.audio_start_ms != null && (
+              <button
+                type="button"
+                onClick={() => onPlayPart(part.audio_start_ms, part.audio_end_ms)}
+                title={`Play part ${i + 1} from the start`}
+                className="ml-auto flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] normal-case tracking-normal transition-colors hover:bg-foreground/8 hover:text-primary"
+              >
+                <Play className="size-3" aria-hidden />
+                play this part
+              </button>
             )}
           </h2>
           <div className="space-y-8">
@@ -101,33 +120,58 @@ export function QuestionPaper({
   );
 }
 
+/** How much of a part is answered, by part id. */
+export type PartProgress = Map<string, { answered: number; total: number }>;
+
 /** Jump links along the bottom of the sticky block. Drawn only where there is
  *  more than one part to jump between — a single-part material would be
- *  offering a way back to the page you are on. */
+ *  offering a way back to the page you are on.
+ *
+ *  With `progress` they also say how much of each part is left. That is the
+ *  question a candidate two parts in actually has — "what have I still not
+ *  answered" — and without it the only way to find out is to scroll the whole
+ *  paper looking for empty boxes. A finished part goes quiet rather than
+ *  bright: what wants the eye is what is unfinished. */
 export function PartChips({
   parts,
   active,
+  progress,
 }: {
   parts: TakePart[];
   active: string | null;
+  progress?: PartProgress;
 }) {
   if (parts.length < 2) return null;
   return (
     <div className="mt-2 flex flex-wrap gap-1">
-      {parts.map((part, i) => (
-        <a
-          key={part.id}
-          href={`#part-${part.id}`}
-          className={cn(
-            "rounded-md px-2 py-1 text-xs transition-colors",
-            active === part.id
-              ? "bg-primary/12 text-primary"
-              : "text-muted-foreground hover:bg-foreground/8 hover:text-foreground",
-          )}
-        >
-          part {i + 1}
-        </a>
-      ))}
+      {parts.map((part, i) => {
+        const done = progress?.get(part.id);
+        const complete = done && done.total > 0 && done.answered >= done.total;
+        return (
+          <a
+            key={part.id}
+            href={`#part-${part.id}`}
+            className={cn(
+              "flex items-baseline gap-1.5 rounded-md px-2 py-1 text-xs transition-colors",
+              active === part.id
+                ? "bg-primary/12 text-primary"
+                : "text-muted-foreground hover:bg-foreground/8 hover:text-foreground",
+            )}
+          >
+            part {i + 1}
+            {done && done.total > 0 && (
+              <span
+                className={cn(
+                  "font-mono text-[10px] tabular-nums",
+                  complete ? "opacity-40" : "text-warning",
+                )}
+              >
+                {done.answered}/{done.total}
+              </span>
+            )}
+          </a>
+        );
+      })}
     </div>
   );
 }

@@ -142,6 +142,11 @@ export default function ListeningResultsPage() {
             answers={given}
             results={byQuestion}
             onReplay={(start, end) => audio.current?.playRange(start, end)}
+            onPlayPart={
+              data.audio_url
+                ? (start, end) => audio.current?.playRange(start, end)
+                : undefined
+            }
             disabled
           />
           <Transcripts results={data.results} />

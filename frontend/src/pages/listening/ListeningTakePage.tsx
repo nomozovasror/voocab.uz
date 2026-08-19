@@ -75,11 +75,13 @@ export default function ListeningTakePage() {
    *  letters" is one row and two numbers, and the count in the header has to
    *  be the count the score is out of. */
   const paper = useMemo(() => {
-    const rows: { id: string; span: number }[] = [];
+    const rows: { id: string; partId: string; span: number }[] = [];
     for (const part of parts) {
       for (const group of sorted(part.question_groups)) {
         const span = questionSpan(group.config.answers_per_question);
-        for (const q of group.questions) rows.push({ id: q.id, span });
+        for (const q of group.questions) {
+          rows.push({ id: q.id, partId: part.id, span });
+        }
       }
     }
     return rows;
@@ -87,17 +89,32 @@ export default function ListeningTakePage() {
 
   const allQuestionIds = useMemo(() => paper.map((r) => r.id), [paper]);
 
-  const total = paper.reduce((n, row) => n + row.span, 0);
   // A "choose TWO" with one letter picked is half answered, and says so. It
   // is also the one case where a candidate can leave a number blank without
   // leaving a field empty, which is exactly what the warning is for.
-  const answered = paper.reduce((n, row) => {
+  const answeredIn = (row: (typeof paper)[number]) => {
     const value = (answers[row.id] ?? "").trim();
-    if (!value) return n;
-    if (row.span === 1) return n + 1;
-    return n + Math.min(row.span, value.split(",").filter(Boolean).length);
-  }, 0);
+    if (!value) return 0;
+    if (row.span === 1) return 1;
+    return Math.min(row.span, value.split(",").filter(Boolean).length);
+  };
+
+  const total = paper.reduce((n, row) => n + row.span, 0);
+  const answered = paper.reduce((n, row) => n + answeredIn(row), 0);
   const blank = total - answered;
+
+  const byPart = useMemo(() => {
+    const map = new Map<string, { answered: number; total: number }>();
+    for (const row of paper) {
+      const at = map.get(row.partId) ?? { answered: 0, total: 0 };
+      at.total += row.span;
+      at.answered += answeredIn(row);
+      map.set(row.partId, at);
+    }
+    return map;
+    // Recomputed as answers change — that is the point of it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paper, answers]);
 
   // --- Keeping the draft ----------------------------------------------------
 
@@ -285,8 +302,11 @@ export default function ListeningTakePage() {
             config={config}
             onSpan={onSpan}
             onSeekBack={onSeekBack}
+            markers={parts
+              .map((p) => p.audio_start_ms)
+              .filter((ms): ms is number => ms != null)}
           />
-          <PartChips parts={parts} active={activePart} />
+          <PartChips parts={parts} active={activePart} progress={byPart} />
         </div>
       )}
 
@@ -315,6 +335,13 @@ export default function ListeningTakePage() {
           material={material}
           answers={answers}
           onChange={onAnswer}
+          // Only where the rules let the playhead move. In an exam the
+          // recording plays through and part 3 arrives when it arrives.
+          onPlayPart={
+            material.audio_url && config.allowSeek
+              ? (start, end) => audio.current?.playRange(start, end)
+              : undefined
+          }
           disabled={submitMut.isPending}
           onFocus={(e) => {
             const qid = (e.target as HTMLElement).dataset?.question;

@@ -45,6 +45,11 @@ interface TakeAudioProps {
    *  arrives and doesn't resize under the pointer. */
   durationMs: number | null;
   config: TakeConfig;
+  /** Where the parts begin, in ms. Drawn on the track as ticks, so the
+   *  recording stops being an undifferentiated six minutes: a candidate
+   *  working on part 3 can see where part 3 is. The author already marked
+   *  these; until now nothing showed them. */
+  markers?: number[];
   onSpan?: (span: ListenedSpan) => void;
   onSeekBack?: () => void;
   ref?: Ref<TakeAudioHandle>;
@@ -58,6 +63,7 @@ export function TakeAudio({
   src,
   durationMs,
   config,
+  markers,
   onSpan,
   onSeekBack,
   ref,
@@ -293,6 +299,21 @@ export function TakeAudio({
         </div>
       </div>
 
+      <div className="relative mt-3">
+        {/* Behind the handle and inert: this is scenery, not a control. The
+            first part always begins at zero, where a tick would just be the
+            left edge of the track. */}
+        {lengthMs > 0 &&
+          (markers ?? [])
+            .filter((ms) => ms > 0 && ms < lengthMs)
+            .map((ms) => (
+              <span
+                key={ms}
+                aria-hidden
+                className="pointer-events-none absolute top-1/2 h-2 w-px -translate-y-1/2 bg-foreground/25"
+                style={{ left: `${(ms / lengthMs) * 100}%` }}
+              />
+            ))}
       <input
         type="range"
         min={0}
@@ -318,7 +339,7 @@ export function TakeAudio({
           background: `linear-gradient(to right, var(--primary) ${pct}%, color-mix(in oklab, var(--foreground) 15%, transparent) ${pct}%)`,
         }}
         className={cn(
-          "mt-3 h-1 w-full appearance-none rounded-full outline-none",
+          "relative h-1 w-full appearance-none rounded-full outline-none",
           "[&::-webkit-slider-thumb]:size-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary",
           "[&::-moz-range-thumb]:size-3 [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-primary",
           "focus-visible:ring-2 focus-visible:ring-ring",
@@ -329,6 +350,7 @@ export function TakeAudio({
               "cursor-default [&::-moz-range-thumb]:opacity-0 [&::-webkit-slider-thumb]:opacity-0",
         )}
       />
+      </div>
     </div>
   );
 }
