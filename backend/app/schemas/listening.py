@@ -833,10 +833,23 @@ class QuestionResultOut(BaseModel):
     feedback."""
 
     question_id: uuid.UUID
-    #: The number printed beside it, so a results page loaded on its own —
-    #: from a link, after a refresh — can name the questions without also
-    #: fetching the material.
+    #: The number printed beside it ON THE PAPER, not its place inside its
+    #: group — the row stores 1..N per group, and a review that showed those
+    #: would count "1, 2, 1, 2, 3" down a four-part test. Sent rather than
+    #: worked out by the client so a results page opened on its own, from a
+    #: link or after a refresh, can name the questions without also fetching
+    #: the material to walk it.
     number: int
+    #: How many of those numbers this question takes. One, except for a
+    #: "choose TWO letters", which is printed as *Questions 15 and 16* and
+    #: carries both.
+    marks: int = 1
+    #: Whether this was answered by writing words or by naming an option.
+    #: Told rather than guessed: "a" is a plausible one-word answer and a
+    #: plausible option letter, and only the group knows which — the same
+    #: distinction grading itself turns on. A review that can't tell prints a
+    #: candidate's chosen option as a lowercase letter in a sentence.
+    answered_by: Literal["words", "letters"] = "words"
     #: What the learner actually put. Stored on the attempt, so a review
     #: opened days later still shows it.
     given_answer: str

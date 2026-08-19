@@ -95,25 +95,40 @@ export default function ListeningTakePage() {
 
   const parts = useMemo(() => (material ? sorted(material.parts) : []), [material]);
 
-  const allQuestionIds = useMemo(() => {
-    const ids: string[] = [];
+  /** Every question on the paper, with how many of the paper's NUMBERS it
+   *  takes. Not just a list of ids, because "3 of 25 answered" over a test
+   *  the server marks out of 26 is two different tests — a "choose TWO
+   *  letters" is one row and two numbers, and the count in the header has to
+   *  be the count the score is out of. */
+  const paper = useMemo(() => {
+    const rows: { id: string; span: number }[] = [];
     for (const part of parts) {
       for (const group of sorted(part.question_groups)) {
-        for (const q of group.questions) ids.push(q.id);
+        const span = questionSpan(group.config.answers_per_question);
+        for (const q of group.questions) rows.push({ id: q.id, span });
       }
     }
-    return ids;
+    return rows;
   }, [parts]);
+
+  const allQuestionIds = useMemo(() => paper.map((r) => r.id), [paper]);
 
   const startNumbers = useMemo(
     () => (material ? groupNumbering(material) : new Map<string, number>()),
     [material],
   );
 
-  const answered = allQuestionIds.filter(
-    (qid) => (answers[qid] ?? "").trim().length > 0,
-  ).length;
-  const blank = allQuestionIds.length - answered;
+  const total = paper.reduce((n, row) => n + row.span, 0);
+  // A "choose TWO" with one letter picked is half answered, and says so. It
+  // is also the one case where a candidate can leave a number blank without
+  // leaving a field empty, which is exactly what the warning is for.
+  const answered = paper.reduce((n, row) => {
+    const value = (answers[row.id] ?? "").trim();
+    if (!value) return n;
+    if (row.span === 1) return n + 1;
+    return n + Math.min(row.span, value.split(",").filter(Boolean).length);
+  }, 0);
+  const blank = total - answered;
 
   // --- Keeping the draft ----------------------------------------------------
 
@@ -223,12 +238,23 @@ export default function ListeningTakePage() {
   // to one, not a wizard.
   useEffect(() => {
     if (parts.length < 2) return;
+    // What is on screen has to be kept, not recomputed from each callback.
+    // An observer reports only the sections whose visibility CHANGED, so a
+    // part tall enough to fill the whole band — one with a map in it — stops
+    // being mentioned at all, and a handler that reads only the latest batch
+    // goes on pointing at whichever part happened to change last.
+    const onScreen = new Set<string>();
     const observer = new IntersectionObserver(
       (entries) => {
-        const visible = entries
-          .filter((e) => e.isIntersecting)
-          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
-        if (visible) setActivePart(visible.target.id.replace("part-", ""));
+        for (const entry of entries) {
+          const id = entry.target.id.replace("part-", "");
+          if (entry.isIntersecting) onScreen.add(id);
+          else onScreen.delete(id);
+        }
+        // The first in the material's own order, not the one nearest the top
+        // of the viewport: reading runs downwards, and a part half off the
+        // top of the screen is still the part being read.
+        setActivePart(parts.find((p) => onScreen.has(p.id))?.id ?? null);
       },
       { rootMargin: "-30% 0px -60% 0px" },
     );
@@ -303,7 +329,7 @@ export default function ListeningTakePage() {
           {material.title}
         </h1>
         <span className="font-mono text-xs tabular-nums text-muted-foreground">
-          {answered} of {allQuestionIds.length} answered
+          {answered} of {total} answered
         </span>
       </div>
 
@@ -381,7 +407,11 @@ export default function ListeningTakePage() {
         }}
       >
         {parts.map((part, i) => (
-          <section key={part.id} id={`part-${part.id}`} className="scroll-mt-44">
+          // scroll-mt clears the whole sticky block — app header, audio, and
+          // the chips that did the jumping — because a jump that lands the
+          // part's own heading underneath the bar that sent you there looks
+          // like it went somewhere else.
+          <section key={part.id} id={`part-${part.id}`} className="scroll-mt-52">
             <h2 className="mb-4 border-b border-border pb-2 text-xs tracking-[0.14em] text-muted-foreground uppercase">
               part {i + 1}
               {part.title && part.title.toLowerCase() !== `part ${i + 1}` && (

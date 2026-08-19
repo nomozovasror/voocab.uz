@@ -3,6 +3,7 @@ import { Link, useLocation, useParams } from "react-router-dom";
 import { ArrowLeft, Check, RotateCcw, Volume2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fmtClock } from "@/lib/time";
+import { questionNumbersShort } from "@/features/listening/numbering";
 import { PageLoader } from "@/components/ui/spinner";
 import { mediaUrl } from "@/features/listening/api";
 import { useAttempt } from "@/features/listening/queries";
@@ -105,10 +106,21 @@ export default function ListeningResultsPage() {
       <ol className="mt-6 divide-y divide-border">
         {data.results.map((r) => {
           const canHear = data.audio_url && r.replay_start_ms != null;
+          // Letters are printed the way the paper prints them. A chosen
+          // option stored as "b,d" is two letters, and reading them back as
+          // "b,d" in a sentence is reading back the storage format.
+          const say = (v: string) =>
+            r.answered_by === "letters"
+              ? v
+                  .split(",")
+                  .map((x) => x.trim().toUpperCase())
+                  .filter(Boolean)
+                  .join(" and ")
+              : v.trim();
           return (
             <li key={r.question_id} className="flex flex-wrap gap-x-3 gap-y-1 py-3">
-              <span className="w-6 shrink-0 pt-0.5 text-right font-mono text-xs text-muted-foreground tabular-nums">
-                {r.number}
+              <span className="w-9 shrink-0 pt-0.5 text-right font-mono text-xs text-muted-foreground tabular-nums">
+                {questionNumbersShort(r.number, r.marks ?? 1)}
               </span>
               <span
                 aria-hidden
@@ -135,11 +147,16 @@ export default function ListeningResultsPage() {
                       !r.given_answer.trim() && "text-muted-foreground italic",
                     )}
                   >
-                    {r.given_answer.trim() || "left blank"}
+                    {say(r.given_answer) || "left blank"}
                   </span>
                   {!r.is_correct && r.correct_answers.length > 0 && (
                     <span className="ml-2 text-muted-foreground">
-                      → {r.correct_answers.join(" / ")}
+                      →{" "}
+                      {r.answered_by === "letters"
+                        ? // The key is the whole set — "B and D" is one
+                          // answer, not two acceptable ones.
+                          say(r.correct_answers.join(","))
+                        : r.correct_answers.join(" / ")}
                     </span>
                   )}
                 </p>

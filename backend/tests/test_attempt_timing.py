@@ -601,6 +601,81 @@ async def test_fetching_an_attempt_by_id_returns_what_the_submit_returned() -> N
 
 
 @pytest.mark.asyncio
+async def test_results_are_numbered_as_the_paper_prints_them() -> None:
+    """A question's stored number is its place inside its own group, always
+    1..N. A review that showed those would count "1, 2, 1, 2, 3" down a test
+    with more than one group — which is exactly what it did.
+
+    And a "choose TWO letters" takes two of the numbers, so what follows it
+    starts two later, not one."""
+    email = "t8-learner@example.com"
+    user = await _make_user(email)
+    material = await _make_material(user.id, None)
+    token = create_access_token(str(user.id))
+
+    try:
+        async with _client() as client:
+            questions = await _seed_two_gaps(client, token, material.id)
+            async with async_session_factory() as session:
+                part_id = (
+                    await session.exec(
+                        select(Part).where(Part.material_id == material.id)
+                    )
+                ).one().id
+
+            # A "choose TWO", then one more gap after it.
+            r_choice = await client.post(
+                f"/api/parts/{part_id}/question-groups",
+                json={
+                    "type": "multiple_choice",
+                    "instructions": "Choose TWO letters.",
+                    "config": {"answers_per_question": 2},
+                    "questions": [
+                        {
+                            "number": 1,
+                            "prompt": "Which two?",
+                            "options": ["one", "two", "three"],
+                            "correct_answers": ["a", "b"],
+                        }
+                    ],
+                },
+                cookies={"access_token": token},
+            )
+            assert r_choice.status_code == 201, r_choice.text
+            r_after = await client.post(
+                f"/api/parts/{part_id}/question-groups",
+                json={
+                    "type": "sentence_completion",
+                    "instructions": "Complete the sentence.",
+                    "config": {"template": "It was {{1}}."},
+                    "questions": [{"number": 1, "correct_answers": ["late"]}],
+                },
+                cookies={"access_token": token},
+            )
+            assert r_after.status_code == 201, r_after.text
+
+            posted = await client.post(
+                f"/api/materials/{material.id}/attempts",
+                json={
+                    "answers": [
+                        {"question_id": questions[0]["id"], "given_answer": "alpha"}
+                    ]
+                },
+                cookies={"access_token": token},
+            )
+            assert posted.status_code == 200, posted.text
+            body = posted.json()
+
+            assert [r["number"] for r in body["results"]] == [1, 2, 3, 5]
+            assert [r["marks"] for r in body["results"]] == [1, 1, 2, 1]
+            # Four rows, five numbers — which is why the count of marks and
+            # the count of questions are not the same number.
+            assert body["total_questions"] == 5
+    finally:
+        await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
 async def test_an_attempt_belongs_to_whoever_made_it_not_to_the_author() -> None:
     """404 rather than 403: whether a given attempt id exists is itself a fact
     about another person's practice."""

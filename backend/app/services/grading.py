@@ -379,13 +379,25 @@ async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
     lines = await material_transcript(session, attempt.material_id)
 
     results = []
-    for question, _group in questions:
+    # The number on the paper, accumulated down the same ordered walk the
+    # editor and the take page make. It is not ``question.number`` — that is
+    # the question's place inside its own group, always 1..N, so printing it
+    # would number a four-part test "1, 2, 1, 2, 3".
+    printed = 1
+    for question, group in questions:
         row = given_rows.get(question.id)
         ranges = question_ranges(question)
+        marks = listening_service.question_marks(group)
         results.append(
             {
                 "question_id": question.id,
-                "number": question.number,
+                "number": printed,
+                "marks": marks,
+                "answered_by": (
+                    "letters"
+                    if listening_service.answers_are_letters(group)
+                    else "words"
+                ),
                 "given_answer": row.given_answer if row else "",
                 "is_correct": bool(row.is_correct) if row else False,
                 "correct_answers": question.correct_answers,
@@ -398,6 +410,7 @@ async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
                 "transcript": transcript_across(lines, ranges),
             }
         )
+        printed += marks
 
     return {
         "attempt_id": attempt.id,

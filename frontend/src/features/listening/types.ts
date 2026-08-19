@@ -398,9 +398,16 @@ export interface TranscriptLine {
 
 export interface QuestionResult {
   question_id: string;
-  /** The number printed beside it, so a results page opened on its own can
-   *  name the questions without also fetching the material. */
+  /** The number printed beside it on the paper — worked out by the server
+   *  from the same walk the take page makes, so a results page opened on its
+   *  own can name the questions without fetching the material. */
   number: number;
+  /** How many of those numbers it takes: 2 for a "choose TWO letters". */
+  marks?: number;
+  /** Whether the answer is words or an option letter. Told by the server
+   *  because "a" is both a plausible word and a plausible letter, and only
+   *  the group knows which. */
+  answered_by?: "words" | "letters";
   /** What the learner actually typed, kept raw. */
   given_answer: string;
   is_correct: boolean;
