@@ -21,7 +21,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { MagicBento } from "@/components/ui/magic-bento";
-import { PageLoader } from "@/components/ui/spinner";
+import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 import { UserAvatar } from "@/auth/UserAvatar";
 import { useCurrentUser } from "@/auth/useCurrentUser";
 import { useMediaQuery } from "@/hooks/use-media-query";
@@ -265,7 +265,12 @@ export default function StudioDashboardPage() {
     localStorage.setItem(RECENT_KEY, showRecent ? "on" : "off");
   }, [showRecent]);
 
-  if (isLoading) return <PageLoader />;
+  // Computed before the early returns so the skeleton below lays out on the
+  // identical grid — the board's geometry is a fact about the viewport and
+  // the panel toggle, not about the stats.
+  const boardStyle = buildBoardStyle(isNarrow, showRecent);
+
+  if (isLoading) return <DashboardSkeleton style={boardStyle} />;
   if (isError || !stats) {
     return (
       <p className="text-sm text-destructive">
@@ -280,29 +285,6 @@ export default function StudioDashboardPage() {
 
   const listening = byType("listening");
   const dictation = byType("dictation");
-
-  // Hiding "Recent work" drops its column entirely so the tiles widen into the
-  // freed space, rather than leaving a gap.
-  const boardStyle = isNarrow
-    ? {
-        display: "grid",
-        gap: "0.85rem",
-        gridTemplateColumns: "1fr 1fr",
-        gridTemplateAreas: `"author author" "achv achv" "t1 t2" "t3 t4" "t5 t6"${
-          showRecent ? ' "activity activity"' : ""
-        }`,
-      }
-    : {
-        display: "grid",
-        gap: "0.85rem",
-        gridTemplateColumns: showRecent
-          ? "305px repeat(3, 1fr) 330px"
-          : "305px repeat(3, 1fr)",
-        gridTemplateRows: "1fr 1fr",
-        gridTemplateAreas: showRecent
-          ? '"author t1 t2 t3 activity" "achv t4 t5 t6 activity"'
-          : '"author t1 t2 t3" "achv t4 t5 t6"',
-      };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3.5">
@@ -625,5 +607,122 @@ export default function StudioDashboardPage() {
         )}
       </MagicBento>
     </div>
+  );
+}
+
+/**
+ * The board's geometry — the one thing about this page that does not depend
+ * on the stats. Hiding "Recent work" drops its column entirely so the tiles
+ * widen into the freed space rather than leaving a gap.
+ *
+ * Extracted so the loading state can lay out on the identical grid. A
+ * skeleton that invents its own columns is a skeleton that moves everything
+ * when the real board arrives.
+ */
+function buildBoardStyle(
+  isNarrow: boolean,
+  showRecent: boolean,
+): React.CSSProperties {
+  return isNarrow
+    ? {
+        display: "grid",
+        gap: "0.85rem",
+        gridTemplateColumns: "1fr 1fr",
+        gridTemplateAreas: `"author author" "achv achv" "t1 t2" "t3 t4" "t5 t6"${
+          showRecent ? ' "activity activity"' : ""
+        }`,
+      }
+    : {
+        display: "grid",
+        gap: "0.85rem",
+        gridTemplateColumns: showRecent
+          ? "305px repeat(3, 1fr) 330px"
+          : "305px repeat(3, 1fr)",
+        gridTemplateRows: "1fr 1fr",
+        gridTemplateAreas: showRecent
+          ? '"author t1 t2 t3 activity" "achv t4 t5 t6 activity"'
+          : '"author t1 t2 t3" "achv t4 t5 t6"',
+      };
+}
+
+/**
+ * The board with nothing on it yet.
+ *
+ * The greeting is real: it comes from the session, which resolved before this
+ * page was allowed to mount, so there is no reason to draw a bar over a name
+ * we already know. Only the three figures are bars — they are the whole point
+ * of the request that is still in flight.
+ *
+ * Every card reuses the real card's class string and its grid area, so the
+ * board does not reflow when the stats land; only what is written on the
+ * cards changes.
+ */
+function DashboardSkeleton({ style }: { style: React.CSSProperties }) {
+  const { user } = useCurrentUser();
+
+  return (
+    <SkeletonBlock
+      label="Loading your Studio"
+      className="flex min-h-0 flex-1 flex-col gap-3.5"
+    >
+      <div className="flex flex-none flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="text-h1 text-foreground">
+            Welcome back{user ? `, ${user.display_name}` : ""}
+          </h1>
+          <p className="mt-0.5 text-body text-muted-foreground">
+            Here&apos;s how your material is doing.
+          </p>
+        </div>
+        <div className="flex items-center gap-5">
+          {["Materials", "Learners reached", "Content hours"].map((label) => (
+            <div key={label} className="text-right">
+              <div className="text-kpi">
+                <Skeleton className="ml-auto inline-block h-[0.8em] w-12" />
+              </div>
+              <div className="mt-0.5 text-micro text-muted-foreground">
+                {label}
+              </div>
+            </div>
+          ))}
+          {/* The panel toggle's space, held. It is a real control that owes
+              nothing to the stats, but it lives inside the branch below — and
+              left out entirely it shoved the three figures 59px sideways the
+              moment they arrived. */}
+          <div className="size-9 shrink-0" aria-hidden />
+        </div>
+      </div>
+
+      <div style={style} className="min-h-0 flex-1">
+        {["author", "achv", "t1", "t2", "t3", "t4", "t5", "t6"].map((area) => (
+          <div
+            key={area}
+            style={{ gridArea: area }}
+            className={cn(glass, "min-h-0 gap-2 overflow-hidden p-3.5")}
+          >
+            <Skeleton className="h-3 w-20" />
+            <Skeleton className="mt-2 h-5 w-2/3" />
+            <Skeleton className="mt-auto h-6 w-full rounded-md" />
+          </div>
+        ))}
+        {style.gridTemplateAreas?.includes("activity") && (
+          <div
+            style={{ gridArea: "activity" }}
+            className={cn(deep, "min-h-0 gap-3 p-3.5")}
+          >
+            <Skeleton className="h-3 w-24" />
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="grid grid-cols-[auto_1fr] gap-2.5">
+                <Skeleton className="size-7.5 shrink-0 rounded-lg" />
+                <div className="min-w-0">
+                  <Skeleton className="h-3.5 w-4/5" />
+                  <Skeleton className="mt-1.5 h-3 w-1/2" />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </SkeletonBlock>
   );
 }
