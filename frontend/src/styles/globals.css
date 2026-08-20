@@ -500,6 +500,36 @@
   .loader-deferred { animation-duration: 0.01s; }
 }
 
+/* Skeleton bars pulse via Tailwind's built-in `animate-pulse`, which — unlike
+   every animation defined in this file — has no reduced-motion companion of
+   its own. One rule covers every skeleton in the app; the shapes still hold
+   the layout, they just stop breathing. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse { animation: none; }
+}
+
+/* Indeterminate route progress. Fast at the start — most of a chunk's wait is
+   the request, not the transfer — then asymptotic, so a slow network still
+   sees a bar visibly moving at four seconds rather than one that finished
+   lying about it at one. Removed when the page paints, never completed. */
+.route-progress {
+  animation: route-progress 10s cubic-bezier(0, 0.7, 0.2, 1) forwards;
+}
+
+@keyframes route-progress {
+  0%   { transform: scaleX(0.02); }
+  30%  { transform: scaleX(0.55); }
+  100% { transform: scaleX(0.97); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-progress {
+    animation: none;
+    transform: scaleX(1);
+    opacity: 0.55;
+  }
+}
+
 /* Thin, muted scrollbar — used where native scrolling is kept (e.g. the
    waveform editor's horizontal pan while zoomed in) but shouldn't compete
    visually with the rest of the token-driven chrome. */

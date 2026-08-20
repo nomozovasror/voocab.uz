@@ -1,7 +1,37 @@
+import type { ComponentType } from "react";
 import { Navigate, createBrowserRouter, redirect } from "react-router-dom";
 import { Layout } from "@/components/layout/Layout";
 import { StudioLayout } from "@/components/studio/StudioLayout";
 import { RequireAuth } from "@/auth/RequireAuth";
+import { PageLoader } from "@/components/ui/spinner";
+
+/**
+ * A code-split page, plus what stands in for it during a cold load.
+ *
+ * Route-level `lazy:` leaves the router uninitialised until the chunk lands,
+ * and a matched tree with NO HydrateFallback anywhere is truncated to the
+ * root and rendered as `null` — the header included. A reload used to show a
+ * blank page for the length of the import.
+ *
+ * Declared on the leaf and never on the root: a fallback renders *instead of*
+ * its own route's element, so on the root it would replace <Layout/> and take
+ * the chrome down with it. On the leaf, the tree above still renders and the
+ * fallback simply fills the <Outlet/>.
+ *
+ * Deliberately PageLoader rather than each page's skeleton: a HydrateFallback
+ * is a static component reference, so it is imported eagerly — pointing it at
+ * a page's own skeleton would pull that page into the entry chunk and undo
+ * the split. PageLoader is already in the entry graph via RequireAuth.
+ *
+ * Only ever seen on first entry or reload; client-side navigation is covered
+ * by <RouteProgress/>.
+ */
+function page(load: () => Promise<{ default: ComponentType }>) {
+  return {
+    lazy: async () => ({ Component: (await load()).default }),
+    HydrateFallback: PageLoader,
+  };
+}
 
 /**
  * Central route config. Page components are lazy-loaded so each route is its
@@ -17,27 +47,19 @@ export const router = createBrowserRouter([
     children: [
       {
         index: true,
-        lazy: async () => ({
-          Component: (await import("@/pages/home/HomePage")).default,
-        }),
+        ...page(() => import("@/pages/home/HomePage")),
       },
       {
         path: "reading",
-        lazy: async () => ({
-          Component: (await import("@/pages/reading/ReadingPage")).default,
-        }),
+        ...page(() => import("@/pages/reading/ReadingPage")),
       },
       {
         path: "vocabulary",
-        lazy: async () => ({
-          Component: (await import("@/pages/vocabulary/VocabularyPage")).default,
-        }),
+        ...page(() => import("@/pages/vocabulary/VocabularyPage")),
       },
       {
         path: "login",
-        lazy: async () => ({
-          Component: (await import("@/pages/login/LoginPage")).default,
-        }),
+        ...page(() => import("@/pages/login/LoginPage")),
       },
       // --- Protected ---
       {
@@ -45,62 +67,38 @@ export const router = createBrowserRouter([
         children: [
           {
             path: "listening",
-            lazy: async () => ({
-              Component: (await import("@/pages/listening/ListeningPage")).default,
-            }),
+            ...page(() => import("@/pages/listening/ListeningPage")),
           },
           {
             // Before ``listening/:id``, or an attempt id would be read as a
             // material id and the take page would fetch a material that
             // doesn't exist.
             path: "listening/attempts/:attemptId",
-            lazy: async () => ({
-              Component: (
-                await import("@/pages/listening/ListeningResultsPage")
-              ).default,
-            }),
+            ...page(() => import("@/pages/listening/ListeningResultsPage")),
           },
           {
             path: "listening/:id",
-            lazy: async () => ({
-              Component: (
-                await import("@/pages/listening/ListeningTakePage")
-              ).default,
-            }),
+            ...page(() => import("@/pages/listening/ListeningTakePage")),
           },
           {
             path: "dictation",
-            lazy: async () => ({
-              Component: (await import("@/pages/dictation/DictationPage")).default,
-            }),
+            ...page(() => import("@/pages/dictation/DictationPage")),
           },
           {
             path: "profile",
-            lazy: async () => ({
-              Component: (await import("@/pages/profile/ProfilePage")).default,
-            }),
+            ...page(() => import("@/pages/profile/ProfilePage")),
           },
           {
             path: "materials",
-            lazy: async () => ({
-              Component: (await import("@/pages/materials/MaterialsPage")).default,
-            }),
+            ...page(() => import("@/pages/materials/MaterialsPage")),
           },
           {
             path: "materials/new",
-            lazy: async () => ({
-              Component: (
-                await import("@/pages/materials/MaterialEditorPage")
-              ).default,
-            }),
+            ...page(() => import("@/pages/materials/MaterialEditorPage")),
           },
           {
             path: "materials/:id/edit",
-            lazy: async () => ({
-              Component: (
-                await import("@/pages/materials/MaterialEditorPage")
-              ).default,
-            }),
+            ...page(() => import("@/pages/materials/MaterialEditorPage")),
           },
         ],
       },
@@ -118,11 +116,7 @@ export const router = createBrowserRouter([
         children: [
           {
             index: true,
-            lazy: async () => ({
-              Component: (
-                await import("@/pages/studio/StudioDashboardPage")
-              ).default,
-            }),
+            ...page(() => import("@/pages/studio/StudioDashboardPage")),
           },
           // Where the listening studio used to live, before it was rebuilt
           // around the editor at /studio/listening. The pages are gone; the
@@ -148,30 +142,21 @@ export const router = createBrowserRouter([
                 params.id ? `/studio/listening/${params.id}` : "/studio/listening",
               ),
             Component: () => null,
+            // A pending loader leaves the router uninitialised exactly as a
+            // pending `lazy` does, so this route blanks on a cold load too.
+            HydrateFallback: PageLoader,
           },
           {
             path: "listening",
-            lazy: async () => ({
-              Component: (
-                await import("@/pages/studio/listening/StudioListeningListPage")
-              ).default,
-            }),
+            ...page(() => import("@/pages/studio/listening/StudioListeningListPage")),
           },
           {
             path: "listening/new",
-            lazy: async () => ({
-              Component: (
-                await import("@/pages/studio/listening/StudioListeningEditorPage")
-              ).default,
-            }),
+            ...page(() => import("@/pages/studio/listening/StudioListeningEditorPage")),
           },
           {
             path: "listening/:id",
-            lazy: async () => ({
-              Component: (
-                await import("@/pages/studio/listening/StudioListeningEditorPage")
-              ).default,
-            }),
+            ...page(() => import("@/pages/studio/listening/StudioListeningEditorPage")),
           },
         ],
       },

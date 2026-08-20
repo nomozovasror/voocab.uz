@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import { Check, Headphones } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fmtClock, timeAgo } from "@/lib/time";
-import { PageLoader } from "@/components/ui/spinner";
+import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 import { usePracticeCatalogue } from "@/features/listening/queries";
 import type { PracticeMaterial } from "@/features/listening/types";
 
@@ -28,15 +28,28 @@ export default function ListeningPage() {
         <h1 className="flex-1 text-lg font-semibold text-foreground">
           listening
         </h1>
-        {data && data.length > 0 && (
-          <span className="font-mono text-xs tabular-nums text-muted-foreground">
-            {data.filter((m) => m.attempts > 0).length} of {data.length} done
-          </span>
+        {/* Held open while loading rather than absent, or the heading line
+            gains a right-hand column the moment data lands. */}
+        {isLoading ? (
+          <Skeleton className="h-3 w-24" />
+        ) : (
+          data &&
+          data.length > 0 && (
+            <span className="font-mono text-xs tabular-nums text-muted-foreground">
+              {data.filter((m) => m.attempts > 0).length} of {data.length} done
+            </span>
+          )
         )}
       </div>
 
       {isLoading ? (
-        <PageLoader />
+        <SkeletonBlock label="Loading materials">
+          <ol className="divide-y divide-border border-y border-border">
+            {Array.from({ length: 5 }, (_, i) => (
+              <RowSkeleton key={i} />
+            ))}
+          </ol>
+        </SkeletonBlock>
       ) : isError ? (
         <p className="text-sm text-destructive">
           couldn&apos;t load the listening materials.
@@ -62,6 +75,29 @@ export default function ListeningPage() {
         </ol>
       )}
     </div>
+  );
+}
+
+/** One catalogue row, waiting. Same `<li>` and same three columns as `Row`
+ *  below, so the list doesn't reflow when the real rows arrive. */
+function RowSkeleton() {
+  return (
+    <li className="flex items-center gap-4 py-3">
+      <Skeleton className="size-5 shrink-0 rounded-full" />
+      {/* The bars sit inside the same elements the real row uses, so the
+          line-heights — not the bar heights — set the row's height. Sized by
+          hand it came out 6px short per row, which over five rows is a
+          visible settle when the list arrives. */}
+      <div className="min-w-0 flex-1">
+        <span className="block font-medium">
+          <Skeleton className="inline-block h-[0.8em] w-48 max-w-full" />
+        </span>
+        <p className="mt-0.5 font-mono text-xs">
+          <Skeleton className="inline-block h-[0.8em] w-56 max-w-full" />
+        </p>
+      </div>
+      <Skeleton className="h-6 w-14 shrink-0" />
+    </li>
   );
 }
 

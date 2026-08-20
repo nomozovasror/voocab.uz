@@ -3,13 +3,17 @@ import { Link, useLocation, useParams } from "react-router-dom";
 import { ArrowLeft, Check, RotateCcw, Volume2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fmtClock } from "@/lib/time";
-import { PageLoader } from "@/components/ui/spinner";
+import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 import { mediaUrl } from "@/features/listening/api";
 import { useAttempt, useTakeMaterial } from "@/features/listening/queries";
 import {
   PartChips,
   QuestionPaper,
 } from "@/features/listening/components/QuestionPaper";
+import {
+  AudioSkeleton,
+  PaperSkeleton,
+} from "@/features/listening/components/PaperSkeleton";
 import {
   TakeAudio,
   type TakeAudioHandle,
@@ -67,7 +71,7 @@ export default function ListeningResultsPage() {
     return map;
   }, [data]);
 
-  if (isLoading) return <PageLoader />;
+  if (isLoading) return <ResultsSkeleton />;
   if (isError || !data) {
     return (
       <div className="mx-auto max-w-3xl space-y-4 py-10">
@@ -154,12 +158,13 @@ export default function ListeningResultsPage() {
       ) : paperGone ? (
         <CompactList data={data} onReplay={(s, e) => audio.current?.playRange(s, e)} />
       ) : (
-        // Neither yet. The paper is still coming, and showing the fallback
-        // in the meantime would flash a whole different page for a moment
-        // and then replace it.
-        <p className="mt-10 text-center text-xs text-muted-foreground">
-          loading the paper…
-        </p>
+        // Neither yet. The paper is still coming — and this page always waits
+        // for it, because the attempt has to arrive first to say which
+        // material to ask for. Showing the compact fallback in the meantime
+        // would flash a whole different page and then replace it.
+        <SkeletonBlock label="Loading the paper" className="mt-6">
+          <PaperSkeleton />
+        </SkeletonBlock>
       )}
     </div>
   );
@@ -281,5 +286,47 @@ function CompactList({
         );
       })}
     </ol>
+  );
+}
+
+/**
+ * The review's shape while the attempt loads. Reached on a reload of the URL;
+ * arriving from a submit skips it entirely, because the result travels with
+ * the navigation.
+ */
+function ResultsSkeleton() {
+  return (
+    <SkeletonBlock label="Loading result" className="mx-auto max-w-3xl pb-24">
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 pt-2 pb-4">
+        <Link
+          to="/listening"
+          className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ArrowLeft className="size-3.5" />
+          listening
+        </Link>
+        <h1 className="min-w-0 flex-1 truncate text-lg font-semibold">
+          <Skeleton className="inline-block h-[0.85em] w-64 max-w-full" />
+        </h1>
+        <span className="text-xs">
+          <Skeleton className="inline-block h-[0.9em] w-24" />
+        </span>
+      </div>
+
+      {/* The score card, which is the first thing anyone looks for. */}
+      <div className="flex items-baseline gap-3 rounded-lg border border-border bg-card px-5 py-4">
+        <Skeleton className="h-8 w-10" />
+        <Skeleton className="h-4 w-12" />
+        <Skeleton className="ml-auto h-4 w-10" />
+      </div>
+
+      <div className="sticky top-[3.75rem] z-20 -mx-1 mt-4 bg-background/90 px-1 py-2 backdrop-blur-md">
+        <AudioSkeleton />
+      </div>
+
+      <div className="mt-6">
+        <PaperSkeleton />
+      </div>
+    </SkeletonBlock>
   );
 }

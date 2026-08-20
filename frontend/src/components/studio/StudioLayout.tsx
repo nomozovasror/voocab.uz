@@ -2,6 +2,8 @@ import { Suspense } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { ArrowLeft, Bell } from "lucide-react";
 import { Logo } from "@/components/Logo";
+import { PageLoader } from "@/components/ui/spinner";
+import { RouteProgress } from "@/components/ui/route-progress";
 import { UserAvatar } from "@/auth/UserAvatar";
 import { useCurrentUser } from "@/auth/useCurrentUser";
 import {
@@ -42,6 +44,7 @@ function StudioShell() {
     // shell must be *bounded* by the viewport — otherwise its 1fr grid rows
     // grow with their content and the board spills past the fold.
     <div className="flex h-svh flex-col bg-background">
+      <RouteProgress />
       <header className="sticky top-0 z-30 w-full flex-none border-b border-border bg-background/90 backdrop-blur-md">
         <div className="mx-auto flex h-14 w-full max-w-[1500px] items-center gap-4 px-4 sm:px-6">
           <div className="flex items-center gap-2">
@@ -95,13 +98,15 @@ function StudioShell() {
       </header>
 
       <main className="mx-auto flex w-full max-w-[1500px] flex-1 min-h-0 flex-col overflow-y-auto px-4 py-4 sm:px-6">
-        <Suspense
-          fallback={
-            <div className="flex min-h-64 items-center justify-center text-muted-foreground">
-              Loading…
-            </div>
-          }
-        >
+        {/* Dead for the routes as configured: react-router's route-level
+            `lazy:` resolves inside the router rather than by suspending, so
+            nothing below ever reaches here. Kept as the boundary of last
+            resort — a page that later adopts React.lazy or use() would
+            otherwise suspend all the way to the React root and blank the
+            whole app, header included. Cold loads are covered by each
+            route's HydrateFallback, in-page waits by the page's own
+            skeleton, and the gap between the two by <RouteProgress/>. */}
+        <Suspense fallback={<PageLoader />}>
           <Outlet />
         </Suspense>
       </main>

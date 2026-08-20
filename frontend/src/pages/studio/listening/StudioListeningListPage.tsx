@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Trash2 } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { useStudioCrumbs } from "@/components/studio/breadcrumbs";
 import { cn } from "@/lib/utils";
@@ -198,13 +199,13 @@ function RowSkeleton() {
       aria-hidden
     >
       <div className="min-w-0 flex-1 space-y-2">
-        <div className="h-4 w-48 max-w-full animate-pulse rounded bg-foreground/10" />
-        <div className="h-3 w-32 max-w-full animate-pulse rounded bg-foreground/10" />
+        <Skeleton className="h-4 w-48 max-w-full" />
+        <Skeleton className="h-3 w-32 max-w-full" />
       </div>
-      <div className="h-5 w-16 shrink-0 animate-pulse rounded-full bg-foreground/10" />
+      <Skeleton className="h-5 w-16 shrink-0 rounded-full" />
       <div className="flex shrink-0 gap-5">
-        <div className="h-8 w-9 animate-pulse rounded bg-foreground/10" />
-        <div className="h-8 w-9 animate-pulse rounded bg-foreground/10" />
+        <Skeleton className="h-8 w-9" />
+        <Skeleton className="h-8 w-9" />
       </div>
     </div>
   );

@@ -1,6 +1,8 @@
 import { Suspense } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { Logo } from "@/components/Logo";
+import { PageLoader } from "@/components/ui/spinner";
+import { RouteProgress } from "@/components/ui/route-progress";
 import { UserMenu } from "@/components/layout/UserMenu";
 import { ThemeSwitcher } from "@/theme/ThemeSwitcher";
 import { useCurrentUser } from "@/auth/useCurrentUser";
@@ -29,6 +31,7 @@ export function Layout() {
 
   return (
     <div className="flex min-h-svh flex-col">
+      <RouteProgress />
       <header className="sticky top-0 z-30 w-full px-4 pt-3 sm:px-6 lg:px-8">
         {/* Three islands on one rail. The rail is wider than the content at the
             top and snaps to the container width once scrolled. */}
@@ -93,13 +96,15 @@ export function Layout() {
       </header>
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6 lg:px-8">
-        <Suspense
-          fallback={
-            <div className="flex min-h-64 items-center justify-center text-muted-foreground">
-              Loading…
-            </div>
-          }
-        >
+        {/* Dead for the routes as configured: react-router's route-level
+            `lazy:` resolves inside the router rather than by suspending, so
+            nothing below ever reaches here. Kept as the boundary of last
+            resort — a page that later adopts React.lazy or use() would
+            otherwise suspend all the way to the React root and blank the
+            whole app, header included. Cold loads are covered by each
+            route's HydrateFallback, in-page waits by the page's own
+            skeleton, and the gap between the two by <RouteProgress/>. */}
+        <Suspense fallback={<PageLoader />}>
           <Outlet />
         </Suspense>
       </main>

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Loader2 } from "lucide-react";
-import { PageLoader } from "@/components/ui/spinner";
+import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
 import { mediaUrl } from "@/features/listening/api";
@@ -10,6 +10,10 @@ import {
   PartChips,
   QuestionPaper,
 } from "@/features/listening/components/QuestionPaper";
+import {
+  AudioSkeleton,
+  PaperSkeleton,
+} from "@/features/listening/components/PaperSkeleton";
 import {
   TakeAudio,
   type TakeAudioHandle,
@@ -248,7 +252,7 @@ export default function ListeningTakePage() {
   };
 
   if (!id) return null;
-  if (isLoading) return <PageLoader />;
+  if (isLoading) return <TakeSkeleton />;
   if (isError || !material) {
     return (
       <div className="mx-auto max-w-3xl space-y-4 py-10">
@@ -395,5 +399,49 @@ export default function ListeningTakePage() {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * The paper's shape, held open while it loads.
+ *
+ * The container, the spacing and the back link are the real ones — only what
+ * depends on the material is a bar. That is what stops the page jumping: the
+ * header sits at the same y before and after, and so does the audio box.
+ */
+function TakeSkeleton() {
+  return (
+    <SkeletonBlock label="Loading material" className="mx-auto max-w-3xl pb-24">
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 pt-2 pb-4">
+        {/* A real link, not a bar. A page that hasn't loaded is exactly when
+            somebody wants to leave it. */}
+        <Link
+          to="/listening"
+          className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ArrowLeft className="size-3.5" />
+          listening
+        </Link>
+        {/* The bars sit INSIDE the real elements, so those elements' own
+            line-heights set the row height and the baseline row measures the
+            same before and after the words arrive. */}
+        <h1 className="min-w-0 flex-1 truncate text-lg font-semibold">
+          <Skeleton className="inline-block h-[0.85em] w-64 max-w-full" />
+        </h1>
+        <span className="font-mono text-xs">
+          <Skeleton className="inline-block h-[0.9em] w-28" />
+        </span>
+      </div>
+
+      {/* Same sticky wrapper as the real one, so the paper below starts at
+          the same y rather than jumping when the audio box lands. */}
+      <div className="sticky top-[3.75rem] z-20 -mx-1 bg-background/90 px-1 py-2 backdrop-blur-md">
+        <AudioSkeleton />
+      </div>
+
+      <div className="mt-6">
+        <PaperSkeleton />
+      </div>
+    </SkeletonBlock>
   );
 }
