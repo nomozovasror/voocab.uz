@@ -269,6 +269,26 @@
   --tracking-caps: 0.14em; /* uppercase labels — replaces tracking-[0.14em] */
 }
 
+/* ── Type scale ───────────────────────────────────────────────────────────
+   The bottom four steps, each one step of the old scale bigger (§1.0).
+   text-xs is used 139 times and text-base 21, which means the interface was
+   effectively set at 12px — small for something you read a question off and
+   then type an answer into.
+
+   Four lines instead of two hundred class changes, and revertable in one
+   commit if the sizes turn out wrong. text-2xl and text-4xl are left alone;
+   they were already large enough.
+
+   Only the sizes are restated. Tailwind's line-heights are unitless ratios
+   (--text-sm--line-height is calc(1.25 / 0.875), not 1.25rem), so the line
+   boxes grow with the text on their own and the vertical rhythm holds. */
+@theme {
+  --text-xs: 0.8125rem; /* 12 → 13px */
+  --text-sm: 0.9375rem; /* 14 → 15px */
+  --text-base: 1.0625rem; /* 16 → 17px */
+  --text-lg: 1.1875rem; /* 18 → 19px */
+}
+
 /* The utilities Tailwind will not generate on its own. */
 @utility duration-fast {
   transition-duration: var(--duration-fast);
