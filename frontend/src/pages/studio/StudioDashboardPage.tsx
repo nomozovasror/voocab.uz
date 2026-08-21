@@ -79,20 +79,20 @@ function Stat({ value, label }: { value: string; label: string }) {
     <div className="text-center">
       <div
         className={cn(
-          "text-stat tabular-nums",
+          "text-base font-bold leading-tight tabular-nums",
           dashed ? "text-muted-foreground" : "text-foreground",
         )}
       >
         {value}
       </div>
-      <div className="mt-0.5 text-micro text-muted-foreground">{label}</div>
+      <div className="mt-0.5 text-xs text-muted-foreground">{label}</div>
     </div>
   );
 }
 
 function SoonChip() {
   return (
-    <span className="rounded-full bg-foreground/8 px-1.5 py-0.5 text-micro font-bold tracking-wider text-muted-foreground uppercase">
+    <span className="rounded-full bg-foreground/8 px-1.5 py-0.5 text-xs font-bold tracking-wider text-muted-foreground uppercase">
       Soon
     </span>
   );
@@ -132,10 +132,10 @@ function TypeTile({
         style={{ width: "11.5rem", height: "11.5rem" }}
       />
       <div className="relative z-10 flex items-center justify-between gap-2">
-        <h3 className="text-tile text-foreground">{title}</h3>
+        <h3 className="text-2xl font-semibold leading-tight text-foreground">{title}</h3>
         {!available && <SoonChip />}
       </div>
-      <p className="relative z-10 line-clamp-1 flex-1 text-label text-muted-foreground">
+      <p className="relative z-10 line-clamp-1 flex-1 text-xs text-muted-foreground">
         {description}
       </p>
       <div className="relative z-10 grid grid-cols-3 gap-1.5">
@@ -151,7 +151,7 @@ function TypeTile({
           // Negative margins pull the button's border to within ~6px of the
           // card's own border on all three sides, so it reads as a footer
           // action rather than a control floating in the middle.
-          "relative z-10 -mx-2 -mb-2 flex items-center justify-center gap-1 rounded-md border px-3 py-1.5 text-micro font-semibold transition-all duration-200 ease-out",
+          "relative z-10 -mx-2 -mb-2 flex items-center justify-center gap-1 rounded-md border px-3 py-1.5 text-xs font-semibold transition-all duration-200 ease-out",
           // Lighter than the card's own border (foreground/10) so the card
           // edge stays the dominant line and the button reads as secondary.
           available
@@ -237,11 +237,11 @@ function ActivityRow({ item }: { item: StudioRecentItem }) {
         <EventIcon className="size-3.5" />
       </span>
       <div className="min-w-0">
-        <div className="truncate text-body text-foreground group-hover:text-primary">
+        <div className="truncate text-xs leading-normal text-foreground group-hover:text-primary">
           {edited ? "Edited " : "Created "}
           <b className="font-semibold">{item.title}</b>
         </div>
-        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-micro tabular-nums text-muted-foreground">
+        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs tabular-nums text-muted-foreground">
           <span className="capitalize">{item.type}</span>
           <span>·</span>
           <span>
@@ -301,10 +301,10 @@ export default function StudioDashboardPage() {
       {/* Welcome + top KPIs */}
       <div className="flex flex-none flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-h1 text-foreground">
+          <h1 className="text-2xl font-semibold leading-tight text-foreground">
             Welcome back{user ? `, ${user.display_name}` : ""}
           </h1>
-          <p className="mt-0.5 text-body text-muted-foreground">
+          <p className="mt-0.5 text-xs leading-normal text-muted-foreground">
             {isEmpty
               ? "Let's publish your first practice material."
               : "Here's how your material is doing."}
@@ -312,24 +312,24 @@ export default function StudioDashboardPage() {
         </div>
         <div className="flex items-center gap-5">
           <div className="text-right">
-            <div className="text-kpi tabular-nums text-foreground">
+            <div className="text-2xl font-bold leading-none tabular-nums text-foreground">
               {stats.materials_total}
             </div>
-            <div className="mt-0.5 text-micro text-muted-foreground">Materials</div>
+            <div className="mt-0.5 text-xs text-muted-foreground">Materials</div>
           </div>
           <div className="text-right">
-            <div className="text-kpi tabular-nums text-foreground">
+            <div className="text-2xl font-bold leading-none tabular-nums text-foreground">
               {stats.learners}
             </div>
-            <div className="mt-0.5 text-micro text-muted-foreground">
+            <div className="mt-0.5 text-xs text-muted-foreground">
               Learners reached
             </div>
           </div>
           <div className="text-right">
-            <div className="text-kpi tabular-nums text-foreground">
+            <div className="text-2xl font-bold leading-none tabular-nums text-foreground">
               {isEmpty ? DASH : formatContentHours(stats.content_ms)}
             </div>
-            <div className="mt-0.5 text-micro text-muted-foreground">
+            <div className="mt-0.5 text-xs text-muted-foreground">
               Content hours
             </div>
           </div>
@@ -391,11 +391,11 @@ export default function StudioDashboardPage() {
               {/* justify-start (not centre): keeps the handle + level bar tucked
                   up close under the seam rather than floating mid-half. */}
               <div className="flex h-[2.65rem] flex-col justify-start pt-1">
-                <div className="mb-1 flex items-baseline justify-between gap-2 text-micro text-muted-foreground">
+                <div className="mb-1 flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
                   <span className="truncate">
                     {user?.email ? `@${user.email.split("@")[0]}` : ""}
                   </span>
-                  <b className="shrink-0 text-label font-bold tabular-nums text-muted-foreground">
+                  <b className="shrink-0 text-xs font-bold tabular-nums text-muted-foreground">
                     Lvl {DASH}
                   </b>
                 </div>
@@ -439,7 +439,7 @@ export default function StudioDashboardPage() {
         {/* Achievements */}
         <div style={{ gridArea: "achv" }} className={cn(glass, "min-h-0 p-3.5")}>
           <div className="mb-2.5 flex flex-none items-center justify-between">
-            <h2 className="flex items-center gap-1.5 text-panel text-foreground">
+            <h2 className="flex items-center gap-1.5 text-base font-semibold leading-tight text-foreground">
               <Trophy className="size-4" aria-hidden />
               Achievements
             </h2>
@@ -454,13 +454,13 @@ export default function StudioDashboardPage() {
                 <div className="flex size-11 items-center justify-center rounded-full border border-dashed border-foreground/18 bg-foreground/7 text-muted-foreground">
                   <Lock className="size-4" aria-hidden />
                 </div>
-                <div className="text-center text-micro leading-tight text-muted-foreground">
+                <div className="text-center text-xs leading-tight text-muted-foreground">
                   {label}
                 </div>
               </div>
             ))}
           </div>
-          <div className="mt-2 flex-none border-t border-dashed border-foreground/12 pt-1.5 text-micro text-muted-foreground">
+          <div className="mt-2 flex-none border-t border-dashed border-foreground/12 pt-1.5 text-xs text-muted-foreground">
             Badges unlock once levelling &amp; achievements ship.
           </div>
         </div>
@@ -570,10 +570,10 @@ export default function StudioDashboardPage() {
             {/* Named for what it actually is: the author's own recent work, so
                 you can resume it. Learner activity (completions, saves,
                 subscribers) doesn't exist yet — see the footer note. */}
-            <h2 className="text-panel text-foreground">Recent work</h2>
+            <h2 className="text-base font-semibold leading-tight text-foreground">Recent work</h2>
             <div className="flex items-center gap-2">
               {!isEmpty && (
-                <span className="text-micro text-muted-foreground">
+                <span className="text-xs text-muted-foreground">
                   tap to continue
                 </span>
               )}
@@ -596,7 +596,7 @@ export default function StudioDashboardPage() {
                   <ActivityRow key={item.id} item={item} />
                 ))}
               </div>
-              <div className="mt-1.5 flex-none border-t border-dashed border-foreground/12 pt-1.5 text-micro text-muted-foreground">
+              <div className="mt-1.5 flex-none border-t border-dashed border-foreground/12 pt-1.5 text-xs text-muted-foreground">
                 Learner activity — completions, saves, subscribers — appears
                 here once it ships.
               </div>
@@ -604,13 +604,13 @@ export default function StudioDashboardPage() {
           ) : (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-muted-foreground">
               <Headphones className="size-6 opacity-50" aria-hidden />
-              <p className="max-w-52 text-body">
+              <p className="max-w-52 text-xs leading-normal">
                 Nothing here yet. Create your first material and it&apos;ll show
                 up here.
               </p>
               <Link
                 to="/studio/listening/new"
-                className="text-label font-semibold text-primary hover:underline"
+                className="text-xs font-semibold text-primary hover:underline"
               >
                 Create your first material
               </Link>
@@ -680,20 +680,20 @@ function DashboardSkeleton({ style }: { style: React.CSSProperties }) {
     >
       <div className="flex flex-none flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-h1 text-foreground">
+          <h1 className="text-2xl font-semibold leading-tight text-foreground">
             Welcome back{user ? `, ${user.display_name}` : ""}
           </h1>
-          <p className="mt-0.5 text-body text-muted-foreground">
+          <p className="mt-0.5 text-xs leading-normal text-muted-foreground">
             Here&apos;s how your material is doing.
           </p>
         </div>
         <div className="flex items-center gap-5">
           {["Materials", "Learners reached", "Content hours"].map((label) => (
             <div key={label} className="text-right">
-              <div className="text-kpi">
+              <div className="text-2xl font-bold leading-none">
                 <Skeleton className="ml-auto inline-block h-[0.8em] w-12" />
               </div>
-              <div className="mt-0.5 text-micro text-muted-foreground">
+              <div className="mt-0.5 text-xs text-muted-foreground">
                 {label}
               </div>
             </div>

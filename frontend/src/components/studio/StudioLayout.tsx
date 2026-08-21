@@ -50,7 +50,7 @@ function StudioShell() {
           <div className="flex items-center gap-2">
             <NavLink to="/" className="group flex items-center gap-2">
               <Logo animate="hover" className="size-6" />
-              <span className="text-body font-semibold text-foreground">
+              <span className="text-xs leading-normal font-semibold text-foreground">
                 voocab
               </span>
             </NavLink>
