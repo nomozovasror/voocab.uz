@@ -37,6 +37,32 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
+  /* Named surface and border roles (§2.1). One declaration covers all three
+     themes because each is mixed from that theme's own --foreground — see the
+     :root block below the theme blocks for the values. */
+  --color-surface-hover: var(--surface-hover);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+
+  /* Domain roles (§3). Aliases today, but a name of their own: "the right
+     answer" and "a success toast" are the same green by coincidence, not by
+     rule, and one day one of them moves. Note the utility drops the
+     `--color-` prefix — that IS Tailwind's namespace, so --color-correct
+     generates `text-correct` / `bg-correct` / `border-correct`. */
+  --color-correct: var(--correct);
+  --color-incorrect: var(--incorrect);
+  --color-skipped: var(--skipped);
+  --color-caret: var(--caret);
+  --color-attention: var(--attention);
+  --color-published: var(--published);
+  --color-draft: var(--draft);
+  --color-stub: var(--stub);
+  --color-wave: var(--wave);
+  --color-wave-progress: var(--wave-progress);
+  --color-region: var(--region);
+  --color-audio-marker: var(--audio-marker);
+
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -164,6 +190,113 @@
   --border: #44475a;
   --input: #44475a;
   --ring: #bd93f9;
+}
+
+/* ── Derived roles ────────────────────────────────────────────────────────
+   Declared once, not once per theme. Every value below is mixed from — or
+   aliased to — a token the active theme already sets, and custom properties
+   resolve against the element they are declared on. That element is <html>,
+   which is also where ThemeProvider puts data-theme, so `var(--foreground)`
+   here is whichever theme is on. A fourth theme inherits all of this for
+   free; that is the whole point of writing them this way.
+
+   Nothing in the app uses these yet — see the @theme inline block above for
+   the utilities they generate (bg-surface-hover, border-border-subtle,
+   text-correct, …). */
+:root {
+  /* Surfaces and borders (§2.1). Ghost hover has been written three ways
+     (foreground/5, /6, /8); 8% is the one that wins, and the other two are
+     within a shade of it. */
+  --surface-hover: color-mix(in srgb, var(--foreground) 8%, transparent);
+  --surface-sunken: color-mix(in srgb, var(--foreground) 4%, transparent);
+  --border-subtle: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --border-strong: color-mix(in srgb, var(--foreground) 25%, transparent);
+
+  /* Marking (§3). */
+  --correct: var(--success);
+  --incorrect: var(--destructive);
+  --skipped: var(--muted-foreground);
+
+  /* Authoring and status (§3). --attention is warning wearing a job title:
+     an unfinished part chip, a publish that is being refused. */
+  --caret: var(--primary);
+  --attention: var(--warning);
+  --published: var(--success);
+  --draft: var(--muted-foreground);
+  --stub: color-mix(in srgb, var(--foreground) 15%, transparent);
+
+  /* Audio (§3). --wave and --wave-progress exist as real custom properties
+     rather than as @theme entries alone because wavesurfer takes colours as
+     JS strings, not classes, and reads them with getPropertyValue(). @theme
+     inline emits nothing to :root, so a token declared only there would read
+     back as "". */
+  --wave: var(--muted-foreground);
+  --wave-progress: var(--primary);
+  --region: color-mix(in srgb, var(--primary) 18%, transparent);
+  --audio-marker: color-mix(in srgb, var(--foreground) 25%, transparent);
+}
+
+/* Motion and stacking (§4.1, §4.3). Not in @theme because neither
+   `--duration-*` nor `--z-*` is a Tailwind v4 namespace — only the values
+   live here; the utilities are declared by hand further down. Theme-
+   independent, so no color-mix and no per-theme block. */
+:root {
+  --duration-fast: 100ms;
+  --duration-base: 200ms;
+  --duration-slow: 300ms;
+
+  /* The ladder, named. The levels were already clean — 10/20/30/40/50/100 —
+     they just had no way to say which was which at the call site. */
+  --z-raised: 10;
+  --z-sticky: 20;
+  --z-header: 30;
+  --z-progress: 40;
+  --z-overlay: 50;
+  --z-splash: 100;
+}
+
+/* These two ARE namespaces, so declaring them is all it takes: `ease-spring`
+   and `tracking-caps` become utilities. --ease-out and --ease-in-out are
+   Tailwind's own defaults restated at the same values — written down so §4.1
+   has one place to point at, and a deliberate no-op on the six existing
+   cubic-bezier() call sites. */
+@theme {
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Overshoots on the way in. Celebration and pop only. */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --tracking-caps: 0.14em; /* uppercase labels — replaces tracking-[0.14em] */
+}
+
+/* The utilities Tailwind will not generate on its own. */
+@utility duration-fast {
+  transition-duration: var(--duration-fast);
+}
+@utility duration-base {
+  transition-duration: var(--duration-base);
+}
+@utility duration-slow {
+  transition-duration: var(--duration-slow);
+}
+
+@utility z-raised {
+  z-index: var(--z-raised);
+}
+@utility z-sticky {
+  z-index: var(--z-sticky);
+}
+@utility z-header {
+  z-index: var(--z-header);
+}
+@utility z-progress {
+  z-index: var(--z-progress);
+}
+@utility z-overlay {
+  z-index: var(--z-overlay);
+}
+@utility z-splash {
+  z-index: var(--z-splash);
 }
 
 @layer base {
