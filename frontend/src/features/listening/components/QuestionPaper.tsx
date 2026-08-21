@@ -84,7 +84,7 @@ export function QuestionPaper({
                 type="button"
                 onClick={() => onPlayPart(part.audio_start_ms, part.audio_end_ms)}
                 title={`Play part ${i + 1} from the start`}
-                className="ml-auto flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] normal-case tracking-normal transition-colors hover:bg-foreground/8 hover:text-primary"
+                className="ml-auto flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs normal-case tracking-normal transition-colors hover:bg-foreground/8 hover:text-primary"
               >
                 <Play className="size-3" aria-hidden />
                 play this part
@@ -162,7 +162,7 @@ export function PartChips({
             {done && done.total > 0 && (
               <span
                 className={cn(
-                  "font-mono text-[10px] tabular-nums",
+                  "font-mono text-xs tabular-nums",
                   complete ? "opacity-40" : "text-warning",
                 )}
               >

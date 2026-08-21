@@ -82,7 +82,7 @@ export default function HomePage() {
           <Sparkles className="size-3.5 text-primary" />
           IELTS-focused practice
         </span>
-        <h1 className="max-w-3xl text-4xl font-semibold tracking-tight text-foreground sm:text-5xl">
+        <h1 className="max-w-3xl text-4xl font-semibold tracking-tight text-foreground">
           Learn English, your way
         </h1>
         <p className="max-w-2xl text-lg text-muted-foreground">
@@ -107,7 +107,7 @@ export default function HomePage() {
             key={s.label}
             className="rounded-lg border border-border bg-card px-4 py-6 text-center"
           >
-            <div className="text-3xl font-semibold text-primary">{s.value}</div>
+            <div className="text-2xl font-semibold text-primary">{s.value}</div>
             <div className="mt-1 text-sm text-muted-foreground">{s.label}</div>
           </div>
         ))}

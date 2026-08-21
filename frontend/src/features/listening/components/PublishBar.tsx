@@ -96,7 +96,7 @@ export function PublishBar({
             <Button type="button" size="sm" variant="secondary">
               Publish
               {outstanding.length > 0 && (
-                <span className="ml-0.5 rounded-full bg-foreground/12 px-1.5 text-[10px] tabular-nums">
+                <span className="ml-0.5 rounded-full bg-foreground/12 px-1.5 text-xs tabular-nums">
                   {outstanding.length}
                 </span>
               )}

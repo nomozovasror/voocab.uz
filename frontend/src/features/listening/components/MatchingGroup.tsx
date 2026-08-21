@@ -69,7 +69,7 @@ export function MatchingGroup({
           <li key={index} className="flex items-baseline gap-2 text-sm">
             <span
               aria-hidden
-              className="flex size-5 shrink-0 items-center justify-center self-center rounded-full border border-border text-[11px] font-semibold text-muted-foreground"
+              className="flex size-5 shrink-0 items-center justify-center self-center rounded-full border border-border text-xs font-semibold text-muted-foreground"
             >
               {matchLetter(index).toUpperCase()}
             </span>

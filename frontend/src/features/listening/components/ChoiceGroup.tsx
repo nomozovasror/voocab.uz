@@ -200,7 +200,7 @@ function ChoiceQuestion({
             <span
               aria-hidden
               className={cn(
-                "flex size-5 shrink-0 items-center justify-center self-center border text-[11px] font-semibold",
+                "flex size-5 shrink-0 items-center justify-center self-center border text-xs font-semibold",
                 several ? "rounded-[4px]" : "rounded-full",
                 graded && isKey
                   ? "border-success"

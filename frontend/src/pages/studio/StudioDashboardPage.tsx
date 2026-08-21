@@ -384,7 +384,7 @@ export default function StudioDashboardPage() {
               {/* Two equal halves split by the seam: the name bottom-aligns
                   onto it, the handle + level sit just under it. */}
               <div className="flex h-[2.65rem] min-w-0 items-end pb-1">
-                <div className="truncate text-[1.25rem] leading-none font-semibold tracking-tight text-foreground">
+                <div className="truncate text-lg leading-none font-semibold tracking-tight text-foreground">
                   {user?.display_name ?? "—"}
                 </div>
               </div>

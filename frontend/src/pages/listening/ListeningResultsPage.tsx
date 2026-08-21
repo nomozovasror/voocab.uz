@@ -115,7 +115,7 @@ export default function ListeningResultsPage() {
       </div>
 
       <div className="flex items-baseline gap-3 rounded-lg border border-border bg-card px-5 py-4">
-        <span className="font-mono text-3xl leading-none font-bold text-primary tabular-nums">
+        <span className="font-mono text-4xl leading-none font-bold text-primary tabular-nums">
           {data.score}
         </span>
         <span className="font-mono text-sm text-muted-foreground">

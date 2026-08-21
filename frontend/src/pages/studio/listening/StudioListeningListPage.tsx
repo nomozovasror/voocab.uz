@@ -66,7 +66,7 @@ function CreateTile({ selected, big, innerRef, onFocus }: CreateTileProps) {
     >
       <span
         aria-hidden
-        className={cn("leading-none text-primary", big ? "text-3xl" : "text-xl")}
+        className={cn("leading-none text-primary", big ? "text-2xl" : "text-lg")}
       >
         +
       </span>
@@ -163,7 +163,7 @@ function ListeningRow({ item, selected, innerRef, onFocus, onDelete }: RowProps)
             >
               {attemptsDisplay}
             </div>
-            <div className="text-[11px] text-muted-foreground">attempts</div>
+            <div className="text-xs text-muted-foreground">attempts</div>
           </div>
           <div className="text-center">
             <div
@@ -174,7 +174,7 @@ function ListeningRow({ item, selected, innerRef, onFocus, onDelete }: RowProps)
             >
               {avgDisplay}
             </div>
-            <div className="text-[11px] text-muted-foreground">avg score</div>
+            <div className="text-xs text-muted-foreground">avg score</div>
           </div>
         </div>
       </Link>

@@ -1955,7 +1955,7 @@ export const AudioEditorPane = forwardRef<
             // far apart as two separate ones, so a long line read as several.
             // Relaxed keeps them together while the rows' own padding still
             // separates one line of speech from the next.
-            "scrollbar-quiet relative min-h-0 flex-1 overflow-y-auto pr-1 text-[15px] leading-relaxed",
+            "scrollbar-quiet relative min-h-0 flex-1 overflow-y-auto pr-1 text-sm leading-relaxed",
             // `select-none` while picking: shift-click is how a mark is
             // stretched over several lines, and shift-click is also how a
             // browser extends a text selection — so every extension came with
@@ -2404,7 +2404,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
         {segment.edited && (
           <span
             title="You corrected this line"
-            className="ml-1.5 align-baseline text-[9px] text-muted-foreground/60"
+            className="ml-1.5 align-baseline text-xs text-muted-foreground/60"
           >
             edited
           </span>

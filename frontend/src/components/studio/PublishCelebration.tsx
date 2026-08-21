@@ -166,7 +166,7 @@ export function PublishCelebration({
           {milestone.count === 1 ? (
             <Check className="size-7" aria-hidden />
           ) : (
-            <span className="text-xl font-semibold tabular-nums">
+            <span className="text-lg font-semibold tabular-nums">
               {milestone.count}
             </span>
           )}

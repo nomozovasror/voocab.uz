@@ -29,7 +29,7 @@ export function ConnectionGateScreen() {
               <div className="mx-auto flex size-16 items-center justify-center rounded-2xl bg-primary/10">
                 <WifiOff className="size-8 text-primary" />
               </div>
-              <h1 className="text-3xl font-semibold text-balance text-foreground sm:text-4xl">
+              <h1 className="text-2xl font-semibold text-balance text-foreground sm:text-4xl">
                 The server stepped out for a cup of tea ☕
               </h1>
               <p className="text-lg text-muted-foreground">
