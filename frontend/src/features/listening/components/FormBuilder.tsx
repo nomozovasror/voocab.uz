@@ -1043,10 +1043,10 @@ export function FormBuilder({
                                 aria-label="Row label"
                                 title={block.label}
                                 // The same line box as the value beside it
-                                // (leading-7 + py-1): the two columns
+                                // (leading-relaxed + py-1): the two columns
                                 // read as one line, so a half-step
                                 // between them shows.
-                                className="w-full bg-transparent px-3 py-1 text-base leading-8 text-foreground placeholder:text-muted-foreground/50 focus-visible:outline-none"
+                                className="w-full bg-transparent px-3 py-1 text-base leading-relaxed text-foreground placeholder:text-muted-foreground/50 focus-visible:outline-none"
                               />
                             )}
                           </div>

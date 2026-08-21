@@ -181,7 +181,7 @@ function Transcripts({ results }: { results: QuestionResult[] }) {
   if (!withText.length) return null;
   return (
     <section className="mt-12">
-      <h2 className="mb-4 border-b border-border pb-2 text-xs tracking-[0.14em] text-muted-foreground uppercase">
+      <h2 className="mb-4 border-b border-border pb-2 text-xs tracking-caps text-muted-foreground uppercase">
         where the answers are said
       </h2>
       <ol className="divide-y divide-border">

@@ -92,7 +92,7 @@ function Stat({ value, label }: { value: string; label: string }) {
 
 function SoonChip() {
   return (
-    <span className="rounded-full bg-foreground/8 px-1.5 py-0.5 text-xs font-bold tracking-wider text-muted-foreground uppercase">
+    <span className="rounded-full bg-foreground/8 px-1.5 py-0.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
       Soon
     </span>
   );
@@ -251,7 +251,7 @@ function ActivityRow({ item }: { item: StudioRecentItem }) {
           <span>{timeAgo(item.updated_at)}</span>
           <span
             className={cn(
-              "font-bold tracking-wide uppercase",
+              "font-semibold tracking-wide uppercase",
               item.visibility === "public" ? "text-success" : "text-muted-foreground",
             )}
           >
@@ -384,7 +384,7 @@ export default function StudioDashboardPage() {
               {/* Two equal halves split by the seam: the name bottom-aligns
                   onto it, the handle + level sit just under it. */}
               <div className="flex h-[2.65rem] min-w-0 items-end pb-1">
-                <div className="truncate text-lg leading-none font-semibold tracking-tight text-foreground">
+                <div className="truncate text-lg leading-none font-semibold tracking-normal text-foreground">
                   {user?.display_name ?? "—"}
                 </div>
               </div>

@@ -1951,8 +1951,10 @@ export const AudioEditorPane = forwardRef<
           // afterwards — pointerdown lands first, click has the last word.
           onPointerDown={onTranscriptInput}
           className={cn(
-            // `leading-loose` set wrapped lines within one line of speech as
-            // far apart as two separate ones, so a long line read as several.
+            // Tailwind's `loose` step (2, banned by §1.3) set wrapped lines
+            // within one line of speech as far apart as two separate ones, so
+            // a long line read as several. Named without its class spelled
+            // out: the scanner reads comments too, and would emit the rule.
             // Relaxed keeps them together while the rows' own padding still
             // separates one line of speech from the next.
             "scrollbar-quiet relative min-h-0 flex-1 overflow-y-auto pr-1 text-sm leading-relaxed",

@@ -244,7 +244,7 @@
   /* Overshoots on the way in. Celebration and pop only. */
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
-  --tracking-caps: 0.14em; /* uppercase labels — replaces tracking-[0.14em] */
+  --tracking-caps: 0.14em; /* eyebrow labels — only ever with uppercase */
 }
 
 /* ── Type scale ───────────────────────────────────────────────────────────

@@ -18,7 +18,7 @@ import { ArrowLeft } from "lucide-react";
 export default function NotFoundPage() {
   return (
     <div className="mx-auto max-w-3xl py-16">
-      <p className="font-mono text-xs tracking-[0.14em] text-muted-foreground uppercase">
+      <p className="font-mono text-xs tracking-caps text-muted-foreground uppercase">
         404
       </p>
       <h1 className="mt-2 text-lg font-semibold text-foreground">

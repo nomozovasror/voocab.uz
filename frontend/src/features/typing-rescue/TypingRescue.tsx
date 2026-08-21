@@ -220,7 +220,7 @@ export function TypingRescue() {
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
             <span
               key={waveBanner}
-              className="font-mono text-4xl font-bold tracking-widest text-primary"
+              className="font-mono text-4xl font-semibold tracking-wide text-primary"
               style={{ animation: "tr-wave 1600ms ease-out" }}
             >
               WAVE {waveBanner}

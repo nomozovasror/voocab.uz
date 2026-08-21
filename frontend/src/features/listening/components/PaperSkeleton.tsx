@@ -43,7 +43,7 @@ export function PaperSkeleton({ parts = 2 }: { parts?: number }) {
     <div className="space-y-10">
       {Array.from({ length: parts }, (_, i) => (
         <section key={i}>
-          <h2 className="mb-4 border-b border-border pb-2 text-xs tracking-[0.14em] uppercase">
+          <h2 className="mb-4 border-b border-border pb-2 text-xs tracking-caps uppercase">
             <Skeleton className="inline-block h-[0.9em] w-16" />
           </h2>
           <div className="space-y-3">

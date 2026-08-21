@@ -61,7 +61,7 @@ export function Layout() {
                 to={item.to}
                 className={({ isActive }) =>
                   cn(
-                    "rounded-full px-3 py-1.5 text-xs font-medium tracking-wider uppercase transition-colors",
+                    "rounded-full px-3 py-1.5 text-xs font-medium tracking-wide uppercase transition-colors",
                     isActive
                       ? "bg-primary/10 text-primary"
                       : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",

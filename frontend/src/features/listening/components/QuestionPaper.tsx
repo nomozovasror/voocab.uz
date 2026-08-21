@@ -71,7 +71,7 @@ export function QuestionPaper({
         // part's own heading underneath the bar that sent you there looks
         // like it went somewhere else.
         <section key={part.id} id={`part-${part.id}`} className="scroll-mt-52">
-          <h2 className="mb-4 flex items-baseline gap-2 border-b border-border pb-2 text-xs tracking-[0.14em] text-muted-foreground uppercase">
+          <h2 className="mb-4 flex items-baseline gap-2 border-b border-border pb-2 text-xs tracking-caps text-muted-foreground uppercase">
             part {i + 1}
             {part.title && part.title.toLowerCase() !== `part ${i + 1}` && (
               <span className="normal-case tracking-normal">{part.title}</span>
