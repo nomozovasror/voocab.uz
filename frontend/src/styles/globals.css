@@ -2,6 +2,17 @@
 @import "tw-animate-css";
 @import "@fontsource-variable/inter";
 
+/* The spec lives in frontend/docs/*.md and its tables are full of class
+   names — Tailwind scans markdown too, so `hover:bg-surface-hover` and
+   friends were being generated into production CSS purely by being written
+   down. That matters beyond the wasted bytes: the built stylesheet is the
+   measuring instrument for the rest of this migration, and §6's list of
+   BANNED classes would generate right alongside the allowed ones.
+
+   Two levels up, not one: @source resolves against this file, and this file
+   is in src/styles/, so "../docs" would mean src/docs. */
+@source not "../../docs";
+
 /* Dark variant is driven by the active theme's appearance: ThemeProvider toggles
    the `.dark` class on <html> for dark themes, so shadcn `dark:` utilities work. */
 @custom-variant dark (&:is(.dark *));
