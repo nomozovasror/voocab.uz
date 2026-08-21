@@ -667,7 +667,7 @@ export function FormBuilder({
                     }
                     placeholder="Form title"
                     aria-label="Form title"
-                    className="w-full bg-transparent px-3 py-2.5 text-center text-base font-semibold tracking-wide text-foreground uppercase placeholder:font-normal placeholder:normal-case placeholder:text-muted-foreground focus:outline-none"
+                    className="w-full bg-transparent px-3 py-2.5 text-center text-base font-semibold tracking-wide text-foreground uppercase placeholder:font-normal placeholder:normal-case placeholder:text-muted-foreground focus-visible:outline-none"
                   />
                 )}
 
@@ -681,7 +681,7 @@ export function FormBuilder({
                     }
                     placeholder="Section heading"
                     aria-label="Section heading"
-                    className="w-full bg-transparent px-3 py-1.5 text-base font-medium text-primary placeholder:font-normal placeholder:text-muted-foreground focus:outline-none"
+                    className="w-full bg-transparent px-3 py-1.5 text-base font-medium text-primary placeholder:font-normal placeholder:text-muted-foreground focus-visible:outline-none"
                   />
                 )}
 
@@ -823,7 +823,7 @@ export function FormBuilder({
                                   }
                                   placeholder="Column"
                                   aria-label={`Column ${index + 1} heading`}
-                                  className="w-full bg-transparent px-2.5 py-1.5 pr-7 text-base font-medium text-foreground placeholder:font-normal placeholder:text-muted-foreground/50 focus:outline-none"
+                                  className="w-full bg-transparent px-2.5 py-1.5 pr-7 text-base font-medium text-foreground placeholder:font-normal placeholder:text-muted-foreground/50 focus-visible:outline-none"
                                 />
                                 {/* One column is the fewest a table can have;
                                     below that there is no grid. */}
@@ -1046,7 +1046,7 @@ export function FormBuilder({
                                 // (leading-7 + py-1): the two columns
                                 // read as one line, so a half-step
                                 // between them shows.
-                                className="w-full bg-transparent px-3 py-1 text-base leading-8 text-foreground placeholder:text-muted-foreground/50 focus:outline-none"
+                                className="w-full bg-transparent px-3 py-1 text-base leading-8 text-foreground placeholder:text-muted-foreground/50 focus-visible:outline-none"
                               />
                             )}
                           </div>
@@ -1168,7 +1168,7 @@ export function FormBuilder({
                       type="button"
                       title="Row actions"
                       aria-label="Row actions"
-                      // Hover only, plus its own focus: `group-focus-within`
+                      // Hover only, plus its own focus-visible: `group-focus-within`
                       // meant it appeared the moment the value beside it was
                       // typed into, sitting on the words being written.
                       className="absolute top-1 right-1 flex size-7 items-center justify-center rounded-md bg-card text-muted-foreground opacity-0 shadow-sm transition-opacity group-hover/block:opacity-100 hover:text-foreground focus-visible:opacity-100 data-[state=open]:opacity-100"

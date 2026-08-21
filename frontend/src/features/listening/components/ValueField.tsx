@@ -326,7 +326,7 @@ export function ValueField({
           const chip = (e.target as HTMLElement).closest("[data-gap]");
           onSelectGap?.(chip ? ((chip as HTMLElement).dataset.gap ?? null) : null);
         }}
-        className="min-h-8 w-full text-base leading-8 break-words whitespace-pre-wrap text-foreground focus:outline-none"
+        className="min-h-8 w-full text-base leading-8 break-words whitespace-pre-wrap text-foreground focus-visible:outline-none"
       />
 
       {empty && placeholder && (

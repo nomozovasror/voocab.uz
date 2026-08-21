@@ -103,7 +103,7 @@ export function OptionsBox({
                 }}
                 placeholder="option"
                 aria-label={`Option ${letter.toUpperCase()}`}
-                className="min-w-0 flex-1 border-b border-transparent bg-transparent pb-0.5 text-base text-foreground placeholder:text-muted-foreground/50 hover:border-border focus:border-primary focus:outline-none"
+                className="min-w-0 flex-1 border-b border-transparent bg-transparent pb-0.5 text-base text-foreground placeholder:text-muted-foreground/50 hover:border-border focus-visible:border-primary focus-visible:outline-none"
               />
               {/* Two is the fewest a box can have; below that there is nothing
                   to choose between. Its space is held either way, so nothing

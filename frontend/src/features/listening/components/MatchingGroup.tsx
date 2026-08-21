@@ -151,6 +151,12 @@ function MatchingItem({
               key={letter}
               className={cn(
                 "flex size-7 cursor-pointer items-center justify-center rounded-full border text-xs font-semibold transition-colors",
+                // The real input is sr-only, so the ring goes on the visible
+                // letter. `has-[:focus-visible]` because the input is a child
+                // of this label, not a preceding sibling — there is no peer.
+                // Drawn outside the border box, so it survives all four
+                // colour states below.
+                "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
                 // Before grading, only what the candidate chose is coloured.
                 // After it, the answer leads: the right letter is marked
                 // whether or not they found it, and a wrong pick is marked as

@@ -2425,7 +2425,7 @@ export default function StudioListeningEditorPage() {
           onChange={(e) => update({ title: e.target.value })}
           placeholder="untitled listening"
           aria-label="Material title"
-          className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 py-1 text-sm font-medium text-foreground placeholder:text-muted-foreground hover:border-border focus:border-ring focus:outline-none"
+          className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 py-1 text-sm font-medium text-foreground placeholder:text-muted-foreground hover:border-border focus-visible:border-ring focus-visible:outline-none"
         />
       </Header.Lead>
 

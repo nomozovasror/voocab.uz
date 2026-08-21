@@ -2220,10 +2220,10 @@ function TimeField({
         }
       }}
       className={cn(
-        "text-center text-xs tabular-nums text-foreground focus:outline-none",
+        "text-center text-xs tabular-nums text-foreground focus-visible:outline-none",
         bare
           ? "w-10 bg-transparent p-0 text-left"
-          : "w-12 rounded border border-transparent bg-foreground/6 px-1.5 py-0.5 focus:border-primary",
+          : "w-12 rounded border border-transparent bg-foreground/6 px-1.5 py-0.5 focus-visible:border-primary",
       )}
     />
   );
@@ -2364,7 +2364,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
               e.currentTarget.blur();
             }
           }}
-          className="min-w-0 flex-1 resize-y rounded border border-primary bg-transparent px-1.5 py-0.5 text-sm text-foreground focus:outline-none"
+          className="min-w-0 flex-1 resize-y rounded border border-primary bg-transparent px-1.5 py-0.5 text-sm text-foreground focus-visible:outline-none"
         />
       </div>
     );

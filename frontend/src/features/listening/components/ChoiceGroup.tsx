@@ -162,6 +162,17 @@ function ChoiceQuestion({
             key={letter}
             className={cn(
               "flex cursor-pointer items-baseline gap-2 rounded-md border px-2.5 py-1.5 text-sm transition-colors",
+              // The real input is sr-only, so the focus ring has to be put on
+              // what is actually visible. `has-[:focus-visible]` and not
+              // `peer-focus-visible`: the input is a CHILD of this label, not
+              // a sibling before it, so there is no peer to match.
+              //
+              // A ring rather than a border change, and that is the point: it
+              // is drawn outside the border box, so it survives every one of
+              // the four colour states below — a keyboard user tabbing across
+              // a graded paper can still see where they are on the options
+              // that have gone green or red.
+              "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
               // Before grading, only what the candidate chose is coloured.
               // After it, the answer leads: every right option is marked
               // whether or not they found it, and a wrong pick is marked as

@@ -291,7 +291,7 @@ function QuestionBlock({
           onFocus={remember}
           placeholder="question text"
           aria-label={`Question ${questionNumbers(number, wanted)}`}
-          className="min-w-0 flex-1 border-b border-transparent bg-transparent pb-0.5 text-base text-foreground placeholder:text-muted-foreground/50 hover:border-border focus:border-primary focus:outline-none"
+          className="min-w-0 flex-1 border-b border-transparent bg-transparent pb-0.5 text-base text-foreground placeholder:text-muted-foreground/50 hover:border-border focus-visible:border-primary focus-visible:outline-none"
         />
         {/* In the flow rather than floating over the input's right edge,
             where it sat on top of whatever had been typed. Its space is held
@@ -360,7 +360,7 @@ function QuestionBlock({
                 }}
                 placeholder="option"
                 aria-label={`Option ${letter.toUpperCase()} of question ${number}`}
-                className="min-w-0 flex-1 border-b border-transparent bg-transparent pb-0.5 text-base text-foreground placeholder:text-muted-foreground/50 hover:border-border focus:border-primary focus:outline-none"
+                className="min-w-0 flex-1 border-b border-transparent bg-transparent pb-0.5 text-base text-foreground placeholder:text-muted-foreground/50 hover:border-border focus-visible:border-primary focus-visible:outline-none"
               />
               {/* Two is the fewest a question can have; below that there is
                   nothing to choose between. Its space is held either way, so
