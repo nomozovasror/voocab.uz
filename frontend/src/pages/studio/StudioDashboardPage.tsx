@@ -61,14 +61,14 @@ function itemCountLabel(type: string): string {
   return "items";
 }
 
-function editorHref(item: { id: string; type: string }): string {
-  // A listening material opens in the listening editor. It used to open in
-  // the studio's old per-material page, which was left behind when the editor
-  // was rebuilt — so the dashboard was quietly the one door in the studio that
-  // led to an editor knowing one question type out of eleven.
-  return item.type === "listening"
-    ? `/studio/listening/${item.id}`
-    : `/materials/${item.id}/edit`;
+/** Where a recent item opens, or null if nothing can open it.
+ *
+ *  Only listening has an editor. It used to fall back to /materials/:id/edit
+ *  for everything else, which was authoring for dictation — closed now, since
+ *  its learner side was never built. A row with no editor is drawn as a row
+ *  rather than as a link to nowhere. */
+function editorHref(item: { id: string; type: string }): string | null {
+  return item.type === "listening" ? `/studio/listening/${item.id}` : null;
 }
 
 // ── Small building blocks ────────────────────────────────────────────────
@@ -212,11 +212,21 @@ function ActivityRow({ item }: { item: StudioRecentItem }) {
         ? "bg-success/14 text-success"
         : "bg-foreground/8 text-muted-foreground";
 
+  const href = editorHref(item);
+  const rowClass =
+    "group grid grid-cols-[auto_1fr] items-start gap-2.5 border-t border-foreground/7 py-2 first:border-t-0";
+  const Row = href
+    ? ({ children }: { children: React.ReactNode }) => (
+        <Link to={href} className={rowClass}>
+          {children}
+        </Link>
+      )
+    : ({ children }: { children: React.ReactNode }) => (
+        <div className={rowClass}>{children}</div>
+      );
+
   return (
-    <Link
-      to={editorHref(item)}
-      className="group grid grid-cols-[auto_1fr] items-start gap-2.5 border-t border-foreground/7 py-2 first:border-t-0"
-    >
+    <Row>
       <span
         className={cn(
           "flex size-7.5 shrink-0 items-center justify-center rounded-lg",
@@ -249,7 +259,7 @@ function ActivityRow({ item }: { item: StudioRecentItem }) {
           </span>
         </div>
       </div>
-    </Link>
+    </Row>
   );
 }
 
@@ -480,7 +490,6 @@ export default function StudioDashboardPage() {
           icon={Keyboard}
           title="Dictation"
           description="Listen and type, segment by segment, with word-level feedback."
-          available
           stats={[
             { value: String(dictation?.total ?? 0), label: "materials" },
             {
@@ -489,8 +498,12 @@ export default function StudioDashboardPage() {
             },
             { value: DASH, label: "saves" },
           ]}
-          href={(dictation?.total ?? 0) > 0 ? "/materials" : "/materials/new"}
-          ctaLabel={(dictation?.total ?? 0) > 0 ? "Manage" : "Create your first"}
+          // Authoring for dictation is closed until its learner side exists.
+          // The counts stay real — the backend still reports them — but there
+          // is nowhere for the tile to lead.
+          available={false}
+          href="#"
+          ctaLabel="Coming soon"
         />
         <TypeTile
           gridArea="t3"

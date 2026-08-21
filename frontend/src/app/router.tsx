@@ -88,19 +88,19 @@ export const router = createBrowserRouter([
             path: "profile",
             ...page(() => import("@/pages/profile/ProfilePage")),
           },
-          {
-            path: "materials",
-            ...page(() => import("@/pages/materials/MaterialsPage")),
-          },
-          {
-            path: "materials/new",
-            ...page(() => import("@/pages/materials/MaterialEditorPage")),
-          },
-          {
-            path: "materials/:id/edit",
-            ...page(() => import("@/pages/materials/MaterialEditorPage")),
-          },
+          // /materials, /materials/new and /materials/:id/edit used to live
+          // here: authoring for dictation, whose learner side was never
+          // built. A door to a room with no floor. Closed rather than
+          // redirected — there is nowhere to redirect to, and dictation is
+          // not deleted, just not open yet.
         ],
+      },
+      // Anything else under "/". Without it react-router raises the path as
+      // an error and renders its own developer screen; with it, a stale
+      // bookmark lands on a page wearing the app's own chrome.
+      {
+        path: "*",
+        ...page(() => import("@/pages/NotFoundPage")),
       },
     ],
   },
@@ -157,6 +157,12 @@ export const router = createBrowserRouter([
           {
             path: "listening/:id",
             ...page(() => import("@/pages/studio/listening/StudioListeningEditorPage")),
+          },
+          // The studio's own, so a wrong address inside it keeps the studio's
+          // chrome rather than dropping the author back into the app shell.
+          {
+            path: "*",
+            ...page(() => import("@/pages/NotFoundPage")),
           },
         ],
       },
