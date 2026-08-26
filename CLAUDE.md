@@ -74,6 +74,27 @@ megabyte of JSON and a thousand rows of DOM to show somebody thirty titles.
   four, filters narrow before depth does, and one order per sort key is worth
   more than a cursor that has to encode which key it is on.
 
+## A recommendation has to say why
+
+`GET /api/listening/next` returns three materials and a `reason`
+(`backend/app/services/recommend.py`). The reason is the contract, not
+decoration: a recommendation that cannot justify itself is a shuffle with a
+confident label on it, and the reader has no way to tell those apart except by
+being told.
+
+- **`weak_part` is guarded, and stays guarded.** The sidebar once named the
+  lowest-scoring part outright and it did not survive being looked at — 62%
+  against 66% over a few dozen answers is noise. A part is named only when it
+  is scored at all, below `WEAK_CEILING`, and clear of the next-weakest by
+  `DECISIVE_GAP`. Otherwise the reason falls through to `level`, which the
+  same data does support. Loosening those constants means making a claim about
+  somebody's ability on evidence that doesn't carry it.
+- **The ladder never opens with `hard`**, at any level, and `new` is always
+  last — "might be anything" is not a recommendation.
+- Never recommend a material with no questions in it, or one already sat.
+- The block is shown only over an **unnarrowed** list. A filter is the reader
+  saying what they want; suggesting past it is the page talking over them.
+
 ## Loading states (frontend)
 
 Three of the four pieces are structural and need no remembering:

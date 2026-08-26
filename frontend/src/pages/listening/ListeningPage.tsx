@@ -11,6 +11,7 @@ import { getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
   PRACTICE_PAGE,
+  useNextUp,
   usePracticeCatalogue,
   usePracticeStats,
 } from "@/features/listening/queries";
@@ -44,6 +45,10 @@ import {
   PracticeRowSkeleton,
 } from "@/features/listening/components/PracticeRow";
 import { PracticeAside } from "@/features/listening/components/PracticeAside";
+import {
+  NextUp,
+  NextUpSkeleton,
+} from "@/features/listening/components/NextUp";
 
 /** How long the pointer has to rest on a row before the cards answer it, and
  *  how long they wait before turning back once it leaves. Module constants so
@@ -89,6 +94,7 @@ const BOTTOM_GAP = 16;
  */
 export default function ListeningPage() {
   const stats = usePracticeStats();
+  const nextUp = useNextUp();
 
   // One value rather than a useState per control: every one of them narrows
   // the same list, "clear filters" has to put all of them back at once, and
@@ -526,6 +532,24 @@ export default function ListeningPage() {
             </div>
           ) : (
             <>
+              {/*
+                Only over an unnarrowed list, and that is the rule rather than
+                a detail. A suggestion answers "what should I do"; a filter is
+                somebody saying what they want to do. Leaving the block up
+                over a search for "map labelling" is the page talking over the
+                reader — and worse, recommending materials that the filter
+                they just set would have excluded.
+
+                It is inside the loaded branch and above the header, where the
+                list's own first row would be, so the eye meets it on the way
+                down rather than having to come back up for it.
+              */}
+              {!narrowed &&
+                (nextUp.isLoading ? (
+                  <NextUpSkeleton />
+                ) : nextUp.data ? (
+                  <NextUp data={nextUp.data} />
+                ) : null)}
               <ListHeader
                 count={total}
                 filtered={narrowed}

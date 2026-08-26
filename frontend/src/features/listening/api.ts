@@ -18,6 +18,7 @@ import type {
   PartCreate,
   PartOut,
   PartUpdate,
+  NextUp,
   PracticeCatalogue,
   QuestionGroupIn,
 } from "@/features/listening/types";
@@ -153,6 +154,12 @@ export const listeningApi = {
       `/api/listening/practice${query ? `?${query}` : ""}`,
     );
   },
+
+  /** A few materials to practise next, and why those. Its own request rather
+   *  than a field on the catalogue: that answers "what is there", this
+   *  answers "what should I do", and changing a filter is not asking the
+   *  second question again. */
+  nextUp: () => api.get<NextUp>("/api/listening/next"),
 
   /** The caller's own listening statistics — the practice page's right-hand
    *  panel. There is no user id in the path and no way to ask for anybody

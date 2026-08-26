@@ -424,6 +424,29 @@ export interface PracticeCatalogue {
   bands: PracticeFacet[];
 }
 
+/** Why a set of recommendations was made. Three genuinely different claims,
+ *  not three phrasings of one:
+ *
+ *  - `start` — nothing finished yet, so this is Part 1 and nothing is being
+ *    asserted about the reader.
+ *  - `weak_part` — one part is clearly behind the others; `part` and
+ *    `accuracy_pct` say which and how far.
+ *  - `level` — nothing is clearly behind, so these suit their average.
+ *
+ *  The words live here rather than on the server, but WHICH of the three is
+ *  the server's judgement — and each one had to prove something before it was
+ *  allowed (backend/app/services/recommend.py). */
+export type NextUpReason = "start" | "weak_part" | "level";
+
+export interface NextUp {
+  reason: NextUpReason;
+  part: number | null;
+  accuracy_pct: number | null;
+  /** May be empty: somebody who has sat everything gets the reason and no
+   *  rows, and the block has to survive drawing that. */
+  items: PracticeMaterial[];
+}
+
 // --- The learner's own statistics -------------------------------------------
 
 /** One bar of a distribution.

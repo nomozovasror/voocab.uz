@@ -331,6 +331,40 @@ async def _time_spent(session: AsyncSession, user_id: uuid.UUID) -> int:
     return int(total or 0)
 
 
+async def first_attempt_profile(
+    session: AsyncSession, user_id: uuid.UUID
+) -> dict:
+    """The little of this module that anything else needs to know.
+
+    Two facts and a flag: whether they have finished anything at all, how they
+    average over first attempts, and how that splits by part. It exists so
+    :mod:`app.services.recommend` can ask without reaching into the private
+    helpers here — the rule that first attempts are the measurement lives in
+    this module, and a second caller working it out for itself is a second
+    place for it to be got wrong.
+
+    Not :func:`listening_stats`: that also counts mistakes by kind, time
+    spent, the trend and where they left off, none of which chooses a
+    material, and all of which is work.
+    """
+    attempts = await _submitted(session, user_id)
+    if not attempts:
+        return {"sat_anything": False, "average_pct": None, "by_part": []}
+
+    first_by_material, _best, _repeated = _first_and_best(attempts)
+    first_ids = [a.id for a in first_by_material.values()]
+    scores = [
+        pct
+        for a in first_by_material.values()
+        if (pct := _score_pct(a)) is not None
+    ]
+    return {
+        "sat_anything": True,
+        "average_pct": _mean(scores),
+        "by_part": await _by_part(session, first_ids),
+    }
+
+
 async def listening_stats(session: AsyncSession, user_id: uuid.UUID) -> dict:
     """The practice page's right-hand column, whole.
 

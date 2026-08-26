@@ -34,6 +34,7 @@ from app.schemas.listening import (
     PartCreate,
     PartOut,
     PartUpdate,
+    NextUpOut,
     PracticeCatalogueOut,
     PracticeMaterialOut,
     QuestionGroupIn,
@@ -44,6 +45,7 @@ from app.schemas.listening import (
 from app.services import difficulty as difficulty_service
 from app.services import grading as grading_service
 from app.services import learner_stats as learner_stats_service
+from app.services import recommend as recommend_service
 from app.services import listening as listening_service
 
 router = APIRouter(prefix="/api", tags=["listening"])
@@ -320,6 +322,25 @@ async def practice_catalogue(
         done_hidden=page["done_hidden"],
         types=page["types"],
         bands=page["bands"],
+    )
+
+
+@router.get("/listening/next", response_model=NextUpOut)
+async def next_up(user: CurrentUser, session: SessionDep) -> NextUpOut:
+    """What to practise next, and why.
+
+    Its own request rather than a field on the catalogue, and the reason is
+    the same one that keeps the statistics panel separate: the catalogue is
+    "what is there", this is "what should I do", and a learner changing a
+    filter has not asked the second question again. Bundled together, every
+    chip click would recompute a recommendation nobody is looking at.
+
+    Nothing is cached and nothing is stored. It is three rules over numbers
+    the platform already has (:mod:`app.services.recommend`), so it is always
+    current and there is no stale-suggestion state to reason about.
+    """
+    return NextUpOut(
+        **await recommend_service.next_up(session, user.id),
     )
 
 

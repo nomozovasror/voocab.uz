@@ -136,6 +136,19 @@ export function usePracticeCatalogue(
   });
 }
 
+const NEXT_UP_KEY = ["listening-next-up"] as const;
+
+/** What to practise next. Not keyed by the filters — a recommendation is
+ *  about the library and the learner, and neither of those changes because
+ *  somebody clicked a chip. */
+export function useNextUp() {
+  return useQuery({
+    queryKey: NEXT_UP_KEY,
+    queryFn: () => listeningApi.nextUp(),
+    staleTime: 60_000,
+  });
+}
+
 const PRACTICE_STATS_KEY = ["listening-practice-stats"] as const;
 
 /** What the learner is good and bad at — the catalogue's right-hand panel.
@@ -168,6 +181,9 @@ export function useSubmitAttempt(materialId: string) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: PRACTICE_KEY });
       void qc.invalidateQueries({ queryKey: PRACTICE_STATS_KEY });
+      // And what to do next: the material just finished must drop out of the
+      // suggestions, and finishing it may have moved which part is behind.
+      void qc.invalidateQueries({ queryKey: NEXT_UP_KEY });
     },
   });
 }

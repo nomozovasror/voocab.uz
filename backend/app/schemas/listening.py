@@ -862,6 +862,35 @@ class PracticeCatalogueOut(BaseModel):
     bands: list[PracticeFacetOut] = []
 
 
+class NextUpOut(BaseModel):
+    """A few materials to practise next, and why those.
+
+    ``reason`` is the whole contract, and it is an enum rather than a
+    server-written sentence for the usual reason — the words belong with the
+    rest of the interface's words — but also because each value is a genuinely
+    different claim and the client must be able to tell them apart:
+
+    * ``start`` — no finished attempts yet, so this is Part 1 and nothing is
+      being asserted about the reader.
+    * ``weak_part`` — one part is clearly behind the others; ``part`` and
+      ``accuracy_pct`` say which and how far.
+    * ``level`` — nothing is clearly behind, so these are chosen to suit their
+      average, which ``accuracy_pct`` carries.
+
+    A recommendation that cannot say why it was made is a shuffle with a
+    confident label on it. See :mod:`app.services.recommend` for what each
+    branch had to prove before it was allowed to make its claim.
+
+    ``items`` may be empty: a learner who has sat everything gets the reason
+    and no rows, which the page has to be able to draw.
+    """
+
+    reason: Literal["start", "weak_part", "level"]
+    part: int | None = None
+    accuracy_pct: int | None = None
+    items: list[PracticeMaterialOut] = []
+
+
 # --- Consumption: the learner's own statistics ------------------------------
 
 

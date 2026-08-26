@@ -1,0 +1,186 @@
+import { Link } from "react-router-dom";
+import { Sparkles } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
+import { fmtClock } from "@/lib/time";
+import {
+  DIFFICULTY_CLASS,
+  DIFFICULTY_SHORT,
+  describeTask,
+  difficultyTitle,
+  partLabel,
+} from "@/features/listening/practice";
+import type { NextUp as NextUpData, PracticeMaterial } from "@/features/listening/types";
+
+/**
+ * Three materials, above a catalogue nobody can read all of.
+ *
+ * A list of a thousand papers answers "what exists". This answers the
+ * question people actually arrive with — "I have twenty minutes, what should
+ * I do" — and it is the only part of the page that makes a choice on the
+ * reader's behalf.
+ *
+ * Which is why the sentence above the three is not decoration. A
+ * recommendation that cannot say why it was made is a shuffle with a
+ * confident label on it, and the reader has no way to tell the two apart
+ * except by being told. Each of the three reasons is a different claim, and
+ * two of them are claims about the reader that had to be earned before the
+ * server was allowed to make them (backend/app/services/recommend.py).
+ *
+ * Deliberately small. It sits above the list, not instead of it: somebody who
+ * knows what they want should be able to look straight past this at the
+ * search field, so it is three lines and a heading rather than three cards
+ * with cover images.
+ */
+
+/** What the block says it is doing, per reason.
+ *
+ *  Written here with the rest of the interface's words, and written in full
+ *  sentences rather than assembled from fragments — "Part 3 · 52%" is a
+ *  readout, and this is meant to be read. */
+function heading(data: NextUpData): { title: string; note: string } {
+  if (data.reason === "weak_part") {
+    return {
+      title: `Part ${data.part} is where you lose most marks`,
+      // The number is the working. Without it the claim is the page asserting
+      // something about somebody with nothing to check it against.
+      note:
+        data.accuracy_pct === null
+          ? "Papers with that part in them."
+          : `You get ${data.accuracy_pct}% of it right on a first attempt. These have it in them.`,
+    };
+  }
+  if (data.reason === "start") {
+    return {
+      title: "Start with Part 1",
+      note: "The gentlest section of the paper, and the one the others build on.",
+    };
+  }
+  return {
+    title: "Next up",
+    note:
+      data.accuracy_pct === null
+        ? "Picked from what you haven't sat yet."
+        : `You average ${data.accuracy_pct}% on a first attempt. These are pitched around there.`,
+  };
+}
+
+export function NextUp({ data }: { data: NextUpData }) {
+  // Nothing to suggest — they have sat everything the filters could offer.
+  // Silence is right here: a heading over an empty box is the page insisting
+  // on speaking when it has nothing to say.
+  if (data.items.length === 0) return null;
+
+  const { title, note } = heading(data);
+
+  return (
+    <section
+      aria-label="Suggested materials"
+      className="mb-6 rounded-2xl border border-border-subtle bg-card/40 p-4"
+    >
+      <div className="flex items-start gap-2.5">
+        <Sparkles className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
+        <div className="min-w-0">
+          <h2 className="text-sm text-foreground">{title}</h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">{note}</p>
+        </div>
+      </div>
+
+      {/* Not <ol>, and not numbered. The list below is numbered, and a second
+          set of 1-2-3 twenty pixels above it reads as the same list starting
+          twice. */}
+      <ul className="mt-3 space-y-0.5">
+        {data.items.map((m) => (
+          <li key={m.id}>
+            <Suggestion material={m} />
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** One suggestion: the same facts a catalogue row carries, at half the
+ *  weight. No history column — everything here is by definition unsat. */
+function Suggestion({ material: m }: { material: PracticeMaterial }) {
+  const task = describeTask(m);
+  const part = partLabel(m);
+
+  return (
+    <Link
+      to={`/listening/${m.id}`}
+      className="flex items-center gap-3 rounded-lg px-2 py-2 transition-colors duration-fast hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+    >
+      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+        {m.title}
+      </span>
+      <span className="hidden shrink-0 items-center gap-1.5 text-xs text-muted-foreground sm:flex">
+        {part && <span>{part}</span>}
+        {task && (
+          <>
+            <span aria-hidden className="opacity-60">
+              ·
+            </span>
+            <span className="max-w-40 truncate">{task.label}</span>
+          </>
+        )}
+        {m.duration_ms != null && (
+          <>
+            <span aria-hidden className="opacity-60">
+              ·
+            </span>
+            <span className="tabular-nums">{fmtClock(m.duration_ms)}</span>
+          </>
+        )}
+      </span>
+      <span
+        title={difficultyTitle(m)}
+        className={cn(
+          "w-14 shrink-0 rounded-full border py-0.5 text-center text-xs font-medium",
+          DIFFICULTY_CLASS[m.difficulty.band],
+        )}
+      >
+        {DIFFICULTY_SHORT[m.difficulty.band]}
+      </span>
+    </Link>
+  );
+}
+
+/**
+ * The block, waiting.
+ *
+ * Built from the real one's class strings so the two cannot drift, and
+ * present at all because this sits ABOVE the list: a block that appears once
+ * loaded would push the whole catalogue down the page under the reader's
+ * pointer.
+ */
+export function NextUpSkeleton() {
+  return (
+    <section
+      aria-hidden
+      className="mb-6 rounded-2xl border border-border-subtle bg-card/40 p-4"
+    >
+      <div className="flex items-start gap-2.5">
+        <Skeleton className="mt-0.5 size-4 shrink-0 rounded-full" />
+        <div className="min-w-0 flex-1">
+          <h2 className="text-sm">
+            <Skeleton className="inline-block h-[0.8em] w-48 max-w-full" />
+          </h2>
+          <p className="mt-0.5 text-xs">
+            <Skeleton className="inline-block h-[0.8em] w-72 max-w-full" />
+          </p>
+        </div>
+      </div>
+      <ul className="mt-3 space-y-0.5">
+        {[0, 1, 2].map((i) => (
+          <li key={i} className="flex items-center gap-3 px-2 py-2">
+            <span className="min-w-0 flex-1 text-sm">
+              <Skeleton className="inline-block h-[0.8em] w-56 max-w-full" />
+            </span>
+            <Skeleton className="h-6 w-14 shrink-0 rounded-full" />
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}

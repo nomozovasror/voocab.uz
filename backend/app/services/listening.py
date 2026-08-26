@@ -1068,6 +1068,75 @@ async def practice_catalogue(
     }
 
 
+async def recommended(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    *,
+    part: int | None,
+    ranks: dict[str, int],
+    size: int,
+) -> list[dict]:
+    """A handful of materials to put in front of one learner.
+
+    The same rows as the catalogue, chosen by a different question. Two
+    filters and an order, and nothing else is worth the machinery: it must be
+    something they have NOT sat — recommending a paper somebody finished last
+    week is the page not paying attention — optionally from one part, and
+    ordered so the level that suits them comes first (``ranks``, from
+    :mod:`app.services.recommend`, which is where every judgement about WHO
+    this is for lives).
+
+    Ties inside a band break newest-first, so the block changes as the library
+    grows rather than recommending the same three things forever.
+    """
+    where = [
+        Material.type == "listening",
+        Material.visibility == "public",
+        ~select(Attempt.id)
+        .where(
+            Attempt.material_id == Material.id,
+            Attempt.user_id == user_id,
+            Attempt.status == AttemptStatus.SUBMITTED,
+        )
+        .exists(),
+        # Nothing empty. A material with no questions is not practice, and it
+        # is the one thing a recommendation must not be: the page choosing,
+        # on the learner's behalf, to waste their evening.
+        select(Question.id)
+        .join(QuestionGroup, QuestionGroup.id == Question.group_id)  # type: ignore[arg-type]
+        .join(Part, Part.id == QuestionGroup.part_id)  # type: ignore[arg-type]
+        .where(Part.material_id == Material.id)
+        .exists(),
+    ]
+    if part is not None:
+        where.append(
+            select(Part.id)
+            .where(Part.material_id == Material.id, Part.order_index == part - 1)
+            .exists()
+        )
+
+    materials = list(
+        (
+            await session.exec(
+                select(Material)
+                .select_from(Material)
+                .outerjoin(
+                    MaterialDifficulty,
+                    MaterialDifficulty.material_id == Material.id,  # type: ignore[arg-type]
+                )
+                .where(*where)
+                .order_by(
+                    _band_case(ranks),
+                    Material.created_at.desc(),  # type: ignore[attr-defined]
+                    Material.id,
+                )
+                .limit(size)
+            )
+        ).all()
+    )
+    return await _catalogue_rows(session, user_id, materials)
+
+
 async def _catalogue_rows(
     session: AsyncSession, user_id: uuid.UUID, materials: list[Material]
 ) -> list[dict]:
