@@ -28,6 +28,13 @@ uv run uvicorn app.main:app --reload
 
 # Full stack (API + Postgres) via Docker
 docker compose up --build   # from repo root
+
+# A catalogue to develop the learner's /listening page against — 15 public
+# materials across all four parts, every question type, and the answers that
+# give each one a difficulty band. Dev databases only (refuses to run unless
+# DEV_LOGIN_ENABLED); --clean removes exactly what it wrote.
+uv run python -m scripts.seed_practice
+uv run python -m scripts.seed_practice --reset
 ```
 
 No test, lint, or formatter setup exists yet.
@@ -39,6 +46,33 @@ The project targets **Python 3.14** and **Postgres 18**. Keep these aligned acro
 - `backend/.python-version` → `3.14`
 - `backend/Dockerfile` → `FROM python:3.14-slim`
 - `docker-compose.yml` → `image: postgres:18`
+
+## The catalogue is a query, not a list
+
+`GET /api/listening/practice` returns **one page**, filtered, ordered and
+counted in SQL (`backend/app/services/listening.py`). Nothing about the list
+is decided in the browser any more, and that is deliberate: at a thousand
+materials, sending the library so the page can hide most of it is half a
+megabyte of JSON and a thousand rows of DOM to show somebody thirty titles.
+
+- **Add a filter in two places or not at all.** `catalogueParams` in
+  `frontend/src/features/listening/practice.ts` turns the control state into
+  query parameters; `_catalogue_where` in the service turns them into SQL. A
+  filter that only exists in one of them narrows the page and not the count.
+- **Facets are counted over the whole library**, never over the page and never
+  over what the other filters left. An option that appears and vanishes as you
+  filter is an option nobody can aim at.
+- **`done` defaults to false** — materials the caller has sat are put away —
+  and the endpoint says how many that hid (`done_hidden`). Never hide rows
+  without saying so; a list quietly shorter than the reader knows the library
+  to be is a list that looks broken.
+- Anything a row prints that is a fact about the LIBRARY rather than about the
+  material must come from the server. The author byline's "4 materials here"
+  was counted in the browser and became a lie the day the browser stopped
+  having the library.
+- Paging is offset-based on purpose. Keyset is what survives six figures; at
+  four, filters narrow before depth does, and one order per sort key is worth
+  more than a cursor that has to encode which key it is on.
 
 ## Loading states (frontend)
 
@@ -80,3 +114,83 @@ for route-level `lazy:`.
 
 Reference implementations: `src/features/listening/components/PaperSkeleton.tsx`
 and `DashboardSkeleton` in `src/pages/studio/StudioDashboardPage.tsx`.
+
+## Difficulty is measured, never stored
+
+A listening material's `Easy` / `Medium` / `Hard` / `New` band is a function of
+`QuestionAttempt` rows (`backend/app/services/difficulty.py`), never anything
+an author declares. **Do not add a `difficulty` column to `materials`.** The
+current answer is a classic proportion correct (stage 1); the next one is a
+Rasch/1PL estimate that corrects for *who* sat the paper. As long as
+difficulty stays a function, that swap touches one module — an authored column
+would make it a migration, a backfill and a re-education of everyone who set
+one.
+
+**The projection is not that column.** The tally lives in a
+`material_difficulty` table that `difficulty.recompute()` refills, because the
+aggregate is a scan of every answer on the platform and running it per request
+does not survive a catalogue of a thousand papers. The line: nothing authored
+ever reaches that table, every column in it is derived, and dropping the whole
+thing costs one `recompute()`. Stage 2 changes the computation and the table
+refills — still no migration.
+
+- The worker refreshes it every `DIFFICULTY_REFRESH_INTERVAL_S` (default 900),
+  in its own loop beside transcription (`backend/app/worker.py`). A failed
+  refresh is logged and swallowed: nobody waits on a band, and people wait on
+  audio.
+- **A band is only as fresh as the last refresh.** The one visible effect is a
+  material crossing `MIN_ANSWERS` for the first time, which keeps saying `New`
+  until the next pass. Anything writing attempts outside a request — the seed
+  script — calls `recompute()` itself.
+- The read path derives the band from the stored *tally*, not from the stored
+  `band` column. Move a threshold and the API is right immediately while the
+  column catches up; the column exists so a paginated catalogue can filter and
+  sort by difficulty in SQL.
+
+Two constants guard against inventing numbers, and both are deliberate:
+
+- `difficulty.MIN_ANSWERS` — below it, a material is `New` with no percentage.
+- `learner_stats.MIN_ANSWERS` — below it, a distribution row on the practice
+  page's statistics panel reports `accuracy_pct: null`, and the UI draws a dash
+  with no bar. **Never substitute 0** — over four answers a zero is a false
+  claim, and the panel exists to be trusted.
+
+They are separate constants on purpose: "is this paper hard" and "is this
+person weak here" are different questions, so one moving must not drag the
+other.
+
+
+## First attempts are the measurement
+
+Every figure in the listening sidebar that describes *ability* — the average,
+the mistake breakdown, the trend, the part split — counts each material's
+**first** submitted attempt and nothing else
+(`backend/app/services/learner_stats.py`). Somebody who sits a paper three
+times and finishes on 95% has learned that paper, not listening.
+
+- `first_try_avg_pct` is the headline; `best_avg_pct` sits under it and is
+  **absent entirely** until something has actually been sat twice, because
+  with no retries it is the same number under a second name.
+- "Materials done" counts materials with at least one *submitted* attempt.
+  Started-and-abandoned doesn't count.
+- Percentages round half **up** (`_pct`), not Python's default half-to-even —
+  two figures on one panel disagreeing by one is a bug nobody reports and
+  everybody notices.
+
+## Mistakes are classified, not counted
+
+`backend/app/services/mistakes.py` turns a wrong answer into a *kind* —
+spelling, missed entirely, singular/plural, over word limit, number/date
+format, wrong answer — by comparing the raw `given_answer` against the
+accepted ones. This is only possible because grading normalises for the
+comparison and never writes the normalised form back: **keep storing
+`given_answer` exactly as typed.**
+
+The distinction the sidebar rests on is *spelling* against *missed entirely*:
+one is a proof-reading problem and the other is a listening problem, and "you
+got 62%" tells a candidate neither. The rules lean towards **not** claiming
+spelling — see the threshold notes in that module.
+
+Letter-answered groups (multiple choice, matching, boxed summaries) are
+excluded: there is no spelling in "b". Distractor analysis is the equivalent
+question there, and it belongs on the full statistics page.

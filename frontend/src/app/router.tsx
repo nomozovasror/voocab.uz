@@ -77,6 +77,11 @@ export const router = createBrowserRouter([
             ...page(() => import("@/pages/listening/ListeningResultsPage")),
           },
           {
+            // Same reason as above: "statistics" is not a material id.
+            path: "listening/statistics",
+            ...page(() => import("@/pages/listening/ListeningStatsPage")),
+          },
+          {
             path: "listening/:id",
             ...page(() => import("@/pages/listening/ListeningTakePage")),
           },

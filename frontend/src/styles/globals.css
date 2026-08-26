@@ -314,6 +314,48 @@
   }
 }
 
+/* The catalogue's side card swaps face as the pointer moves between rows, and
+   its new contents arrive out of a blur rather than cutting in
+   (reactbits.dev/animations/fade-content).
+
+   A keyframe rather than a utility because no utility animates `filter` —
+   tw-animate-css's fade-in touches opacity alone, and opacity alone is the
+   cut this is meant to replace.
+
+   Three numbers are deliberately not the source's, because the source is a
+   one-shot reveal of a hero on scroll and this is a card that changes again
+   every time the pointer moves:
+
+   * 4px of blur, not 10. At ten the text is a smear for the first third of
+     the animation — legible content is the point of the card, and there is no
+     drama to be had from hiding it.
+   * 400ms, not 700. The card is answering a gesture, and an answer that takes
+     the better part of a second after the wait that preceded it stops feeling
+     like a reply and starts feeling like a scene change.
+   * It starts at 0.35 opacity rather than 0. The outgoing face is gone the
+     instant React swaps the subtree, so a fade from nothing leaves an empty
+     bordered box on screen for a beat — which is exactly what makes the card
+     read as detached from the row that asked for it.
+
+   `will-change` is on for the length of the animation: a blur is composited,
+   and saying so in advance is the difference between a smooth dissolve and
+   one that hitches on its first frame. */
+@keyframes fade-blur-in {
+  from {
+    opacity: 0.35;
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+@utility animate-fade-blur {
+  animation: fade-blur-in 400ms var(--ease-out) both;
+  will-change: opacity, filter;
+}
+
 /* Typing Rescue animations (juice for the connection-gate game). */
 @keyframes tr-rise {
   0% { opacity: 0; transform: translate(-50%, 6px) scale(0.9); }

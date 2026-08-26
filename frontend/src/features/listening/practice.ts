@@ -1,0 +1,493 @@
+import { AudioLines, Layers } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import {
+  QUESTION_TYPE_ICON,
+  QUESTION_TYPE_LABEL,
+} from "@/features/listening/parts";
+import type {
+  CatalogueAuthor,
+  DifficultyBand,
+  ListeningStats,
+  MistakeKind,
+  PartAccuracy,
+  PracticeFacet,
+  PracticeMaterial,
+  QuestionGroupType,
+} from "@/features/listening/types";
+
+/**
+ * What a catalogue row says about itself, and what the filters above it mean.
+ *
+ * All of it derived, none of it stored: the server sends which parts a
+ * material holds and which kinds of question are in them, and everything a
+ * learner reads on the row — "Part 2", "Full test", "2 question types" — is
+ * worked out from those two lists here, in one place, so the row and the chip
+ * that filters it can't come to disagree about what a material is.
+ */
+
+// --- Difficulty --------------------------------------------------------------
+
+/** Title case, like every other label in the interface. */
+export const DIFFICULTY_LABEL: Record<DifficultyBand, string> = {
+  new: "New",
+  easy: "Easy",
+  medium: "Medium",
+  hard: "Hard",
+};
+
+/**
+ * The same four, at the width of the shortest of them.
+ *
+ * The chip is the right-hand column of every row, and a column whose width
+ * changes per row is a ragged edge down the page — "Medium" is half as wide
+ * again as "New", which was enough to make the list look unaligned even
+ * though every chip was placed identically.
+ *
+ * Trimming the label is what fixes it at the source, rather than padding the
+ * chip out to the widest word and printing three of the four with air around
+ * them. "Med" is the only one that loses anything, and it loses it beside
+ * "Easy" and "Hard", which is all the context it needs. The full word is
+ * still what the filter menu offers and what the tooltip spells out.
+ */
+export const DIFFICULTY_SHORT: Record<DifficultyBand, string> = {
+  new: "New",
+  easy: "Easy",
+  medium: "Med",
+  hard: "Hard",
+};
+
+/** The chip, per band.
+ *
+ * `New` is deliberately the quietest of the four rather than a fifth colour:
+ * it is the absence of a measurement, not a level of difficulty, and painting
+ * it as loudly as `Hard` would make "nobody has done this yet" look like a
+ * warning. */
+export const DIFFICULTY_CLASS: Record<DifficultyBand, string> = {
+  new: "border-border-subtle text-muted-foreground",
+  easy: "border-correct/40 bg-correct/10 text-correct",
+  // Neutral, not amber. Amber here is within a shade of the accent, and the
+  // accent means "this is the action" — a chip on every second row wearing it
+  // would spend the page's one loud colour on the least interesting fact it
+  // has. Green and red carry the two ends; the middle is the absence of both.
+  medium: "border-border-subtle bg-surface-hover text-foreground",
+  hard: "border-incorrect/40 bg-incorrect/10 text-incorrect",
+};
+
+/** The bands in the order they are offered — the scale, then the absence of
+ *  one. `New` is last because it is not a level of difficulty. */
+export const DIFFICULTY_ORDER: DifficultyBand[] = [
+  "easy",
+  "medium",
+  "hard",
+  "new",
+];
+
+/** What a difficulty chip means, spelled out — the band alone is a claim with
+ *  no working shown, and the number behind it is the working. */
+export function difficultyTitle(m: PracticeMaterial): string {
+  const { band, correct_pct, answered } = m.difficulty;
+  if (band === "new" || correct_pct === null) {
+    return answered === 0
+      ? "Nobody has answered this yet"
+      : `Only ${answered} answers so far — not enough to rate it`;
+  }
+  return `${correct_pct}% of answers to this material are correct (${answered} answers)`;
+}
+
+// --- What a material is ------------------------------------------------------
+
+/** Four parts is a whole paper; anything less is an excerpt from one. */
+export const FULL_TEST_PARTS = 4;
+
+export interface TaskDescription {
+  Icon: LucideIcon;
+  label: string;
+}
+
+/**
+ * The one thing the meta line says about the questions inside.
+ *
+ * A single type names itself and wears its own icon — the same icon the
+ * editor uses, imported from the same table, because an author who built a
+ * map-labelling task and a learner looking for one should be looking at the
+ * same mark.
+ *
+ * Beyond that a name would be a lie by omission: a part holding form
+ * completion *and* multiple choice is not a form-completion material, and
+ * labelling it after whichever came first is how a catalogue teaches people
+ * to distrust it. So several types in one part count themselves, and several
+ * parts stop describing the questions at all — a whole paper is not "notes
+ * completion", it is a whole paper.
+ */
+export function describeTask(m: PracticeMaterial): TaskDescription | null {
+  if (m.part_count > 1) {
+    return {
+      Icon: AudioLines,
+      label:
+        m.part_count >= FULL_TEST_PARTS
+          ? "Full test"
+          : `${m.part_count} parts`,
+    };
+  }
+  if (m.question_types.length === 1) {
+    const type = m.question_types[0];
+    return { Icon: QUESTION_TYPE_ICON[type], label: QUESTION_TYPE_LABEL[type] };
+  }
+  if (m.question_types.length > 1) {
+    return { Icon: Layers, label: `${m.question_types.length} question types` };
+  }
+  return null;
+}
+
+/** "Part 2", or nothing where there is more than one to name. */
+export function partLabel(m: PracticeMaterial): string | null {
+  if (m.part_count !== 1) return null;
+  const [n] = m.part_numbers;
+  return n ? `Part ${n}` : null;
+}
+
+// --- Filters -----------------------------------------------------------------
+
+/**
+ * What the chip row selects: everything, one part, or a whole paper.
+ *
+ * One selection rather than a set, because these are three answers to the
+ * same question ("which of them do I want to see"). "Done" is the other
+ * question and toggles independently — it is about the learner, not about the
+ * material.
+ */
+export type Scope = "all" | "full" | 1 | 2 | 3 | 4;
+
+export const SCOPE_PARTS: Scope[] = [1, 2, 3, 4];
+
+export function scopeLabel(scope: Scope): string {
+  if (scope === "all") return "All";
+  if (scope === "full") return "Full test";
+  return `Part ${scope}`;
+}
+
+/**
+ * Everything the controls above the list can say, in one value.
+ *
+ * `bands` and `types` are arrays and an EMPTY one means "all of them", not
+ * "none of them" — the difference matters, because the alternative is
+ * seeding state with every option pre-selected and then having to keep that
+ * seed in step with whatever the catalogue happens to contain today.
+ */
+export interface PracticeFilterState {
+  scope: Scope;
+  /**
+   * Whether materials the reader has already sat are in the list.
+   *
+   * Off by default, which is the one filter here that starts doing something.
+   * The list answers "what shall I practise next", and a paper somebody has
+   * already sat is the least likely answer on the page — leaving them in
+   * meant a learner scrolled past their own history to find anything new,
+   * and the more they practised the worse the page got at its job.
+   *
+   * They are never gone, only put away: the chip brings them straight back,
+   * and the line above the list says how many are being held. A filter that
+   * hides things silently is a filter that makes the catalogue look broken.
+   */
+  showDone: boolean;
+  query: string;
+  /** Any of these bands. Difficulty is a scale, so "Easy or Medium" is a real
+   *  request, which is why this is a set of toggles and the scope above is
+   *  not. */
+  bands: DifficultyBand[];
+  /** Any of these types. A material holding several matches on any one of
+   *  them: somebody looking for map labelling wants the full test that has
+   *  some in it too. */
+  types: QuestionGroupType[];
+}
+
+export const EMPTY_FILTERS: PracticeFilterState = {
+  scope: "all",
+  showDone: false,
+  query: "",
+  bands: [],
+  types: [],
+};
+
+/** Whether the list is showing less than everything — what puts "Clear
+ *  filters" on screen. One definition, so the button can't appear over an
+ *  unfiltered list or hide over a filtered one. */
+export function isNarrowed(f: PracticeFilterState): boolean {
+  return (
+    f.scope !== "all" ||
+    // Widening rather than narrowing, and still here: "Clear filters" means
+    // "put the list back the way it was", and leaving this one set would make
+    // the button a liar about the one filter that is on by default.
+    f.showDone ||
+    f.query.trim() !== "" ||
+    f.bands.length > 0 ||
+    f.types.length > 0
+  );
+}
+
+/**
+ * The filter state as query parameters.
+ *
+ * This function IS the move that made the page survive a big library. The
+ * filtering used to happen here, in the browser, over a catalogue the server
+ * had sent in full — which works precisely as long as sending it in full is
+ * reasonable. Now the same state is handed to the server and the browser
+ * receives a page.
+ *
+ * An empty array means "all of them" and is left out entirely rather than
+ * sent as an empty parameter, so the URL says what was asked for and nothing
+ * else. `done` is only ever sent true: false is the default at both ends.
+ */
+export function catalogueParams(
+  f: PracticeFilterState,
+  sort: SortKey,
+): Record<string, string | string[]> {
+  const params: Record<string, string | string[]> = {};
+  const query = f.query.trim();
+  if (query) params.q = query;
+  if (f.scope !== "all") params.scope = String(f.scope);
+  if (f.types.length) params.types = f.types;
+  if (f.bands.length) params.bands = f.bands;
+  if (f.showDone) params.done = "true";
+  if (sort !== "newest") params.sort = sort;
+  return params;
+}
+
+/** Toggle one value of a multi-select filter. */
+export function toggle<T>(values: T[], value: T): T[] {
+  return values.includes(value)
+    ? values.filter((v) => v !== value)
+    : [...values, value];
+}
+
+// --- What there is to filter BY ---------------------------------------------
+
+/** One line of a filter menu: what it selects, what it is called, and how
+ *  many materials it would leave standing. */
+export interface FilterOption<T> {
+  value: T;
+  label: string;
+  count: number;
+}
+
+/**
+ * The server's facet counts, turned into menu lines.
+ *
+ * The counts come from the server because only it can count the library; the
+ * NAMES come from here, because what we call a question type is not the
+ * server's business. Anything it sends that we have no name for is dropped
+ * rather than printed raw — a menu line reading "flow_chart_completion" is
+ * worse than one line fewer.
+ *
+ * Ordered by the canonical table rather than by count, so an option keeps its
+ * position in the menu from one visit to the next. A list that reorders
+ * itself as the library grows is a list nobody learns.
+ */
+export function filterOptions<T extends string>(
+  facets: PracticeFacet[],
+  order: readonly T[],
+  labels: Record<T, string>,
+): FilterOption<T>[] {
+  const counts = new Map(facets.map((f) => [f.value, f.count]));
+  return order
+    .filter((value) => (counts.get(value) ?? 0) > 0)
+    .map((value) => ({
+      value,
+      label: labels[value],
+      count: counts.get(value)!,
+    }));
+}
+
+/** The question types in the order the menu offers them — the canonical
+ *  table's own order. */
+export const QUESTION_TYPE_ORDER = Object.keys(
+  QUESTION_TYPE_LABEL,
+) as QuestionGroupType[];
+
+// --- Accuracy ----------------------------------------------------------------
+
+/**
+ * Whether a percentage is low enough to be worth colouring.
+ *
+ * Two states, not three, and the threshold is deliberately low. The panel used
+ * to paint anything under 70 red and anything over 80 green, which meant most
+ * of a candidate's figures arrived pre-judged — 66% in red is a verdict nobody
+ * asked for on a number that is ordinary. Red now means what red should mean:
+ * this one is genuinely poor. Everything else is left alone to be read.
+ */
+export type AccuracyTone = "weak" | "neutral";
+
+export const WEAK_UNDER = 60;
+
+export function accuracyTone(pct: number): AccuracyTone {
+  return pct < WEAK_UNDER ? "weak" : "neutral";
+}
+
+export const ACCURACY_TEXT: Record<AccuracyTone, string> = {
+  weak: "text-incorrect",
+  neutral: "text-foreground",
+};
+
+/** "2.4h", "35m" — how long has been spent, at the resolution a person
+ *  thinks in. Minutes below the hour mark, because "0.6h" is a number nobody
+ *  reads as thirty-six minutes. */
+export function formatSpent(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  return `${(ms / 3_600_000).toFixed(1)}h`;
+}
+
+
+// --- Order ------------------------------------------------------------------
+
+/**
+ * How the list is ordered.
+ *
+ * Four, and every one of them is answerable from what a row already shows —
+ * which is the test a sort has to pass. "Most popular" and "Suits you" are
+ * the obvious next two and neither is here yet, because the first needs an
+ * attempt count this endpoint doesn't send and the second needs the learner's
+ * weakest area crossed with each material's parts. Adding them is adding a
+ * line to this table and a case below; nothing else moves.
+ */
+export type SortKey = "newest" | "easiest" | "hardest" | "shortest";
+
+export const SORT_ORDER: SortKey[] = ["newest", "easiest", "hardest", "shortest"];
+
+export const SORT_LABEL: Record<SortKey, string> = {
+  newest: "Newest first",
+  easiest: "Easiest first",
+  hardest: "Hardest first",
+  shortest: "Shortest first",
+};
+
+// The four orders are named here and applied by the server (see
+// backend/app/services/listening.py `_catalogue_order`). Where a band sits on
+// the scale — and that `new` is last in BOTH directions, because a material
+// nobody has answered enough of belongs at neither end — lives there now,
+// with the query that uses it.
+
+// --- What a row means to this reader ----------------------------------------
+
+/**
+ * Where a material sits against the reader's own record.
+ *
+ * This is the one thing the catalogue can say that neither the row nor the
+ * statistics panel can say alone: the row knows what the material is, the
+ * panel knows how the reader does, and the useful sentence is the two crossed.
+ *
+ * It reports the number and stops there. It used to add "your weakest area",
+ * and that claim did not survive being looked at: 62% against 66% over a few
+ * dozen answers is noise, and ranking one above the other told a candidate to
+ * spend their evening on a difference that isn't there.
+ *
+ * Where a material spans several parts, the WORST of them is the one reported.
+ * A whole paper is worth sitting for the part you are weakest at, and averaging
+ * four parts into one number would hide exactly the fact that makes it worth
+ * sitting.
+ */
+export interface Standing {
+  part: number;
+  /** `null` where the reader has not answered enough of that part to score
+   *  it — a state the card says out loud rather than papering over. */
+  accuracy_pct: number | null;
+  answered: number;
+}
+
+export function standingFor(
+  m: PracticeMaterial,
+  stats: ListeningStats | undefined,
+): Standing | null {
+  if (!stats || m.part_numbers.length === 0) return null;
+  const rows = m.part_numbers
+    .map((part) => stats.by_part.find((row) => row.part === part))
+    .filter((row): row is PartAccuracy => row !== undefined);
+  if (rows.length === 0) return null;
+
+  const scored = rows.filter((row) => row.accuracy_pct !== null);
+  // The worst scored part if any of them is scored; otherwise the first, so
+  // the card can still say which part it is and that there is no reading yet.
+  const row = scored.length
+    ? scored.reduce((worst, next) =>
+        next.accuracy_pct! < worst.accuracy_pct! ? next : worst,
+      )
+    : rows[0];
+
+  return {
+    part: row.part,
+    accuracy_pct: row.accuracy_pct,
+    answered: row.answered,
+  };
+}
+
+// --- What one author has written --------------------------------------------
+
+/**
+ * An author, summarised.
+ *
+ * Both numbers arrive on the row (`material.author`) rather than being
+ * counted here, and that changed with pagination: counting them in the
+ * browser meant counting over whatever the browser happened to have, which
+ * was the whole catalogue and is now thirty rows of it. "4 materials here"
+ * under a name has to mean four.
+ *
+ * Two numbers and no more. It used to report which parts they write, the
+ * difficulty they tend to land on and how many questions they have written
+ * in total; all of it was true, none of it helped anybody decide whether to
+ * sit the material in front of them.
+ */
+export interface AuthorSummary {
+  materials: number;
+  /** How many of them the reader has sat. */
+  done: number;
+}
+
+export function authorSummary(author: CatalogueAuthor): AuthorSummary {
+  return { materials: author.materials, done: author.done };
+}
+
+// --- Mistakes ---------------------------------------------------------------
+
+/**
+ * What each kind of mistake is called, and what it says about the reader.
+ *
+ * The rules that produce these live on the server
+ * (`backend/app/services/mistakes.py`); the words live here, with every other
+ * label in the interface. The meanings are the working: "Spelling" on its own
+ * is a category, and "you heard the answer correctly but wrote it wrong" is
+ * the thing a candidate can do something about on Thursday evening.
+ */
+export const MISTAKE_LABEL: Record<MistakeKind, string> = {
+  spelling: "Spelling",
+  missed: "Missed entirely",
+  wrong: "Wrong answer",
+  plural: "Singular / plural",
+  word_limit: "Over word limit",
+  format: "Number / date format",
+};
+
+export const MISTAKE_MEANING: Record<MistakeKind, string> = {
+  spelling: "You heard the answer correctly but wrote it wrong.",
+  missed: "You left these blank — the answer went past you.",
+  plural: "The word was right; the singular or plural wasn't.",
+  word_limit: "The answer was there, but longer than the rubric allows.",
+  format: "The right value, written a way the marker doesn't accept.",
+  wrong: "A different answer entirely — the ones to listen for again.",
+};
+
+/** "1st", "2nd", "3rd", "4th" — for "83% on your 2nd try", where the ordinal
+ *  is doing as much work as the percentage. */
+export function ordinal(n: number): string {
+  const tens = n % 100;
+  if (tens >= 11 && tens <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1:
+      return `${n}st`;
+    case 2:
+      return `${n}nd`;
+    case 3:
+      return `${n}rd`;
+    default:
+      return `${n}th`;
+  }
+}

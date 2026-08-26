@@ -4,6 +4,10 @@ import { Logo } from "@/components/Logo";
 import { PageLoader } from "@/components/ui/spinner";
 import { RouteProgress } from "@/components/ui/route-progress";
 import { UserMenu } from "@/components/layout/UserMenu";
+import {
+  HeaderCentreProvider,
+  useHeaderCentreState,
+} from "@/components/layout/header-center";
 import { ThemeSwitcher } from "@/theme/ThemeSwitcher";
 import { useCurrentUser } from "@/auth/useCurrentUser";
 import { useScrolled } from "@/hooks/use-scrolled";
@@ -19,6 +23,9 @@ const NAV_ITEMS = [
 export function Layout() {
   const scrolled = useScrolled();
   const { user, isLoading } = useCurrentUser();
+  // The middle of the header is held clear when a page has something of its
+  // own arriving there (see components/layout/header-center.tsx).
+  const centre = useHeaderCentreState();
 
   // Each group is its own floating island — transparent at the top, frosted
   // glass once scrolled. A shared height keeps the three islands aligned.
@@ -30,6 +37,7 @@ export function Layout() {
   );
 
   return (
+    <HeaderCentreProvider value={centre.value}>
     <div className="flex min-h-svh flex-col">
       <RouteProgress />
       <header className="sticky top-0 z-30 w-full px-4 pt-3 sm:px-6 lg:px-8">
@@ -51,14 +59,35 @@ export function Layout() {
             </NavLink>
           </div>
 
-          {/* Primary nav, centered. Active item gets a soft glass chip. */}
+          {/* Primary nav, centered. Active item gets a soft glass chip.
+
+              It gives way when a page has something arriving in the middle —
+              lifting out through the top of the header, which is the only
+              direction that reads as being pushed rather than as blinking
+              out. Moved rather than unmounted: it has to come back down when
+              the page lets go, and something that was removed can't. */}
           <nav
-            className={cn(pill, "hidden gap-1 px-2 justify-self-center md:flex")}
+            aria-hidden={centre.claimed}
+            className={cn(
+              pill,
+              "hidden gap-1 px-2 justify-self-center md:flex",
+              // `translate`, not `transform`: Tailwind v4 writes -translate-y-*
+              // to the individual `translate` property, so a transition naming
+              // `transform` animates nothing and the nav jumps out while only
+              // its opacity fades.
+              "transition-[translate,opacity] duration-300 ease-out motion-reduce:transition-none",
+              // A short lift, not a launch: 32px puts it behind the header's own top
+              // edge, and the fade finishes the job. Sending it further only
+              // makes it travel faster to cover the distance in the same
+              // 300ms, which reads as a flinch.
+              centre.claimed && "pointer-events-none -translate-y-8 opacity-0",
+            )}
           >
             {NAV_ITEMS.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
+                tabIndex={centre.claimed ? -1 : undefined}
                 className={({ isActive }) =>
                   cn(
                     "rounded-full px-3 py-1.5 text-xs font-medium tracking-wide uppercase transition-colors",
@@ -109,5 +138,6 @@ export function Layout() {
         </Suspense>
       </main>
     </div>
+    </HeaderCentreProvider>
   );
 }
