@@ -1,9 +1,17 @@
 """GET /api/listening/practice — what a learner can sit, and what they have
 already done with it.
 
-The two things worth pinning down here are both about what the catalogue
-REFUSES to show: an author's unfinished drafts, which belong in the Studio,
-and anybody else's attempt history, which belongs to them.
+Two things worth pinning down are about what the catalogue REFUSES to show:
+an author's unfinished drafts, which belong in the Studio, and anybody else's
+attempt history, which belongs to them.
+
+The rest are about the endpoint having become a query. Filtering, ordering
+and paging moved out of the browser and into SQL, because at a thousand
+materials sending the whole library so the page can hide most of it is half a
+megabyte of JSON to show somebody thirty titles. What that makes worth
+testing is the seams: that a filter narrows the COUNT and not just the page,
+that the facet counts describe the library rather than the page, and that
+paging cannot show a row twice or lose one.
 """
 
 import uuid
@@ -54,6 +62,23 @@ def _client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     )
+
+
+async def _rows(client: httpx.AsyncClient, token: str, **params) -> list[dict]:
+    """One page of the catalogue, as a list.
+
+    ``done=true`` by default because the endpoint now puts materials the
+    caller has already sat away, and half of these tests are about what a row
+    says once it HAS been sat. ``limit`` is raised for the same reason a test
+    looks its material up by id rather than taking the first row: the test
+    database holds whatever every other test left behind.
+    """
+    query = {"done": "true", "limit": 100, **params}
+    r = await client.get(
+        "/api/listening/practice", params=query, cookies={"access_token": token}
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["items"]
 
 
 async def _publish(material_id: uuid.UUID) -> None:
@@ -188,11 +213,8 @@ async def test_the_catalogue_says_how_big_each_paper_is() -> None:
             await _seed(client, token, material.id)
             await _publish(material.id)
 
-            r = await client.get(
-                "/api/listening/practice", cookies={"access_token": token}
-            )
-            assert r.status_code == 200, r.text
-            row = next(x for x in r.json() if x["id"] == str(material.id))
+            rows = await _rows(client, token)
+            row = next(x for x in rows if x["id"] == str(material.id))
 
             assert row["part_count"] == 2
             # Four rows, five numbers: the "choose TWO" takes two of them, and
@@ -219,12 +241,9 @@ async def test_a_private_draft_is_not_offered_to_practise() -> None:
         async with _client() as client:
             await _seed(client, token, draft.id)  # left private on purpose
 
-            r = await client.get(
-                "/api/listening/practice", cookies={"access_token": token}
-            )
-            assert r.status_code == 200, r.text
+            rows = await _rows(client, token)
             # Not even to its own author.
-            assert all(x["id"] != str(draft.id) for x in r.json())
+            assert all(x["id"] != str(draft.id) for x in rows)
     finally:
         await _cleanup([draft.id], email)
 
@@ -270,23 +289,272 @@ async def test_the_history_in_a_row_is_the_callers_own() -> None:
             assert r_theirs.status_code == 200, r_theirs.text
             assert r_theirs.json()["score"] == 3
 
-            r = await client.get(
-                "/api/listening/practice", cookies={"access_token": my_token}
-            )
-            row = next(x for x in r.json() if x["id"] == str(material.id))
+            rows = await _rows(client, my_token)
+            row = next(x for x in rows if x["id"] == str(material.id))
             assert row["attempts"] == 2
             # Mine, not the better score somebody else got.
             assert row["best_score"] == 1
             assert row["last_attempt_id"] == last_id
             assert row["last_attempt_at"] is not None
 
-            r_other = await client.get(
-                "/api/listening/practice", cookies={"access_token": their_token}
-            )
+            their_rows = await _rows(client, their_token)
             row_other = next(
-                x for x in r_other.json() if x["id"] == str(material.id)
+                x for x in their_rows if x["id"] == str(material.id)
             )
             assert row_other["attempts"] == 1
             assert row_other["best_score"] == 3
     finally:
         await _cleanup([material.id], mine, theirs)
+
+
+# --- The endpoint as a query ------------------------------------------------
+
+
+async def _catalogue(client: httpx.AsyncClient, token: str, **params) -> dict:
+    """The whole envelope, not just the rows: total, facets and done_hidden
+    are the parts a page cannot say about itself."""
+    r = await client.get(
+        "/api/listening/practice", params=params, cookies={"access_token": token}
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def _family(user_id: uuid.UUID, prefix: str, count: int) -> list[Material]:
+    """``count`` public listening materials sharing a searchable prefix, so a
+    test can find its own rows in a database full of other tests' leftovers."""
+    made = []
+    for index in range(count):
+        material = await _make_material(
+            user_id, f"{prefix} number {index}", "public"
+        )
+        made.append(material)
+    return made
+
+
+@pytest.mark.asyncio
+async def test_a_page_is_a_page_and_the_total_is_the_whole_answer() -> None:
+    """``limit`` bounds the rows and nothing else. ``total`` counts what
+    matched, which is what tells the reader there is more below — a total
+    that only counted the page would say "5 materials" over every page of a
+    hundred."""
+    email = "cat-page@example.com"
+    user = await _make_user(email)
+    prefix = f"Paging{uuid.uuid4().hex[:8]}"
+    made = await _family(user.id, prefix, 5)
+    token = create_access_token(str(user.id))
+
+    try:
+        async with _client() as client:
+            page = await _catalogue(client, token, q=prefix, limit=2)
+            assert page["total"] == 5
+            assert len(page["items"]) == 2
+
+            # Every row, across three pages, exactly once — the guarantee
+            # that makes an infinite scroll not lie.
+            seen = []
+            for offset in (0, 2, 4):
+                page = await _catalogue(
+                    client, token, q=prefix, limit=2, offset=offset
+                )
+                seen.extend(x["id"] for x in page["items"])
+            assert len(seen) == 5
+            assert len(set(seen)) == 5
+            assert set(seen) == {str(m.id) for m in made}
+    finally:
+        await _cleanup([m.id for m in made], email)
+
+
+@pytest.mark.asyncio
+async def test_search_matches_the_title_and_the_author() -> None:
+    """Both, and every term has to hit. The chips above the field select
+    part and question type exactly, so the field is for the two things only
+    it can find."""
+    email = "cat-search@example.com"
+    user = await _make_user(email)
+    tag = uuid.uuid4().hex[:8]
+    mine = await _make_material(user.id, f"Riverside {tag} consultation", "public")
+    other = await _make_material(user.id, f"Museum {tag} tour", "public")
+    token = create_access_token(str(user.id))
+
+    try:
+        async with _client() as client:
+            both = await _catalogue(client, token, q=tag)
+            assert both["total"] == 2
+
+            # Two terms narrow rather than widen.
+            one = await _catalogue(client, token, q=f"{tag} riverside")
+            assert [x["id"] for x in one["items"]] == [str(mine.id)]
+
+            # The author's name finds their work without their name being in
+            # the title of it.
+            by_author = await _catalogue(
+                client, token, q=f"{tag} Catalogue"
+            )
+            assert by_author["total"] == 2
+
+            assert (await _catalogue(client, token, q=f"{tag} nobody"))["total"] == 0
+    finally:
+        await _cleanup([mine.id, other.id], email)
+
+
+@pytest.mark.asyncio
+async def test_done_materials_are_put_away_and_counted() -> None:
+    """The one filter that starts on. It is not silent about it: what it
+    holds back comes back as a number, because a list quietly shorter than
+    the reader knows the library to be is a list that looks broken."""
+    email = "cat-done@example.com"
+    user = await _make_user(email)
+    prefix = f"Done{uuid.uuid4().hex[:8]}"
+    sat = await _make_material(user.id, f"{prefix} sat", "private")
+    fresh = await _make_material(user.id, f"{prefix} fresh", "public")
+    token = create_access_token(str(user.id))
+
+    try:
+        async with _client() as client:
+            await _seed(client, token, sat.id)
+            await _publish(sat.id)
+            r = await client.post(
+                f"/api/materials/{sat.id}/attempts",
+                json={"answers": []},
+                cookies={"access_token": token},
+            )
+            assert r.status_code == 200, r.text
+
+            default = await _catalogue(client, token, q=prefix)
+            assert [x["id"] for x in default["items"]] == [str(fresh.id)]
+            assert default["total"] == 1
+            assert default["done_hidden"] == 1
+
+            asked = await _catalogue(client, token, q=prefix, done="true")
+            assert asked["total"] == 2
+            # Nothing is being held back once they have been asked for, so
+            # the line above the list has nothing to say.
+            assert asked["done_hidden"] == 0
+    finally:
+        await _cleanup([sat.id, fresh.id], email)
+
+
+@pytest.mark.asyncio
+async def test_a_part_chip_matches_a_material_that_holds_that_part() -> None:
+    """Not "is only that part". Somebody practising their weakest section
+    wants material with that part in it, whole papers included."""
+    email = "cat-scope@example.com"
+    user = await _make_user(email)
+    prefix = f"Scope{uuid.uuid4().hex[:8]}"
+    material = await _make_material(user.id, f"{prefix} two parts", "private")
+    token = create_access_token(str(user.id))
+
+    try:
+        async with _client() as client:
+            await _seed(client, token, material.id)  # parts 1 and 2
+            await _publish(material.id)
+
+            assert (await _catalogue(client, token, q=prefix, scope="1"))["total"] == 1
+            assert (await _catalogue(client, token, q=prefix, scope="2"))["total"] == 1
+            assert (await _catalogue(client, token, q=prefix, scope="3"))["total"] == 0
+            # Two parts is not a full test.
+            assert (
+                await _catalogue(client, token, q=prefix, scope="full")
+            )["total"] == 0
+    finally:
+        await _cleanup([material.id], email)
+
+
+@pytest.mark.asyncio
+async def test_a_type_filter_matches_a_material_that_asks_that_kind() -> None:
+    """A material holding several matches on any one of them — somebody
+    looking for multiple choice wants the paper that has some in it."""
+    email = "cat-type@example.com"
+    user = await _make_user(email)
+    prefix = f"Type{uuid.uuid4().hex[:8]}"
+    material = await _make_material(user.id, f"{prefix} mixed", "private")
+    token = create_access_token(str(user.id))
+
+    try:
+        async with _client() as client:
+            await _seed(client, token, material.id)  # form completion + choice
+            await _publish(material.id)
+
+            for group_type in ("form_completion", "multiple_choice"):
+                page = await _catalogue(
+                    client, token, q=prefix, types=group_type
+                )
+                assert page["total"] == 1, group_type
+
+            assert (
+                await _catalogue(client, token, q=prefix, types="matching")
+            )["total"] == 0
+    finally:
+        await _cleanup([material.id], email)
+
+
+@pytest.mark.asyncio
+async def test_an_unrefreshed_material_filters_as_new() -> None:
+    """The band comes from a projection, and a material created since the
+    last refresh has no row in it. Filtering by New has to find exactly those
+    — the alternative is a filter that silently drops the newest materials in
+    the library, which are the ones most likely to be wanted."""
+    email = "cat-band@example.com"
+    user = await _make_user(email)
+    prefix = f"Band{uuid.uuid4().hex[:8]}"
+    material = await _make_material(user.id, f"{prefix} unrated", "public")
+    token = create_access_token(str(user.id))
+
+    try:
+        async with _client() as client:
+            page = await _catalogue(client, token, q=prefix, bands="new")
+            assert [x["id"] for x in page["items"]] == [str(material.id)]
+            assert page["items"][0]["difficulty"]["band"] == "new"
+
+            assert (
+                await _catalogue(client, token, q=prefix, bands="easy")
+            )["total"] == 0
+    finally:
+        await _cleanup([material.id], email)
+
+
+@pytest.mark.asyncio
+async def test_the_facets_describe_the_library_not_the_page() -> None:
+    """A count that described the thirty rows in hand is a number nobody can
+    act on, and an option that vanishes as you filter is one nobody can aim
+    at. So the facets ignore both the page and the filters."""
+    email = "cat-facet@example.com"
+    user = await _make_user(email)
+    prefix = f"Facet{uuid.uuid4().hex[:8]}"
+    material = await _make_material(user.id, f"{prefix} mixed", "private")
+    token = create_access_token(str(user.id))
+
+    try:
+        async with _client() as client:
+            await _seed(client, token, material.id)
+            await _publish(material.id)
+
+            wide = await _catalogue(client, token)
+            narrow = await _catalogue(client, token, q=prefix, limit=1)
+
+            assert narrow["types"] == wide["types"]
+            assert narrow["bands"] == wide["bands"]
+
+            counts = {row["value"]: row["count"] for row in wide["types"]}
+            assert counts.get("form_completion", 0) >= 1
+            assert counts.get("multiple_choice", 0) >= 1
+    finally:
+        await _cleanup([material.id], email)
+
+
+@pytest.mark.asyncio
+async def test_an_order_the_endpoint_does_not_have_is_refused() -> None:
+    """A client asking for a sort that doesn't exist is a client bug, and
+    quietly serving it newest-first would hide it."""
+    email = "cat-sort@example.com"
+    user = await _make_user(email)
+    token = create_access_token(str(user.id))
+
+    async with _client() as client:
+        r = await client.get(
+            "/api/listening/practice",
+            params={"sort": "alphabetical"},
+            cookies={"access_token": token},
+        )
+        assert r.status_code == 422

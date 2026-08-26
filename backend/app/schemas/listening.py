@@ -746,6 +746,47 @@ class MaterialTakeOut(BaseModel):
     parts: list[TakePartOut]
 
 
+class CatalogueAuthorOut(BaseModel):
+    """Who wrote a material, as a catalogue row shows them.
+
+    No email: this is the public byline on somebody's work, not their
+    account. Nullable on the row it hangs off only because a material whose
+    author has been deleted is still a material.
+
+    The two counts are what the byline opens into on hover, and they are
+    counted here rather than in the browser for one reason: the browser only
+    has the page. "4 materials here" under a name, worked out from thirty
+    rows of a thousand, is a number that is wrong every time it isn't one.
+    """
+
+    id: uuid.UUID
+    display_name: str
+    avatar_url: str | None = None
+    #: How many public listening materials they have written, in the whole
+    #: library.
+    materials: int = 0
+    #: How many of those the CALLER has sat. Their own, like every other
+    #: history on this row.
+    done: int = 0
+
+
+class DifficultyOut(BaseModel):
+    """How hard a material turned out to be, over everybody's answers.
+
+    Computed, never stored — see :mod:`app.services.difficulty` for why that
+    is the design and not an implementation detail. ``correct_pct`` is
+    ``None`` exactly when ``band`` is ``new``: below the evidence threshold
+    there is no percentage to report, and reporting one anyway is how a paper
+    two people have tried comes to be labelled "Hard".
+    """
+
+    band: Literal["new", "easy", "medium", "hard"]
+    correct_pct: int | None = None
+    #: How many answers the band rests on. What makes ``new`` legible as "not
+    #: enough evidence yet" rather than "nobody has been here".
+    answered: int = 0
+
+
 class PracticeMaterialOut(BaseModel):
     """One row of the learner's catalogue.
 
@@ -760,10 +801,20 @@ class PracticeMaterialOut(BaseModel):
     id: uuid.UUID
     title: str
     part_count: int
+    #: WHICH parts, ascending — ``[2]`` for a Part 2 material, ``[1,2,3,4]``
+    #: for a full test. The list is filtered by this, and a count cannot say
+    #: it: one part is Part 1 or Part 4 depending on where it sits.
+    part_numbers: list[int] = []
+    #: The kinds of question it asks, in the order it asks them, deduplicated.
+    #: Empty for a material with no questions yet.
+    question_types: list[str] = []
     #: Numbers on the paper, which is what a score is out of — not rows. See
     #: ``question_marks``.
     question_count: int
     duration_ms: int | None = None
+    created_at: datetime | None = None
+    author: CatalogueAuthorOut | None = None
+    difficulty: DifficultyOut
 
     #: The caller's own history with this material, and nobody else's.
     attempts: int = 0
@@ -771,6 +822,150 @@ class PracticeMaterialOut(BaseModel):
     #: The most recent one, so a row can lead straight back to its review.
     last_attempt_id: uuid.UUID | None = None
     last_attempt_at: datetime | None = None
+
+
+class PracticeFacetOut(BaseModel):
+    """One option of a filter menu, with how many materials carry it.
+
+    Counted over the WHOLE catalogue rather than over the page or over what
+    the other filters have left standing: an option that appears and vanishes
+    as you filter is an option nobody can aim at, and a count describing only
+    the thirty rows in hand is a number nobody can act on.
+
+    Only what the library actually holds is listed, so a menu can never be
+    used to empty the list.
+    """
+
+    value: str
+    count: int
+
+
+class PracticeCatalogueOut(BaseModel):
+    """One page of the catalogue, and the three things a page cannot say
+    about itself.
+
+    ``total`` is how many match the filters, not how many were returned —
+    what the list header prints and what tells the reader whether there is
+    more below.
+
+    ``done_hidden`` is how many the "put finished materials away" default is
+    holding back, over and above whatever the chips are doing. It is here
+    because a list quietly shorter than the reader knows the library to be is
+    a list that looks broken, and the client can no longer count it: it only
+    ever sees a page.
+    """
+
+    items: list[PracticeMaterialOut]
+    total: int
+    done_hidden: int = 0
+    types: list[PracticeFacetOut] = []
+    bands: list[PracticeFacetOut] = []
+
+
+# --- Consumption: the learner's own statistics ------------------------------
+
+
+class AccuracyRowOut(BaseModel):
+    """One bar of a distribution: how much of it they have done, and how well.
+
+    ``accuracy_pct`` is ``None`` below the evidence threshold
+    (:data:`app.services.learner_stats.MIN_ANSWERS`) and the UI draws a dash
+    rather than a bar. That is not a missing value to be filled in with a
+    zero — a zero would be a claim, and it would be false.
+    """
+
+    answered: int
+    accuracy_pct: int | None = None
+
+
+class PartAccuracyOut(AccuracyRowOut):
+    part: int
+
+
+class ResumeOut(BaseModel):
+    """The last thing they finished, and which try it was.
+
+    The ordinal is the point: "83% on your 2nd try" and "83% on your 1st try"
+    are different facts about the same number.
+    """
+
+    material_id: uuid.UUID
+    title: str
+    attempt_id: uuid.UUID
+    submitted_at: datetime
+    score_pct: int | None = None
+    attempt_number: int
+
+
+class MistakeGroupOut(BaseModel):
+    """One kind of wrong answer, and how many of them there were."""
+
+    kind: Literal["missed", "word_limit", "plural", "format", "spelling", "wrong"]
+    count: int
+
+
+class MistakesOut(BaseModel):
+    """What the wrong answers were wrong about.
+
+    Present only where there is enough to see a pattern in — enough answers
+    and enough mistakes (:mod:`app.services.learner_stats`). Absent, the page
+    says so in a sentence rather than drawing a chart of four bars of one.
+
+    Typed answers only: a multiple-choice answer is a letter, and a letter has
+    no spelling. Which distractor pulls a candidate is a real question and a
+    different one, for the page with room for it.
+    """
+
+    #: Wrong answers counted, across first attempts.
+    total: int
+    #: Typed answers considered — the denominator the threshold is against.
+    answered: int
+    #: Biggest kind first.
+    groups: list[MistakeGroupOut] = []
+
+
+class TrendOut(BaseModel):
+    """The last ten first attempts, and whether they are going up.
+
+    ``delta_pct`` compares the two halves of that same window, so the figure
+    means something the moment the window is full rather than only once there
+    is a second window to compare it with.
+    """
+
+    average_pct: int
+    delta_pct: int
+    from_pct: int
+    to_pct: int
+    #: Oldest first — the sparkline, exactly as drawn.
+    points: list[int] = []
+    #: When the window opens, so the page can say what period it covers.
+    since: datetime
+
+
+class ListeningStatsOut(BaseModel):
+    """The practice page's right-hand column, whole.
+
+    ``materials_done == 0`` is what the page reads to hide every card and put
+    guidance in their place. A learner who has never sat anything is not
+    served by four zeroes.
+
+    ``first_try_avg_pct`` is the headline and ``best_avg_pct`` the footnote,
+    and that order is a judgement about what the numbers mean: sitting a paper
+    until you score well on it measures memory of that paper, not listening.
+    """
+
+    materials_done: int = 0
+    first_try_avg_pct: int | None = None
+    #: Absent until something has actually been sat twice — with no retries it
+    #: is the first-try average under a second name.
+    best_avg_pct: int | None = None
+    time_spent_ms: int = 0
+    resume: ResumeOut | None = None
+    mistakes: MistakesOut | None = None
+    trend: TrendOut | None = None
+    #: Not drawn in the sidebar any more; the catalogue's material preview
+    #: reads it to say what a row is worth to this reader.
+    by_part: list[PartAccuracyOut] = []
 
 
 # --- Consumption: submit + grade (§7) ---------------------------------------

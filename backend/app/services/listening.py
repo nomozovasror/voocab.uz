@@ -14,7 +14,7 @@ gradeable and event-sourceable via ``QuestionAttempt`` (Faza 3).
 import uuid
 
 from fastapi import HTTPException, status
-from sqlalchemy import func
+from sqlalchemy import case, distinct, func, literal_column
 from sqlmodel import select
 
 from app.core.database import AsyncSession
@@ -22,6 +22,7 @@ from app.models.attempt import Attempt, AttemptStatus
 from app.models.audio_asset import AudioAsset
 from app.models.audio_blob import AudioBlob
 from app.models.material import Material
+from app.models.material_difficulty import MaterialDifficulty
 from app.models.part import Part
 from app.models.question import Question
 from app.models.question_attempt import QuestionAttempt
@@ -31,6 +32,7 @@ from app.models.question_group import (
     QuestionGroupType,
     same_question_kind,
 )
+from app.models.user import User
 from app.schemas.listening import (
     ChoiceQuestionIn,
     MatchingQuestionIn,
@@ -38,6 +40,7 @@ from app.schemas.listening import (
     PartUpdate,
     QuestionGroupIn,
 )
+from app.services import difficulty as difficulty_service
 from app.services import images as images_service
 from app.services import storage
 
@@ -738,47 +741,431 @@ async def get_author_tree(
 # --- The learner's catalogue (brief §33) ------------------------------------
 
 
+#: How many rows one page of the catalogue holds, and the most a caller may
+#: ask for. Thirty is about three screens of list — enough that the first
+#: fetch fills the page and the second is prefetched before anybody reaches
+#: the bottom, small enough that a filter change is not a fresh half-megabyte.
+CATALOGUE_PAGE = 30
+CATALOGUE_MAX_PAGE = 100
+
+#: Where each band sits when the list is ordered by difficulty. ``new`` is
+#: last in BOTH directions, and that is the point of two tables rather than
+#: one reversed: a material nobody has answered enough of has no place on the
+#: scale, so it can be neither the easiest nor the hardest thing on the page.
+#: The frontend has the same two tables for the same reason; they are two
+#: implementations of one rule, and the tests pin the SQL one.
+_EASIEST_FIRST = {"easy": 0, "medium": 1, "hard": 2, "new": 3}
+_HARDEST_FIRST = {"hard": 0, "medium": 1, "easy": 2, "new": 3}
+
+#: Four parts is a whole paper; anything less is an excerpt from one. The same
+#: constant the frontend calls FULL_TEST_PARTS.
+FULL_TEST_PARTS = 4
+
+
+def _band_of():
+    """A material's band as SQL sees it.
+
+    ``COALESCE`` and not a plain column read: a material created since the
+    last refresh has no projection row, and a LEFT JOIN gives NULL where the
+    honest answer is ``new``. Without this, filtering by New would silently
+    drop exactly the materials that most deserve to be in it.
+
+    The default is a literal rather than a bound parameter because this
+    expression is both selected and grouped by, and Postgres matches a GROUP
+    BY to a SELECT expression by comparing them — two placeholders holding
+    the same string are not the same expression to it, and the query is
+    rejected.
+    """
+    return func.coalesce(MaterialDifficulty.band, literal_column("'new'"))
+
+
+def _catalogue_where(
+    user_id: uuid.UUID,
+    *,
+    query: str,
+    scope: str,
+    types: list[str],
+    bands: list[str],
+    done: bool,
+) -> list:
+    """Everything the controls above the list mean, as SQL.
+
+    This used to be a function in the browser over the whole catalogue, which
+    worked precisely because the whole catalogue was in the browser. It is
+    here now because the list is paginated, and a filter applied to the page
+    rather than to the query filters thirty rows out of a thousand.
+
+    Each clause is an EXISTS rather than a join, deliberately: a material with
+    two parts and three groups would otherwise come back twice and be counted
+    twice, and every one of these asks "is there one" rather than "which".
+    """
+    where = [
+        Material.type == "listening",
+        Material.visibility == "public",
+    ]
+
+    if scope == "full":
+        where.append(
+            select(func.count(Part.id))
+            .where(Part.material_id == Material.id)
+            .scalar_subquery()
+            >= FULL_TEST_PARTS
+        )
+    elif scope.isdigit():
+        # A part chip matches a material that HOLDS that part, whole paper
+        # included: somebody practising their weakest section wants material
+        # with that part in it, not material that is only that part. The
+        # editor titles a part `Part {order_index + 1}`, so the index carries
+        # the number.
+        where.append(
+            select(Part.id)
+            .where(
+                Part.material_id == Material.id,
+                Part.order_index == int(scope) - 1,
+            )
+            .exists()
+        )
+
+    if types:
+        where.append(
+            select(QuestionGroup.id)
+            .join(Part, Part.id == QuestionGroup.part_id)  # type: ignore[arg-type]
+            .where(
+                Part.material_id == Material.id,
+                QuestionGroup.type.in_(types),  # type: ignore[attr-defined]
+            )
+            .exists()
+        )
+
+    if bands:
+        where.append(_band_of().in_(bands))
+
+    if not done:
+        # Materials the caller has already sat are put away by default: the
+        # list answers "what shall I practise next", and a paper they have
+        # finished is the least likely answer on it. Started-and-abandoned
+        # does not count — only a submitted attempt is having done something.
+        where.append(
+            ~select(Attempt.id)
+            .where(
+                Attempt.material_id == Material.id,
+                Attempt.user_id == user_id,
+                Attempt.status == AttemptStatus.SUBMITTED,
+            )
+            .exists()
+        )
+
+    # Title and author, and nothing else. The client-side version also matched
+    # question-type labels and "Part 3", which were free when every row was
+    # already in hand; in SQL they would be a subquery per term to search for
+    # something the chips above the field select exactly. Every term must hit
+    # (AND, not OR), so "nodira park" narrows rather than widens.
+    for term in query.split():
+        pattern = f"%{term}%"
+        where.append(
+            func.lower(Material.title).like(pattern.lower())
+            | select(User.id)
+            .where(
+                User.id == Material.author_id,
+                func.lower(User.display_name).like(pattern.lower()),
+            )
+            .exists()
+        )
+
+    return where
+
+
+def _catalogue_order(sort: str) -> list:
+    """The chosen order, with a tiebreaker that makes paging honest.
+
+    Every order ends in ``created_at DESC, id``: two materials with the same
+    band sort in a defined order, so row thirty of page one is not also row
+    one of page two. Without the final ``id`` two rows written in the same
+    transaction could swap places between two requests, which is a row the
+    reader sees twice and one they never see.
+    """
+    tail = [Material.created_at.desc(), Material.id]  # type: ignore[attr-defined]
+    if sort == "easiest":
+        return [_band_case(_EASIEST_FIRST), *tail]
+    if sort == "hardest":
+        return [_band_case(_HARDEST_FIRST), *tail]
+    if sort == "shortest":
+        # NULLS LAST: a material with no recording has no length, so it sorts
+        # last rather than first — an unknown duration is not a duration of
+        # zero.
+        return [AudioBlob.duration_ms.asc().nulls_last(), *tail]  # type: ignore[attr-defined]
+    return tail
+
+
+def _band_case(ranks: dict[str, int]):
+    band = _band_of()
+    return case(*[(band == name, rank) for name, rank in ranks.items()], else_=99)
+
+
+async def _catalogue_facets(session: AsyncSession) -> dict:
+    """What there is to filter BY, counted over the WHOLE catalogue.
+
+    Not over what is currently showing, and not over the current page. An
+    option that appears and vanishes as you filter is an option you cannot
+    aim at, and a count that only described the thirty rows in hand would be
+    a number nobody could act on. Two grouped queries for the whole library,
+    which is why they are cheap enough to run on every request.
+    """
+    public = [Material.type == "listening", Material.visibility == "public"]
+
+    types = [
+        {"value": group_type, "count": int(count)}
+        for group_type, count in (
+            await session.exec(
+                select(QuestionGroup.type, func.count(distinct(Part.material_id)))
+                .select_from(QuestionGroup)
+                .join(Part, Part.id == QuestionGroup.part_id)  # type: ignore[arg-type]
+                .join(Material, Material.id == Part.material_id)  # type: ignore[arg-type]
+                .where(*public)
+                .group_by(QuestionGroup.type)  # type: ignore[arg-type]
+            )
+        ).all()
+    ]
+
+    bands = [
+        {"value": band, "count": int(count)}
+        for band, count in (
+            await session.exec(
+                select(_band_of(), func.count(Material.id))
+                .select_from(Material)
+                .outerjoin(
+                    MaterialDifficulty,
+                    MaterialDifficulty.material_id == Material.id,  # type: ignore[arg-type]
+                )
+                .where(*public)
+                .group_by(_band_of())  # type: ignore[arg-type]
+            )
+        ).all()
+    ]
+
+    return {"types": types, "bands": bands}
+
+
 async def practice_catalogue(
-    session: AsyncSession, user_id: uuid.UUID
-) -> list[dict]:
-    """Every listening material a learner can sit, with what it is and what
-    they have already done with it.
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    *,
+    query: str = "",
+    scope: str = "all",
+    types: list[str] | None = None,
+    bands: list[str] | None = None,
+    done: bool = False,
+    sort: str = "newest",
+    limit: int = CATALOGUE_PAGE,
+    offset: int = 0,
+) -> dict:
+    """One page of what a learner can sit, and what they have done with it.
 
     Public ones only. An author's unfinished drafts are reachable from the
     Studio, which is where unfinished work belongs; listing them here put
     "untitled listening — private" in front of the person who came to
     practise, next to a button that opens a paper with no questions on it.
 
-    Built from four flat queries rather than a walk per material: the
-    catalogue grows with the library, and a page that costs a tree traversal
-    per row is a page that gets slower the more there is to practise.
+    **Filtered, ordered and paged in the database.** It used to return the
+    whole catalogue and let the browser do all three, which was right while
+    the whole catalogue was fifteen rows and stops being right somewhere
+    around a hundred: at a thousand it is half a megabyte of JSON, a thousand
+    rows of DOM, and a difficulty aggregate over every answer on the platform,
+    to show somebody thirty titles.
+
+    What comes back is a page plus the two things a page cannot say about
+    itself — how many there are in total, and what there is to filter by (see
+    :func:`_catalogue_facets`) — plus ``done_hidden``, because a list quietly
+    shorter than the reader knows the library to be is a list that looks
+    broken.
+
+    Ordered newest-first by ``created_at`` and not by ``updated_at``, which is
+    what the list header claims and what a learner means. ``updated_at`` moves
+    every time the author fixes a typo, so a year-old paper could sit at the
+    top of "Newest first" for having been touched this morning.
     """
+    limit = max(1, min(limit, CATALOGUE_MAX_PAGE))
+    offset = max(0, offset)
+    where = _catalogue_where(
+        user_id,
+        query=query,
+        scope=scope,
+        types=types or [],
+        bands=bands or [],
+        done=done,
+    )
+
+    # One base shape for the count and the page, so the two can never come to
+    # disagree about what the filters mean. The joins are all one-to-(zero or
+    # one) — the difficulty projection, the recording — so nothing here
+    # multiplies rows and the count needs no DISTINCT.
+    def base(statement):
+        return statement.select_from(Material).outerjoin(
+            MaterialDifficulty,
+            MaterialDifficulty.material_id == Material.id,  # type: ignore[arg-type]
+        )
+
+    total = int(
+        (await session.exec(base(select(func.count(Material.id))).where(*where))).one()
+    )
+
+    page = base(select(Material))
+    if sort == "shortest":
+        # Only where it is being ordered by: two more joins on every request
+        # to sort by a column three of the four orders never look at.
+        page = page.outerjoin(
+            AudioAsset,
+            AudioAsset.id == Material.audio_asset_id,  # type: ignore[arg-type]
+        ).outerjoin(AudioBlob, AudioBlob.id == AudioAsset.blob_id)  # type: ignore[arg-type]
+
     materials = list(
         (
             await session.exec(
-                select(Material)
-                .where(
-                    Material.type == "listening",
-                    Material.visibility == "public",
-                )
-                .order_by(Material.updated_at.desc())  # type: ignore[attr-defined]
+                page.where(*where)
+                .order_by(*_catalogue_order(sort))
+                .limit(limit)
+                .offset(offset)
             )
         ).all()
     )
+
+    # How many the default is holding back, over and above whatever the chips
+    # are doing: the same filters with that one switch flipped the other way.
+    # Zero the moment the reader asks to see them, which is what makes the
+    # line above the list disappear rather than say "0 done".
+    done_hidden = 0
+    if not done:
+        done_where = _catalogue_where(
+            user_id,
+            query=query,
+            scope=scope,
+            types=types or [],
+            bands=bands or [],
+            done=True,
+        )
+        done_where.append(
+            select(Attempt.id)
+            .where(
+                Attempt.material_id == Material.id,
+                Attempt.user_id == user_id,
+                Attempt.status == AttemptStatus.SUBMITTED,
+            )
+            .exists()
+        )
+        done_hidden = int(
+            (
+                await session.exec(
+                    base(select(func.count(Material.id))).where(*done_where)
+                )
+            ).one()
+        )
+
+    return {
+        "items": await _catalogue_rows(session, user_id, materials),
+        "total": total,
+        "done_hidden": done_hidden,
+        **await _catalogue_facets(session),
+    }
+
+
+async def _catalogue_rows(
+    session: AsyncSession, user_id: uuid.UUID, materials: list[Material]
+) -> list[dict]:
+    """Everything a row prints, for one page of materials.
+
+    Flat queries rather than a walk per material — the same rule as before,
+    and it matters less than it did now that the page is thirty rows rather
+    than the library. What it costs is a fixed handful of queries whatever the
+    catalogue grows to, which is the whole point of paginating.
+    """
     if not materials:
         return []
 
     ids = [m.id for m in materials]
 
-    parts_by_material: dict[uuid.UUID, int] = {}
-    for material_id, count in (
+    # Which parts, not how many. "Part 2" is the single most useful thing on
+    # a row — it is what a candidate practising their weakest section filters
+    # by — and a count can't say it: a material with one part is Part 1 or
+    # Part 4 depending on the index it was seeded at (the editor titles a part
+    # ``Part {order_index + 1}``, so the index carries the number even when
+    # there is only one).
+    part_numbers: dict[uuid.UUID, list[int]] = {}
+    for material_id, order_index in (
         await session.exec(
-            select(Part.material_id, func.count(Part.id)).where(
-                Part.material_id.in_(ids)  # type: ignore[attr-defined]
-            ).group_by(Part.material_id)  # type: ignore[arg-type]
+            select(Part.material_id, Part.order_index)
+            .where(Part.material_id.in_(ids))  # type: ignore[attr-defined]
+            .order_by(Part.material_id, Part.order_index)  # type: ignore[arg-type]
         )
     ).all():
-        parts_by_material[material_id] = count
+        part_numbers.setdefault(material_id, []).append(int(order_index) + 1)
+
+    # The kinds of question each material asks, in the order they are asked
+    # and without repeating one. A row names its type where there is one to
+    # name; a material that mixes them says so instead of being labelled
+    # after whichever came first.
+    types_by_material: dict[uuid.UUID, list[str]] = {}
+    for material_id, group_type in (
+        await session.exec(
+            select(Part.material_id, QuestionGroup.type)
+            .select_from(QuestionGroup)
+            .join(Part, Part.id == QuestionGroup.part_id)  # type: ignore[arg-type]
+            .where(Part.material_id.in_(ids))  # type: ignore[attr-defined]
+            .order_by(Part.material_id, Part.order_index, QuestionGroup.order_index)  # type: ignore[arg-type]
+        )
+    ).all():
+        seen = types_by_material.setdefault(material_id, [])
+        if group_type not in seen:
+            seen.append(group_type)
+
+    # Who wrote it. Public material is somebody's work with their name on it,
+    # and the name is also how a learner comes to follow an author whose
+    # papers suit them. One query for every author at once.
+    author_ids = {m.author_id for m in materials}
+    authors = {
+        user.id: user
+        for user in (
+            await session.exec(
+                select(User).where(User.id.in_(author_ids))  # type: ignore[attr-defined]
+            )
+        ).all()
+    }
+
+    # What else each of them has written, and how much of it the caller has
+    # sat. Over the whole library rather than over this page — the byline
+    # opens into these two numbers on hover, and "4 materials" counted from
+    # the thirty rows in hand would be wrong every time it wasn't one.
+    written_by: dict[uuid.UUID, int] = {
+        author_id: int(count)
+        for author_id, count in (
+            await session.exec(
+                select(Material.author_id, func.count(Material.id))
+                .where(
+                    Material.author_id.in_(author_ids),  # type: ignore[attr-defined]
+                    Material.type == "listening",
+                    Material.visibility == "public",
+                )
+                .group_by(Material.author_id)  # type: ignore[arg-type]
+            )
+        ).all()
+    }
+    sat_by_author: dict[uuid.UUID, int] = {
+        author_id: int(count)
+        for author_id, count in (
+            await session.exec(
+                select(Material.author_id, func.count(distinct(Material.id)))
+                .select_from(Material)
+                .join(Attempt, Attempt.material_id == Material.id)  # type: ignore[arg-type]
+                .where(
+                    Material.author_id.in_(author_ids),  # type: ignore[attr-defined]
+                    Material.type == "listening",
+                    Material.visibility == "public",
+                    Attempt.user_id == user_id,
+                    Attempt.status == AttemptStatus.SUBMITTED,
+                )
+                .group_by(Material.author_id)  # type: ignore[arg-type]
+            )
+        ).all()
+    }
 
     # Marks, not rows — the number a score is out of. A "choose TWO letters"
     # is one row and two of the numbers printed down the side, and a
@@ -826,21 +1213,47 @@ async def practice_catalogue(
 
     audio_by_material = await _catalogue_audio(session, materials)
 
-    return [
-        {
-            "id": m.id,
-            "title": m.title,
-            "part_count": parts_by_material.get(m.id, 0),
-            "question_count": marks_by_material.get(m.id, 0),
-            "duration_ms": audio_by_material.get(m.id),
-            "attempts": 0,
-            "best_score": None,
-            "last_attempt_id": None,
-            "last_attempt_at": None,
-            **history.get(m.id, {}),
-        }
-        for m in materials
-    ]
+    # How hard each one turned out to be, over everybody's answers. Read from
+    # the projection the worker refills — see app/services/difficulty.py for
+    # why that is a cache and not a column.
+    difficulty_by_material = await difficulty_service.material_difficulty(session, ids)
+
+    rows = []
+    for m in materials:
+        author = authors.get(m.author_id)
+        parts = part_numbers.get(m.id, [])
+        rows.append(
+            {
+                "id": m.id,
+                "title": m.title,
+                "part_count": len(parts),
+                "part_numbers": parts,
+                "question_types": types_by_material.get(m.id, []),
+                "question_count": marks_by_material.get(m.id, 0),
+                "duration_ms": audio_by_material.get(m.id),
+                "created_at": m.created_at,
+                "author": (
+                    {
+                        "id": author.id,
+                        "display_name": author.display_name,
+                        "avatar_url": author.avatar_url,
+                        "materials": written_by.get(author.id, 0),
+                        "done": sat_by_author.get(author.id, 0),
+                    }
+                    if author is not None
+                    else None
+                ),
+                "difficulty": difficulty_by_material.get(
+                    m.id, difficulty_service.unknown()
+                ),
+                "attempts": 0,
+                "best_score": None,
+                "last_attempt_id": None,
+                "last_attempt_at": None,
+                **history.get(m.id, {}),
+            }
+        )
+    return rows
 
 
 async def _catalogue_audio(

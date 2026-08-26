@@ -9,7 +9,7 @@ persist the group and its questions atomically (validation happens in
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentUser
@@ -28,10 +28,12 @@ from app.models.question_group import QuestionGroup
 from app.schemas.listening import (
     AttemptResultOut,
     AttemptSubmit,
+    ListeningStatsOut,
     MaterialTakeOut,
     PartCreate,
     PartOut,
     PartUpdate,
+    PracticeCatalogueOut,
     PracticeMaterialOut,
     QuestionGroupIn,
     QuestionGroupOrderIn,
@@ -39,6 +41,7 @@ from app.schemas.listening import (
     QuestionOut,
 )
 from app.services import grading as grading_service
+from app.services import learner_stats as learner_stats_service
 from app.services import listening as listening_service
 
 router = APIRouter(prefix="/api", tags=["listening"])
@@ -261,20 +264,79 @@ async def delete_question_group(
 # --- Consumption (§7) -------------------------------------------------------
 
 
-@router.get("/listening/practice", response_model=list[PracticeMaterialOut])
+@router.get("/listening/practice", response_model=PracticeCatalogueOut)
 async def practice_catalogue(
-    user: CurrentUser, session: SessionDep
-) -> list[PracticeMaterialOut]:
-    """What a learner can sit, and what they have already done with it.
+    user: CurrentUser,
+    session: SessionDep,
+    q: Annotated[str, Query(max_length=200)] = "",
+    scope: Annotated[str, Query(pattern=r"^(all|full|[1-4])$")] = "all",
+    types: Annotated[list[str] | None, Query()] = None,
+    bands: Annotated[list[str] | None, Query()] = None,
+    done: bool = False,
+    sort: Annotated[
+        str, Query(pattern=r"^(newest|easiest|hardest|shortest)$")
+    ] = "newest",
+    limit: Annotated[int, Query(ge=1, le=listening_service.CATALOGUE_MAX_PAGE)] = (
+        listening_service.CATALOGUE_PAGE
+    ),
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> PracticeCatalogueOut:
+    """One page of what a learner can sit, and what they have done with it.
 
     Public materials only; an author reaches their own drafts through the
     Studio. The history in each row is the caller's — an attempt is a record
     of somebody's mistakes, and a catalogue is not where other people's go.
+
+    Every control above the list is a parameter here rather than something
+    the browser does afterwards, and that is the whole change: filtering a
+    page is filtering thirty rows out of a thousand. ``done`` defaults to
+    false — materials the caller has finished are put away unless asked for.
+
+    The enum-shaped parameters are validated by pattern rather than by an
+    Enum type on purpose: an unknown ``sort`` is a client bug and deserves a
+    422, while ``types`` and ``bands`` are open lists (question types grow
+    without a migration — see :class:`QuestionGroupType`) and an unrecognised
+    member simply matches nothing.
     """
-    return [
-        PracticeMaterialOut(**row)
-        for row in await listening_service.practice_catalogue(session, user.id)
-    ]
+    page = await listening_service.practice_catalogue(
+        session,
+        user.id,
+        query=q.strip(),
+        scope=scope,
+        types=types,
+        bands=bands,
+        done=done,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+    )
+    return PracticeCatalogueOut(
+        items=[PracticeMaterialOut(**row) for row in page["items"]],
+        total=page["total"],
+        done_hidden=page["done_hidden"],
+        types=page["types"],
+        bands=page["bands"],
+    )
+
+
+@router.get("/listening/stats", response_model=ListeningStatsOut)
+async def listening_statistics(
+    user: CurrentUser, session: SessionDep
+) -> ListeningStatsOut:
+    """What the caller is good and bad at, from their own answers.
+
+    The caller's own and nobody else's — the same rule the catalogue's history
+    column follows, for the same reason. There is no user id in the path, and
+    there is deliberately no way to ask for somebody else's: a record of what
+    a person keeps getting wrong is theirs.
+
+    Empty is a real answer here rather than a 404. A learner who has never sat
+    anything gets zeroes and empty distributions, and the page turns that into
+    "start with Part 1" instead of a wall of 0%.
+    """
+    return ListeningStatsOut(
+        **await learner_stats_service.listening_stats(session, user.id)
+    )
 
 
 @router.get("/materials/{material_id}/take", response_model=MaterialTakeOut)

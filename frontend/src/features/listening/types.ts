@@ -344,17 +344,171 @@ export interface MaterialTake {
  *  that is the author's view — visibility, the concurrency version — and
  *  pointing the practice list at it showed learners their own unfinished
  *  drafts labelled "private". */
+/** Who wrote a material, as a catalogue row shows them: a byline, not an
+ *  account. No email — that is not the public's business. */
+export interface CatalogueAuthor {
+  id: string;
+  display_name: string;
+  avatar_url: string | null;
+  /** How many public listening materials they have written — the whole
+   *  library, not the page. Counted on the server for exactly that reason:
+   *  the client only ever has thirty rows, and "4 materials here" worked out
+   *  from those is a number that is wrong every time it isn't one. */
+  materials: number;
+  /** How many of those the reader has sat. Theirs, like every other history
+   *  on the row. */
+  done: number;
+}
+
+/** How hard a material turned out to be, over everybody's answers.
+ *
+ *  `"new"` is not a fourth level of hard — it is the absence of a level, and
+ *  it is what a material carries until enough people have answered enough of
+ *  it to mean something. `correct_pct` is null exactly then. */
+export type DifficultyBand = "new" | "easy" | "medium" | "hard";
+
+export interface Difficulty {
+  band: DifficultyBand;
+  correct_pct: number | null;
+  /** How many answers the band rests on. */
+  answered: number;
+}
+
 export interface PracticeMaterial {
   id: string;
   title: string;
   part_count: number;
+  /** WHICH parts, ascending — `[2]` for a Part 2 material, `[1,2,3,4]` for a
+   *  full test. The filter chips read this; a count can't say it, because one
+   *  part is Part 1 or Part 4 depending on where it sits. */
+  part_numbers: number[];
+  /** The kinds of question it asks, in the order it asks them. One entry is a
+   *  named task with its own icon; several is "2 question types". */
+  question_types: QuestionGroupType[];
   /** Numbers on the paper, which is what a score is out of. */
   question_count: number;
   duration_ms: number | null;
+  created_at: string | null;
+  author: CatalogueAuthor | null;
+  difficulty: Difficulty;
   attempts: number;
   best_score: number | null;
   last_attempt_id: string | null;
   last_attempt_at: string | null;
+}
+
+/** One option of a filter menu, with how many materials carry it.
+ *
+ *  Counted over the WHOLE catalogue by the server, not over the page and not
+ *  over what the other filters have left: an option that appears and vanishes
+ *  as you filter is an option you can't aim at. `value` is a
+ *  `QuestionGroupType` or a `DifficultyBand` depending on which list it came
+ *  from; the label is looked up here, because the server has no business
+ *  knowing what we call things. */
+export interface PracticeFacet {
+  value: string;
+  count: number;
+}
+
+/** One page of the catalogue, and the three things a page cannot say about
+ *  itself. */
+export interface PracticeCatalogue {
+  items: PracticeMaterial[];
+  /** How many match the filters — not how many came back. What the list
+   *  header prints, and what says there is more below. */
+  total: number;
+  /** How many the "put finished materials away" default is holding back. Zero
+   *  once the reader asks to see them. */
+  done_hidden: number;
+  types: PracticeFacet[];
+  bands: PracticeFacet[];
+}
+
+// --- The learner's own statistics -------------------------------------------
+
+/** One bar of a distribution.
+ *
+ *  `accuracy_pct` is null below the server's evidence threshold, and that is
+ *  a value in its own right: the row draws a dash and stays muted. Never
+ *  substitute a 0 — a 0 is a claim, and it would be false. */
+export interface AccuracyRow {
+  answered: number;
+  accuracy_pct: number | null;
+}
+
+export interface PartAccuracy extends AccuracyRow {
+  part: number;
+}
+
+/** The last thing the reader finished, and which try it was. The ordinal is
+ *  the point: 83% on a first try and 83% on a third are different facts. */
+export interface Resume {
+  material_id: string;
+  title: string;
+  attempt_id: string;
+  submitted_at: string;
+  score_pct: number | null;
+  attempt_number: number;
+}
+
+/** What a wrong answer was wrong ABOUT — the classification the whole panel
+ *  turns on. See backend `app/services/mistakes.py` for the rules. */
+export type MistakeKind =
+  | "missed"
+  | "word_limit"
+  | "plural"
+  | "format"
+  | "spelling"
+  | "wrong";
+
+export interface MistakeGroup {
+  kind: MistakeKind;
+  count: number;
+}
+
+export interface Mistakes {
+  /** Wrong answers counted, across first attempts. */
+  total: number;
+  /** Typed answers considered — the denominator behind the threshold. */
+  answered: number;
+  /** Biggest kind first. */
+  groups: MistakeGroup[];
+}
+
+/** The last ten first attempts, and whether they are going up. */
+export interface Trend {
+  average_pct: number;
+  delta_pct: number;
+  from_pct: number;
+  to_pct: number;
+  /** Oldest first — the sparkline, exactly as drawn. */
+  points: number[];
+  since: string;
+}
+
+/**
+ * The practice page's right-hand column.
+ *
+ * `first_try_avg_pct` is the headline and `best_avg_pct` the footnote, and
+ * that order is a judgement rather than a layout choice: sitting a paper
+ * until you score well on it measures memory of that paper, not listening.
+ * Every analytical figure here — the mistakes, the trend, the part split —
+ * counts first attempts only for the same reason.
+ *
+ * `mistakes` and `trend` are null below their evidence thresholds. The page
+ * says so in a sentence; it does not draw a thin chart.
+ */
+export interface ListeningStats {
+  materials_done: number;
+  first_try_avg_pct: number | null;
+  /** Absent until something has actually been sat twice. */
+  best_avg_pct: number | null;
+  time_spent_ms: number;
+  resume: Resume | null;
+  mistakes: Mistakes | null;
+  trend: Trend | null;
+  /** Not drawn in the sidebar; the material preview reads it. */
+  by_part: PartAccuracy[];
 }
 
 // --- Consumption: submit + grade --------------------------------------------

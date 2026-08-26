@@ -13,11 +13,12 @@ import type {
   ListeningMaterialDetail,
   ListeningMaterialUpdate,
   ListeningQuestionGroup,
+  ListeningStats,
   MaterialTake,
   PartCreate,
   PartOut,
   PartUpdate,
-  PracticeMaterial,
+  PracticeCatalogue,
   QuestionGroupIn,
 } from "@/features/listening/types";
 
@@ -128,9 +129,35 @@ export const listeningApi = {
   // Never call materials.get() (the author endpoint) from consumption code —
   // it carries correct_answers. `take` is structurally guaranteed answer-free
   // (backend's TakeQuestionOut has no such field at all).
-  /** What a learner can sit, with their own history against each one. Not
-   *  `materials.list` — that is the author's view and carries drafts. */
-  practice: () => api.get<PracticeMaterial[]>("/api/listening/practice"),
+  /** One page of what a learner can sit, with their own history against each
+   *  one. Not `materials.list` — that is the author's view and carries
+   *  drafts.
+   *
+   *  Filters, order and paging are all the server's: at a thousand materials
+   *  sending the library so the browser can hide most of it is half a
+   *  megabyte of JSON to show thirty titles. `params` is whatever
+   *  `catalogueParams` made of the controls, plus the page bounds.
+   *
+   *  An array value becomes a repeated parameter (`types=a&types=b`), which
+   *  is what FastAPI reads a `list[str]` query from — a comma-joined string
+   *  would arrive as one type nobody has. */
+  practice: (params: Record<string, string | string[]> = {}) => {
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      for (const one of Array.isArray(value) ? value : [value]) {
+        search.append(key, one);
+      }
+    }
+    const query = search.toString();
+    return api.get<PracticeCatalogue>(
+      `/api/listening/practice${query ? `?${query}` : ""}`,
+    );
+  },
+
+  /** The caller's own listening statistics — the practice page's right-hand
+   *  panel. There is no user id in the path and no way to ask for anybody
+   *  else's: a record of what a person keeps getting wrong is theirs. */
+  practiceStats: () => api.get<ListeningStats>("/api/listening/stats"),
 
   take: (materialId: string) =>
     api.get<MaterialTake>(`/api/materials/${materialId}/take`),
