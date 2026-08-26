@@ -15,6 +15,11 @@ item difficulty from candidate ability and undoes that. When that day comes,
 only the body of :func:`_band` and the query feeding it change — no column, no
 migration, no UI.
 
+**When it is computed.** :func:`recompute` on the worker's timer, plus one
+targeted refresh at the moment a material first crosses :data:`MIN_ANSWERS`
+(:func:`refresh_if_unrated`) — see there for why that one transition is worth
+not waiting for and the rest are not.
+
 **How it is served.** The measurement is expensive in exactly the way that
 does not scale: it is an aggregate over every answer on the platform, and at
 a thousand materials computing it per request means scanning the whole of
@@ -194,6 +199,36 @@ async def recompute(
     )
     await session.commit()
     return len(rows)
+
+
+async def refresh_if_unrated(
+    session: AsyncSession, material_id: uuid.UUID
+) -> bool:
+    """Recompute one material, but only while it has no band worth waiting
+    for. Returns whether it did.
+
+    The timer is the right cadence for a measurement averaged over hundreds
+    of answers: a rated material's band does not move in fifteen minutes, and
+    refreshing it on every submit would be a write on the path a learner is
+    waiting on to keep a number fresher than anybody can perceive.
+
+    The exception is the first crossing of :data:`MIN_ANSWERS`. Until then the
+    material reads ``New`` — "nobody has answered enough of this yet" — and a
+    material that a class of twenty has just worked through, still advertising
+    that nobody has been near it, is the catalogue contradicting itself in
+    front of the people who proved it wrong. So that one transition happens
+    immediately and everything after it waits for the worker.
+
+    What it costs in the common case is a primary-key lookup: a material past
+    the threshold is answered here and goes no further. In the uncommon case
+    it is the tally for one material, bounded by that material's own answers
+    however big the library grows.
+    """
+    row = await session.get(MaterialDifficulty, material_id)
+    if row is not None and row.answered >= MIN_ANSWERS:
+        return False
+    await recompute(session, [material_id])
+    return True
 
 
 async def material_difficulty(

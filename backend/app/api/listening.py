@@ -6,6 +6,7 @@ persist the group and its questions atomically (validation happens in
 ``app/schemas/listening.py`` and raises 422 before any DB write).
 """
 
+import logging
 import uuid
 from typing import Annotated
 
@@ -40,11 +41,14 @@ from app.schemas.listening import (
     QuestionGroupOut,
     QuestionOut,
 )
+from app.services import difficulty as difficulty_service
 from app.services import grading as grading_service
 from app.services import learner_stats as learner_stats_service
 from app.services import listening as listening_service
 
 router = APIRouter(prefix="/api", tags=["listening"])
+
+logger = logging.getLogger("app.api.listening")
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
@@ -379,6 +383,20 @@ async def submit_attempt(
         material_id=material_id,
         data=data,
     )
+    # The one moment a difficulty band is worth not waiting for the worker on:
+    # a material that has just been answered enough times to be rated at all.
+    # Everything after that first crossing waits for the timer — see
+    # difficulty.refresh_if_unrated.
+    #
+    # Guarded, and the order matters: the attempt is committed by now, so a
+    # failure here must cost a stale band and never the learner's answers. The
+    # next scheduled refresh puts it right regardless.
+    try:
+        await difficulty_service.refresh_if_unrated(session, material_id)
+    except Exception:  # noqa: BLE001 - a band is not worth an attempt
+        logger.exception(
+            "difficulty refresh after attempt on %s failed", material_id
+        )
     return AttemptResultOut.model_validate(
         await grading_service.attempt_result(session, attempt)
     )

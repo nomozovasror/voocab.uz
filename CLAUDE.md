@@ -138,10 +138,17 @@ refills — still no migration.
   in its own loop beside transcription (`backend/app/worker.py`). A failed
   refresh is logged and swallowed: nobody waits on a band, and people wait on
   audio.
-- **A band is only as fresh as the last refresh.** The one visible effect is a
-  material crossing `MIN_ANSWERS` for the first time, which keeps saying `New`
-  until the next pass. Anything writing attempts outside a request — the seed
+- **A band is only as fresh as the last refresh**, with one exception: the
+  first crossing of `MIN_ANSWERS` happens on the submit that causes it
+  (`refresh_if_unrated`, called from the attempts endpoint). A paper a class
+  has just worked through, still saying nobody has answered it, is the
+  catalogue contradicting itself. Everything after that first crossing waits
+  for the timer. Anything writing attempts outside a request — the seed
   script — calls `recompute()` itself.
+- **A skipped question is still an answer.** Grading writes a row for every
+  question on the paper, so an untouched one counts toward the evidence and
+  counts as wrong. That is what makes "missed entirely" classifiable at all,
+  and it means a paper is four answers per attempt, not four minus the blanks.
 - The read path derives the band from the stored *tally*, not from the stored
   `band` column. Move a threshold and the API is right immediately while the
   column catches up; the column exists so a paginated catalogue can filter and

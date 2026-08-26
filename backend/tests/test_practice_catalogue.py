@@ -30,6 +30,7 @@ from app.models.question import Question
 from app.models.question_attempt import QuestionAttempt
 from app.models.question_group import QuestionGroup
 from app.models.user import User
+from app.services.difficulty import MIN_ANSWERS
 
 
 async def _make_user(email: str) -> User:
@@ -558,3 +559,52 @@ async def test_an_order_the_endpoint_does_not_have_is_refused() -> None:
             cookies={"access_token": token},
         )
         assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_finishing_a_paper_can_give_it_its_first_band() -> None:
+    """End to end, through the endpoint a learner actually uses.
+
+    Attempts are submitted until the material has been answered enough times
+    to be rated, and the catalogue is asked what it thinks — with nothing
+    having run on a timer in between. The band is there, because the submit
+    that crossed the threshold refreshed it
+    (difficulty.refresh_if_unrated).
+
+    Four answers an attempt, not three: grading records a row for every
+    question on the paper, and the multiple-choice one nobody touched counts
+    as an answer that was got wrong. That is deliberate rather than
+    incidental — a question everybody skips is a hard question, and the row
+    has to exist for the mistake breakdown to be able to call it "missed
+    entirely" (app/services/mistakes.py).
+    """
+    email = "cat-firstband@example.com"
+    user = await _make_user(email)
+    prefix = f"Firstband{uuid.uuid4().hex[:8]}"
+    material = await _make_material(user.id, f"{prefix} paper", "private")
+    token = create_access_token(str(user.id))
+
+    try:
+        async with _client() as client:
+            questions = await _seed(client, token, material.id)
+            await _publish(material.id)
+            answers = [
+                {"question_id": q["id"], "given_answer": "wrong"} for q in questions
+            ]
+
+            attempts = MIN_ANSWERS // 4
+            for _ in range(attempts):
+                r = await client.post(
+                    f"/api/materials/{material.id}/attempts",
+                    json={"answers": answers},
+                    cookies={"access_token": token},
+                )
+                assert r.status_code == 200, r.text
+
+            page = await _catalogue(client, token, q=prefix, done="true")
+            row = page["items"][0]
+            assert row["difficulty"]["answered"] == attempts * 4
+            assert row["difficulty"]["band"] == "hard"
+            assert row["difficulty"]["correct_pct"] == 0
+    finally:
+        await _cleanup([material.id], email)

@@ -335,3 +335,89 @@ async def test_deleting_a_material_takes_its_tally_with_it() -> None:
 
     async with async_session_factory() as session:
         assert await session.get(MaterialDifficulty, material_id) is None
+
+
+# --- The one refresh that does not wait for the timer ------------------------
+
+
+@pytest.mark.asyncio
+async def test_an_unrated_material_is_refreshed_on_the_spot() -> None:
+    """The first crossing of the threshold happens immediately.
+
+    Until it does, the material says "nobody has answered enough of this yet"
+    — and a paper a class of twenty has just worked through, still advertising
+    that, is the catalogue contradicting itself in front of the people who
+    proved it wrong.
+    """
+    material_id, questions, user_id = await _material(f"Crossing {uuid.uuid4()}")
+    try:
+        # Short of the threshold: refreshed, and still New, which is the
+        # truth rather than a failure to update.
+        await _answer(
+            user_id, material_id, questions, answers=MIN_ANSWERS - 1, correct=0
+        )
+        async with async_session_factory() as session:
+            assert await difficulty_service.refresh_if_unrated(session, material_id)
+            row = await difficulty_service.material_difficulty(
+                session, [material_id]
+            )
+        assert row[material_id]["band"] == "new"
+        assert row[material_id]["answered"] == MIN_ANSWERS - 1
+
+        # One more answer crosses it, and the band is there without anything
+        # having run on a timer.
+        await _answer(user_id, material_id, questions, answers=1, correct=0)
+        async with async_session_factory() as session:
+            assert await difficulty_service.refresh_if_unrated(session, material_id)
+            row = await difficulty_service.material_difficulty(
+                session, [material_id]
+            )
+        assert row[material_id]["band"] == "hard"
+        assert row[material_id]["answered"] == MIN_ANSWERS
+    finally:
+        await _cleanup(material_id)
+
+
+@pytest.mark.asyncio
+async def test_a_rated_material_is_left_to_the_timer() -> None:
+    """Past the threshold it does nothing, and that is the point: this runs on
+    the path a learner is waiting on, and a band averaged over dozens of
+    answers does not move enough in fifteen minutes to be worth a write
+    there."""
+    material_id, questions, user_id = await _material(f"Settled {uuid.uuid4()}")
+    try:
+        await _answer(user_id, material_id, questions, answers=40, correct=4)
+        async with async_session_factory() as session:
+            await difficulty_service.recompute(session, [material_id])
+
+        await _answer(user_id, material_id, questions, answers=40, correct=40)
+        async with async_session_factory() as session:
+            assert (
+                await difficulty_service.refresh_if_unrated(session, material_id)
+                is False
+            )
+            row = await difficulty_service.material_difficulty(
+                session, [material_id]
+            )
+        # Untouched: the forty perfect answers wait for the worker.
+        assert row[material_id]["answered"] == 40
+        assert row[material_id]["band"] == "hard"
+    finally:
+        await _cleanup(material_id)
+
+
+@pytest.mark.asyncio
+async def test_a_material_never_seen_before_is_refreshed() -> None:
+    """No row at all is not "rated": it is the state every material is in
+    until the first refresh reaches it, and the first attempt on one has to
+    create the row rather than find nothing and give up."""
+    material_id, questions, user_id = await _material(f"Firstever {uuid.uuid4()}")
+    try:
+        await _answer(user_id, material_id, questions, answers=4, correct=2)
+        async with async_session_factory() as session:
+            assert await difficulty_service.refresh_if_unrated(session, material_id)
+            stored = await session.get(MaterialDifficulty, material_id)
+        assert stored is not None
+        assert stored.answered == 4
+    finally:
+        await _cleanup(material_id)
