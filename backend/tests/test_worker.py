@@ -16,7 +16,13 @@ from app.models.audio_blob import AudioBlob, TranscriptStatus
 from app.models.audio_segment import AudioSegment
 from app.services.asr import TranscriptResult, TranscriptSegment, WordTiming
 from app.services.storage import get_storage
-from app.worker import claim_one, classify_error, process_blob, recover_stale
+from app.worker import (
+    claim_one,
+    classify_error,
+    process_blob,
+    recover_stale,
+    refresh_difficulty_once,
+)
 
 
 def _sha() -> str:
@@ -422,3 +428,31 @@ async def test_recover_stale_resets_processing_to_pending() -> None:
             assert refreshed.transcript_status == TranscriptStatus.PENDING
     finally:
         await _cleanup_blob(blob.id)
+
+
+@pytest.mark.asyncio
+async def test_the_difficulty_refresh_runs() -> None:
+    """The worker's other loop, one pass of it. What it computes is tested in
+    tests/test_difficulty_projection.py; this is that the worker's own
+    wrapper reaches it and reports how much it wrote."""
+    written = await refresh_difficulty_once()
+    assert written >= 0
+
+
+@pytest.mark.asyncio
+async def test_a_failed_difficulty_refresh_does_not_escape(monkeypatch) -> None:
+    """A broken refresh must not take transcription down with it.
+
+    The two loops share a process and nothing else; people are waiting on the
+    audio one, and nobody is waiting on a difficulty band. So the refresh
+    swallows its own failure, logs it, and lets the next interval try again —
+    the catalogue's own fallback for a material with no row is `New`, which
+    is what it would have said anyway.
+    """
+    from app.services import difficulty as difficulty_service
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("database is on fire")
+
+    monkeypatch.setattr(difficulty_service, "recompute", boom)
+    assert await refresh_difficulty_once() == 0

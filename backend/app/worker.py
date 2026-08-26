@@ -1,11 +1,26 @@
-"""Postgres-backed async transcription worker (§9 of the audio-ingestion brief).
+"""The background process: transcription, and the difficulty refresh.
 
-The queue is ``audio_blob.transcript_status`` itself — no Redis, no external
-broker (volume is small: ~200-500/month). Multiple worker instances are safe
+Two loops, run concurrently, and they have nothing to do with each other
+beyond both being work that must not happen inside a request.
+
+**Transcription** (§9 of the audio-ingestion brief). The queue is
+``audio_blob.transcript_status`` itself — no Redis, no external broker
+(volume is small: ~200-500/month). Multiple worker instances are safe
 concurrently thanks to ``SELECT ... FOR UPDATE SKIP LOCKED`` in
 :func:`claim_one`: a row locked by one worker is invisible to another's claim
 query rather than blocking it, so nothing is ever double-processed in
 steady state.
+
+**Difficulty** (:func:`app.services.difficulty.recompute`). Every material's
+tally, refilled into ``material_difficulty`` on a timer. It lives here rather
+than in a container of its own because "the process that does the work
+nobody is waiting for" already exists, is already restart-managed, and this
+is one query every fifteen minutes.
+
+Its own loop rather than a step in the transcription one: that loop's pace is
+set by the queue, and it sleeps out a doubling backoff after a failed ASR
+call. A refresh queued behind that would run when the audio provider felt
+like letting it.
 
 Entrypoint: ``python -m app.worker``.
 
@@ -25,6 +40,7 @@ from sqlmodel import select
 from app.core.config import settings
 from app.core.database import AsyncSession, async_session_factory
 from app.models.audio_blob import AudioBlob, TranscriptStatus
+from app.services import difficulty as difficulty_service
 from app.services.asr import ASRProvider, GroqASR, TranscriptResult
 from app.services.audio import persist_transcript_result
 from app.services.storage import get_storage
@@ -270,25 +286,51 @@ async def _sleep_or_stop(seconds: float) -> None:
         pass
 
 
-async def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+async def refresh_difficulty_once() -> int:
+    """One pass of the difficulty projection. Never raises.
 
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, _request_stop)
-        except NotImplementedError:  # pragma: no cover - platforms without signals
-            pass
+    Swallowing the error is the right call here and not laziness: a failed
+    refresh means the catalogue's bands are one interval staler than they
+    would have been, which is a state the page is already built to survive
+    (a material with no row reads as ``New``). Letting it escape would take
+    the transcription loop down with it — two unrelated jobs, one of which
+    people are waiting on.
+    """
+    try:
+        async with async_session_factory() as session:
+            return await difficulty_service.recompute(session)
+    except Exception:  # noqa: BLE001 - logged; the next pass tries again
+        logger.exception("difficulty refresh failed; will retry next interval")
+        return 0
 
-    provider = get_asr_provider()
 
+async def _difficulty_loop() -> None:
+    """Refill the difficulty projection every ``difficulty_refresh_interval_s``.
+
+    Runs once at startup before waiting, so a fresh database — or one whose
+    refresher has been down — is correct within a moment of the worker coming
+    up rather than a quarter of an hour later.
+    """
+    interval = settings.difficulty_refresh_interval_s
+    if interval <= 0:
+        logger.info("difficulty refresh disabled (interval <= 0)")
+        return
+
+    logger.info("difficulty refresh every %.0fs", interval)
+    while not _stop_event.is_set():
+        written = await refresh_difficulty_once()
+        logger.info("difficulty refreshed for %d material(s)", written)
+        await _sleep_or_stop(interval)
+
+
+async def _transcription_loop(provider: ASRProvider) -> None:
     async with async_session_factory() as session:
         recovered = await recover_stale(session)
         if recovered:
             logger.info("recovered %d stale processing blob(s) to pending", recovered)
 
     logger.info(
-        "worker started; polling every %.1fs (max_attempts=%d)",
+        "transcription polling every %.1fs (max_attempts=%d)",
         settings.asr_poll_interval_s,
         settings.asr_max_attempts,
     )
@@ -338,6 +380,27 @@ async def main() -> None:
                 attempts_after,
             )
             await _sleep_or_stop(backoff)
+
+
+async def main() -> None:
+    logging.basicConfig(level=logging.INFO)
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _request_stop)
+        except NotImplementedError:  # pragma: no cover - platforms without signals
+            pass
+
+    logger.info("worker started")
+    # Both loops watch the same stop event, so one SIGTERM ends both and
+    # `gather` returns when the slower of the two has finished its current
+    # step. Neither is allowed to fail the other: the transcription loop
+    # guards every blob it touches, and the refresh swallows its own errors.
+    await asyncio.gather(
+        _transcription_loop(get_asr_provider()),
+        _difficulty_loop(),
+    )
 
     logger.info("worker stopping")
 

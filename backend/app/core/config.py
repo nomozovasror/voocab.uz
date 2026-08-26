@@ -85,6 +85,15 @@ class Settings(BaseSettings):
     # asr_backoff_base_s * 2 ** (attempts - 1).
     asr_backoff_base_s: float = 2.0
 
+    # --- Difficulty projection (app/services/difficulty.py) ---
+    # How often the worker recomputes every material's difficulty tally into
+    # material_difficulty. Fifteen minutes because a band is an average over
+    # hundreds of answers and does not move in less; the only visible lag is a
+    # material crossing MIN_ANSWERS for the first time, which keeps saying
+    # "New" until the next pass. Set to 0 to turn the refresher off entirely
+    # (a second worker instance that shouldn't duplicate the work, or a test).
+    difficulty_refresh_interval_s: float = 900.0
+
     # --- Local media (dev fallback when R2 isn't configured) ---
     # Uploads land here and are served at ``media_url_prefix``. Relative to the
     # backend working directory.
