@@ -1137,6 +1137,29 @@ async def recommended(
     return await _catalogue_rows(session, user_id, materials)
 
 
+async def materials_in_order(
+    session: AsyncSession, ids: list[uuid.UUID]
+) -> list[Material]:
+    """The named materials, in the order they were named.
+
+    SQL has no opinion about the order of an ``IN`` list, and here the order
+    IS the content — a collection is a sequence somebody laid out on purpose.
+    Sorted in Python against the ids rather than with a CASE expression
+    because the list is a course, not a catalogue: ten rows, not ten thousand.
+    """
+    if not ids:
+        return []
+    found = {
+        m.id: m
+        for m in (
+            await session.exec(
+                select(Material).where(Material.id.in_(ids))  # type: ignore[attr-defined]
+            )
+        ).all()
+    }
+    return [found[i] for i in ids if i in found]
+
+
 async def _catalogue_rows(
     session: AsyncSession, user_id: uuid.UUID, materials: list[Material]
 ) -> list[dict]:

@@ -95,6 +95,35 @@ being told.
 - The block is shown only over an **unnarrowed** list. A filter is the reader
   saying what they want; suggesting past it is the page talking over them.
 
+## Collections are references, and progress is derived
+
+A collection (`backend/app/services/collections.py`) is an ordered list of
+material ids. It owns nothing, so deleting one cannot lose a material, and
+that is what keeps the whole feature as small as it is.
+
+- **There is no enrolment.** How far somebody is through one is counted from
+  the attempts they already made, so opening a collection commits them to
+  nothing and there is no state that can rot. Same argument as difficulty
+  being a measurement — except this one is genuinely cheap (ten materials, not
+  a library), so it is computed per request with no projection behind it.
+- **`next_material_id` is the first UNSAT one in order**, not the nearest. The
+  sequence is somebody's judgement about what to do when; picking the nearest
+  would make a collection a filter with a progress bar.
+- **The item list is written whole** (`PUT .../items`), never patched a row at
+  a time. Reordering through a unique index on `(collection_id, order_index)`
+  one row at a time is a sequence of temporary states that all have to be
+  legal; replacing the list has no intermediate state to get wrong.
+- An author may put their own drafts in; a learner sees only the published
+  ones. Both counts are reported to the author (`item_count` vs
+  `public_item_count`) rather than the difference being hidden.
+- **Emptying a published collection withdraws it** rather than the save being
+  refused. The author's work is never rejected to protect a flag — but a
+  published course with nothing in it is a promise that opens onto a blank
+  page.
+- The rows a learner sees are the catalogue's own (`_catalogue_rows`), so a
+  material looks the same in a collection as in the list. A collection is a
+  different route to the same thing, not a different thing.
+
 ## Loading states (frontend)
 
 Three of the four pieces are structural and need no remembering:

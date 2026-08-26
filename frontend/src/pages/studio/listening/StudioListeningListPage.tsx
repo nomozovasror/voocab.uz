@@ -341,7 +341,21 @@ export default function StudioListeningListPage() {
       )}
       {isEmpty && <h1 className="mb-1 text-2xl font-medium tracking-wide text-foreground">listening</h1>}
 
-      {!isEmpty && <p className="mb-7 text-xs text-muted-foreground">your listening materials</p>}
+      {!isEmpty && (
+        <p className="mb-7 text-xs text-muted-foreground">
+          your listening materials ·{" "}
+          {/* The way through to the other half of authoring. A collection is
+              made OF these, so this is where somebody goes looking for it —
+              and the studio's chrome is breadcrumbs rather than a nav, so a
+              page with no link into it is a page nobody finds. */}
+          <Link
+            to="/studio/collections"
+            className="text-primary transition-colors hover:underline"
+          >
+            collections
+          </Link>
+        </p>
+      )}
 
       {isError ? (
         <div className="rounded-lg border border-dashed border-border px-5 py-10 text-center">

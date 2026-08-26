@@ -10,6 +10,7 @@ from app.models.audio_asset import AudioAsset
 from app.models.audio_blob import AudioBlob
 from app.models.audio_segment import AudioSegment
 from app.models.auth_identity import AuthIdentity
+from app.models.collection import Collection, CollectionItem
 from app.models.image_blob import ImageBlob
 from app.models.material import Material
 from app.models.material_difficulty import MaterialDifficulty
@@ -24,6 +25,8 @@ from app.models.user import User
 __all__ = [
     "User",
     "AuthIdentity",
+    "Collection",
+    "CollectionItem",
     "Material",
     "MaterialDifficulty",
     "Segment",

@@ -447,6 +447,61 @@ export interface NextUp {
   items: PracticeMaterial[];
 }
 
+// --- Collections ------------------------------------------------------------
+
+/** How far the reader is through a collection.
+ *
+ *  Derived from attempts they had already made, never stored — opening a
+ *  collection commits them to nothing, and there is no enrolment row that can
+ *  come to disagree with what they have actually sat.
+ *
+ *  `next_material_id` is the first UNSAT one **in order**, which is the
+ *  difference between a collection and a filter: the sequence is somebody's
+ *  judgement about what to do when. `null` means finished. */
+export interface CollectionProgress {
+  total: number;
+  done: number;
+  next_material_id: string | null;
+}
+
+/** An ordered set of materials somebody put together on purpose — a course, a
+ *  mock-test set, a route through the library. The catalogue says what exists;
+ *  this says what to do in what order. */
+export interface Collection {
+  id: string;
+  title: string;
+  summary: string;
+  visibility: string;
+  created_at: string | null;
+  author: CatalogueAuthor | null;
+  progress: CollectionProgress;
+}
+
+/** One collection, opened. `items` are the catalogue's own rows — same
+ *  measured difficulty, same history, same byline — because a collection is a
+ *  different route to the same thing, not a different thing. */
+export interface CollectionDetail extends Collection {
+  items: PracticeMaterial[];
+}
+
+/** A collection as its author sees it listed.
+ *
+ *  Two counts because they differ exactly when the course contains the
+ *  author's own drafts: normal halfway through building one, confusing to
+ *  discover later. `blocker` is why it cannot be published yet, in words the
+ *  studio can print. */
+export interface AuthorCollection {
+  id: string;
+  title: string;
+  summary: string;
+  visibility: string;
+  created_at: string | null;
+  author: CatalogueAuthor | null;
+  item_count: number;
+  public_item_count: number;
+  blocker: string | null;
+}
+
 // --- The learner's own statistics -------------------------------------------
 
 /** One bar of a distribution.

@@ -11,6 +11,7 @@ import { getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
   PRACTICE_PAGE,
+  useCollections,
   useNextUp,
   usePracticeCatalogue,
   usePracticeStats,
@@ -49,6 +50,10 @@ import {
   NextUp,
   NextUpSkeleton,
 } from "@/features/listening/components/NextUp";
+import {
+  CollectionStrip,
+  CollectionStripSkeleton,
+} from "@/features/listening/components/CollectionStrip";
 
 /** How long the pointer has to rest on a row before the cards answer it, and
  *  how long they wait before turning back once it leaves. Module constants so
@@ -95,6 +100,7 @@ const BOTTOM_GAP = 16;
 export default function ListeningPage() {
   const stats = usePracticeStats();
   const nextUp = useNextUp();
+  const collections = useCollections();
 
   // One value rather than a useState per control: every one of them narrows
   // the same list, "clear filters" has to put all of them back at once, and
@@ -544,12 +550,24 @@ export default function ListeningPage() {
                 list's own first row would be, so the eye meets it on the way
                 down rather than having to come back up for it.
               */}
-              {!narrowed &&
-                (nextUp.isLoading ? (
-                  <NextUpSkeleton />
-                ) : nextUp.data ? (
-                  <NextUp data={nextUp.data} />
-                ) : null)}
+              {!narrowed && (
+                <>
+                  {/* Structure first, then the one immediate suggestion, then
+                      the library. It is the order the questions get more
+                      specific in: what should I be working through, what
+                      should I do tonight, and what else is there. */}
+                  {collections.isLoading ? (
+                    <CollectionStripSkeleton />
+                  ) : collections.data ? (
+                    <CollectionStrip collections={collections.data} />
+                  ) : null}
+                  {nextUp.isLoading ? (
+                    <NextUpSkeleton />
+                  ) : nextUp.data ? (
+                    <NextUp data={nextUp.data} />
+                  ) : null}
+                </>
+              )}
               <ListHeader
                 count={total}
                 filtered={narrowed}

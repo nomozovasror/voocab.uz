@@ -18,6 +18,9 @@ import type {
   PartCreate,
   PartOut,
   PartUpdate,
+  AuthorCollection,
+  Collection,
+  CollectionDetail,
   NextUp,
   PracticeCatalogue,
   QuestionGroupIn,
@@ -153,6 +156,29 @@ export const listeningApi = {
     return api.get<PracticeCatalogue>(
       `/api/listening/practice${query ? `?${query}` : ""}`,
     );
+  },
+
+  collections: {
+    /** Published collections, newest first, with the caller's progress
+     *  through each. Not paginated: these are curated by hand, and there are
+     *  tens of them where there are thousands of materials. */
+    list: () => api.get<Collection[]>("/api/collections"),
+    get: (id: string) => api.get<CollectionDetail>(`/api/collections/${id}`),
+    /** The caller's own, published or not. */
+    mine: () => api.get<AuthorCollection[]>("/api/studio/collections"),
+    create: (body: { title: string; summary?: string }) =>
+      api.post<AuthorCollection>("/api/collections", { json: body }),
+    update: (
+      id: string,
+      body: { title?: string; summary?: string; visibility?: string },
+    ) => api.patch<AuthorCollection>(`/api/collections/${id}`, { json: body }),
+    /** The whole ordered list, every time — see the endpoint's own note on
+     *  why there is no add/remove/move. */
+    setItems: (id: string, materialIds: string[]) =>
+      api.put<AuthorCollection>(`/api/collections/${id}/items`, {
+        json: { material_ids: materialIds },
+      }),
+    remove: (id: string) => api.delete<void>(`/api/collections/${id}`),
   },
 
   /** A few materials to practise next, and why those. Its own request rather

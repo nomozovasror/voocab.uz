@@ -1,0 +1,250 @@
+"""Collections: what to practise, in what order.
+
+Authorization follows the same two rules as materials — anyone may read a
+public one, only its author may change it — and the same disguise: a private
+collection is a 404 to everybody else rather than a 403, because confirming
+which ids exist leaks what somebody is working on.
+
+The learner-facing reads and the authoring writes live in one module rather
+than being split across a studio router. They are four endpoints over one
+table, and the interesting rules (what may be published, what may be put in)
+are shared between them.
+"""
+
+import uuid
+
+from fastapi import APIRouter, HTTPException, status
+from sqlmodel import select
+
+from app.api.deps import CurrentUser
+from app.api.listening import SessionDep
+from app.core.database import AsyncSession
+from app.models.collection import Collection
+from app.models.material import Material
+from app.schemas.collection import (
+    AuthorCollectionOut,
+    CollectionCreate,
+    CollectionDetailOut,
+    CollectionItemsIn,
+    CollectionOut,
+    CollectionUpdate,
+)
+from app.services import collections as collections_service
+
+router = APIRouter(prefix="/api", tags=["collections"])
+
+
+async def _load_readable(
+    session: AsyncSession, collection_id: uuid.UUID, user_id: uuid.UUID
+) -> Collection:
+    collection = await collections_service.get(session, collection_id)
+    if collection is None or (
+        collection.author_id != user_id and collection.visibility != "public"
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Collection not found")
+    return collection
+
+
+async def _load_owned(
+    session: AsyncSession, collection_id: uuid.UUID, user_id: uuid.UUID
+) -> Collection:
+    collection = await collections_service.get(session, collection_id)
+    if collection is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Collection not found")
+    if collection.author_id != user_id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your collection")
+    return collection
+
+
+# --- Reading ----------------------------------------------------------------
+
+
+@router.get("/collections", response_model=list[CollectionOut])
+async def list_collections(
+    user: CurrentUser, session: SessionDep
+) -> list[CollectionOut]:
+    """Published collections, newest first, each with the caller's progress.
+
+    Not paginated, and that is a judgement rather than an oversight: these are
+    curated by hand and there will be tens of them where there are thousands
+    of materials. The day that stops being true this wants what the catalogue
+    got, and the shape of the answer here already leaves room for it.
+    """
+    return [
+        CollectionOut(**row)
+        for row in await collections_service.list_public(session, user.id)
+    ]
+
+
+@router.get("/collections/{collection_id}", response_model=CollectionDetailOut)
+async def get_collection(
+    collection_id: uuid.UUID, user: CurrentUser, session: SessionDep
+) -> CollectionDetailOut:
+    """One collection and its materials, in order.
+
+    Its author sees it before it is published — that is how they check what
+    they have built — and everybody else gets a 404 until it is.
+    """
+    collection = await _load_readable(session, collection_id, user.id)
+    return CollectionDetailOut(
+        **await collections_service.for_learner(session, user.id, collection)
+    )
+
+
+@router.get("/studio/collections", response_model=list[AuthorCollectionOut])
+async def my_collections(
+    user: CurrentUser, session: SessionDep
+) -> list[AuthorCollectionOut]:
+    """The caller's own, published or not, most recently touched first."""
+    return [
+        AuthorCollectionOut(**row)
+        for row in await collections_service.for_author(session, user.id)
+    ]
+
+
+# --- Authoring --------------------------------------------------------------
+
+
+@router.post(
+    "/collections",
+    response_model=AuthorCollectionOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_collection(
+    data: CollectionCreate, user: CurrentUser, session: SessionDep
+) -> AuthorCollectionOut:
+    """A new, empty, private collection.
+
+    Private on creation and empty is a legal state to be in: an author starts
+    by naming the thing they are about to build, and a create that demanded
+    its contents up front would be a form nobody could fill in.
+    """
+    collection = await collections_service.create(
+        session, user.id, title=data.title, summary=data.summary
+    )
+    return await _author_row(session, collection)
+
+
+@router.patch(
+    "/collections/{collection_id}", response_model=AuthorCollectionOut
+)
+async def update_collection(
+    collection_id: uuid.UUID,
+    data: CollectionUpdate,
+    user: CurrentUser,
+    session: SessionDep,
+) -> AuthorCollectionOut:
+    """Rename, re-describe, publish or withdraw.
+
+    Publishing is the one that can be refused, and it comes back as a 422 with
+    the reason in it rather than a bare rejection: the author is being told
+    what to fix, and "cannot publish" without a because is a dead end.
+    Withdrawing is never refused — taking your own work back is not something
+    to argue with.
+    """
+    collection = await _load_owned(session, collection_id, user.id)
+    if data.visibility == "public":
+        # Checked against what the collection will BE, so a rename to a
+        # non-blank title and a publish can arrive in the same request.
+        prospective = Collection(
+            id=collection.id,
+            author_id=collection.author_id,
+            title=data.title if data.title is not None else collection.title,
+            summary=collection.summary,
+            visibility="public",
+        )
+        blocker = await collections_service.can_publish(session, prospective)
+        if blocker is not None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, blocker)
+
+    collection = await collections_service.update(
+        session,
+        collection,
+        title=data.title,
+        summary=data.summary,
+        visibility=data.visibility,
+    )
+    return await _author_row(session, collection)
+
+
+@router.put("/collections/{collection_id}/items", response_model=AuthorCollectionOut)
+async def set_collection_items(
+    collection_id: uuid.UUID,
+    data: CollectionItemsIn,
+    user: CurrentUser,
+    session: SessionDep,
+) -> AuthorCollectionOut:
+    """Replace the whole ordered list.
+
+    The whole list every time, rather than add/remove/move: reordering rows
+    individually through a unique index is a sequence of temporary states that
+    all have to be legal, and there is no reason a client should have to think
+    about that.
+
+    What may go in: the author's own materials, and anybody's published ones.
+    The second is what makes a collection worth having — somebody who knows
+    the exam laying out a route through the library, not just through their
+    own work. An id that is neither is refused rather than dropped: a course
+    that silently loses a material when it is saved is a course whose author
+    stops trusting the save button.
+
+    A public collection that loses its last public material would be a
+    published course opening onto a blank page, so that save withdraws it and
+    says so. The author's work is never rejected to protect a flag.
+    """
+    collection = await _load_owned(session, collection_id, user.id)
+
+    if data.material_ids:
+        allowed = {
+            material_id
+            for material_id, author_id, visibility in (
+                await session.exec(
+                    select(Material.id, Material.author_id, Material.visibility).where(
+                        Material.id.in_(data.material_ids),  # type: ignore[attr-defined]
+                        Material.type == "listening",
+                    )
+                )
+            ).all()
+            if author_id == user.id or visibility == "public"
+        }
+        missing = [m for m in data.material_ids if m not in allowed]
+        if missing:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"{len(missing)} of those materials are not yours and not published.",
+            )
+
+    await collections_service.set_items(session, collection, data.material_ids)
+
+    if collection.visibility == "public":
+        blocker = await collections_service.can_publish(session, collection)
+        if blocker is not None:
+            collection = await collections_service.update(
+                session, collection, visibility="private"
+            )
+
+    return await _author_row(session, collection)
+
+
+@router.delete(
+    "/collections/{collection_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_collection(
+    collection_id: uuid.UUID, user: CurrentUser, session: SessionDep
+) -> None:
+    """Delete the collection. The materials in it are untouched — that is the
+    whole point of a collection being a list of references rather than a
+    container, and it is why this needs no are-you-sure about content that
+    isn't going anywhere."""
+    collection = await _load_owned(session, collection_id, user.id)
+    await collections_service.delete(session, collection)
+
+
+async def _author_row(
+    session: AsyncSession, collection: Collection
+) -> AuthorCollectionOut:
+    """One collection in the author's own shape. Read back through the same
+    listing the studio uses, so a write and a refresh cannot disagree."""
+    rows = await collections_service.for_author(session, collection.author_id)
+    row = next(r for r in rows if r["id"] == collection.id)
+    return AuthorCollectionOut(**row)

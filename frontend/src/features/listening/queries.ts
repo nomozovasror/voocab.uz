@@ -136,6 +136,89 @@ export function usePracticeCatalogue(
   });
 }
 
+// --- Collections -------------------------------------------------------------
+
+const COLLECTIONS_KEY = ["listening-collections"] as const;
+
+/** Published collections with the caller's progress. */
+export function useCollections() {
+  return useQuery({
+    queryKey: COLLECTIONS_KEY,
+    queryFn: () => listeningApi.collections.list(),
+    staleTime: 60_000,
+  });
+}
+
+export function useCollection(id: string | undefined) {
+  return useQuery({
+    queryKey: [...COLLECTIONS_KEY, "detail", id],
+    queryFn: () => listeningApi.collections.get(id as string),
+    enabled: !!id,
+  });
+}
+
+/** The author's own. Its own key, because it holds things the learner-facing
+ *  list deliberately does not: unpublished collections, and the count of what
+ *  is in them that nobody else can see. */
+const MY_COLLECTIONS_KEY = ["studio-collections"] as const;
+
+export function useMyCollections() {
+  return useQuery({
+    queryKey: MY_COLLECTIONS_KEY,
+    queryFn: () => listeningApi.collections.mine(),
+  });
+}
+
+/** Every write to a collection invalidates both listings and the detail.
+ *
+ *  Both, always: publishing moves a collection from one list into the other,
+ *  and a save that only refreshed the one the author is looking at would
+ *  leave the learner-facing list holding the version from before. */
+function useCollectionWrite<TArgs, TResult>(
+  fn: (args: TArgs) => Promise<TResult>,
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: COLLECTIONS_KEY });
+      void qc.invalidateQueries({ queryKey: MY_COLLECTIONS_KEY });
+    },
+  });
+}
+
+export function useCreateCollection() {
+  return useCollectionWrite((body: { title: string; summary?: string }) =>
+    listeningApi.collections.create(body),
+  );
+}
+
+export function useUpdateCollection() {
+  return useCollectionWrite(
+    (args: {
+      id: string;
+      title?: string;
+      summary?: string;
+      visibility?: string;
+    }) => {
+      const { id, ...body } = args;
+      return listeningApi.collections.update(id, body);
+    },
+  );
+}
+
+export function useSetCollectionItems() {
+  return useCollectionWrite((args: { id: string; materialIds: string[] }) =>
+    listeningApi.collections.setItems(args.id, args.materialIds),
+  );
+}
+
+export function useDeleteCollection() {
+  return useCollectionWrite((id: string) =>
+    listeningApi.collections.remove(id),
+  );
+}
+
 const NEXT_UP_KEY = ["listening-next-up"] as const;
 
 /** What to practise next. Not keyed by the filters — a recommendation is
@@ -184,6 +267,10 @@ export function useSubmitAttempt(materialId: string) {
       // And what to do next: the material just finished must drop out of the
       // suggestions, and finishing it may have moved which part is behind.
       void qc.invalidateQueries({ queryKey: NEXT_UP_KEY });
+      // And any collection holding it: progress through a course is counted
+      // from attempts, so finishing something moves the bar on every course
+      // it appears in.
+      void qc.invalidateQueries({ queryKey: COLLECTIONS_KEY });
     },
   });
 }

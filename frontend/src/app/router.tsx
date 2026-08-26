@@ -82,6 +82,12 @@ export const router = createBrowserRouter([
             ...page(() => import("@/pages/listening/ListeningStatsPage")),
           },
           {
+            // And nor is "collections". Every one of these has to stay above
+            // ``listening/:id``.
+            path: "listening/collections/:id",
+            ...page(() => import("@/pages/listening/CollectionPage")),
+          },
+          {
             path: "listening/:id",
             ...page(() => import("@/pages/listening/ListeningTakePage")),
           },
@@ -162,6 +168,21 @@ export const router = createBrowserRouter([
           {
             path: "listening/:id",
             ...page(() => import("@/pages/studio/listening/StudioListeningEditorPage")),
+          },
+          {
+            path: "collections",
+            ...page(
+              () => import("@/pages/studio/collections/StudioCollectionsPage"),
+            ),
+          },
+          {
+            path: "collections/:id",
+            ...page(
+              () =>
+                import(
+                  "@/pages/studio/collections/StudioCollectionEditorPage"
+                ),
+            ),
           },
           // The studio's own, so a wrong address inside it keeps the studio's
           // chrome rather than dropping the author back into the app shell.
