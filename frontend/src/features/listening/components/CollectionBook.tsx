@@ -250,25 +250,19 @@ export function CollectionBook({ collection }: { collection: Collection }) {
           />
         </div>
 
-        {/* The ground the byline stands on. Over the pattern, under the type
-            — see COVER_INK.foot for why it is here rather than the pattern
-            being kept out of the way. */}
-        <span
-          aria-hidden
-          className="absolute inset-x-0 bottom-0 h-2/5"
-          style={{ backgroundImage: COVER_INK.foot }}
-        />
-
-        <div className="absolute inset-x-5 bottom-3 pr-1 text-xs">
+        {/* Both lines in the title's own white — see COVER_INK.byline for
+            why a dimmed one could not survive the pattern behind it. */}
+        <div
+          className="absolute inset-x-5 bottom-3 pr-1 text-xs"
+          style={{ color: COVER_INK.byline }}
+        >
           {collection.author && (
-            <p className="truncate" style={{ color: COVER_INK.author }}>
-              {collection.author.display_name}
-            </p>
+            <p className="truncate">{collection.author.display_name}</p>
           )}
           {/* "materials", never "papers": in IELTS a paper is the whole exam,
               and a cover claiming "6 papers" promises six exams. The word is
               the one the rest of the page uses, so the two agree. */}
-          <p className="tabular-nums" style={{ color: COVER_INK.count }}>
+          <p className="tabular-nums">
             {total} material{total === 1 ? "" : "s"}
           </p>
         </div>

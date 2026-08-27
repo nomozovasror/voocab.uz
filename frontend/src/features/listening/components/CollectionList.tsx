@@ -41,14 +41,24 @@ import {
  * rail is a place to hide things — three fit, the scrollbar hides until it is
  * reached for, and a mouse wheel cannot move it sideways at all.
  *
- * Five across rather than four, and that is not a taste decision. At four the
- * books came out 186px wide, a row was tall enough that the second one began
- * below the fold, and a reader with seven collections saw four and had no
- * reason to think there were more. Five puts them back at about the 156px
- * they were drawn for, and puts the second row where it can be seen.
+ * Four across, and the books are CAPPED rather than left to fill the column.
+ * Uncapped they came out 186px wide — wider than they were drawn for — and a
+ * book is a fixed ratio, so every pixel of extra width is another one and a
+ * third of height. That is what pushed the second row off the bottom, and a
+ * reader with seven collections seeing four has no reason to think there are
+ * more. Capped at 160 the row is sixty pixels shorter, which is the
+ * difference between the next row peeking and the next row not existing.
+ *
+ * The slack that leaves in each cell is spread evenly rather than pushed to
+ * one side: an even shelf with air in it reads as a shelf, and a left-packed
+ * one with a gap at the end reads as a mistake.
  */
 const SHELF =
-  "mt-4 grid grid-cols-2 gap-x-5 gap-y-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5";
+  "mt-4 grid grid-cols-2 justify-items-center gap-x-5 gap-y-6 sm:grid-cols-3 lg:grid-cols-4";
+
+/** One place on the shelf. The cap is here rather than on the book itself so
+ *  that anything else placed on a shelf lines up with the books. */
+const SLOT = "w-full max-w-40";
 
 /** The same entrance the catalogue rows use, applied to a book. */
 const REVEAL =
@@ -144,8 +154,10 @@ export function CollectionList({
         <Header loading />
         <SkeletonBlock label="Loading collections">
           <div className={SHELF}>
-            {Array.from({ length: 5 }, (_, i) => (
-              <CollectionBookSkeleton key={i} />
+            {Array.from({ length: 4 }, (_, i) => (
+              <div key={i} className={SLOT}>
+                <CollectionBookSkeleton />
+              </div>
             ))}
           </div>
         </SkeletonBlock>
@@ -187,7 +199,7 @@ export function CollectionList({
               <li
                 key={collection.id}
                 ref={revealRef}
-                className={revealRef ? REVEAL : undefined}
+                className={cn(SLOT, revealRef && REVEAL)}
               >
                 <CollectionBook collection={collection} />
               </li>
@@ -196,8 +208,12 @@ export function CollectionList({
 
           {isFetchingNextPage && (
             <div className={cn(SHELF, "mt-6")} aria-hidden>
-              <CollectionBookSkeleton />
-              <CollectionBookSkeleton />
+              <div className={SLOT}>
+                <CollectionBookSkeleton />
+              </div>
+              <div className={SLOT}>
+                <CollectionBookSkeleton />
+              </div>
             </div>
           )}
           {hasNextPage && <div ref={bottom} aria-hidden className="h-8" />}
