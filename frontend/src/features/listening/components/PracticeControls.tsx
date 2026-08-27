@@ -212,6 +212,10 @@ export function SearchField({
  *  between a chip and the bar's edge is what makes it look set INTO something
  *  rather than dropped on top of it. */
 const PILL = "h-8 rounded-full px-3 text-xs";
+
+/** Horizontal slack inside the box that clips the swapping control groups, so
+ *  its edge never cuts through a focus ring. Four, against the ring's three. */
+const SLACK = 4;
 const PILL_ON =
   "bg-primary/15 text-primary hover:bg-primary/20 hover:text-primary aria-expanded:bg-primary/20 aria-expanded:text-primary";
 const PILL_OFF = "text-muted-foreground hover:bg-surface-hover hover:text-foreground";
@@ -322,9 +326,13 @@ function Group({
       aria-hidden={!active}
       className={cn(
         "flex flex-wrap items-center gap-0.5 transition-opacity duration-fast ease-out motion-reduce:transition-none sm:flex-nowrap",
+        // `sm:w-max` on the active one too: it takes its own natural width
+        // rather than the box's, which is what keeps the measurement honest
+        // (see FilterChips). Below `sm` it wraps instead, and no width is
+        // being animated there anyway.
         active
-          ? "relative opacity-100"
-          : "pointer-events-none absolute inset-y-0 left-0 w-max opacity-0",
+          ? "relative opacity-100 sm:w-max"
+          : "pointer-events-none absolute inset-y-0 left-1 w-max opacity-0",
       )}
     >
       {children}
@@ -425,6 +433,14 @@ export function FilterChips({
   // Measured rather than written down: the material row's width moves as its
   // own menus change label ("Difficulty" becoming "2 levels"), and a number
   // typed in here would be wrong every time that happened.
+  //
+  // Both groups size themselves (`w-max`) and the box is given THEIR width,
+  // never the other way round. That direction is the whole of what makes the
+  // measurement work: constrained by the box, a group's own width stops
+  // changing when its contents do, the ResizeObserver never fires again, and
+  // the box keeps whatever width it was given on the first paint — which is
+  // the width of a filter row whose menus had not loaded yet, with the rest
+  // of the controls hanging outside the bar.
   const materialsRef = useRef<HTMLDivElement | null>(null);
   const coursesRef = useRef<HTMLDivElement | null>(null);
   const [widths, setWidths] = useState({ materials: 0, courses: 0 });
@@ -448,7 +464,9 @@ export function FilterChips({
   // not the number this wants anyway. A phone gets the swap without the
   // width animation, which is the part that needs the room.
   const oneLine = useMediaQuery("(min-width: 40rem)");
-  const width = oneLine ? widths[mode] || undefined : undefined;
+  // Plus the slack the box carries so a focus ring on the pill at either end
+  // survives the clipping — see the note on it below.
+  const width = oneLine && widths[mode] ? widths[mode] + SLACK * 2 : undefined;
 
   return (
     // One bar rather than chips loose on the page: it says the row is a set
@@ -463,7 +481,7 @@ export function FilterChips({
     // left.
     <div
       role="group"
-      aria-label="Filter materials"
+      aria-label={mode === "courses" ? "Filter collections" : "Filter materials"}
       className="inline-flex flex-wrap items-center justify-center gap-0.5 rounded-2xl border border-border-subtle bg-card/50 p-1"
     >
       <ModeSwitch mode={mode} onChange={onMode} />
@@ -476,9 +494,20 @@ export function FilterChips({
         still in the document, and a keyboard would otherwise tab straight
         into controls nobody can see.
       */}
+      {/*
+        `overflow-hidden` is what turns the resize into a reveal: the incoming
+        group is already at its full width behind the edge, and the box opens
+        onto it rather than the controls sliding in from somewhere.
+
+        The negative margin and matching padding are the price of clipping —
+        without them the box's edge would cut through the focus ring of the
+        pill at either end. Four pixels of slack is more than the three the
+        ring needs, and the negative margin puts the visible edge back exactly
+        where it was.
+      */}
       <div
         style={{ width }}
-        className="relative transition-[width] duration-slow ease-out motion-reduce:transition-none"
+        className="relative -mx-1 overflow-hidden px-1 transition-[width] duration-slow ease-out motion-reduce:transition-none"
       >
         <Group ref={materialsRef} active={mode === "materials"}>
           <ChipDivider />
