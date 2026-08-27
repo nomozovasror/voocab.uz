@@ -153,7 +153,7 @@ export const COLLECTIONS_PAGE = 12;
  * beats a page number. Keyed by the search so a query is its own list rather
  * than a filter applied afterwards.
  */
-export function useCollections(params: { q?: string } = {}) {
+export function useCollections(params: { q?: string; status?: string } = {}) {
   return useInfiniteQuery({
     queryKey: [...COLLECTIONS_KEY, params],
     queryFn: ({ pageParam }) =>

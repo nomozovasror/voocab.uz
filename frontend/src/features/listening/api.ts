@@ -164,7 +164,14 @@ export const listeningApi = {
      *  Ordered by that progress rather than by date — in progress, then
      *  untouched, then finished — because what somebody wants from a list of
      *  courses is the one they were in the middle of. */
-    list: (params: { q?: string; limit?: number; offset?: number } = {}) =>
+    list: (
+      params: {
+        q?: string;
+        status?: string;
+        limit?: number;
+        offset?: number;
+      } = {},
+    ) =>
       api.get<CollectionList>("/api/collections", { params }),
     get: (id: string) => api.get<CollectionDetail>(`/api/collections/${id}`),
     /** The caller's own, published or not. */

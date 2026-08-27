@@ -686,3 +686,79 @@ async def test_collections_are_searchable_by_title_and_by_author() -> None:
             assert r.json()["total"] == 0
     finally:
         await _cleanup([material.id], email)
+
+
+@pytest.mark.asyncio
+async def test_the_status_filter_narrows_the_count_as_well_as_the_page() -> None:
+    """The same computation the ordering uses, asked as a question.
+
+    ``total`` has to count what survives it: a filtered list reporting the
+    unfiltered total is a list that looks like it lost something between the
+    header and the rows.
+    """
+    email = f"coll-status-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    token = create_access_token(str(user.id))
+    made = [
+        await _material(user.id, f"Status {i} {uuid.uuid4()}", "public")
+        for i in range(3)
+    ]
+    tag = f"XX{uuid.uuid4().hex[:6]}"
+
+    try:
+        async with _client() as client:
+            finished = await _make(client, token, f"{tag} finished")
+            untouched = await _make(client, token, f"{tag} untouched")
+            halfway = await _make(client, token, f"{tag} halfway")
+
+            for collection_id, ids in (
+                (finished, [made[0].id]),
+                (untouched, [made[1].id]),
+                (halfway, [made[1].id, made[2].id]),
+            ):
+                await client.put(
+                    f"/api/collections/{collection_id}/items",
+                    json={"material_ids": [str(m) for m in ids]},
+                    cookies={"access_token": token},
+                )
+                await client.patch(
+                    f"/api/collections/{collection_id}",
+                    json={"visibility": "public"},
+                    cookies={"access_token": token},
+                )
+
+            await _sit(user.id, made[0].id)
+            await _sit(user.id, made[2].id)
+
+            async def ids_for(status: str) -> tuple[list[str], int]:
+                r = await client.get(
+                    "/api/collections",
+                    params={"q": tag, "status": status},
+                    cookies={"access_token": token},
+                )
+                assert r.status_code == 200, r.text
+                return [x["id"] for x in r.json()["items"]], r.json()["total"]
+
+            assert await ids_for("in_progress") == ([halfway], 1)
+            assert await ids_for("not_started") == ([untouched], 1)
+            assert await ids_for("finished") == ([finished], 1)
+            everything, total = await ids_for("all")
+            assert total == 3
+            assert len(everything) == 3
+    finally:
+        await _cleanup([m.id for m in made], email)
+
+
+@pytest.mark.asyncio
+async def test_a_status_the_endpoint_does_not_have_is_refused() -> None:
+    email = f"coll-badstatus-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    token = create_access_token(str(user.id))
+    async with _client() as client:
+        r = await client.get(
+            "/api/collections",
+            params={"status": "abandoned"},
+            cookies={"access_token": token},
+        )
+        assert r.status_code == 422
+    await _cleanup([], email)

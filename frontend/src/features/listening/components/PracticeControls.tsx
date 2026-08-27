@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { ChevronDown, Command, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,12 +16,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { hasPlatformModifier, isApplePlatform } from "@/lib/platform";
 import {
+  COURSE_STATUS_LABEL,
+  COURSE_STATUS_ORDER,
   SCOPE_OPTIONS,
   SORT_LABEL,
   SORT_ORDER,
   scopeLabel,
 } from "@/features/listening/practice";
 import type {
+  CourseStatus,
   FilterOption,
   ListMode,
   PracticeFilterState,
@@ -290,6 +294,89 @@ function ModeSwitch({
   );
 }
 
+/**
+ * One of the two sets of controls, in the box they share.
+ *
+ * The active one is in the flow and sets the box's height; the inactive one is
+ * lifted out of it, so the two never push each other about and the box is
+ * always exactly the size of what is showing.
+ *
+ * The fade is deliberately faster than the resize. Half the point of the
+ * animation is that the row is understood to be the SAME row asking a
+ * different question, and a fade that outlasted the movement would read as
+ * two rows changing places.
+ */
+function Group({
+  ref,
+  active,
+  children,
+}: {
+  ref: React.Ref<HTMLDivElement>;
+  active: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      ref={ref}
+      inert={!active}
+      aria-hidden={!active}
+      className={cn(
+        "flex flex-wrap items-center gap-0.5 transition-opacity duration-fast ease-out motion-reduce:transition-none sm:flex-nowrap",
+        active
+          ? "relative opacity-100"
+          : "pointer-events-none absolute inset-y-0 left-0 w-max opacity-0",
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * The courses list's one filter.
+ *
+ * A radio menu, the same shape as the scope menu beside it in the other mode
+ * — which is most of why the swap reads as one row changing its mind rather
+ * than as two rows. Four answers to one question, exactly one true, and "All
+ * courses" is an option rather than a clear button: going back to everything
+ * is picking an answer, not undoing one.
+ */
+function StatusMenu({
+  status,
+  onChange,
+}: {
+  status: CourseStatus;
+  onChange: (status: CourseStatus) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className={cn(PILL, status !== "all" ? PILL_ON : PILL_OFF)}
+        >
+          {COURSE_STATUS_LABEL[status]}
+          <ChevronDown className="size-3" aria-hidden />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-40">
+        <DropdownMenuRadioGroup
+          value={status}
+          onValueChange={(value) => onChange(value as CourseStatus)}
+        >
+          {COURSE_STATUS_ORDER.map((option) => (
+            <DropdownMenuRadioItem key={option} value={option}>
+              {COURSE_STATUS_LABEL[option]}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 interface FilterChipsProps {
   filters: PracticeFilterState;
   onChange: (next: Partial<PracticeFilterState>) => void;
@@ -308,6 +395,9 @@ interface FilterChipsProps {
   /** Only what the catalogue actually holds, with counts. */
   typeOptions: FilterOption<QuestionGroupType>[];
   bandOptions: FilterOption<DifficultyBand>[];
+  /** The courses list's one filter — see `CourseStatus`. */
+  status: CourseStatus;
+  onStatus: (status: CourseStatus) => void;
 }
 
 export function FilterChips({
@@ -319,8 +409,46 @@ export function FilterChips({
   onToggleType,
   typeOptions,
   bandOptions,
+  status,
+  onStatus,
 }: FilterChipsProps) {
   const { scope, showDone, bands, types } = filters;
+
+  // --- The two sets of controls, and the width between them ----------------
+  //
+  // Both are rendered at all times; the inactive one is lifted out of the
+  // flow and faded, and the strip they share is given the active one's width.
+  // Swapped by mounting and unmounting instead, the row simply changed size
+  // in one frame — which reads as the controls having broken rather than as
+  // their having become a different question.
+  //
+  // Measured rather than written down: the material row's width moves as its
+  // own menus change label ("Difficulty" becoming "2 levels"), and a number
+  // typed in here would be wrong every time that happened.
+  const materialsRef = useRef<HTMLDivElement | null>(null);
+  const coursesRef = useRef<HTMLDivElement | null>(null);
+  const [widths, setWidths] = useState({ materials: 0, courses: 0 });
+
+  useEffect(() => {
+    const measure = () =>
+      setWidths({
+        materials: materialsRef.current?.scrollWidth ?? 0,
+        courses: coursesRef.current?.scrollWidth ?? 0,
+      });
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    if (materialsRef.current) observer.observe(materialsRef.current);
+    if (coursesRef.current) observer.observe(coursesRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  // Only where the row is on one line. Below `sm` it wraps, an explicit width
+  // would fight the wrapping, and `scrollWidth` measured off a wrapped row is
+  // not the number this wants anyway. A phone gets the swap without the
+  // width animation, which is the part that needs the room.
+  const oneLine = useMediaQuery("(min-width: 40rem)");
+  const width = oneLine ? widths[mode] || undefined : undefined;
 
   return (
     // One bar rather than chips loose on the page: it says the row is a set
@@ -340,13 +468,19 @@ export function FilterChips({
     >
       <ModeSwitch mode={mode} onChange={onMode} />
 
-      {/* Everything past here narrows the CATALOGUE. A course has no part
-          number, no question type and no difficulty band, so in that mode the
-          row is the switch and nothing else — controls that would do nothing
-          are worse than no controls, because they invite a click that has no
-          effect and teach the reader the page is broken. */}
-      {mode === "materials" && (
-        <>
+      {/*
+        The controls the switch swaps between, stacked in one box that resizes
+        to whichever is showing.
+
+        `inert` rather than only `pointer-events-none`: the hidden row is
+        still in the document, and a keyboard would otherwise tab straight
+        into controls nobody can see.
+      */}
+      <div
+        style={{ width }}
+        className="relative transition-[width] duration-slow ease-out motion-reduce:transition-none"
+      >
+        <Group ref={materialsRef} active={mode === "materials"}>
           <ChipDivider />
 
           <ScopeMenu
@@ -391,8 +525,13 @@ export function FilterChips({
               className="w-44"
             />
           )}
-        </>
-      )}
+        </Group>
+
+        <Group ref={coursesRef} active={mode === "courses"}>
+          <ChipDivider />
+          <StatusMenu status={status} onChange={onStatus} />
+        </Group>
+      </div>
     </div>
   );
 }

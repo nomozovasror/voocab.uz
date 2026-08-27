@@ -225,6 +225,36 @@ export interface PracticeFilterState {
  */
 export type ListMode = "materials" | "courses";
 
+/**
+ * The one filter a course has.
+ *
+ * It is the ordering read as a question rather than as an order: the list
+ * already leads with what is half-finished, and this is for the reader who
+ * wants only that part of it. Everything else the catalogue filters by — the
+ * part, the task, the difficulty band — belongs to a paper, not to a route
+ * through several of them.
+ *
+ * It exists because of what switching lists used to do: the filter row simply
+ * emptied, which read as the controls having broken rather than as their
+ * having become irrelevant. A row that changes what it offers is answering
+ * the new question; a row that goes blank is refusing to.
+ */
+export type CourseStatus = "all" | "in_progress" | "not_started" | "finished";
+
+export const COURSE_STATUS_ORDER: CourseStatus[] = [
+  "all",
+  "in_progress",
+  "not_started",
+  "finished",
+];
+
+export const COURSE_STATUS_LABEL: Record<CourseStatus, string> = {
+  all: "All courses",
+  in_progress: "In progress",
+  not_started: "Not started",
+  finished: "Finished",
+};
+
 export const EMPTY_FILTERS: PracticeFilterState = {
   scope: "all",
   showDone: false,

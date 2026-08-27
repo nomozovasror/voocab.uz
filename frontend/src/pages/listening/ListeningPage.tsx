@@ -27,6 +27,7 @@ import {
   toggle,
 } from "@/features/listening/practice";
 import type {
+  CourseStatus,
   ListMode,
   PracticeFilterState,
   Scope,
@@ -118,6 +119,10 @@ export default function ListeningPage() {
   // not narrow a list — it changes which list there is, and "Clear filters"
   // has no business putting somebody back on the other one.
   const [mode, setMode] = useState<ListMode>("materials");
+  // The courses list's own filter. Its own state rather than a field on
+  // `filters` for the same reason `mode` is: "Clear filters" belongs to the
+  // catalogue, and it has no business reaching into the other list.
+  const [status, setStatus] = useState<CourseStatus>("all");
   const change = useCallback(
     (next: Partial<PracticeFilterState>) =>
       setFilters((prev) => ({ ...prev, ...next })),
@@ -164,13 +169,13 @@ export default function ListeningPage() {
   // again. The search only applies in courses mode — the strip is a shortlist
   // above the CATALOGUE, and narrowing it by a search meant for materials
   // would be answering a question nobody asked.
-  const collectionParams = useMemo(
-    () =>
-      mode === "courses" && settledQuery.trim()
-        ? { q: settledQuery.trim() }
-        : {},
-    [mode, settledQuery],
-  );
+  const collectionParams = useMemo(() => {
+    if (mode !== "courses") return {};
+    const next: Record<string, string> = {};
+    if (settledQuery.trim()) next.q = settledQuery.trim();
+    if (status !== "all") next.status = status;
+    return next;
+  }, [mode, settledQuery, status]);
   const collections = useCollections(collectionParams);
 
   const {
@@ -485,6 +490,8 @@ export default function ListeningPage() {
             onChange={change}
             mode={mode}
             onMode={setMode}
+            status={status}
+            onStatus={setStatus}
             onToggleBand={toggleBand}
             onToggleType={toggleType}
             typeOptions={typeOptions}
@@ -520,6 +527,7 @@ export default function ListeningPage() {
                not change, the list did. */
             <CollectionList
               query={settledQuery}
+              status={status}
               revealRef={stillness ? undefined : revealRef}
             />
           ) : isError ? (

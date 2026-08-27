@@ -279,6 +279,16 @@ async def _authors(
 #: the reward.
 IN_PROGRESS, NOT_STARTED, FINISHED = 0, 1, 2
 
+#: The same three states, as the filter above the list names them. They are
+#: the ranking read as a question rather than as an order — which is why the
+#: list needs no sort control and does need this: the order says where
+#: everything is, and this says "only show me that part of it".
+STATUSES = {
+    "in_progress": IN_PROGRESS,
+    "not_started": NOT_STARTED,
+    "finished": FINISHED,
+}
+
 
 def _rank(done: int, total: int) -> int:
     if total == 0 or done == 0:
@@ -354,6 +364,7 @@ async def list_public(
     user_id: uuid.UUID,
     *,
     query: str = "",
+    status: str = "all",
     limit: int = 20,
     offset: int = 0,
 ) -> dict:
@@ -361,6 +372,11 @@ async def list_public(
 
     In progress first, then untouched, then finished — see :func:`_rank`.
     Newest-first is the tiebreak inside each group rather than the sort.
+
+    ``status`` narrows to one of those three. It is the same computation the
+    ordering uses, asked as a question instead of as an order, and ``total``
+    counts what SURVIVES it — a filtered list reporting the unfiltered total
+    is a list that looks like it lost something.
 
     Sorted and paged in Python rather than in SQL, which is a considered
     exception to how the catalogue works. The rank depends on the caller's
@@ -402,6 +418,18 @@ async def list_public(
             _rank(row["done"], row["total"]),
             -(collection.created_at.timestamp() if collection.created_at else 0),
         )
+
+    wanted = STATUSES.get(status)
+    if wanted is not None:
+        collections = [
+            c
+            for c in collections
+            if _rank(
+                progress_by_id.get(c.id, {"done": 0})["done"],
+                progress_by_id.get(c.id, {"total": 0})["total"],
+            )
+            == wanted
+        ]
 
     collections.sort(key=sort_key)
 

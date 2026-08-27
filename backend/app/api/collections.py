@@ -67,6 +67,9 @@ async def list_collections(
     user: CurrentUser,
     session: SessionDep,
     q: Annotated[str, Query(max_length=200)] = "",
+    status: Annotated[
+        str, Query(pattern="^(all|in_progress|not_started|finished)$")
+    ] = "all",
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> CollectionListOut:
@@ -83,7 +86,12 @@ async def list_collections(
     accident.
     """
     page = await collections_service.list_public(
-        session, user.id, query=q.strip(), limit=limit, offset=offset
+        session,
+        user.id,
+        query=q.strip(),
+        status=status,
+        limit=limit,
+        offset=offset,
     )
     return CollectionListOut(
         items=[CollectionOut(**row) for row in page["items"]],
