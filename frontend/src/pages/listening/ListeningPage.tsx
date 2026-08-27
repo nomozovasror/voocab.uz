@@ -222,6 +222,17 @@ export default function ListeningPage() {
   );
 
   const narrowed = isNarrowed(filters);
+  // Whether the list on screen — whichever one it is — has been narrowed. The
+  // two modes have different filters, and the suggestion block is gated on
+  // this in both: it answers "what should I do", and a filter is somebody
+  // saying what they want to do.
+  const listNarrowed =
+    mode === "courses"
+      ? filters.query.trim() !== "" ||
+        status !== "all" ||
+        covers !== "all" ||
+        length !== "all"
+      : narrowed;
 
   // --- The field's journey to the header -----------------------------------
   //
@@ -552,6 +563,24 @@ export default function ListeningPage() {
           anything the reader is looking at.
         */}
         <div className="min-h-svh min-w-0 [overflow-anchor:none]">
+          {/*
+            Above both lists, because it is about neither of them. A learner
+            works from the catalogue and from their courses, and "what now"
+            has one answer and should have one place — hidden on the courses
+            tab, somebody carrying on a course would find the way back to it
+            only by leaving the tab their courses are on.
+
+            Outside the loading and error branches for the same reason: it is
+            its own request, and the one useful thing on the page while the
+            list is still arriving.
+          */}
+          {!listNarrowed &&
+            (nextUp.isLoading ? (
+              <NextUpSkeleton />
+            ) : nextUp.data ? (
+              <NextUp data={nextUp.data} />
+            ) : null)}
+
           {mode === "courses" ? (
             /* The other list. It gets the same column and the same treatment
                — one field above it, one rule between rows — because the
@@ -627,22 +656,6 @@ export default function ListeningPage() {
                 list's own first row would be, so the eye meets it on the way
                 down rather than having to come back up for it.
               */}
-              {/* The suggestion, and only over an unnarrowed list: it
-                  answers "what should I do", and a filter is somebody saying
-                  what they want to do. Leaving it up over a search is the
-                  page talking over the reader — and worse, recommending
-                  materials the filter they just set would have excluded.
-
-                  The courses used to sit above this as a rail, in materials
-                  mode, which made the tabs a lie: half the answer to
-                  "Courses" was already on screen while "Materials" was
-                  selected. The tabs switch the whole column now. */}
-              {!narrowed &&
-                (nextUp.isLoading ? (
-                  <NextUpSkeleton />
-                ) : nextUp.data ? (
-                  <NextUp data={nextUp.data} />
-                ) : null)}
               <ListHeader
                 count={total}
                 filtered={narrowed}

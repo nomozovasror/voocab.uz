@@ -312,6 +312,10 @@ async def in_progress_for(
         "remaining": remaining,
         # 1-based, so it reads as a lesson number rather than an index.
         "position": ids.index(remaining[0]) + 1,
+        # Counted, not inferred from the position: somebody who skipped ahead
+        # has done more than their place in the queue suggests, and a bar
+        # drawn from the position would quietly under-report their work.
+        "done": len(ids) - len(remaining),
         "total": len(ids),
     }
 

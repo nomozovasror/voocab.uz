@@ -905,8 +905,14 @@ class NextUpOut(BaseModel):
     #: Only on ``course``. ``position`` is 1-based so it reads as a lesson
     #: number, and ``of`` is how many lessons the course has — together they
     #: are the difference between carrying on and starting again.
+    #:
+    #: ``done`` is counted rather than inferred from ``position``: somebody
+    #: who skipped ahead has done more than their place in the queue
+    #: suggests, and a bar drawn from the position would under-report their
+    #: work back at them.
     collection: NextUpCollectionOut | None = None
     position: int | None = None
+    done: int | None = None
     of: int | None = None
     items: list[PracticeMaterialOut] = []
 

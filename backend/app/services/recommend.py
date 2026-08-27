@@ -178,6 +178,7 @@ async def next_up(
             "accuracy_pct": None,
             "collection": {"id": collection.id, "title": collection.title},
             "position": carrying_on["position"],
+            "done": carrying_on["done"],
             "of": carrying_on["total"],
             "items": await listening_service._catalogue_rows(
                 session, user_id, materials

@@ -445,6 +445,7 @@ async def test_a_course_in_progress_outranks_everything_else() -> None:
         # Lesson three of four, and the rows are the rest of it IN ORDER.
         assert out["position"] == 3
         assert out["of"] == 4
+        assert out["done"] == 2
         assert [row["id"] for row in out["items"]] == [
             course[2][0],
             course[3][0],
@@ -545,6 +546,39 @@ async def test_a_loose_suggestion_never_jumps_a_course_queue() -> None:
 
         assert course[2][0] in waiting
         assert course[1][0] not in waiting
+    finally:
+        await _drop_collections(email)
+        await _cleanup(made, email)
+
+
+@pytest.mark.asyncio
+async def test_done_is_counted_not_read_off_the_queue() -> None:
+    """Somebody who skipped ahead has done more than their place suggests.
+
+    Lessons one and three sat, so the next one up is two — but three lessons'
+    worth of work is two, not one. A bar drawn from the position would
+    under-report their own work back at them.
+    """
+    email = f"next-skip-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    course = [
+        await _material(user.id, f"Skip {i} {uuid.uuid4()}", 1) for i in range(4)
+    ]
+    made = [m for m, _q in course]
+
+    try:
+        await _collection(user.id, "Skipped about", [m for m, _q in course])
+        for index in (0, 2):
+            material_id, questions = course[index]
+            await _sit(user.id, material_id, questions, answers=4, correct=2)
+
+        async with async_session_factory() as session:
+            out = await recommend.next_up(session, user.id)
+
+        assert out["reason"] == "course"
+        assert out["position"] == 2  # the next one still waiting
+        assert out["done"] == 2  # and two are behind them
+        assert out["of"] == 4
     finally:
         await _drop_collections(email)
         await _cleanup(made, email)

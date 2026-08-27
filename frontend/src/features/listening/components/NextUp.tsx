@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
-import { BookOpen, Sparkles } from "lucide-react";
+import { ArrowRight, BookOpen, Sparkles } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { fmtClock } from "@/lib/time";
@@ -104,6 +105,7 @@ export function NextUp({ data }: { data: NextUpData }) {
 
   const { title, note } = heading(data);
   const carrying = data.reason === "course";
+  const [next] = data.items;
 
   return (
     // Smaller than it was, and the reason is what it is FOR: it sits above
@@ -118,31 +120,70 @@ export function NextUp({ data }: { data: NextUpData }) {
       aria-label={carrying ? "Carry on with your course" : "Suggested materials"}
       className="mb-5 rounded-xl border border-border-subtle bg-card/40 px-3 py-2.5"
     >
-      <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-        <span className="inline-flex items-center gap-1.5 text-xs text-foreground">
-          {/* A different mark for a continuation than for a suggestion: one
-              is somewhere the reader already is, the other is the page
-              offering an opinion, and the icon is the first thing read. */}
-          {carrying ? (
-            <BookOpen className="size-3.5 shrink-0 text-primary" aria-hidden />
+      <div className="flex items-start gap-3">
+        <p className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <span className="inline-flex items-center gap-1.5 text-xs text-foreground">
+            {/* A different mark for a continuation than for a suggestion: one
+                is somewhere the reader already is, the other is the page
+                offering an opinion, and the icon is the first thing read. */}
+            {carrying ? (
+              <BookOpen className="size-3.5 shrink-0 text-primary" aria-hidden />
+            ) : (
+              <Sparkles className="size-3.5 shrink-0 text-primary" aria-hidden />
+            )}
+            {title}
+          </span>
+          {/* The course's name is a link where there is one — the reader may
+              want the whole sequence rather than the next three of it. */}
+          {carrying && data.collection ? (
+            <Link
+              to={`/listening/collections/${data.collection.id}`}
+              className="text-xs text-muted-foreground transition-colors hover:text-foreground hover:underline"
+            >
+              {note}
+            </Link>
           ) : (
-            <Sparkles className="size-3.5 shrink-0 text-primary" aria-hidden />
+            <span className="text-xs text-muted-foreground">{note}</span>
           )}
-          {title}
-        </span>
-        {/* The course's name is a link where there is one — the reader may
-            want the whole sequence rather than the next three of it. */}
-        {carrying && data.collection ? (
-          <Link
-            to={`/listening/collections/${data.collection.id}`}
-            className="text-xs text-muted-foreground transition-colors hover:text-foreground hover:underline"
-          >
-            {note}
-          </Link>
-        ) : (
-          <span className="text-xs text-muted-foreground">{note}</span>
+        </p>
+
+        {/* One button, and it goes to the next lesson rather than to the
+            course. Somebody carrying on has already decided; making them open
+            the collection and find their place again is asking them to decide
+            twice. The rows below still let them pick a different one. */}
+        {carrying && next && (
+          <Button asChild size="sm" className="shrink-0">
+            <Link to={`/listening/${next.id}`}>
+              Continue
+              <ArrowRight className="size-3.5" aria-hidden />
+            </Link>
+          </Button>
         )}
-      </p>
+      </div>
+
+      {/* How far through the course they are. Only on a continuation: a
+          suggestion has no progress to report, and an empty bar over three
+          unrelated papers would be inventing one. */}
+      {carrying && data.of ? (
+        <div className="mt-2 flex items-center gap-2">
+          <div
+            className="h-0.5 flex-1 overflow-hidden rounded-full bg-foreground/10"
+            role="progressbar"
+            aria-valuenow={data.done ?? 0}
+            aria-valuemin={0}
+            aria-valuemax={data.of}
+            aria-label={`${data.done ?? 0} of ${data.of} done`}
+          >
+            <div
+              className="h-full rounded-full bg-correct transition-[width] duration-slow ease-out motion-reduce:transition-none"
+              style={{ width: `${Math.round(((data.done ?? 0) / data.of) * 100)}%` }}
+            />
+          </div>
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+            {data.done ?? 0} of {data.of} done
+          </span>
+        </div>
+      ) : null}
 
       {/* An ordered list only where the order is real. Three suggestions are
           a set — nothing says sit them in this order — but the next lessons

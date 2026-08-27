@@ -447,6 +447,10 @@ export interface NextUp {
    *  difference between carrying on and starting again. */
   collection: { id: string; title: string } | null;
   position: number | null;
+  /** How many of the course are behind them. Counted, not read off
+   *  `position` — somebody who skipped ahead has done more than their place
+   *  in the queue suggests. */
+  done: number | null;
   of: number | null;
   /** May be empty: somebody who has sat everything gets the reason and no
    *  rows, and the block has to survive drawing that. */
