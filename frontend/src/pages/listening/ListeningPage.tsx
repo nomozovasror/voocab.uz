@@ -578,7 +578,23 @@ export default function ListeningPage() {
             (nextUp.isLoading ? (
               <NextUpSkeleton />
             ) : nextUp.data ? (
-              <NextUp data={nextUp.data} />
+              // "Browse all Part 3" sets the filter rather than going
+              // anywhere. The reader is asking to see more of the same kind
+              // of thing, and a page that navigated instead would throw away
+              // the search and the mode they are in.
+              <NextUp
+                data={nextUp.data}
+                // "Browse all Part 3" sets the filter rather than going
+                // anywhere: the reader is asking to see more of the same
+                // kind of thing, and navigating would throw away the search
+                // and the mode they are in. It does switch OUT of courses,
+                // because a part number means nothing to a shelf of courses.
+                onBrowse={(scope) => {
+                  setMode("materials");
+                  setScope(scope);
+                }}
+                onCourses={() => setMode("courses")}
+              />
             ) : null)}
 
           {mode === "courses" ? (

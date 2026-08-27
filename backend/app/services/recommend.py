@@ -52,6 +52,20 @@ from app.services import (
     listening as listening_service,
 )
 
+#: How many materials somebody has to have finished before this says anything
+#: at all.
+#:
+#: Below it there is no block: the search field, the filters, and then the
+#: list. A recommendation off one paper is a guess in a confident voice, and
+#: the reader has no way to tell those apart — so the honest move is silence
+#: until there is something to go on, and then the block simply appears.
+#:
+#: Three rather than one, which is where the sidebar's own cards start. The
+#: page fills in two steps rather than one because of it, and that is the
+#: trade: an average over three papers is worth reading, an average over one
+#: is a single morning.
+MIN_MATERIALS = 3
+
 #: How many to put in front of somebody. Three is a choice; one is an
 #: instruction and a learner who does not fancy it has nowhere to go, and six
 #: is the catalogue again in miniature.
@@ -88,6 +102,11 @@ _LADDER: list[tuple[int, dict[str, int]]] = [
     (101, {"medium": 0, "hard": 1, "easy": 2, "new": 3}),
 ]
 
+#: What to serve somebody who is level everywhere: hard first. Nothing else
+#: here ever opens with `hard` — this is the one reader for whom it is the
+#: right answer rather than a discouragement.
+_STEADY_RANKS = {"hard": 0, "medium": 1, "easy": 2, "new": 3}
+
 #: Where somebody with no history at all is sent. Part 1 is the gentlest
 #: section of the paper and the one whose task types the rest are built on,
 #: and easiest-first inside it.
@@ -108,6 +127,28 @@ def _ranks_for(average: int | None) -> dict[str, int]:
         if average < ceiling:
             return ranks
     return _LADDER[-1][1]
+
+
+def _steady(by_part: list[dict]) -> bool:
+    """Whether they are level across the whole paper.
+
+    The exact inverse of :func:`_weak_part`, using the same two constants, so
+    the two can never both be true and the block can never tell somebody they
+    have a weak part and that they haven't. Every part scored, none of them
+    below the ceiling, and the whole spread inside the gap that would have
+    made one of them "clearly behind".
+
+    It exists because "your weakest area" is a sentence with nothing behind it
+    for somebody who is good everywhere, and saying it anyway is the block
+    being confident instead of useful. What that reader wants next is not
+    their worst part — it is a harder paper.
+    """
+    scored = [
+        row["accuracy_pct"] for row in by_part if row["accuracy_pct"] is not None
+    ]
+    if len(scored) < len(learner_stats.PARTS):
+        return False
+    return min(scored) >= WEAK_CEILING and max(scored) - min(scored) < DECISIVE_GAP
 
 
 def _weak_part(by_part: list[dict]) -> dict | None:
@@ -144,83 +185,157 @@ def _weak_part(by_part: list[dict]) -> dict | None:
 async def next_up(
     session: AsyncSession, user_id: uuid.UUID, *, size: int = SIZE
 ) -> dict:
-    """Three materials and the reason for them.
+    """What the block above the list says, and why.
 
-    ``reason`` is what the interface prints, and the values are four different
-    sentences rather than four ways of saying the same one:
+    ``reason`` is the whole contract. Each value is a genuinely different
+    claim, and the client has to be able to tell them apart:
 
-    * ``course`` — they are part-way through a collection. The next materials
-      in it, in its order, with which lesson it is. This outranks the rest
-      because they chose it and because its order is a person's judgement —
-      see the module docstring.
-    * ``start`` — no finished attempts. Part 1, easiest first.
-    * ``weak_part`` — one part is clearly behind the others. Materials with
-      that part in them, at their level.
-    * ``level`` — nothing is clearly behind. Anything they have not sat, at
-      their level. This is the ordinary case and it is not a failure of the
-      other two: most people practising are not lopsided, they are just
-      practising.
+    * ``none`` — fewer than :data:`MIN_MATERIALS` finished. There is no block
+      at all: silence beats a guess in a confident voice, and the block simply
+      appearing once there is something to go on is a better first impression
+      than one that was always there saying nothing.
+    * ``finished_course`` — the attempt they just submitted completed a
+      course. It says so, with what they averaged, and it is gone the moment
+      they sit anything else.
+    * ``course`` — part-way through a collection: the next lesson in it, in
+      its order. This outranks the suggestions below because they chose the
+      course and because its order is a person's judgement, not this module's.
+    * ``weak_part`` — one part is clearly behind the others.
+    * ``steady`` — none of them is, and all four are good. Harder material,
+      because "your weakest area" is a sentence with nothing behind it for
+      somebody who is good everywhere.
+    * ``level`` — nothing clear either way. Pitched at their average.
 
-    An empty ``items`` is a real answer and the page has to survive it: a
-    learner who has sat everything in the library gets a reason and no rows.
+    An empty ``items`` is a real answer for every reason but the last two: a
+    learner who has sat everything gets the reason and no rows, and the page
+    has to be able to draw that.
     """
-    # Carrying on beats being recommended to, so this is asked first and its
+    profile = await learner_stats.first_attempt_profile(session, user_id)
+    if not profile["sat_anything"] or profile["materials_done"] < MIN_MATERIALS:
+        return _nothing()
+
+    # Just finished one — said at the moment it is true and not after.
+    finished = await collections_service.just_finished_for(session, user_id)
+    if finished is not None:
+        collection = finished["collection"]
+        ids = finished["material_ids"]
+        return {
+            **_nothing(),
+            "reason": "finished_course",
+            "collection": {"id": collection.id, "title": collection.title},
+            "accuracy_pct": await learner_stats.first_try_average_for(
+                session, user_id, ids
+            ),
+            "done": len(ids),
+            "remaining": 0,
+            "of": len(ids),
+            "in_progress_count": await collections_service.in_progress_count(
+                session, user_id
+            ),
+        }
+
+    # Carrying on beats being recommended to, so this is asked next and its
     # answer is taken whole.
     carrying_on = await collections_service.in_progress_for(session, user_id)
     if carrying_on is not None:
-        materials = await listening_service.materials_in_order(
-            session, carrying_on["remaining"][:size]
-        )
         collection = carrying_on["collection"]
+        # One lesson, not three. Two rows under a Continue button leave the
+        # reader working out which one the button opens and which number each
+        # of them is; one row cannot disagree with the button above it. The
+        # rest of the course is a click away on its own page.
+        materials = await listening_service.materials_in_order(
+            session, carrying_on["remaining"][:1]
+        )
         return {
+            **_nothing(),
             "reason": "course",
-            "part": None,
-            "accuracy_pct": None,
             "collection": {"id": collection.id, "title": collection.title},
             "position": carrying_on["position"],
             "done": carrying_on["done"],
+            # What the block prints beside the lesson number. "2 left" rather
+            # than "4 of 6 done": both are true, and only one of them invites
+            # the reader to subtract and find an off-by-one that isn't there.
+            # Somebody who skipped a lesson is legitimately on lesson 4 with
+            # four done, and the bar already shows how far along they are.
+            "remaining": len(carrying_on["remaining"]),
             "of": carrying_on["total"],
+            "in_progress_count": await collections_service.in_progress_count(
+                session, user_id
+            ),
             "items": await listening_service._catalogue_rows(
                 session, user_id, materials
             ),
         }
 
-    profile = await learner_stats.first_attempt_profile(session, user_id)
-    if not profile["sat_anything"]:
-        return {
-            "reason": "start",
-            "part": START_PART,
-            "accuracy_pct": None,
-            "items": await listening_service.recommended(
-                session, user_id, part=START_PART, ranks=_START_RANKS, size=size
-            ),
-        }
-
     # Nothing that is waiting its turn inside a course they have started.
-    # Cheap here — they have no course in progress, or the branch above would
-    # have taken it — but a course they finished and one they never opened can
-    # both still hold materials, and neither should be offered out of order.
     skip = await collections_service.sequenced_material_ids(session, user_id)
-
     average = profile["average_pct"]
-    ranks = _ranks_for(average)
-    weak = _weak_part(profile["by_part"])
+    by_part = profile["by_part"]
+
+    weak = _weak_part(by_part)
     if weak is not None:
         return {
+            **_nothing(),
             "reason": "weak_part",
             "part": weak["part"],
             "accuracy_pct": weak["accuracy_pct"],
             "items": await listening_service.recommended(
-                session, user_id, part=weak["part"], ranks=ranks, size=size,
+                session,
+                user_id,
+                part=weak["part"],
+                ranks=_ranks_for(average),
+                size=size,
                 skip=skip,
             ),
         }
 
+    if _steady(by_part):
+        return {
+            **_nothing(),
+            "reason": "steady",
+            "accuracy_pct": average,
+            "items": await listening_service.recommended(
+                session,
+                user_id,
+                part=None,
+                ranks=_STEADY_RANKS,
+                size=size,
+                skip=skip,
+                prefer_full=True,
+            ),
+        }
+
     return {
+        **_nothing(),
         "reason": "level",
-        "part": None,
         "accuracy_pct": average,
         "items": await listening_service.recommended(
-            session, user_id, part=None, ranks=ranks, size=size, skip=skip
+            session,
+            user_id,
+            part=None,
+            ranks=_ranks_for(average),
+            size=size,
+            skip=skip,
         ),
+    }
+
+
+def _nothing() -> dict:
+    """The shape every answer has, with nothing said.
+
+    One definition, so a branch that forgets a field sends a null rather than
+    a missing key — and so "no block" is a value the client switches on rather
+    than an empty response it has to guess about.
+    """
+    return {
+        "reason": "none",
+        "part": None,
+        "accuracy_pct": None,
+        "collection": None,
+        "position": None,
+        "done": None,
+        "remaining": None,
+        "of": None,
+        "in_progress_count": 0,
+        "items": [],
     }

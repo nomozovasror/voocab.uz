@@ -879,13 +879,18 @@ class NextUpOut(BaseModel):
     rest of the interface's words — but also because each value is a genuinely
     different claim and the client must be able to tell them apart:
 
-    * ``course`` — they are part-way through a collection, and these are the
-      next materials in it, in its order. ``collection``, ``position`` and
-      ``of`` carry which course and which lesson. It outranks the rest
-      because the reader chose the course and because its order is a person's
-      judgement rather than this module's guess.
-    * ``start`` — no finished attempts yet, so this is Part 1 and nothing is
-      being asserted about the reader.
+    * ``none`` — too little history to say anything. There is no block, and
+      that is the honest state rather than a fallback: a recommendation off
+      one paper is a guess in a confident voice.
+    * ``finished_course`` — the attempt they just submitted completed a
+      course. ``accuracy_pct`` is what they averaged over it, on first tries.
+    * ``course`` — part-way through a collection, and ``items`` is the ONE
+      next lesson in it. ``position`` is which lesson that is and
+      ``remaining`` how many are left; both are true at once even when they
+      look like an off-by-one, because somebody who skipped a lesson is
+      legitimately on lesson four with four done.
+    * ``steady`` — level across all four parts and good at all of them, so
+      there is no weak one to name. Harder material instead.
     * ``weak_part`` — one part is clearly behind the others; ``part`` and
       ``accuracy_pct`` say which and how far.
     * ``level`` — nothing is clearly behind, so these are chosen to suit their
@@ -899,7 +904,14 @@ class NextUpOut(BaseModel):
     and no rows, which the page has to be able to draw.
     """
 
-    reason: Literal["course", "start", "weak_part", "level"]
+    reason: Literal[
+        "none",
+        "finished_course",
+        "course",
+        "weak_part",
+        "steady",
+        "level",
+    ]
     part: int | None = None
     accuracy_pct: int | None = None
     #: Only on ``course``. ``position`` is 1-based so it reads as a lesson
@@ -913,7 +925,16 @@ class NextUpOut(BaseModel):
     collection: NextUpCollectionOut | None = None
     position: int | None = None
     done: int | None = None
+    #: How many lessons are left. What the block prints beside the lesson
+    #: number, because "2 left" cannot be subtracted against it and "4 of 6
+    #: done" can — see ``position`` above for why that subtraction finds an
+    #: off-by-one that is not there.
+    remaining: int | None = None
     of: int | None = None
+    #: How many courses they have started and not finished, for the "My
+    #: courses (3)" beside the action. Somebody carrying one on should be able
+    #: to see there are others without being shown them.
+    in_progress_count: int = 0
     items: list[PracticeMaterialOut] = []
 
 

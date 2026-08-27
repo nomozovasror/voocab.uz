@@ -121,17 +121,30 @@ def _first_and_best(
 
 
 async def _resume(
-    session: AsyncSession, attempts: list[Attempt]
+    session: AsyncSession,
+    attempts: list[Attempt],
+    *,
+    exclude: set[uuid.UUID] | None = None,
 ) -> dict | None:
     """The last thing they sat, and which try it was.
 
     The ordinal matters: "83% on your 2nd try" and "83% on your 1st try" are
     different facts about the same number, and the panel is about being honest
     on exactly that point.
+
+    ``exclude`` keeps the panel off whatever the block above the list is
+    already showing. Both columns naming the same material is the page saying
+    one thing twice and looking like it is saying two — so the panel steps
+    back to the last thing they sat OUTSIDE that course. If everything they
+    have sat is in it, the exclusion is dropped rather than the card: a result
+    is still a result, and the card no longer claims to be a way back in.
     """
     if not attempts:
         return None
-    last = attempts[-1]
+    usable = [a for a in attempts if not exclude or a.material_id not in exclude]
+    if not usable:
+        usable = attempts
+    last = usable[-1]
     material = await session.get(Material, last.material_id)
     if material is None:
         return None
@@ -360,9 +373,66 @@ async def first_attempt_profile(
     ]
     return {
         "sat_anything": True,
+        # How many materials they have finished at least once. The block above
+        # the catalogue waits for a few of these before it says anything —
+        # a recommendation off one paper is a guess with a confident voice.
+        "materials_done": len(first_by_material),
         "average_pct": _mean(scores),
         "by_part": await _by_part(session, first_ids),
     }
+
+
+async def first_try_average_for(
+    session: AsyncSession, user_id: uuid.UUID, material_ids: list[uuid.UUID]
+) -> int | None:
+    """Their first-try average over a named set of materials.
+
+    For "you finished this course on 78%". First attempts only, like every
+    other figure that describes ability here — somebody who sat a course
+    twice and finished on 95% has learned that course, not listening.
+
+    ``None`` where none of them has a score, which is a real state: a course
+    of materials that have no questions yet cannot have an average.
+    """
+    if not material_ids:
+        return None
+    first: dict[uuid.UUID, Attempt] = {}
+    for attempt in (
+        await session.exec(
+            select(Attempt)
+            .where(
+                Attempt.user_id == user_id,
+                Attempt.material_id.in_(material_ids),  # type: ignore[attr-defined]
+                Attempt.status == AttemptStatus.SUBMITTED,
+                Attempt.submitted_at.is_not(None),  # type: ignore[attr-defined]
+            )
+            .order_by(Attempt.submitted_at)  # type: ignore[arg-type]
+        )
+    ).all():
+        first.setdefault(attempt.material_id, attempt)
+    return _mean([pct for a in first.values() if (pct := _score_pct(a)) is not None])
+
+
+async def _carried_on_ids(
+    session: AsyncSession, user_id: uuid.UUID
+) -> set[uuid.UUID]:
+    """The materials of the course the block above the list is carrying on
+    with, if there is one.
+
+    Imported here rather than at module scope: collections reads this module
+    for its own averages, and a top-level import each way is a cycle. The
+    cost is one deferred import on a request that was already doing several
+    queries.
+    """
+    from app.services import collections as collections_service
+
+    carrying_on = await collections_service.in_progress_for(session, user_id)
+    if carrying_on is None:
+        return set()
+    ids = await collections_service._item_ids(
+        session, carrying_on["collection"].id, public_only=True
+    )
+    return set(ids)
 
 
 async def listening_stats(session: AsyncSession, user_id: uuid.UUID) -> dict:
@@ -394,7 +464,14 @@ async def listening_stats(session: AsyncSession, user_id: uuid.UUID) -> dict:
             _mean(list(best_by_material.values())) if repeated else None
         ),
         "time_spent_ms": await _time_spent(session, user_id),
-        "resume": await _resume(session, attempts),
+        # Stepped back from whatever the block above the list is showing.
+        # Both columns naming the same material is the page saying one thing
+        # twice and looking like it is saying two — and the two columns have
+        # different jobs: the left one is what to do, this one is how it is
+        # going.
+        "resume": await _resume(
+            session, attempts, exclude=await _carried_on_ids(session, user_id)
+        ),
         "mistakes": await _mistakes(session, first_ids),
         "trend": _trend(first_attempts),
         "by_part": await _by_part(session, first_ids),

@@ -320,6 +320,115 @@ async def in_progress_for(
     }
 
 
+async def just_finished_for(
+    session: AsyncSession, user_id: uuid.UUID
+) -> dict | None:
+    """The course they have this moment finished, if that is what just
+    happened.
+
+    Two conditions, and the second is what stops the card living forever. The
+    learner's most recent submitted attempt has to be in a published course
+    that is now complete — and it has to have been a FIRST attempt at that
+    material, which is what makes it the attempt that finished the course
+    rather than a retake of something inside one they finished in March.
+
+    So it appears at the moment it is true and goes the moment they sit
+    anything else. A month-old "well done" is a page that has stopped paying
+    attention.
+    """
+    collections = list(
+        (
+            await session.exec(
+                select(Collection).where(Collection.visibility == "public")
+            )
+        ).all()
+    )
+    if not collections:
+        return None
+
+    ordered, material_ids = await _items_for_many(
+        session, [c.id for c in collections]
+    )
+    if not material_ids:
+        return None
+
+    attempts = list(
+        (
+            await session.exec(
+                select(Attempt)
+                .where(
+                    Attempt.user_id == user_id,
+                    Attempt.status == AttemptStatus.SUBMITTED,
+                    Attempt.submitted_at.is_not(None),  # type: ignore[attr-defined]
+                )
+                .order_by(Attempt.submitted_at)  # type: ignore[arg-type]
+            )
+        ).all()
+    )
+    if not attempts:
+        return None
+
+    last = attempts[-1]
+    if last.material_id not in material_ids:
+        return None
+    # A retake is not a completion. Somebody re-sitting lesson two of a course
+    # they finished weeks ago has not just finished anything.
+    if sum(1 for a in attempts if a.material_id == last.material_id) > 1:
+        return None
+
+    sat = {a.material_id for a in attempts}
+    for collection in collections:
+        ids = ordered.get(collection.id, [])
+        if not ids or last.material_id not in ids:
+            continue
+        if all(mid in sat for mid in ids):
+            return {"collection": collection, "material_ids": ids}
+    return None
+
+
+async def in_progress_count(session: AsyncSession, user_id: uuid.UUID) -> int:
+    """How many published courses they have started and not finished.
+
+    For the "My courses (3)" beside the action: somebody carrying one on
+    should be able to see that there are others without being shown them.
+    """
+    collections = list(
+        (
+            await session.exec(
+                select(Collection).where(Collection.visibility == "public")
+            )
+        ).all()
+    )
+    if not collections:
+        return 0
+    ordered, material_ids = await _items_for_many(
+        session, [c.id for c in collections]
+    )
+    if not material_ids:
+        return 0
+    sat = set(
+        (
+            await session.exec(
+                select(Attempt.material_id)
+                .where(
+                    Attempt.user_id == user_id,
+                    Attempt.material_id.in_(material_ids),  # type: ignore[attr-defined]
+                    Attempt.status == AttemptStatus.SUBMITTED,
+                )
+                .distinct()
+            )
+        ).all()
+    )
+    started = 0
+    for ids in ordered.values():
+        if not ids:
+            continue
+        touched = [mid for mid in ids if mid in sat]
+        if touched and len(touched) < len(ids):
+            started += 1
+    return started
+
+
 async def sequenced_material_ids(
     session: AsyncSession, user_id: uuid.UUID
 ) -> set[uuid.UUID]:

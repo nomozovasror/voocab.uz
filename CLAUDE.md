@@ -82,6 +82,22 @@ decoration: a recommendation that cannot justify itself is a shuffle with a
 confident label on it, and the reader has no way to tell those apart except by
 being told.
 
+- **The block says nothing until three materials are done** (`MIN_MATERIALS`).
+  A recommendation off one paper is a guess in a confident voice, and the
+  reader cannot tell those apart. Silence, then the block appears.
+- **One slot, three shapes** — carrying on, just finished, suggested — at
+  about the same height, so changing state does not make the page jump.
+- **`finished_course` lasts exactly as long as it is true**: the most recent
+  submitted attempt must be the FIRST attempt at a material that completed a
+  course. A retake is not a completion, and a month-old "well done" is a page
+  that has stopped paying attention.
+- **The two columns have different jobs.** Left is what to do (carry on,
+  suggested, the list); right is how it is going (last result, mistakes,
+  trend, totals). That is why the sidebar's first card is "Your last result"
+  and not "Pick up where you left off" — two invitations to continue on one
+  screen leave the reader guessing which is the right one. The sidebar also
+  steps back from whatever course the block above is carrying on, so the same
+  material is never named in both columns.
 - **A course in progress outranks everything else.** A learner works from
   both halves of the page, and until `reason: "course"` existed the two talked
   over each other — somebody four papers into a six-paper course was handed
@@ -102,8 +118,13 @@ being told.
   `DECISIVE_GAP`. Otherwise the reason falls through to `level`, which the
   same data does support. Loosening those constants means making a claim about
   somebody's ability on evidence that doesn't carry it.
-- **The ladder never opens with `hard`**, at any level, and `new` is always
-  last — "might be anything" is not a recommendation.
+- **The ladder never opens with `hard`** — except for `steady`, the one
+  reader for whom it is the right answer rather than a discouragement. `new`
+  is always last: "might be anything" is not a recommendation.
+- **`steady` is the exact inverse of `_weak_part`, over the same two
+  constants**, so the block can never tell somebody both that they have a weak
+  part and that they haven't. "Your weakest area" is a sentence with nothing
+  behind it for a reader who is good everywhere.
 - Never recommend a material with no questions in it, or one already sat.
 - The block is shown only over an **unnarrowed** list. A filter is the reader
   saying what they want; suggesting past it is the page talking over them.

@@ -175,8 +175,82 @@ function Pattern({
   );
 }
 
+/**
+ * The cover on its own — art, spine and rule, with the title where a title
+ * goes.
+ *
+ * Separated out because the block above the practice list shows the same
+ * cover at a third the size, and two implementations of one book is two
+ * covers that drift. `showTitle` is off there: at 62px wide the title would
+ * be four words of unreadable type, and the course's name is printed in full
+ * eight pixels to its right.
+ */
+export function CollectionCover({
+  id,
+  title,
+  showTitle = true,
+  className,
+}: {
+  id: string;
+  title: string;
+  showTitle?: boolean;
+  className?: string;
+}) {
+  const cover = coverFor(id);
+  return (
+    <div
+      className={cn(
+        "relative overflow-hidden rounded-l-sm rounded-r-md",
+        className,
+      )}
+    >
+      {/* The SVG's own viewBox holds the portrait ratio, so the cover scales
+          with whatever it is put in and nothing here needs a fixed height. */}
+      <svg viewBox="0 0 156 214" className="block h-auto w-full" aria-hidden>
+        <rect width={156} height={214} fill={cover.bg} />
+        <Pattern name={cover.pattern} ink={cover.ink} variant={cover.variant} />
+      </svg>
+
+      {/* The sewn edge. */}
+      <span
+        aria-hidden
+        className="absolute inset-y-0 left-0 w-2"
+        style={{ backgroundColor: COVER_INK.spine }}
+      />
+      <span
+        aria-hidden
+        className="absolute inset-y-0 left-2 w-px"
+        style={{ backgroundColor: COVER_INK.spineEdge }}
+      />
+
+      {showTitle ? (
+        <div className="absolute inset-x-5 top-8 pr-1">
+          <p
+            className="line-clamp-4 text-sm leading-snug font-medium"
+            style={{ color: COVER_INK.title }}
+          >
+            {title}
+          </p>
+          <span
+            aria-hidden
+            className="mt-2.5 block h-0.5 w-8"
+            style={{ backgroundColor: COVER_INK.rule }}
+          />
+        </div>
+      ) : (
+        // Without the title the rule is all that is left of the typography,
+        // and it is what keeps a small cover from reading as a swatch.
+        <span
+          aria-hidden
+          className="absolute top-1/3 left-2.5 block h-px w-4"
+          style={{ backgroundColor: COVER_INK.rule }}
+        />
+      )}
+    </div>
+  );
+}
+
 export function CollectionBook({ collection }: { collection: Collection }) {
-  const cover = coverFor(collection.id);
   const { done, total } = collection.progress;
   const finished = total > 0 && done === total;
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
@@ -190,65 +264,16 @@ export function CollectionBook({ collection }: { collection: Collection }) {
     >
       <div
         className={cn(
-          // Sharper on the sewn edge, softer on the outer. The shadow is a
-          // literal value because it is the object's weight rather than an
-          // interface colour — there is no token for "this is a thing".
-          "relative overflow-hidden rounded-l-sm rounded-r-md shadow-[0_6px_14px_rgba(0,0,0,0.32)]",
+          // The shadow is a literal value because it is the object's weight
+          // rather than an interface colour — there is no token for "this is
+          // a thing".
+          "relative shadow-[0_6px_14px_rgba(0,0,0,0.32)]",
           "transition-[translate,box-shadow] duration-base ease-out motion-reduce:transition-none",
           "group-hover/book:-translate-y-1 group-hover/book:shadow-[0_12px_22px_rgba(0,0,0,0.4)]",
           "group-focus-visible/book:-translate-y-1",
         )}
       >
-        {/* The SVG's own viewBox holds the portrait ratio, so the book scales
-            with its column and nothing here needs a fixed height. */}
-        <svg
-          viewBox="0 0 156 214"
-          className="block h-auto w-full"
-          aria-hidden
-        >
-          <rect width={156} height={214} fill={cover.bg} />
-          <Pattern
-            name={cover.pattern}
-            ink={cover.ink}
-            variant={cover.variant}
-          />
-        </svg>
-
-        {/* The sewn edge. */}
-        <span
-          aria-hidden
-          className="absolute inset-y-0 left-0 w-2"
-          style={{ backgroundColor: COVER_INK.spine }}
-        />
-        <span
-          aria-hidden
-          className="absolute inset-y-0 left-2 w-px"
-          style={{ backgroundColor: COVER_INK.spineEdge }}
-        />
-
-        {/* Title, then a rule under it, then — at the foot — who wrote it and
-            how much of it there is.
-
-            The rule sits UNDER the title rather than over it. Above, it read
-            as a fitting for the block below and pushed the title down the
-            cover; underneath, it closes the title off, which is what a rule
-            in a book actually does. It is also why the title block is a
-            flow-positioned column rather than three absolutes: a rule that
-            has to sit under a title of unknown length cannot be given a
-            coordinate. */}
-        <div className="absolute inset-x-5 top-8 pr-1">
-          <p
-            className="line-clamp-4 text-sm leading-snug font-medium"
-            style={{ color: COVER_INK.title }}
-          >
-            {collection.title}
-          </p>
-          <span
-            aria-hidden
-            className="mt-2.5 block h-0.5 w-8"
-            style={{ backgroundColor: COVER_INK.rule }}
-          />
-        </div>
+        <CollectionCover id={collection.id} title={collection.title} />
 
         {/* Both lines in the title's own white — see COVER_INK.byline for
             why a dimmed one could not survive the pattern behind it. */}
@@ -288,9 +313,9 @@ export function CollectionBook({ collection }: { collection: Collection }) {
             className={cn(
               "h-full rounded-full transition-[width] duration-slow ease-out motion-reduce:transition-none",
               // Green, not the accent. Yellow means "this is the action" all
-              // over this interface, and spending it on a progress bar — which
-              // is a report, not an action — dilutes it everywhere else. Done
-              // is green here because done is green everywhere here.
+              // over this interface, and spending it on a progress bar —
+              // which is a report, not an action — dilutes it everywhere
+              // else. Done is green here because done is green everywhere.
               done > 0 ? "bg-correct" : "bg-transparent",
             )}
             style={{ width: `${pct}%` }}

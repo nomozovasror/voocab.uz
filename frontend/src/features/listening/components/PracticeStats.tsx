@@ -91,12 +91,29 @@ export function PracticeStats({ stats, onBrowsePart }: PracticeStatsProps) {
   );
 }
 
-// --- 1. Carry on ------------------------------------------------------------
+// --- 1. Your last result ----------------------------------------------------
 
+/**
+ * The last thing they sat, framed as a RESULT rather than as a way back in.
+ *
+ * It used to say "Pick up where you left off", which put a second invitation
+ * to carry on next to the one at the top of the page — two "continue" buttons
+ * on one screen, and no way to tell which is the right one. The block above
+ * the list is what to do next; this column is how it is going.
+ *
+ * The reframing costs nothing because the card was already a result: the most
+ * valuable thing about the last material somebody sat is not sitting it again,
+ * it is seeing what they got wrong, and the main action here has always been
+ * "See your answers". Only the label was arguing with it.
+ *
+ * With that settled the column reads in one direction — this result, then
+ * what kind of mistakes, then the trend, then the totals — and the page has a
+ * side for what to do and a side for how it is going.
+ */
 function ResumeCard({ resume }: { resume: NonNullable<ListeningStats["resume"]> }) {
   return (
-    <Card label="Pick up where you left off">
-      <Label>Pick up where you left off</Label>
+    <Card label="Your last result">
+      <Label>Your last result</Label>
       <p className="mt-1 text-sm leading-snug text-foreground">{resume.title}</p>
       <p className="mt-1 text-xs text-muted-foreground">
         {timeAgo(resume.submitted_at)}

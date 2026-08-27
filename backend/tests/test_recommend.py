@@ -250,23 +250,59 @@ async def _cleanup(material_ids: list[uuid.UUID], email: str) -> None:
         await session.commit()
 
 
+async def _warm_up(user_id: uuid.UUID, part: int = 1) -> list[uuid.UUID]:
+    """Enough finished materials to get past MIN_MATERIALS, and no opinion
+    about the reader beyond that: every one is answered at the same middling
+    rate, so nothing here makes a part look weak or strong."""
+    made = []
+    for i in range(recommend.MIN_MATERIALS):
+        material_id, questions = await _material(
+            user_id, f"Warmup {i} {uuid.uuid4()}", part
+        )
+        await _sit(user_id, material_id, questions, answers=4, correct=3)
+        made.append(material_id)
+    return made
+
+
 @pytest.mark.asyncio
-async def test_somebody_with_no_history_is_sent_to_part_one() -> None:
-    """The gentlest section of the paper, and the one whose task types the
-    rest are built on. Nothing is asserted about a reader we know nothing
-    about."""
+async def test_nothing_is_said_until_there_is_something_to_go_on() -> None:
+    """Below the threshold there is no block at all.
+
+    A recommendation off one paper is a guess in a confident voice, and the
+    reader has no way to tell those apart. Silence, and then the block simply
+    appears once there is something to go on.
+    """
     email = f"next-new-{uuid.uuid4().hex[:8]}@example.com"
     user = await _user(email)
-    first, _q = await _material(user.id, f"Next {uuid.uuid4()}", 1)
+    made = []
     try:
+        # Nothing sat at all.
+        async with async_session_factory() as session:
+            assert (await recommend.next_up(session, user.id))["reason"] == "none"
+
+        # One short of the threshold, and still nothing.
+        for i in range(recommend.MIN_MATERIALS - 1):
+            material_id, questions = await _material(
+                user.id, f"Early {i} {uuid.uuid4()}", 1
+            )
+            await _sit(user.id, material_id, questions, answers=4, correct=3)
+            made.append(material_id)
         async with async_session_factory() as session:
             out = await recommend.next_up(session, user.id)
-        assert out["reason"] == "start"
-        assert out["part"] == 1
-        assert out["accuracy_pct"] is None
-        assert any(row["id"] == first for row in out["items"])
+        assert out["reason"] == "none"
+        assert out["items"] == []
+
+        # The one that crosses it.
+        material_id, questions = await _material(user.id, f"Third {uuid.uuid4()}", 1)
+        await _sit(user.id, material_id, questions, answers=4, correct=3)
+        made.append(material_id)
+        spare, _q = await _material(user.id, f"Spare {uuid.uuid4()}", 1)
+        made.append(spare)
+        async with async_session_factory() as session:
+            out = await recommend.next_up(session, user.id)
+        assert out["reason"] != "none"
     finally:
-        await _cleanup([first], email)
+        await _cleanup(made, email)
 
 
 @pytest.mark.asyncio
@@ -277,7 +313,9 @@ async def test_a_paper_already_sat_is_never_recommended() -> None:
     user = await _user(email)
     sat, questions = await _material(user.id, f"Sat {uuid.uuid4()}", 1)
     fresh, _q = await _material(user.id, f"Fresh {uuid.uuid4()}", 1)
+    warm = []
     try:
+        warm = await _warm_up(user.id)
         await _sit(user.id, sat, questions, answers=4, correct=2)
         async with async_session_factory() as session:
             out = await recommend.next_up(session, user.id)
@@ -285,7 +323,7 @@ async def test_a_paper_already_sat_is_never_recommended() -> None:
         assert sat not in ids
         assert fresh in ids
     finally:
-        await _cleanup([sat, fresh], email)
+        await _cleanup([sat, fresh, *warm], email)
 
 
 @pytest.mark.asyncio
@@ -295,12 +333,14 @@ async def test_an_empty_shell_is_never_recommended() -> None:
     email = f"next-empty-{uuid.uuid4().hex[:8]}@example.com"
     user = await _user(email)
     shell, _none = await _material(user.id, f"Shell {uuid.uuid4()}", 1, questions=0)
+    warm = []
     try:
+        warm = await _warm_up(user.id)
         async with async_session_factory() as session:
             out = await recommend.next_up(session, user.id)
         assert all(row["id"] != shell for row in out["items"])
     finally:
-        await _cleanup([shell], email)
+        await _cleanup([shell, *warm], email)
 
 
 @pytest.mark.asyncio
@@ -311,6 +351,7 @@ async def test_a_lopsided_learner_is_sent_to_the_part_they_are_behind_on() -> No
     email = f"next-weak-{uuid.uuid4().hex[:8]}@example.com"
     user = await _user(email)
     strong, strong_q = await _material(user.id, f"Strong {uuid.uuid4()}", 1)
+    strong2, strong2_q = await _material(user.id, f"Strong two {uuid.uuid4()}", 1)
     weak, weak_q = await _material(user.id, f"Weak {uuid.uuid4()}", 3)
     more_weak, _q = await _material(user.id, f"More part 3 {uuid.uuid4()}", 3)
     try:
@@ -318,6 +359,9 @@ async def test_a_lopsided_learner_is_sent_to_the_part_they_are_behind_on() -> No
         # threshold. Every attempt is a first attempt — different materials —
         # which is the only kind that counts.
         await _sit(user.id, strong, strong_q, answers=MIN_ANSWERS, correct=MIN_ANSWERS)
+        await _sit(
+            user.id, strong2, strong2_q, answers=MIN_ANSWERS, correct=MIN_ANSWERS
+        )
         await _sit(user.id, weak, weak_q, answers=MIN_ANSWERS, correct=0)
 
         async with async_session_factory() as session:
@@ -328,7 +372,7 @@ async def test_a_lopsided_learner_is_sent_to_the_part_they_are_behind_on() -> No
         assert out["accuracy_pct"] == 0
         assert [row["id"] for row in out["items"]] == [more_weak]
     finally:
-        await _cleanup([strong, weak, more_weak], email)
+        await _cleanup([strong, strong2, weak, more_weak], email)
 
 
 @pytest.mark.asyncio
@@ -340,10 +384,13 @@ async def test_an_even_learner_is_told_about_their_level_instead() -> None:
     user = await _user(email)
     one, one_q = await _material(user.id, f"Even one {uuid.uuid4()}", 1)
     two, two_q = await _material(user.id, f"Even two {uuid.uuid4()}", 2)
+    three, three_q = await _material(user.id, f"Even three {uuid.uuid4()}", 3)
     spare, _q = await _material(user.id, f"Even spare {uuid.uuid4()}", 4)
     try:
-        # Both parts at exactly the same accuracy: nothing is behind anything.
-        for material, questions in ((one, one_q), (two, two_q)):
+        # Every part at the same accuracy: nothing is behind anything. Fifty
+        # per cent, so it is `level` rather than `steady` — steady means good
+        # everywhere, and this reader is middling everywhere.
+        for material, questions in ((one, one_q), (two, two_q), (three, three_q)):
             await _sit(
                 user.id,
                 material,
@@ -360,7 +407,7 @@ async def test_an_even_learner_is_told_about_their_level_instead() -> None:
         assert out["accuracy_pct"] == 50
         assert spare in [row["id"] for row in out["items"]]
     finally:
-        await _cleanup([one, two, spare], email)
+        await _cleanup([one, two, three, spare], email)
 
 
 # --- Where the two halves of the page meet -----------------------------------
@@ -424,7 +471,7 @@ async def test_a_course_in_progress_outranks_everything_else() -> None:
     email = f"next-course-{uuid.uuid4().hex[:8]}@example.com"
     user = await _user(email)
     course = [
-        await _material(user.id, f"Lesson {i} {uuid.uuid4()}", 1) for i in range(4)
+        await _material(user.id, f"Lesson {i} {uuid.uuid4()}", 1) for i in range(5)
     ]
     loose, loose_q = await _material(user.id, f"Loose {uuid.uuid4()}", 1)
     made = [m for m, _q in course] + [loose]
@@ -433,8 +480,9 @@ async def test_a_course_in_progress_outranks_everything_else() -> None:
         collection_id = await _collection(
             user.id, "Part 1 from scratch", [m for m, _q in course]
         )
-        # The first two sat, so the course is started and unfinished.
-        for material_id, questions in course[:2]:
+        # The first three sat, so the course is started and unfinished — and
+        # the reader is over the threshold that lets the block speak at all.
+        for material_id, questions in course[:3]:
             await _sit(user.id, material_id, questions, answers=4, correct=2)
 
         async with async_session_factory() as session:
@@ -442,14 +490,13 @@ async def test_a_course_in_progress_outranks_everything_else() -> None:
 
         assert out["reason"] == "course"
         assert out["collection"]["id"] == collection_id
-        # Lesson three of four, and the rows are the rest of it IN ORDER.
-        assert out["position"] == 3
-        assert out["of"] == 4
-        assert out["done"] == 2
-        assert [row["id"] for row in out["items"]] == [
-            course[2][0],
-            course[3][0],
-        ]
+        assert out["position"] == 4
+        assert out["of"] == 5
+        assert out["done"] == 3
+        assert out["remaining"] == 2
+        # ONE lesson, not the rest of the course: two rows under a Continue
+        # button leave the reader working out which one the button opens.
+        assert [row["id"] for row in out["items"]] == [course[3][0]]
         # Not the loose material, however well it would have fitted.
         assert loose not in [row["id"] for row in out["items"]]
         assert loose_q is not None
@@ -562,13 +609,13 @@ async def test_done_is_counted_not_read_off_the_queue() -> None:
     email = f"next-skip-{uuid.uuid4().hex[:8]}@example.com"
     user = await _user(email)
     course = [
-        await _material(user.id, f"Skip {i} {uuid.uuid4()}", 1) for i in range(4)
+        await _material(user.id, f"Skip {i} {uuid.uuid4()}", 1) for i in range(5)
     ]
     made = [m for m, _q in course]
 
     try:
         await _collection(user.id, "Skipped about", [m for m, _q in course])
-        for index in (0, 2):
+        for index in (0, 2, 3):
             material_id, questions = course[index]
             await _sit(user.id, material_id, questions, answers=4, correct=2)
 
@@ -577,8 +624,162 @@ async def test_done_is_counted_not_read_off_the_queue() -> None:
 
         assert out["reason"] == "course"
         assert out["position"] == 2  # the next one still waiting
-        assert out["done"] == 2  # and two are behind them
-        assert out["of"] == 4
+        assert out["done"] == 3  # and three are behind them
+        assert out["remaining"] == 2
+        assert out["of"] == 5
     finally:
         await _drop_collections(email)
         await _cleanup(made, email)
+
+
+@pytest.mark.asyncio
+async def test_finishing_a_course_is_said_once_and_then_dropped() -> None:
+    """At the moment it is true, and not after.
+
+    A month-old "well done" is a page that has stopped paying attention, so
+    the card lives exactly as long as the attempt that earned it is the most
+    recent thing they did.
+    """
+    email = f"next-fin-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    course = [
+        await _material(user.id, f"Fin {i} {uuid.uuid4()}", 1) for i in range(3)
+    ]
+    after, after_q = await _material(user.id, f"After {uuid.uuid4()}", 2)
+    made = [m for m, _q in course] + [after]
+
+    try:
+        collection_id = await _collection(
+            user.id, "The lecture set", [m for m, _q in course]
+        )
+        for material_id, questions in course:
+            await _sit(user.id, material_id, questions, answers=4, correct=3)
+
+        async with async_session_factory() as session:
+            out = await recommend.next_up(session, user.id)
+        assert out["reason"] == "finished_course"
+        assert out["collection"]["id"] == collection_id
+        assert out["done"] == out["of"] == 3
+        assert out["accuracy_pct"] == 75  # three at three-of-four
+
+        # Anything else, and it is no longer what just happened.
+        await _sit(user.id, after, after_q, answers=4, correct=3)
+        async with async_session_factory() as session:
+            out = await recommend.next_up(session, user.id)
+        assert out["reason"] != "finished_course"
+    finally:
+        await _drop_collections(email)
+        await _cleanup(made, email)
+
+
+@pytest.mark.asyncio
+async def test_a_retake_inside_a_finished_course_is_not_a_completion() -> None:
+    """Re-sitting lesson two of something finished weeks ago has not just
+    finished anything. Only a FIRST attempt can be the one that completed a
+    course."""
+    email = f"next-retake-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    course = [
+        await _material(user.id, f"Re {i} {uuid.uuid4()}", 1) for i in range(3)
+    ]
+    made = [m for m, _q in course]
+
+    try:
+        await _collection(user.id, "Done long ago", [m for m, _q in course])
+        for material_id, questions in course:
+            await _sit(user.id, material_id, questions, answers=4, correct=3)
+        # Sat again — the course is still complete, but nothing was completed.
+        await _sit(user.id, course[1][0], course[1][1], answers=4, correct=4)
+
+        async with async_session_factory() as session:
+            out = await recommend.next_up(session, user.id)
+        assert out["reason"] != "finished_course"
+    finally:
+        await _drop_collections(email)
+        await _cleanup(made, email)
+
+
+@pytest.mark.asyncio
+async def test_somebody_good_everywhere_is_offered_something_harder() -> None:
+    """"Your weakest area" is a sentence with nothing behind it for a reader
+    who is good at all four parts, and saying it anyway is the block being
+    confident instead of useful.
+
+    `_steady` is the exact inverse of `_weak_part` over the same two
+    constants, so the two can never both be true.
+    """
+    assert recommend._steady(_parts(p1=88, p2=85, p3=90, p4=86)) is True
+    # One part clearly behind: not steady, and `_weak_part` names it.
+    assert recommend._steady(_parts(p1=88, p2=60, p3=90, p4=86)) is False
+    assert recommend._weak_part(_parts(p1=88, p2=60, p3=90, p4=86)) is not None
+    # Level but not good: middling everywhere is `level`, not `steady`.
+    assert recommend._steady(_parts(p1=52, p2=55, p3=50, p4=54)) is False
+    # A part with no score at all cannot be called steady either.
+    assert recommend._steady(_parts(p1=88, p2=85, p3=90, p4=None)) is False
+
+
+@pytest.mark.asyncio
+async def test_steady_reaches_for_a_whole_paper_first() -> None:
+    """The one reader the ladder opens with `hard` for, and the one for whom a
+    full test is the obvious next thing — they have run out of excerpts to be
+    told to practise."""
+    email = f"next-steady-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    sat = []
+    for part in (1, 2, 3, 4):
+        material_id, questions = await _material(
+            user.id, f"Strong p{part} {uuid.uuid4()}", part
+        )
+        await _sit(
+            user.id, material_id, questions, answers=MIN_ANSWERS, correct=MIN_ANSWERS
+        )
+        sat.append(material_id)
+
+    excerpt, _q = await _material(user.id, f"Excerpt {uuid.uuid4()}", 2)
+    async with async_session_factory() as session:
+        whole = Material(
+            author_id=user.id,
+            type="listening",
+            title=f"Whole paper {uuid.uuid4()}",
+            visibility="public",
+        )
+        session.add(whole)
+        await session.commit()
+        await session.refresh(whole)
+    full_id, _fq = whole.id, None
+    for part in (1, 2, 3, 4):
+        async with async_session_factory() as session:
+            session.add(
+                Part(material_id=full_id, order_index=part - 1, title=f"Part {part}")
+            )
+            await session.commit()
+    async with async_session_factory() as session:
+        part_row = (
+            await session.exec(select(Part).where(Part.material_id == full_id))
+        ).first()
+        group = QuestionGroup(
+            part_id=part_row.id,
+            type="form_completion",
+            order_index=0,
+            instructions="Complete the notes.",
+            config={"template": "a {{1}}"},
+        )
+        session.add(group)
+        await session.commit()
+        await session.refresh(group)
+        session.add(Question(group_id=group.id, number=1, correct_answers=["x"]))
+        await session.commit()
+
+    try:
+        async with async_session_factory() as session:
+            out = await recommend.next_up(session, user.id)
+
+        assert out["reason"] == "steady"
+        assert out["accuracy_pct"] == 100
+        # The whole paper comes first. What follows it is whatever else the
+        # library holds, which in a shared test database is not this test's
+        # business — the claim being made here is only that a full paper
+        # outranks an excerpt.
+        assert out["items"][0]["id"] == full_id
+    finally:
+        await _cleanup([*sat, excerpt, full_id], email)

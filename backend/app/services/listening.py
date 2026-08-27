@@ -1076,6 +1076,7 @@ async def recommended(
     ranks: dict[str, int],
     size: int,
     skip: set[uuid.UUID] | None = None,
+    prefer_full: bool = False,
 ) -> list[dict]:
     """A handful of materials to put in front of one learner.
 
@@ -1091,6 +1092,11 @@ async def recommended(
     inside a course the learner has started. Offering lesson five to somebody
     on lesson three denies the one thing a collection claims — that its order
     is somebody's judgement about what to do when.
+
+    ``prefer_full`` puts whole papers first. It is for the one reader the
+    ladder has nothing else to offer — level across all four parts, so there
+    is no weak one to send them to — and a whole paper is the next thing after
+    excerpts however good you are at the excerpts.
 
     Ties inside a band break newest-first, so the block changes as the library
     grows rather than recommending the same three things forever.
@@ -1134,6 +1140,22 @@ async def recommended(
                 )
                 .where(*where)
                 .order_by(
+                    *(
+                        [
+                            case(
+                                (
+                                    select(func.count(Part.id))
+                                    .where(Part.material_id == Material.id)
+                                    .scalar_subquery()
+                                    >= FULL_TEST_PARTS,
+                                    0,
+                                ),
+                                else_=1,
+                            )
+                        ]
+                        if prefer_full
+                        else []
+                    ),
                     _band_case(ranks),
                     Material.created_at.desc(),  # type: ignore[attr-defined]
                     Material.id,

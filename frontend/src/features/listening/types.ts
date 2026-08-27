@@ -436,7 +436,23 @@ export interface PracticeCatalogue {
  *  The words live here rather than on the server, but WHICH of the three is
  *  the server's judgement — and each one had to prove something before it was
  *  allowed (backend/app/services/recommend.py). */
-export type NextUpReason = "course" | "start" | "weak_part" | "level";
+/** What the block above the list is saying, and every value a different
+ *  claim:
+ *
+ *  - `none` — too little history. There is no block, and that is the honest
+ *    state rather than a fallback.
+ *  - `finished_course` — the attempt they just submitted completed a course.
+ *  - `course` — part-way through one; `items` is the ONE next lesson.
+ *  - `weak_part` — one part is clearly behind the others.
+ *  - `steady` — none of them is, and all four are good.
+ *  - `level` — nothing clear either way. */
+export type NextUpReason =
+  | "none"
+  | "finished_course"
+  | "course"
+  | "weak_part"
+  | "steady"
+  | "level";
 
 export interface NextUp {
   reason: NextUpReason;
@@ -451,7 +467,14 @@ export interface NextUp {
    *  `position` — somebody who skipped ahead has done more than their place
    *  in the queue suggests. */
   done: number | null;
+  /** How many lessons are left. What the block prints beside the lesson
+   *  number, because "2 left" cannot be subtracted against it and "4 of 6
+   *  done" can — and that subtraction finds an off-by-one that is not there. */
+  remaining: number | null;
   of: number | null;
+  /** Started-and-unfinished courses, for the "My courses (3)" beside the
+   *  action. */
+  in_progress_count: number;
   /** May be empty: somebody who has sat everything gets the reason and no
    *  rows, and the block has to survive drawing that. */
   items: PracticeMaterial[];
