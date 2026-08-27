@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { Sparkles } from "lucide-react";
+import { BookOpen, Sparkles } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { fmtClock } from "@/lib/time";
@@ -36,6 +36,13 @@ import type { NextUp as NextUpData, PracticeMaterial } from "@/features/listenin
 /**
  * What the block says it is doing, per reason.
  *
+ * **`course` is a continuation, not a suggestion**, and it is the one case
+ * where the heading is not "Suggested for you". Somebody four papers into a
+ * six-paper course did not ask to be advised; they asked to carry on, and the
+ * sentence that helps them is which lesson it is. The block still looks the
+ * same because it is the same block — the reader has one place to look for
+ * "what now" whichever half of the page they were working from.
+ *
  * **The heading is an action; the reason is a line under it.** That division
  * is doing real work, because the panel beside this one is also about where
  * the reader goes wrong, and the two used to lead with competing diagnoses —
@@ -53,6 +60,15 @@ import type { NextUp as NextUpData, PracticeMaterial } from "@/features/listenin
  * 52%" is a readout, and this is meant to be read.
  */
 function heading(data: NextUpData): { title: string; note: string } {
+  if (data.reason === "course" && data.collection) {
+    return {
+      title: "Carry on",
+      note:
+        data.position && data.of
+          ? `Lesson ${data.position} of ${data.of} in ${data.collection.title}.`
+          : data.collection.title,
+    };
+  }
   if (data.reason === "weak_part") {
     return {
       title: "Worth sitting next",
@@ -87,6 +103,7 @@ export function NextUp({ data }: { data: NextUpData }) {
   if (data.items.length === 0) return null;
 
   const { title, note } = heading(data);
+  const carrying = data.reason === "course";
 
   return (
     // Smaller than it was, and the reason is what it is FOR: it sits above
@@ -98,26 +115,58 @@ export function NextUp({ data }: { data: NextUpData }) {
     // a subordinate clause, and putting it on its own line gave it the weight
     // of a second claim.
     <section
-      aria-label="Suggested materials"
+      aria-label={carrying ? "Carry on with your course" : "Suggested materials"}
       className="mb-5 rounded-xl border border-border-subtle bg-card/40 px-3 py-2.5"
     >
       <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
         <span className="inline-flex items-center gap-1.5 text-xs text-foreground">
-          <Sparkles className="size-3.5 shrink-0 text-primary" aria-hidden />
+          {/* A different mark for a continuation than for a suggestion: one
+              is somewhere the reader already is, the other is the page
+              offering an opinion, and the icon is the first thing read. */}
+          {carrying ? (
+            <BookOpen className="size-3.5 shrink-0 text-primary" aria-hidden />
+          ) : (
+            <Sparkles className="size-3.5 shrink-0 text-primary" aria-hidden />
+          )}
           {title}
         </span>
-        <span className="text-xs text-muted-foreground">{note}</span>
+        {/* The course's name is a link where there is one — the reader may
+            want the whole sequence rather than the next three of it. */}
+        {carrying && data.collection ? (
+          <Link
+            to={`/listening/collections/${data.collection.id}`}
+            className="text-xs text-muted-foreground transition-colors hover:text-foreground hover:underline"
+          >
+            {note}
+          </Link>
+        ) : (
+          <span className="text-xs text-muted-foreground">{note}</span>
+        )}
       </p>
 
-      {/* Not <ol>. Three suggestions are a set, not a sequence — nothing
-          says sit them in this order, and numbering them would say so. */}
-      <ul className="mt-1.5">
-        {data.items.map((m) => (
-          <li key={m.id}>
-            <Suggestion material={m} />
-          </li>
-        ))}
-      </ul>
+      {/* An ordered list only where the order is real. Three suggestions are
+          a set — nothing says sit them in this order — but the next lessons
+          of a course are a sequence, and that is the whole claim a collection
+          makes. No visible numbers either way: the lesson number is in the
+          line above, and repeating it down the side would be the same fact
+          three times. */}
+      {carrying ? (
+        <ol className="mt-1.5">
+          {data.items.map((m) => (
+            <li key={m.id}>
+              <Suggestion material={m} />
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <ul className="mt-1.5">
+          {data.items.map((m) => (
+            <li key={m.id}>
+              <Suggestion material={m} />
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }

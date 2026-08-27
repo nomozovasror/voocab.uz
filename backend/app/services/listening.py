@@ -1075,6 +1075,7 @@ async def recommended(
     part: int | None,
     ranks: dict[str, int],
     size: int,
+    skip: set[uuid.UUID] | None = None,
 ) -> list[dict]:
     """A handful of materials to put in front of one learner.
 
@@ -1085,6 +1086,11 @@ async def recommended(
     ordered so the level that suits them comes first (``ranks``, from
     :mod:`app.services.recommend`, which is where every judgement about WHO
     this is for lives).
+
+    ``skip`` is what the collections add to this: materials waiting their turn
+    inside a course the learner has started. Offering lesson five to somebody
+    on lesson three denies the one thing a collection claims — that its order
+    is somebody's judgement about what to do when.
 
     Ties inside a band break newest-first, so the block changes as the library
     grows rather than recommending the same three things forever.
@@ -1114,6 +1120,8 @@ async def recommended(
             .where(Part.material_id == Material.id, Part.order_index == part - 1)
             .exists()
         )
+    if skip:
+        where.append(Material.id.not_in(skip))  # type: ignore[attr-defined]
 
     materials = list(
         (

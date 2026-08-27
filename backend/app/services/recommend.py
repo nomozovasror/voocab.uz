@@ -20,7 +20,25 @@ something (:data:`DECISIVE_GAP`) and the number is low enough to be worth
 acting on (:data:`WEAK_CEILING`). Otherwise the recommendation is about their
 LEVEL, which is a claim the same data does support.
 
-Nothing here is a model. It is three rules over numbers the platform already
+**A course in progress outranks everything below it.** A learner can work
+from the catalogue or from a collection, and until this existed the two talked
+over each other: somebody four papers into a six-paper course opened the page
+and was handed three unrelated ones. Two reasons that is the wrong way round,
+and both are stronger than any heuristic here.
+
+They already chose the course. A recommendation that competes with a choice
+the reader made is the page arguing with them rather than helping.
+
+And its order is a person's judgement about what to do when, made by somebody
+who knows the exam. Band-fit over a first-try average is a guess by
+comparison, and a guess does not get to overrule a judgement.
+
+The same reasoning runs the other way at the bottom: when the recommendation
+IS a loose one, it skips materials sitting mid-sequence in a course they have
+started. Offering lesson five to somebody on lesson three denies the one thing
+a collection claims.
+
+Nothing here is a model. It is four rules over numbers the platform already
 has, and the reason each one exists is written next to it — which is the point
 at which a recommender becomes reviewable instead of magic.
 """
@@ -28,7 +46,11 @@ at which a recommender becomes reviewable instead of magic.
 import uuid
 
 from app.core.database import AsyncSession
-from app.services import learner_stats, listening as listening_service
+from app.services import (
+    collections as collections_service,
+    learner_stats,
+    listening as listening_service,
+)
 
 #: How many to put in front of somebody. Three is a choice; one is an
 #: instruction and a learner who does not fancy it has nowhere to go, and six
@@ -124,9 +146,13 @@ async def next_up(
 ) -> dict:
     """Three materials and the reason for them.
 
-    ``reason`` is what the interface prints, and the three values are three
-    different sentences rather than three ways of saying the same one:
+    ``reason`` is what the interface prints, and the values are four different
+    sentences rather than four ways of saying the same one:
 
+    * ``course`` — they are part-way through a collection. The next materials
+      in it, in its order, with which lesson it is. This outranks the rest
+      because they chose it and because its order is a person's judgement —
+      see the module docstring.
     * ``start`` — no finished attempts. Part 1, easiest first.
     * ``weak_part`` — one part is clearly behind the others. Materials with
       that part in them, at their level.
@@ -138,6 +164,26 @@ async def next_up(
     An empty ``items`` is a real answer and the page has to survive it: a
     learner who has sat everything in the library gets a reason and no rows.
     """
+    # Carrying on beats being recommended to, so this is asked first and its
+    # answer is taken whole.
+    carrying_on = await collections_service.in_progress_for(session, user_id)
+    if carrying_on is not None:
+        materials = await listening_service.materials_in_order(
+            session, carrying_on["remaining"][:size]
+        )
+        collection = carrying_on["collection"]
+        return {
+            "reason": "course",
+            "part": None,
+            "accuracy_pct": None,
+            "collection": {"id": collection.id, "title": collection.title},
+            "position": carrying_on["position"],
+            "of": carrying_on["total"],
+            "items": await listening_service._catalogue_rows(
+                session, user_id, materials
+            ),
+        }
+
     profile = await learner_stats.first_attempt_profile(session, user_id)
     if not profile["sat_anything"]:
         return {
@@ -149,6 +195,12 @@ async def next_up(
             ),
         }
 
+    # Nothing that is waiting its turn inside a course they have started.
+    # Cheap here — they have no course in progress, or the branch above would
+    # have taken it — but a course they finished and one they never opened can
+    # both still hold materials, and neither should be offered out of order.
+    skip = await collections_service.sequenced_material_ids(session, user_id)
+
     average = profile["average_pct"]
     ranks = _ranks_for(average)
     weak = _weak_part(profile["by_part"])
@@ -158,7 +210,8 @@ async def next_up(
             "part": weak["part"],
             "accuracy_pct": weak["accuracy_pct"],
             "items": await listening_service.recommended(
-                session, user_id, part=weak["part"], ranks=ranks, size=size
+                session, user_id, part=weak["part"], ranks=ranks, size=size,
+                skip=skip,
             ),
         }
 
@@ -167,6 +220,6 @@ async def next_up(
         "part": None,
         "accuracy_pct": average,
         "items": await listening_service.recommended(
-            session, user_id, part=None, ranks=ranks, size=size
+            session, user_id, part=None, ranks=ranks, size=size, skip=skip
         ),
     }

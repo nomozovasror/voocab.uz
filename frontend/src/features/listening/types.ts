@@ -436,12 +436,18 @@ export interface PracticeCatalogue {
  *  The words live here rather than on the server, but WHICH of the three is
  *  the server's judgement — and each one had to prove something before it was
  *  allowed (backend/app/services/recommend.py). */
-export type NextUpReason = "start" | "weak_part" | "level";
+export type NextUpReason = "course" | "start" | "weak_part" | "level";
 
 export interface NextUp {
   reason: NextUpReason;
   part: number | null;
   accuracy_pct: number | null;
+  /** Only on `course`: which collection is being carried on with, which
+   *  lesson comes next, and how many there are. Together they are the
+   *  difference between carrying on and starting again. */
+  collection: { id: string; title: string } | null;
+  position: number | null;
+  of: number | null;
   /** May be empty: somebody who has sat everything gets the reason and no
    *  rows, and the block has to survive drawing that. */
   items: PracticeMaterial[];

@@ -82,6 +82,19 @@ decoration: a recommendation that cannot justify itself is a shuffle with a
 confident label on it, and the reader has no way to tell those apart except by
 being told.
 
+- **A course in progress outranks everything else.** A learner works from
+  both halves of the page, and until `reason: "course"` existed the two talked
+  over each other — somebody four papers into a six-paper course was handed
+  three unrelated ones. They chose the course, and its order is a person's
+  judgement about what to do when; band-fit over a first-try average is a
+  guess, and a guess does not overrule a judgement.
+- The course carried on with is the one holding their **most recent** attempt,
+  not the one they are furthest through. Furthest-through keeps pointing at a
+  course abandoned in March.
+- A loose suggestion **never jumps a course queue**: materials waiting their
+  turn inside a started collection are skipped (`sequenced_material_ids`).
+  Offering lesson five to somebody on lesson three denies the one thing a
+  collection claims.
 - **`weak_part` is guarded, and stays guarded.** The sidebar once named the
   lowest-scoring part outright and it did not survive being looked at — 62%
   against 66% over a few dozen answers is noise. A part is named only when it

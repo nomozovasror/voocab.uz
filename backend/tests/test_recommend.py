@@ -25,7 +25,9 @@ from app.models.part import Part
 from app.models.question import Question
 from app.models.question_attempt import QuestionAttempt
 from app.models.question_group import QuestionGroup
+from app.models.collection import Collection, CollectionItem
 from app.models.user import User
+from app.services import collections as collections_service
 from app.services import recommend
 from app.services.learner_stats import MIN_ANSWERS
 
@@ -359,3 +361,190 @@ async def test_an_even_learner_is_told_about_their_level_instead() -> None:
         assert spare in [row["id"] for row in out["items"]]
     finally:
         await _cleanup([one, two, spare], email)
+
+
+# --- Where the two halves of the page meet -----------------------------------
+
+
+async def _collection(
+    author_id: uuid.UUID, title: str, material_ids: list[uuid.UUID]
+) -> uuid.UUID:
+    async with async_session_factory() as session:
+        collection = Collection(
+            author_id=author_id, title=title, visibility="public"
+        )
+        session.add(collection)
+        await session.commit()
+        await session.refresh(collection)
+        for index, material_id in enumerate(material_ids):
+            session.add(
+                CollectionItem(
+                    collection_id=collection.id,
+                    material_id=material_id,
+                    order_index=index,
+                )
+            )
+        await session.commit()
+        return collection.id
+
+
+async def _drop_collections(email: str) -> None:
+    async with async_session_factory() as session:
+        user = (await session.exec(select(User).where(User.email == email))).first()
+        if user is None:
+            return
+        for collection in (
+            await session.exec(
+                select(Collection).where(Collection.author_id == user.id)
+            )
+        ).all():
+            for item in (
+                await session.exec(
+                    select(CollectionItem).where(
+                        CollectionItem.collection_id == collection.id
+                    )
+                )
+            ).all():
+                await session.delete(item)
+            await session.flush()
+            await session.delete(collection)
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_a_course_in_progress_outranks_everything_else() -> None:
+    """Somebody four papers into a six-paper course does not want three
+    unrelated ones.
+
+    They chose the course, and its order is a person's judgement about what to
+    do when — both of which are better than anything this module can work out
+    from a first-try average. So the recommendation carries on with it, in its
+    order, and says which lesson it is.
+    """
+    email = f"next-course-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    course = [
+        await _material(user.id, f"Lesson {i} {uuid.uuid4()}", 1) for i in range(4)
+    ]
+    loose, loose_q = await _material(user.id, f"Loose {uuid.uuid4()}", 1)
+    made = [m for m, _q in course] + [loose]
+
+    try:
+        collection_id = await _collection(
+            user.id, "Part 1 from scratch", [m for m, _q in course]
+        )
+        # The first two sat, so the course is started and unfinished.
+        for material_id, questions in course[:2]:
+            await _sit(user.id, material_id, questions, answers=4, correct=2)
+
+        async with async_session_factory() as session:
+            out = await recommend.next_up(session, user.id)
+
+        assert out["reason"] == "course"
+        assert out["collection"]["id"] == collection_id
+        # Lesson three of four, and the rows are the rest of it IN ORDER.
+        assert out["position"] == 3
+        assert out["of"] == 4
+        assert [row["id"] for row in out["items"]] == [
+            course[2][0],
+            course[3][0],
+        ]
+        # Not the loose material, however well it would have fitted.
+        assert loose not in [row["id"] for row in out["items"]]
+        assert loose_q is not None
+    finally:
+        await _drop_collections(email)
+        await _cleanup(made, email)
+
+
+@pytest.mark.asyncio
+async def test_the_course_carried_on_with_is_the_one_last_touched() -> None:
+    """Not the one furthest through.
+
+    The question a page answers when somebody comes back is where they left
+    off. Furthest-through would keep pointing at a course they abandoned in
+    March because they happened to get most of the way through it first.
+    """
+    email = f"next-recent-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    old = [await _material(user.id, f"Old {i} {uuid.uuid4()}", 1) for i in range(4)]
+    new = [await _material(user.id, f"New {i} {uuid.uuid4()}", 2) for i in range(3)]
+    made = [m for m, _q in old + new]
+
+    try:
+        await _collection(user.id, "Abandoned in March", [m for m, _q in old])
+        recent_id = await _collection(user.id, "Started today", [m for m, _q in new])
+
+        # Three of four in the old one, then one in the new one — so the old
+        # course is further through and the new one is more recent.
+        for material_id, questions in old[:3]:
+            await _sit(user.id, material_id, questions, answers=4, correct=2)
+        await _sit(user.id, new[0][0], new[0][1], answers=4, correct=2)
+
+        async with async_session_factory() as session:
+            out = await recommend.next_up(session, user.id)
+
+        assert out["reason"] == "course"
+        assert out["collection"]["id"] == recent_id
+        assert out["position"] == 2
+    finally:
+        await _drop_collections(email)
+        await _cleanup(made, email)
+
+
+@pytest.mark.asyncio
+async def test_a_finished_course_is_not_something_to_carry_on_with() -> None:
+    """Nor is one they have never opened. Both are recommendations rather than
+    continuations, which is a different sentence and a different rung."""
+    email = f"next-done-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    done_material, done_q = await _material(user.id, f"Done {uuid.uuid4()}", 1)
+    untouched, _q = await _material(user.id, f"Untouched {uuid.uuid4()}", 1)
+    spare, _q2 = await _material(user.id, f"Spare {uuid.uuid4()}", 1)
+    made = [done_material, untouched, spare]
+
+    try:
+        await _collection(user.id, "Finished course", [done_material])
+        await _collection(user.id, "Never opened", [untouched])
+        await _sit(user.id, done_material, done_q, answers=4, correct=2)
+
+        async with async_session_factory() as session:
+            out = await recommend.next_up(session, user.id)
+
+        assert out["reason"] != "course"
+    finally:
+        await _drop_collections(email)
+        await _cleanup(made, email)
+
+
+@pytest.mark.asyncio
+async def test_a_loose_suggestion_never_jumps_a_course_queue() -> None:
+    """Lesson five is not offered to somebody on lesson three.
+
+    The reader here has finished the course they started, so the branch above
+    does not fire — but a course they never opened still holds materials, and
+    those must not be handed out in the wrong order either.
+    """
+    email = f"next-queue-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    course = [
+        await _material(user.id, f"Queued {i} {uuid.uuid4()}", 1) for i in range(3)
+    ]
+    made = [m for m, _q in course]
+
+    try:
+        await _collection(user.id, "Sequenced", [m for m, _q in course])
+        # First one sat: the course is started, so lessons two and three are
+        # waiting their turn — and two IS the turn.
+        await _sit(user.id, course[0][0], course[0][1], answers=4, correct=2)
+
+        async with async_session_factory() as session:
+            waiting = await collections_service.sequenced_material_ids(
+                session, user.id
+            )
+
+        assert course[2][0] in waiting
+        assert course[1][0] not in waiting
+    finally:
+        await _drop_collections(email)
+        await _cleanup(made, email)

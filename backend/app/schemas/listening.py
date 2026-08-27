@@ -862,6 +862,15 @@ class PracticeCatalogueOut(BaseModel):
     bands: list[PracticeFacetOut] = []
 
 
+class NextUpCollectionOut(BaseModel):
+    """The course a ``course`` recommendation is carrying on with. Enough to
+    name it and link to it, and nothing else — the rows beside it are the
+    catalogue's own, so everything about the materials is already there."""
+
+    id: uuid.UUID
+    title: str
+
+
 class NextUpOut(BaseModel):
     """A few materials to practise next, and why those.
 
@@ -870,6 +879,11 @@ class NextUpOut(BaseModel):
     rest of the interface's words — but also because each value is a genuinely
     different claim and the client must be able to tell them apart:
 
+    * ``course`` — they are part-way through a collection, and these are the
+      next materials in it, in its order. ``collection``, ``position`` and
+      ``of`` carry which course and which lesson. It outranks the rest
+      because the reader chose the course and because its order is a person's
+      judgement rather than this module's guess.
     * ``start`` — no finished attempts yet, so this is Part 1 and nothing is
       being asserted about the reader.
     * ``weak_part`` — one part is clearly behind the others; ``part`` and
@@ -885,9 +899,15 @@ class NextUpOut(BaseModel):
     and no rows, which the page has to be able to draw.
     """
 
-    reason: Literal["start", "weak_part", "level"]
+    reason: Literal["course", "start", "weak_part", "level"]
     part: int | None = None
     accuracy_pct: int | None = None
+    #: Only on ``course``. ``position`` is 1-based so it reads as a lesson
+    #: number, and ``of`` is how many lessons the course has — together they
+    #: are the difference between carrying on and starting again.
+    collection: NextUpCollectionOut | None = None
+    position: int | None = None
+    of: int | None = None
     items: list[PracticeMaterialOut] = []
 
 

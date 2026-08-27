@@ -234,6 +234,141 @@ async def progress(
     }
 
 
+async def in_progress_for(
+    session: AsyncSession, user_id: uuid.UUID
+) -> dict | None:
+    """The course this learner was last working on, and what comes next in it.
+
+    "Last working on" and not "furthest through": the question a page asks
+    when somebody comes back is where they left off, and the most recent
+    submitted attempt is the only honest answer to that. Furthest-through
+    would keep pointing at a course they abandoned in March because they
+    happened to get most of the way through it first.
+
+    Only STARTED and unfinished courses count. One they have never opened is
+    not something to carry on with — it is something to recommend, which is a
+    different sentence and a different rung of the ladder
+    (:mod:`app.services.recommend`).
+
+    Returns the collection, its ordered remaining materials, and where in the
+    sequence the next one falls — that number is what lets the page say
+    "lesson 5 of 8" rather than "here are some materials", which is the whole
+    difference between carrying on and starting again.
+    """
+    collections = list(
+        (
+            await session.exec(
+                select(Collection).where(Collection.visibility == "public")
+            )
+        ).all()
+    )
+    if not collections:
+        return None
+
+    ordered, material_ids = await _items_for_many(
+        session, [c.id for c in collections]
+    )
+    if not material_ids:
+        return None
+
+    # Every submitted attempt of theirs that lands in any published course,
+    # newest last, so the final one wins per material and the latest overall
+    # is the last row read.
+    latest: dict[uuid.UUID, datetime] = {}
+    for material_id, submitted_at in (
+        await session.exec(
+            select(Attempt.material_id, Attempt.submitted_at)
+            .where(
+                Attempt.user_id == user_id,
+                Attempt.material_id.in_(material_ids),  # type: ignore[attr-defined]
+                Attempt.status == AttemptStatus.SUBMITTED,
+                Attempt.submitted_at.is_not(None),  # type: ignore[attr-defined]
+            )
+            .order_by(Attempt.submitted_at)  # type: ignore[arg-type]
+        )
+    ).all():
+        latest[material_id] = submitted_at
+
+    best: tuple[datetime, Collection, list[uuid.UUID]] | None = None
+    for collection in collections:
+        ids = ordered.get(collection.id, [])
+        touched = [latest[mid] for mid in ids if mid in latest]
+        if not touched:
+            continue  # never opened — not something to carry on with
+        remaining = [mid for mid in ids if mid not in latest]
+        if not remaining:
+            continue  # finished
+        when = max(touched)
+        if best is None or when > best[0]:
+            best = (when, collection, remaining)
+
+    if best is None:
+        return None
+
+    _when, collection, remaining = best
+    ids = ordered[collection.id]
+    return {
+        "collection": collection,
+        "remaining": remaining,
+        # 1-based, so it reads as a lesson number rather than an index.
+        "position": ids.index(remaining[0]) + 1,
+        "total": len(ids),
+    }
+
+
+async def sequenced_material_ids(
+    session: AsyncSession, user_id: uuid.UUID
+) -> set[uuid.UUID]:
+    """Materials that are waiting their turn inside a course this learner has
+    started.
+
+    Everything after the next one, in every started-and-unfinished course.
+    Loose recommendations skip these: suggesting lesson five to somebody on
+    lesson three quietly denies the thing a collection is FOR, which is that
+    the order is somebody's judgement about what to do when.
+
+    The next one is deliberately not in the set. It is not waiting its turn —
+    it is the turn — and it is what the ``course`` recommendation offers.
+    """
+    collections = list(
+        (
+            await session.exec(
+                select(Collection).where(Collection.visibility == "public")
+            )
+        ).all()
+    )
+    if not collections:
+        return set()
+
+    ordered, material_ids = await _items_for_many(
+        session, [c.id for c in collections]
+    )
+    if not material_ids:
+        return set()
+
+    sat = set(
+        (
+            await session.exec(
+                select(Attempt.material_id)
+                .where(
+                    Attempt.user_id == user_id,
+                    Attempt.material_id.in_(material_ids),  # type: ignore[attr-defined]
+                    Attempt.status == AttemptStatus.SUBMITTED,
+                )
+                .distinct()
+            )
+        ).all()
+    )
+
+    waiting: set[uuid.UUID] = set()
+    for ids in ordered.values():
+        if not any(mid in sat for mid in ids):
+            continue  # never started: nothing in it is waiting a turn
+        remaining = [mid for mid in ids if mid not in sat]
+        waiting.update(remaining[1:])
+    return waiting
+
+
 def _summarise(collection: Collection, author: User | None) -> dict:
     return {
         "id": collection.id,
