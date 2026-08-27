@@ -140,8 +140,11 @@ working through by recognising it.
 - The type on a cover is white with fixed alpha, applied inline rather than in
   a class string, because the stock underneath is always dark whatever the
   theme is doing.
-- Colour and pattern come from **different parts of the hash**, so seven
-  stocks times five patterns really is thirty-five covers.
+- Stock, pattern and cut come from **three different parts of the hash**, so
+  11 × 8 × 3 really is 264 covers and not eleven with decoration.
+- A `variant` moves an anchor, a spacing or an angle — it never adds a shape.
+  That is what lets the count multiply without multiplying the number of ways
+  a cover can come out wrong.
 - A hash, not `collections.length % 7`: an index re-covers every book on the
   shelf the day somebody publishes another one.
 - When uploads arrive, generation stays the default. A shelf where some books

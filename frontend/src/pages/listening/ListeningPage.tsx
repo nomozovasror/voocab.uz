@@ -44,7 +44,6 @@ import { QUESTION_TYPE_LABEL } from "@/features/listening/parts";
 import {
   FilterChips,
   ListHeader,
-  ModeTabs,
   SearchField,
 } from "@/features/listening/components/PracticeControls";
 import {
@@ -508,18 +507,12 @@ export default function ListeningPage() {
           />
         </div>
 
-        {/* Mode first, then what narrows it. Two rows rather than one, and
-            the order is the order the questions come in: which list am I
-            looking at, and then which part of it. */}
         <div className="mt-4 flex justify-center">
-          <ModeTabs mode={mode} onChange={setMode} />
-        </div>
-
-        <div className="mt-3 flex justify-center">
           <FilterChips
             filters={filters}
             onChange={change}
             mode={mode}
+            onMode={setMode}
             status={status}
             onStatus={setStatus}
             covers={covers}

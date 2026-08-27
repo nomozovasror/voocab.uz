@@ -32,56 +32,145 @@ import type { Collection } from "@/features/listening/types";
  * effect goes with it.
  */
 
-/** The printed pattern, low-contrast, kept to the lower half so it never
- *  competes with the title. Drawn in the cover's own 156×214 space, so the
- *  whole book scales with its column and nothing needs measuring. */
-function Pattern({ name, ink }: { name: PatternName; ink: string }) {
+/**
+ * The printed pattern: low-contrast, kept to the lower half so it never
+ * competes with the title, and drawn in the cover's own 156×214 space so the
+ * whole book scales with its column and nothing needs measuring.
+ *
+ * `variant` shifts an anchor, a spacing or an angle rather than adding a
+ * shape. That is what makes the covers multiply cheaply: three cuts of eight
+ * patterns is twenty-four figures, and there are still only eight ways for
+ * one to look wrong.
+ */
+function Pattern({
+  name,
+  ink,
+  variant,
+}: {
+  name: PatternName;
+  ink: string;
+  variant: number;
+}) {
   if (name === "diagonals") {
+    // Lean, spacing and how far up the cover they reach.
+    const lean = [0, 40, -35][variant];
+    const gap = [40, 52, 34][variant];
     return (
       <g stroke={ink} strokeWidth={14}>
-        <line x1={-30} y1={230} x2={120} y2={60} />
-        <line x1={10} y1={250} x2={170} y2={70} />
-        <line x1={55} y1={265} x2={200} y2={95} />
+        {[0, 1, 2, 3].map((i) => (
+          <line
+            key={i}
+            x1={-30 + i * gap}
+            y1={230}
+            x2={120 + i * gap + lean}
+            y2={60}
+          />
+        ))}
       </g>
     );
   }
   if (name === "arcs") {
+    // Which corner they radiate from.
+    const [cx, cy] = [
+      [150, 200],
+      [6, 200],
+      [78, 240],
+    ][variant];
     return (
       <g fill="none" stroke={ink} strokeWidth={10}>
         {[40, 66, 92, 118].map((r) => (
-          <circle key={r} cx={150} cy={200} r={r} />
+          <circle key={r} cx={cx} cy={cy} r={r} />
         ))}
       </g>
     );
   }
   if (name === "dots") {
+    const r = [7, 5, 9][variant];
+    const step = [36, 26, 44][variant];
+    const rows = [150, 180, 210];
     return (
       <g fill={ink}>
-        {[150, 180, 210].map((cy) =>
-          [34, 70, 106, 142].map((cx) => (
-            <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r={7} />
+        {rows.map((cy) =>
+          Array.from({ length: Math.ceil(156 / step) + 1 }, (_, i) => (
+            <circle key={`${i}-${cy}`} cx={16 + i * step} cy={cy} r={r} />
           )),
         )}
       </g>
     );
   }
   if (name === "bands") {
+    const height = [16, 9, 24][variant];
+    const gap = [28, 20, 40][variant];
     return (
       <g fill={ink}>
-        {[128, 156, 184].map((y) => (
-          <rect key={y} x={0} y={y} width={156} height={16} />
+        {[0, 1, 2].map((i) => (
+          <rect
+            key={i}
+            x={0}
+            y={128 + i * gap}
+            width={156}
+            height={height}
+          />
         ))}
       </g>
     );
   }
+  if (name === "grid") {
+    const step = [26, 34, 20][variant];
+    return (
+      <g stroke={ink} strokeWidth={4}>
+        {Array.from({ length: Math.ceil(156 / step) + 1 }, (_, i) => (
+          <line key={`v${i}`} x1={i * step} y1={120} x2={i * step} y2={214} />
+        ))}
+        {Array.from({ length: Math.ceil(94 / step) + 1 }, (_, i) => (
+          <line key={`h${i}`} x1={0} y1={120 + i * step} x2={156} y2={120 + i * step} />
+        ))}
+      </g>
+    );
+  }
+  if (name === "steps") {
+    const rise = [22, 16, 30][variant];
+    return (
+      <g fill={ink}>
+        {[0, 1, 2, 3].map((i) => (
+          <rect
+            key={i}
+            x={i * 39}
+            y={214 - rise * (i + 1)}
+            width={39}
+            height={rise * (i + 1)}
+          />
+        ))}
+      </g>
+    );
+  }
+  if (name === "columns") {
+    const width = [14, 9, 20][variant];
+    const step = [30, 22, 40][variant];
+    return (
+      <g fill={ink}>
+        {Array.from({ length: Math.ceil(156 / step) + 1 }, (_, i) => (
+          <rect
+            key={i}
+            x={12 + i * step}
+            y={116 + (i % 2) * 18}
+            width={width}
+            height={214}
+          />
+        ))}
+      </g>
+    );
+  }
+  const amp = [50, 32, 66][variant];
+  const gap = [26, 20, 34][variant];
   return (
     <g fill="none" stroke={ink} strokeWidth={9}>
-      {[170, 196, 222].map((y) => (
-        <path
-          key={y}
-          d={`M-10 ${y} Q 40 ${y - 50} 90 ${y} T 190 ${y}`}
-        />
-      ))}
+      {[0, 1, 2].map((i) => {
+        const y = 170 + i * gap;
+        return (
+          <path key={i} d={`M-10 ${y} Q 40 ${y - amp} 90 ${y} T 190 ${y}`} />
+        );
+      })}
     </g>
   );
 }
@@ -118,7 +207,11 @@ export function CollectionBook({ collection }: { collection: Collection }) {
           aria-hidden
         >
           <rect width={156} height={214} fill={cover.bg} />
-          <Pattern name={cover.pattern} ink={cover.ink} />
+          <Pattern
+            name={cover.pattern}
+            ink={cover.ink}
+            variant={cover.variant}
+          />
         </svg>
 
         {/* The sewn edge. */}
@@ -133,28 +226,44 @@ export function CollectionBook({ collection }: { collection: Collection }) {
           style={{ backgroundColor: COVER_INK.spineEdge }}
         />
 
-        {/* A rule over the title, which is a typographic habit older than any
-            of this and the cheapest way to make a cover look set rather than
-            typed. */}
-        <span
-          aria-hidden
-          className="absolute top-8 left-5 h-0.5 w-8"
-          style={{ backgroundColor: COVER_INK.rule }}
-        />
-        <p
-          className="absolute top-11 right-3 left-5 line-clamp-4 text-sm leading-snug font-medium"
-          style={{ color: COVER_INK.title }}
-        >
-          {collection.title}
-        </p>
-        {collection.author && (
+        {/* Title, then a rule under it, then — at the foot — who wrote it and
+            how much of it there is.
+
+            The rule sits UNDER the title rather than over it. Above, it read
+            as a fitting for the block below and pushed the title down the
+            cover; underneath, it closes the title off, which is what a rule
+            in a book actually does. It is also why the title block is a
+            flow-positioned column rather than three absolutes: a rule that
+            has to sit under a title of unknown length cannot be given a
+            coordinate. */}
+        <div className="absolute inset-x-5 top-8 pr-1">
           <p
-            className="absolute right-3 bottom-4 left-5 truncate text-xs"
-            style={{ color: COVER_INK.author }}
+            className="line-clamp-4 text-sm leading-snug font-medium"
+            style={{ color: COVER_INK.title }}
           >
-            {collection.author.display_name}
+            {collection.title}
           </p>
-        )}
+          <span
+            aria-hidden
+            className="mt-2.5 block h-0.5 w-8"
+            style={{ backgroundColor: COVER_INK.rule }}
+          />
+        </div>
+
+        <div
+          className="absolute inset-x-5 bottom-4 pr-1 text-xs"
+          style={{ color: COVER_INK.author }}
+        >
+          {collection.author && (
+            <p className="truncate">{collection.author.display_name}</p>
+          )}
+          {/* "materials", never "papers": in IELTS a paper is the whole exam,
+              and a cover claiming "6 papers" promises six exams. The word is
+              the one the rest of the page uses, so the two agree. */}
+          <p className="tabular-nums">
+            {total} material{total === 1 ? "" : "s"}
+          </p>
+        </div>
       </div>
 
       {/* Under the cover: how far through it the reader is, and nothing else.

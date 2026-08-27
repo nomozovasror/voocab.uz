@@ -89,21 +89,29 @@ export function NextUp({ data }: { data: NextUpData }) {
   const { title, note } = heading(data);
 
   return (
+    // Smaller than it was, and the reason is what it is FOR: it sits above
+    // the catalogue and its whole job is to be looked past by anybody who
+    // already knows what they want. A block that takes a third of the first
+    // screenful is not a suggestion, it is an interruption.
+    //
+    // The heading and its reason are one line rather than two — the reason is
+    // a subordinate clause, and putting it on its own line gave it the weight
+    // of a second claim.
     <section
       aria-label="Suggested materials"
-      className="mb-6 rounded-2xl border border-border-subtle bg-card/40 p-4"
+      className="mb-5 rounded-xl border border-border-subtle bg-card/40 px-3 py-2.5"
     >
-      <div className="flex items-start gap-2.5">
-        <Sparkles className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
-        <div className="min-w-0">
-          <h2 className="text-sm text-foreground">{title}</h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">{note}</p>
-        </div>
-      </div>
+      <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        <span className="inline-flex items-center gap-1.5 text-xs text-foreground">
+          <Sparkles className="size-3.5 shrink-0 text-primary" aria-hidden />
+          {title}
+        </span>
+        <span className="text-xs text-muted-foreground">{note}</span>
+      </p>
 
       {/* Not <ol>. Three suggestions are a set, not a sequence — nothing
           says sit them in this order, and numbering them would say so. */}
-      <ul className="mt-3 space-y-0.5">
+      <ul className="mt-1.5">
         {data.items.map((m) => (
           <li key={m.id}>
             <Suggestion material={m} />
@@ -123,7 +131,7 @@ function Suggestion({ material: m }: { material: PracticeMaterial }) {
   return (
     <Link
       to={`/listening/${m.id}`}
-      className="flex items-center gap-3 rounded-lg px-2 py-2 transition-colors duration-fast hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      className="flex items-center gap-3 rounded-md px-2 py-1.5 transition-colors duration-fast hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
     >
       <span className="min-w-0 flex-1 truncate text-sm text-foreground">
         {m.title}
@@ -172,22 +180,16 @@ export function NextUpSkeleton() {
   return (
     <section
       aria-hidden
-      className="mb-6 rounded-2xl border border-border-subtle bg-card/40 p-4"
+      className="mb-5 rounded-xl border border-border-subtle bg-card/40 px-3 py-2.5"
     >
-      <div className="flex items-start gap-2.5">
-        <Skeleton className="mt-0.5 size-4 shrink-0 rounded-full" />
-        <div className="min-w-0 flex-1">
-          <h2 className="text-sm">
-            <Skeleton className="inline-block h-[0.8em] w-48 max-w-full" />
-          </h2>
-          <p className="mt-0.5 text-xs">
-            <Skeleton className="inline-block h-[0.8em] w-72 max-w-full" />
-          </p>
-        </div>
-      </div>
-      <ul className="mt-3 space-y-0.5">
+      <p className="flex items-center gap-2 text-xs">
+        <Skeleton className="size-3.5 shrink-0 rounded-full" />
+        <Skeleton className="inline-block h-[0.8em] w-32" />
+        <Skeleton className="inline-block h-[0.8em] w-56 max-w-full" />
+      </p>
+      <ul className="mt-1.5">
         {[0, 1, 2].map((i) => (
-          <li key={i} className="flex items-center gap-3 px-2 py-2">
+          <li key={i} className="flex items-center gap-3 px-2 py-1.5">
             <span className="min-w-0 flex-1 text-sm">
               <Skeleton className="inline-block h-[0.8em] w-56 max-w-full" />
             </span>

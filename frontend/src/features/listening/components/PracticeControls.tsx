@@ -262,17 +262,18 @@ function ChipDivider() {
 /**
  * The two lists, and which one is showing.
  *
- * Its own row, above the filters and looking nothing like them, because it is
- * not one of them: a filter narrows a list and this decides which list there
- * is. Inside the filter bar and wearing the same pill, the two read as one
- * set of equal choices — and the reader is left to work out why turning
- * "Courses" on emptied half the row beside it.
+ * A segmented control at the head of the filter bar. It is not a filter — it
+ * decides which list there is rather than narrowing one — but it belongs in
+ * the same row because that is where somebody looks for it, and it earns its
+ * place at the head: everything to its right narrows, and this is the widest
+ * question in the row.
  *
- * Underlined tabs rather than pills for exactly that reason. Nothing else on
- * this page is underlined, so the shape alone says this one is different in
- * kind.
+ * What keeps it from reading as one more chip is the lit background on the
+ * selected side. A chip is on or off against the bar; this is one control
+ * with two halves and one of them always lit, which is a different shape even
+ * before you read it.
  */
-export function ModeTabs({
+function ModeSwitch({
   mode,
   onChange,
 }: {
@@ -283,7 +284,7 @@ export function ModeTabs({
     <div
       role="tablist"
       aria-label="What to show"
-      className="flex items-center gap-6"
+      className="flex items-center gap-0.5"
     >
       {(["materials", "courses"] as const).map((value) => (
         <Button
@@ -295,14 +296,11 @@ export function ModeTabs({
           size="sm"
           onClick={() => onChange(value)}
           className={cn(
-            "h-8 rounded-none px-0 text-sm capitalize hover:bg-transparent",
-            // The indicator is a border on the button rather than a separate
-            // element, so it can never drift out of line with the word it
-            // belongs to.
-            "border-b-2",
+            PILL,
+            "capitalize",
             mode === value
-              ? "border-primary text-foreground"
-              : "border-transparent text-muted-foreground hover:text-foreground",
+              ? "bg-foreground/10 text-foreground hover:bg-foreground/10 hover:text-foreground"
+              : PILL_OFF,
           )}
         >
           {value}
@@ -472,9 +470,9 @@ interface FilterChipsProps {
   filters: PracticeFilterState;
   onChange: (next: Partial<PracticeFilterState>) => void;
   /** Which list is showing. Courses have no part number and no difficulty
-   *  band, so this row swaps to the questions a course can answer. The
-   *  control that changes it is not in here — see `ModeTabs`. */
+   *  band, so this row swaps to the questions a course can answer. */
   mode: ListMode;
+  onMode: (mode: ListMode) => void;
   /** The two multi-selects flip one value rather than being handed a new
    *  list, and that is not a style choice: computing `[...bands, band]` here
    *  reads the array off THIS render, so two toggles landing in one batch
@@ -502,6 +500,7 @@ export function FilterChips({
   filters,
   onChange,
   mode,
+  onMode,
   onToggleBand,
   onToggleType,
   typeOptions,
@@ -579,6 +578,8 @@ export function FilterChips({
       aria-label={mode === "courses" ? "Filter collections" : "Filter materials"}
       className="inline-flex flex-wrap items-center justify-center gap-0.5 rounded-2xl border border-border-subtle bg-card/50 p-1"
     >
+      <ModeSwitch mode={mode} onChange={onMode} />
+
       {/*
         The controls the switch swaps between, stacked in one box that resizes
         to whichever is showing.
@@ -841,11 +842,14 @@ export function ListHeader({
   return (
     <div className="flex items-center justify-between gap-4 px-3 py-1.5">
       <p className="flex items-center gap-2 text-xs text-muted-foreground">
+        {/* The count goes in the foreground as a whole phrase, not just the
+            digit: "8" lit and "materials" greyed reads as a number with a
+            caption, and the answer to "how much is there" is the phrase. */}
         {loading ? (
           <Skeleton className="inline-block h-[0.8em] w-20" />
         ) : (
-          <span>
-            <span className="tabular-nums text-foreground">{count}</span>{" "}
+          <span className="text-foreground">
+            <span className="tabular-nums">{count}</span>{" "}
             material{count === 1 ? "" : "s"}
             {/* Said plainly. "12 done, put away" left the reader to work out
                 both what was put away and by whom — beside "4 materials" it
@@ -884,7 +888,10 @@ export function ListHeader({
             variant="ghost"
             size="xs"
             aria-label={`Sort: ${SORT_LABEL[sort]}`}
-            className="rounded-full px-2 text-xs text-muted-foreground hover:text-foreground"
+            // The order is a live setting, not a note about one. Greyed it
+            // read as a caption on the list; it is a control, and the thing
+            // it currently says is a fact about what is on screen.
+            className="rounded-full px-2 text-xs text-foreground"
           >
             {/* Before the words, not after. It is the handle on the control
                 — what says this is a menu rather than a statement — and read

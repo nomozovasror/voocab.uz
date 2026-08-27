@@ -27,6 +27,11 @@ export interface Cover {
    *  as texture rather than as a second element competing with the title. */
   ink: string;
   pattern: PatternName;
+  /** Which cut of that pattern. The third dimension, and the cheap one: it
+   *  moves an anchor, a spacing or an angle rather than adding a shape, so
+   *  the number of covers multiplies without the number of things that can
+   *  look wrong going up with it. */
+  variant: number;
 }
 
 export type PatternName =
@@ -34,11 +39,20 @@ export type PatternName =
   | "arcs"
   | "dots"
   | "bands"
-  | "waves";
+  | "waves"
+  | "grid"
+  | "steps"
+  | "columns";
 
-/** Seven stocks. Deep teal, plum, olive, brick, indigo, slate, moss — all
- *  dark enough to carry white type at any weight, which is the constraint
- *  that decides the set. */
+/**
+ * Eleven stocks: teal, plum, olive, brick, indigo, slate, moss, aubergine,
+ * rust, petrol, umber.
+ *
+ * All dark enough to carry white type at any weight, which is the constraint
+ * that decides the set rather than taste. Muted rather than saturated, so a
+ * shelf of them sits quietly beside Serika Dark instead of shouting over the
+ * list underneath.
+ */
 const STOCKS: Array<{ bg: string; ink: string }> = [
   { bg: "#2f4a4d", ink: "#3d5f63" },
   { bg: "#4a3c52", ink: "#5f4d6a" },
@@ -47,6 +61,10 @@ const STOCKS: Array<{ bg: string; ink: string }> = [
   { bg: "#33445c", ink: "#425875" },
   { bg: "#3c4046", ink: "#4e535a" },
   { bg: "#37472f", ink: "#475c3c" },
+  { bg: "#43334a", ink: "#57435f" },
+  { bg: "#573f2e", ink: "#6e523c" },
+  { bg: "#2c4552", ink: "#3a5a6b" },
+  { bg: "#463a2c", ink: "#5b4b3a" },
 ];
 
 const PATTERNS: PatternName[] = [
@@ -55,14 +73,22 @@ const PATTERNS: PatternName[] = [
   "dots",
   "bands",
   "waves",
+  "grid",
+  "steps",
+  "columns",
 ];
+
+/** How many cuts of each pattern. Eleven stocks times eight patterns times
+ *  this is how many covers there are — enough that a shelf of two dozen has
+ *  no two alike, which is the whole job. */
+export const VARIANTS = 3;
 
 /**
  * A stable number from an id.
  *
  * The same hash the author avatars use, and for the same reason: a hash
  * rather than an index into the list, so adding a collection never re-covers
- * the existing ones. With `collections.length % 7` every book on the shelf
+ * the existing ones. With `collections.length % 11` every book on the shelf
  * changes colour the day somebody publishes another one.
  */
 function hash(id: string): number {
@@ -76,16 +102,16 @@ function hash(id: string): number {
 /**
  * The cover for one collection.
  *
- * Colour and pattern are drawn from different parts of the hash — shifted
- * rather than taken from the same end — so the two do not move together and
- * seven stocks times five patterns really is thirty-five covers rather than
- * seven.
+ * The three choices are drawn from three different parts of the hash rather
+ * than from the same end, so they do not move together — 11 × 8 × 3 really is
+ * 264 covers and not eleven with decoration.
  */
 export function coverFor(id: string): Cover {
   const value = hash(id);
   const stock = STOCKS[value % STOCKS.length];
-  const pattern = PATTERNS[(value >>> 8) % PATTERNS.length];
-  return { ...stock, pattern };
+  const pattern = PATTERNS[(value >>> 7) % PATTERNS.length];
+  const variant = (value >>> 15) % VARIANTS;
+  return { ...stock, pattern, variant };
 }
 
 /**
