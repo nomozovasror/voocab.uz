@@ -4,6 +4,7 @@ import { Headphones } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useClaimHeaderCentre } from "@/components/layout/header-center";
 import { useDebounced } from "@/hooks/use-debounced";
+import { PREFERENCES, usePreference } from "@/lib/preferences";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useRevealOnScroll } from "@/hooks/use-reveal-on-scroll";
 import { SkeletonBlock } from "@/components/ui/skeleton";
@@ -297,6 +298,17 @@ export default function ListeningPage() {
   //
   // The id rather than the material: the catalogue refetches, and a held
   // object would go on describing a row that had since changed.
+  // Whether the cards follow the list at all. Off unless the reader has
+  // asked for it: the swap answers real questions without a click, and it is
+  // also movement at the edge of vision every time the pointer crosses the
+  // list on its way somewhere else. Which of those it is depends on the
+  // person, and a thing that moves without being asked defaults to not.
+  //
+  // Off, `onPreview` is simply not handed to the rows — one branch rather
+  // than a check in each of the four places a preview can start, so there is
+  // no path by which the panel can move while this is off.
+  const [followList] = usePreference(PREFERENCES.hoverPreview);
+
   const [previewId, setPreviewId] = useState<string | null>(null);
   const preview = useMemo(
     () => visible.find((m) => m.id === previewId) ?? null,
@@ -329,6 +341,15 @@ export default function ListeningPage() {
     handover.current = window.setTimeout(() => setPreviewId(null), delay);
   }, []);
   useEffect(() => () => window.clearTimeout(handover.current), []);
+
+  // Turned off in another tab while a card was describing a row, the card
+  // would otherwise sit there describing it forever — the handlers that would
+  // have put it back are the ones that just went away.
+  useEffect(() => {
+    if (followList) return;
+    window.clearTimeout(handover.current);
+    setPreviewId(null);
+  }, [followList]);
 
   // --- Where the page's ceiling is -----------------------------------------
   //
@@ -708,12 +729,18 @@ export default function ListeningPage() {
                   // leaving half: the pointer crossing between two rows never
                   // leaves the list, so the aside doesn't flicker back to the
                   // statistics on the way past.
-                  onMouseLeave={() => releasePreview(HOVER_OUT)}
-                  onBlur={(e) => {
-                    if (!e.currentTarget.contains(e.relatedTarget)) {
-                      releasePreview();
-                    }
-                  }}
+                  onMouseLeave={
+                    followList ? () => releasePreview(HOVER_OUT) : undefined
+                  }
+                  onBlur={
+                    followList
+                      ? (e) => {
+                          if (!e.currentTarget.contains(e.relatedTarget)) {
+                            releasePreview();
+                          }
+                        }
+                      : undefined
+                  }
                 >
                   {visible.map((m, i) => (
                     <PracticeRow
@@ -724,7 +751,7 @@ export default function ListeningPage() {
                         rowRefs.current[i] = el;
                       }}
                       revealRef={stillness ? undefined : revealRef}
-                      onPreview={showPreview}
+                      onPreview={followList ? showPreview : undefined}
                     />
                   ))}
                 </ol>
@@ -778,6 +805,11 @@ export default function ListeningPage() {
           on the column (`scrollbar-quiet`).
         */}
         <aside
+          // The hold-and-release on the column itself is what lets somebody
+          // reach a link inside a card that is describing a row. With the
+          // cards not following the list there is nothing to hold.
+          onMouseEnter={followList ? holdPreview : undefined}
+          onMouseLeave={followList ? () => releasePreview() : undefined}
           style={
             beside
               ? {
@@ -790,8 +822,6 @@ export default function ListeningPage() {
               : undefined
           }
           className="scrollbar-quiet lg:sticky lg:-mr-3 lg:overflow-y-auto lg:pr-3"
-          onMouseEnter={holdPreview}
-          onMouseLeave={() => releasePreview()}
         >
           <PracticeAside
             stats={stats.data}

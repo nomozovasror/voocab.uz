@@ -124,6 +124,25 @@ that is what keeps the whole feature as small as it is.
   material looks the same in a collection as in the list. A collection is a
   different route to the same thing, not a different thing.
 
+## Preferences default to off
+
+`frontend/src/lib/preferences.ts` holds the reader's small on/off choices, in
+`localStorage` beside the theme — these are about this browser, not the
+account, and none of them is worth a column, a migration and a round trip.
+
+**Every one defaults to off.** A preference exists because somebody wanted the
+behaviour; one that is on before anybody asked is not a preference, it is a
+behaviour with a switch attached. `hoverPreview` (`voocab-hover-preview`) is
+the first: with it off the practice page's cards stay on the reader's own
+statistics and the list is a list.
+
+Wire a preference by *withholding the handler*, not by checking the flag
+inside it — `onPreview={followList ? showPreview : undefined}` — so there is
+no path left by which the behaviour can happen while the preference is off.
+
+The settings page that turns these on is not built yet. Flip one by hand:
+`localStorage.setItem("voocab-hover-preview", "on")`.
+
 ## Loading states (frontend)
 
 Three of the four pieces are structural and need no remembering:
