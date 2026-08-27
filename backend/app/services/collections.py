@@ -269,38 +269,155 @@ async def _authors(
     }
 
 
-async def list_public(
-    session: AsyncSession, user_id: uuid.UUID, *, limit: int = 20
-) -> list[dict]:
-    """Published collections, newest first, each with the caller's progress.
+#: Where a collection sits in the list, by what the reader has done with it.
+#:
+#: This is the whole of the ordering, and it is deliberately not newest-first:
+#: the question a list of courses answers is "carry on with what I was doing",
+#: and a course somebody is halfway through is a better answer to that than
+#: one published yesterday. Finished ones go last rather than being hidden —
+#: they are the record of what has been worked through, and hiding that hides
+#: the reward.
+IN_PROGRESS, NOT_STARTED, FINISHED = 0, 1, 2
 
-    Progress per collection is two queries over a handful of ids, and there
-    are a handful of collections — no projection, no N+1 worth worrying
-    about. The moment there are hundreds of these this wants the same
-    treatment the catalogue got; it is not close.
+
+def _rank(done: int, total: int) -> int:
+    if total == 0 or done == 0:
+        return NOT_STARTED
+    return FINISHED if done >= total else IN_PROGRESS
+
+
+async def _progress_for_many(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    collection_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, dict]:
+    """Everybody's progress through every collection, in two queries.
+
+    It used to be two queries EACH, which is fine at five collections and is
+    2N+2 at any number — the sort of cost that stays invisible until somebody
+    publishes forty courses and the practice page starts taking a second to
+    draw.
+
+    Flat instead: one pass for the ordered items of every collection asked
+    about, one for which of those materials the caller has submitted. The rest
+    is arithmetic.
     """
-    collections = list(
-        (
-            await session.exec(
-                select(Collection)
-                .where(Collection.visibility == "public")
-                .order_by(Collection.created_at.desc())  # type: ignore[attr-defined]
-                .limit(limit)
+    if not collection_ids:
+        return {}
+
+    ordered: dict[uuid.UUID, list[uuid.UUID]] = {cid: [] for cid in collection_ids}
+    material_ids: set[uuid.UUID] = set()
+    for collection_id, material_id in (
+        await session.exec(
+            select(CollectionItem.collection_id, CollectionItem.material_id)
+            .select_from(CollectionItem)
+            .join(Material, Material.id == CollectionItem.material_id)  # type: ignore[arg-type]
+            .where(
+                CollectionItem.collection_id.in_(collection_ids),  # type: ignore[attr-defined]
+                Material.visibility == "public",
             )
-        ).all()
+            .order_by(CollectionItem.collection_id, CollectionItem.order_index)  # type: ignore[arg-type]
+        )
+    ).all():
+        ordered[collection_id].append(material_id)
+        material_ids.add(material_id)
+
+    sat: set[uuid.UUID] = set()
+    if material_ids:
+        sat = set(
+            (
+                await session.exec(
+                    select(Attempt.material_id)
+                    .where(
+                        Attempt.user_id == user_id,
+                        Attempt.material_id.in_(material_ids),  # type: ignore[attr-defined]
+                        Attempt.status == AttemptStatus.SUBMITTED,
+                    )
+                    .distinct()
+                )
+            ).all()
+        )
+
+    out: dict[uuid.UUID, dict] = {}
+    for collection_id, ids in ordered.items():
+        unsat = [mid for mid in ids if mid not in sat]
+        out[collection_id] = {
+            "total": len(ids),
+            "done": len(ids) - len(unsat),
+            "next_material_id": unsat[0] if unsat else None,
+        }
+    return out
+
+
+async def list_public(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    *,
+    query: str = "",
+    limit: int = 20,
+    offset: int = 0,
+) -> dict:
+    """Published collections, ordered by what the reader has done with them.
+
+    In progress first, then untouched, then finished — see :func:`_rank`.
+    Newest-first is the tiebreak inside each group rather than the sort.
+
+    Sorted and paged in Python rather than in SQL, which is a considered
+    exception to how the catalogue works. The rank depends on the caller's
+    attempts crossed with each collection's contents, so ordering by it in SQL
+    means that join in the ORDER BY of every page. Collections are curated by
+    hand and number in the tens where materials number in the thousands, so
+    holding the whole set is cheap and the ordering is exact. The day that
+    stops being true, the shape of this answer — items plus a total — is
+    already the shape the catalogue uses, and the fix is the same one.
+    """
+    statement = select(Collection).where(Collection.visibility == "public")
+    # Title, summary and author, every term having to hit. The same field
+    # searches both lists on the practice page, so it had better find a course
+    # the way it finds a material.
+    for term in query.split():
+        pattern = f"%{term.lower()}%"
+        statement = statement.where(
+            func.lower(Collection.title).like(pattern)
+            | func.lower(Collection.summary).like(pattern)
+            | select(User.id)
+            .where(
+                User.id == Collection.author_id,
+                func.lower(User.display_name).like(pattern),
+            )
+            .exists()
+        )
+
+    collections = list((await session.exec(statement)).all())
+    progress_by_id = await _progress_for_many(
+        session, user_id, [c.id for c in collections]
     )
     authors = await _authors(session, collections)
 
-    rows = []
-    for collection in collections:
-        ids = await _item_ids(session, collection.id, public_only=True)
-        rows.append(
+    def sort_key(collection: Collection):
+        row = progress_by_id.get(collection.id, {"done": 0, "total": 0})
+        # Negated timestamp for newest-first inside a rank, so one key sorts
+        # both without a second pass.
+        return (
+            _rank(row["done"], row["total"]),
+            -(collection.created_at.timestamp() if collection.created_at else 0),
+        )
+
+    collections.sort(key=sort_key)
+
+    return {
+        "items": [
             {
                 **_summarise(collection, authors.get(collection.author_id)),
-                "progress": await progress(session, user_id, ids),
+                "progress": progress_by_id.get(
+                    collection.id,
+                    {"total": 0, "done": 0, "next_material_id": None},
+                ),
             }
-        )
-    return rows
+            for collection in collections[offset : offset + limit]
+        ],
+        "total": len(collections),
+    }
 
 
 async def for_learner(

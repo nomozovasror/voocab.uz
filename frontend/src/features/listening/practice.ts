@@ -158,10 +158,18 @@ export function partLabel(m: PracticeMaterial): string | null {
  */
 export type Scope = "all" | "full" | 1 | 2 | 3 | 4;
 
-export const SCOPE_PARTS: Scope[] = [1, 2, 3, 4];
+/** Every answer to the scope question, in the order the menu offers them.
+ *
+ *  One menu rather than six chips. Six was already the widest thing in the
+ *  filter row, and the row has since gained the control that switches between
+ *  materials and courses — which is a question ABOUT the whole page and has
+ *  to come first. Something had to fold up, and this is the one that folds
+ *  without loss: exactly one of these is ever true, so a menu says what a row
+ *  of chips said, at a sixth of the width. */
+export const SCOPE_OPTIONS: Scope[] = ["all", 1, 2, 3, 4, "full"];
 
 export function scopeLabel(scope: Scope): string {
-  if (scope === "all") return "All";
+  if (scope === "all") return "All parts";
   if (scope === "full") return "Full test";
   return `Part ${scope}`;
 }
@@ -200,6 +208,22 @@ export interface PracticeFilterState {
    *  some in it too. */
   types: QuestionGroupType[];
 }
+
+/**
+ * Which of the two lists the page is showing.
+ *
+ * Not a filter, and it is worth being clear about the difference: a filter
+ * narrows a list, and this changes which list there is. It lives beside the
+ * filters because that is where somebody looks for it, but nothing else in
+ * `PracticeFilterState` applies to courses — a course has no part number and
+ * no difficulty band — so switching to them puts most of the row away rather
+ * than leaving controls that would do nothing.
+ *
+ * The search field is the exception, and the one thing that makes the switch
+ * feel like one page rather than two: the same field searches whichever list
+ * is showing.
+ */
+export type ListMode = "materials" | "courses";
 
 export const EMPTY_FILTERS: PracticeFilterState = {
   scope: "all",

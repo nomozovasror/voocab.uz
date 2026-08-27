@@ -13,7 +13,9 @@ are shared between them.
 
 import uuid
 
-from fastapi import APIRouter, HTTPException, status
+from typing import Annotated
+
+from fastapi import APIRouter, HTTPException, Query, status
 from sqlmodel import select
 
 from app.api.deps import CurrentUser
@@ -26,6 +28,7 @@ from app.schemas.collection import (
     CollectionCreate,
     CollectionDetailOut,
     CollectionItemsIn,
+    CollectionListOut,
     CollectionOut,
     CollectionUpdate,
 )
@@ -59,21 +62,33 @@ async def _load_owned(
 # --- Reading ----------------------------------------------------------------
 
 
-@router.get("/collections", response_model=list[CollectionOut])
+@router.get("/collections", response_model=CollectionListOut)
 async def list_collections(
-    user: CurrentUser, session: SessionDep
-) -> list[CollectionOut]:
-    """Published collections, newest first, each with the caller's progress.
+    user: CurrentUser,
+    session: SessionDep,
+    q: Annotated[str, Query(max_length=200)] = "",
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> CollectionListOut:
+    """Published collections, ordered by what the caller has done with them.
 
-    Not paginated, and that is a judgement rather than an oversight: these are
-    curated by hand and there will be tens of them where there are thousands
-    of materials. The day that stops being true this wants what the catalogue
-    got, and the shape of the answer here already leaves room for it.
+    In progress first, then untouched, then finished. Not newest-first, and
+    that is the whole point of the ordering: what somebody wants from a list
+    of courses is the one they were in the middle of, and only after that the
+    one that is new.
+
+    ``total`` is what makes the small version of this list honest. The
+    practice page shows a handful above the catalogue, and a handful with no
+    idea how many it is a handful OF is a list that looks truncated by
+    accident.
     """
-    return [
-        CollectionOut(**row)
-        for row in await collections_service.list_public(session, user.id)
-    ]
+    page = await collections_service.list_public(
+        session, user.id, query=q.strip(), limit=limit, offset=offset
+    )
+    return CollectionListOut(
+        items=[CollectionOut(**row) for row in page["items"]],
+        total=page["total"],
+    )
 
 
 @router.get("/collections/{collection_id}", response_model=CollectionDetailOut)

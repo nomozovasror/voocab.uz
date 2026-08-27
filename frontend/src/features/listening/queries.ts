@@ -140,11 +140,34 @@ export function usePracticeCatalogue(
 
 const COLLECTIONS_KEY = ["listening-collections"] as const;
 
-/** Published collections with the caller's progress. */
-export function useCollections() {
-  return useQuery({
-    queryKey: COLLECTIONS_KEY,
-    queryFn: () => listeningApi.collections.list(),
+/** How many collections one fetch brings back. Smaller than the catalogue's
+ *  page because a collection card is four lines rather than one, and because
+ *  there are tens of these where there are thousands of materials. */
+export const COLLECTIONS_PAGE = 12;
+
+/**
+ * Published collections, a page at a time.
+ *
+ * Same shape as the catalogue's own infinite query, and for the same reason:
+ * the list is browsable, the count is the server's to know, and appending
+ * beats a page number. Keyed by the search so a query is its own list rather
+ * than a filter applied afterwards.
+ */
+export function useCollections(params: { q?: string } = {}) {
+  return useInfiniteQuery({
+    queryKey: [...COLLECTIONS_KEY, params],
+    queryFn: ({ pageParam }) =>
+      listeningApi.collections.list({
+        ...params,
+        limit: COLLECTIONS_PAGE,
+        offset: pageParam,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((n, page) => n + page.items.length, 0);
+      return loaded < last.total ? loaded : undefined;
+    },
+    placeholderData: keepPreviousData,
     staleTime: 60_000,
   });
 }

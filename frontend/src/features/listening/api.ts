@@ -19,8 +19,8 @@ import type {
   PartOut,
   PartUpdate,
   AuthorCollection,
-  Collection,
   CollectionDetail,
+  CollectionList,
   NextUp,
   PracticeCatalogue,
   QuestionGroupIn,
@@ -159,10 +159,13 @@ export const listeningApi = {
   },
 
   collections: {
-    /** Published collections, newest first, with the caller's progress
-     *  through each. Not paginated: these are curated by hand, and there are
-     *  tens of them where there are thousands of materials. */
-    list: () => api.get<Collection[]>("/api/collections"),
+    /** Published collections with the caller's progress through each.
+     *
+     *  Ordered by that progress rather than by date — in progress, then
+     *  untouched, then finished — because what somebody wants from a list of
+     *  courses is the one they were in the middle of. */
+    list: (params: { q?: string; limit?: number; offset?: number } = {}) =>
+      api.get<CollectionList>("/api/collections", { params }),
     get: (id: string) => api.get<CollectionDetail>(`/api/collections/${id}`),
     /** The caller's own, published or not. */
     mine: () => api.get<AuthorCollection[]>("/api/studio/collections"),

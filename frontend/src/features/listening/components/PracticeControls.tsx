@@ -15,13 +15,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { hasPlatformModifier, isApplePlatform } from "@/lib/platform";
 import {
-  SCOPE_PARTS,
+  SCOPE_OPTIONS,
   SORT_LABEL,
   SORT_ORDER,
   scopeLabel,
 } from "@/features/listening/practice";
 import type {
   FilterOption,
+  ListMode,
   PracticeFilterState,
   Scope,
   SortKey,
@@ -71,6 +72,10 @@ interface SearchFieldProps {
    * noticed afterwards.
    */
   landed?: boolean;
+  /** Which list is being searched. The field is the one control that spans
+   *  both, so it says which one it is pointed at rather than making the
+   *  reader infer it from what comes back. */
+  mode?: ListMode;
 }
 
 export function SearchField({
@@ -79,7 +84,9 @@ export function SearchField({
   onDown,
   count,
   landed = false,
+  mode = "materials",
 }: SearchFieldProps) {
+  const noun = mode === "courses" ? "collection" : "material";
   const input = useRef<HTMLInputElement | null>(null);
   // The hint is only worth drawing where the field is empty and idle. Once
   // there is a query in it, the key cap sits next to the answer to a question
@@ -143,7 +150,11 @@ export function SearchField({
             onDown();
           }
         }}
-        placeholder="Search by title, topic or author"
+        placeholder={
+          mode === "courses"
+            ? "Search collections by title or author"
+            : "Search by title, topic or author"
+        }
         aria-label="Search materials"
         // The count is announced, not drawn: the list header already says it
         // in print, and a screen reader needs to hear that typing changed
@@ -183,7 +194,8 @@ export function SearchField({
         </kbd>
       )}
       <span id="practice-result-count" className="sr-only" aria-live="polite">
-        {count} material{count === 1 ? "" : "s"}
+        {count} {noun}
+        {count === 1 ? "" : "s"}
       </span>
     </div>
   );
@@ -232,9 +244,60 @@ function ChipDivider() {
   return <span aria-hidden className="mx-1.5 h-5 w-px bg-border-subtle" />;
 }
 
+/**
+ * The two lists, and which one is showing.
+ *
+ * A segmented control rather than a tab strip or a pair of links: it is one
+ * question with two answers, and the answer that is true has to be readable
+ * at a glance from across the row. It sits at the head of the filter bar
+ * because it is the widest-scoped thing in it — everything to its right
+ * narrows a list, and this decides which list there is.
+ */
+function ModeSwitch({
+  mode,
+  onChange,
+}: {
+  mode: ListMode;
+  onChange: (mode: ListMode) => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="What to show"
+      className="flex items-center gap-0.5"
+    >
+      {(["materials", "courses"] as const).map((value) => (
+        <Button
+          key={value}
+          type="button"
+          role="tab"
+          aria-selected={mode === value}
+          variant="ghost"
+          size="sm"
+          onClick={() => onChange(value)}
+          className={cn(
+            PILL,
+            "capitalize",
+            mode === value
+              ? "bg-foreground/10 text-foreground hover:bg-foreground/10 hover:text-foreground"
+              : PILL_OFF,
+          )}
+        >
+          {value}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
 interface FilterChipsProps {
   filters: PracticeFilterState;
   onChange: (next: Partial<PracticeFilterState>) => void;
+  /** Which list is showing. Courses have no part number and no difficulty
+   *  band, so most of this row is put away rather than left there doing
+   *  nothing. */
+  mode: ListMode;
+  onMode: (mode: ListMode) => void;
   /** The two multi-selects flip one value rather than being handed a new
    *  list, and that is not a style choice: computing `[...bands, band]` here
    *  reads the array off THIS render, so two toggles landing in one batch
@@ -250,18 +313,14 @@ interface FilterChipsProps {
 export function FilterChips({
   filters,
   onChange,
+  mode,
+  onMode,
   onToggleBand,
   onToggleType,
   typeOptions,
   bandOptions,
 }: FilterChipsProps) {
   const { scope, showDone, bands, types } = filters;
-
-  /** Picking the scope that is already picked clears it. Without this the
-   *  only way out of "Full test" is Clear filters, which also throws away the
-   *  search and everything else the reader had set. */
-  const pickScope = (next: Scope) =>
-    onChange({ scope: scope === next ? "all" : next });
 
   return (
     // One bar rather than chips loose on the page: it says the row is a set
@@ -279,59 +338,113 @@ export function FilterChips({
       aria-label="Filter materials"
       className="inline-flex flex-wrap items-center justify-center gap-0.5 rounded-2xl border border-border-subtle bg-card/50 p-1"
     >
-      <Chip active={scope === "all"} onClick={() => onChange({ scope: "all" })}>
-        All
-      </Chip>
-      {SCOPE_PARTS.map((part) => (
-        <Chip key={part} active={scope === part} onClick={() => pickScope(part)}>
-          {scopeLabel(part)}
-        </Chip>
-      ))}
+      <ModeSwitch mode={mode} onChange={onMode} />
 
-      <ChipDivider />
+      {/* Everything past here narrows the CATALOGUE. A course has no part
+          number, no question type and no difficulty band, so in that mode the
+          row is the switch and nothing else — controls that would do nothing
+          are worse than no controls, because they invite a click that has no
+          effect and teach the reader the page is broken. */}
+      {mode === "materials" && (
+        <>
+          <ChipDivider />
 
-      <Chip active={scope === "full"} onClick={() => pickScope("full")}>
-        Full test
-      </Chip>
-      {/* The one chip that starts the list off narrower than the catalogue.
-          It reads as what it does rather than as what it hides — "Show done"
-          off is a list of what there is left to practise, which is the
-          question the page is here to answer. */}
-      <Chip
-        active={showDone}
-        onClick={() => onChange({ showDone: !showDone })}
-      >
-        Show done
-      </Chip>
+          <ScopeMenu
+            scope={scope}
+            onChange={(next) => onChange({ scope: next })}
+          />
+          {/* The one chip that starts the list off narrower than the
+              catalogue. It reads as what it does rather than as what it hides
+              — "Show done" off is a list of what there is left to practise,
+              which is the question the page is here to answer. */}
+          <Chip
+            active={showDone}
+            onClick={() => onChange({ showDone: !showDone })}
+          >
+            Show done
+          </Chip>
 
-      {(typeOptions.length > 0 || bandOptions.length > 0) && <ChipDivider />}
+          {(typeOptions.length > 0 || bandOptions.length > 0) && <ChipDivider />}
 
-      {/* Absent while the catalogue is still loading, and on the day it holds
-          nothing — a menu whose every option returns nothing is a dead end
-          dressed as a choice. */}
-      {typeOptions.length > 0 && (
-        <MultiSelectMenu
-          name="Question type"
-          plural="question types"
-          options={typeOptions}
-          selected={types}
-          onToggle={onToggleType}
-          onClear={() => onChange({ types: [] })}
-          className="w-60"
-        />
-      )}
-      {bandOptions.length > 0 && (
-        <MultiSelectMenu
-          name="Difficulty"
-          plural="levels"
-          options={bandOptions}
-          selected={bands}
-          onToggle={onToggleBand}
-          onClear={() => onChange({ bands: [] })}
-          className="w-44"
-        />
+          {/* Absent while the catalogue is still loading, and on the day it
+              holds nothing — a menu whose every option returns nothing is a
+              dead end dressed as a choice. */}
+          {typeOptions.length > 0 && (
+            <MultiSelectMenu
+              name="Question type"
+              plural="question types"
+              options={typeOptions}
+              selected={types}
+              onToggle={onToggleType}
+              onClear={() => onChange({ types: [] })}
+              className="w-60"
+            />
+          )}
+          {bandOptions.length > 0 && (
+            <MultiSelectMenu
+              name="Difficulty"
+              plural="levels"
+              options={bandOptions}
+              selected={bands}
+              onToggle={onToggleBand}
+              onClear={() => onChange({ bands: [] })}
+              className="w-44"
+            />
+          )}
+        </>
       )}
     </div>
+  );
+}
+
+/**
+ * The scope, as one menu.
+ *
+ * Radio rather than checkbox, because these are six answers to one question
+ * ("which materials") and exactly one is true at a time — which is also why
+ * "All parts" is an option in the list rather than a clear button underneath
+ * it: going back to everything is picking an answer, not undoing one.
+ */
+function ScopeMenu({
+  scope,
+  onChange,
+}: {
+  scope: Scope;
+  onChange: (scope: Scope) => void;
+}) {
+  const narrowed = scope !== "all";
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className={cn(PILL, narrowed ? PILL_ON : PILL_OFF)}
+        >
+          {scopeLabel(scope)}
+          <ChevronDown className="size-3" aria-hidden />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-40">
+        <DropdownMenuRadioGroup
+          value={String(scope)}
+          onValueChange={(value) =>
+            onChange(
+              value === "all" || value === "full"
+                ? value
+                : (Number(value) as Scope),
+            )
+          }
+        >
+          {SCOPE_OPTIONS.map((option) => (
+            <DropdownMenuRadioItem key={option} value={String(option)}>
+              {scopeLabel(option)}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

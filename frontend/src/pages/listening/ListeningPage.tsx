@@ -27,6 +27,7 @@ import {
   toggle,
 } from "@/features/listening/practice";
 import type {
+  ListMode,
   PracticeFilterState,
   Scope,
   SortKey,
@@ -54,6 +55,7 @@ import {
   CollectionStrip,
   CollectionStripSkeleton,
 } from "@/features/listening/components/CollectionStrip";
+import { CollectionList } from "@/features/listening/components/CollectionList";
 
 /** How long the pointer has to rest on a row before the cards answer it, and
  *  how long they wait before turning back once it leaves. Module constants so
@@ -100,7 +102,6 @@ const BOTTOM_GAP = 16;
 export default function ListeningPage() {
   const stats = usePracticeStats();
   const nextUp = useNextUp();
-  const collections = useCollections();
 
   // One value rather than a useState per control: every one of them narrows
   // the same list, "clear filters" has to put all of them back at once, and
@@ -113,6 +114,10 @@ export default function ListeningPage() {
   // reader who asked for easiest-first did not ask for that to be undone by
   // dropping a part chip.
   const [sort, setSort] = useState<SortKey>("newest");
+  // Which of the two lists is showing. Not part of `filters`, because it does
+  // not narrow a list — it changes which list there is, and "Clear filters"
+  // has no business putting somebody back on the other one.
+  const [mode, setMode] = useState<ListMode>("materials");
   const change = useCallback(
     (next: Partial<PracticeFilterState>) =>
       setFilters((prev) => ({ ...prev, ...next })),
@@ -153,6 +158,21 @@ export default function ListeningPage() {
     () => catalogueParams({ ...filters, query: settledQuery }, sort),
     [filters, settledQuery, sort],
   );
+  // The strip and the courses list are the same query, deliberately: given
+  // the same parameters they share a cache entry, so switching to courses
+  // draws the list from what the strip already fetched instead of asking
+  // again. The search only applies in courses mode — the strip is a shortlist
+  // above the CATALOGUE, and narrowing it by a search meant for materials
+  // would be answering a question nobody asked.
+  const collectionParams = useMemo(
+    () =>
+      mode === "courses" && settledQuery.trim()
+        ? { q: settledQuery.trim() }
+        : {},
+    [mode, settledQuery],
+  );
+  const collections = useCollections(collectionParams);
+
   const {
     data,
     isLoading,
@@ -171,6 +191,9 @@ export default function ListeningPage() {
     () => data?.pages.flatMap((page) => page.items) ?? [],
     [data],
   );
+  // What the courses list found, for the field's own announcement. That list
+  // holds its own rows; this page only needs the number.
+  const coursesTotal = collections.data?.pages[0]?.total ?? 0;
   // Off the first page, because every page carries the same answer: these
   // describe the library, not what came back.
   const head = data?.pages[0];
@@ -450,8 +473,9 @@ export default function ListeningPage() {
             value={filters.query}
             onChange={(query) => change({ query })}
             onDown={() => focusRow(0)}
-            count={total}
+            count={mode === "courses" ? coursesTotal : total}
             landed={inHeader}
+            mode={mode}
           />
         </div>
 
@@ -459,6 +483,8 @@ export default function ListeningPage() {
           <FilterChips
             filters={filters}
             onChange={change}
+            mode={mode}
+            onMode={setMode}
             onToggleBand={toggleBand}
             onToggleType={toggleType}
             typeOptions={typeOptions}
@@ -487,7 +513,16 @@ export default function ListeningPage() {
           anything the reader is looking at.
         */}
         <div className="min-h-svh min-w-0 [overflow-anchor:none]">
-          {isError ? (
+          {mode === "courses" ? (
+            /* The other list. It gets the same column and the same treatment
+               — one field above it, one rule between rows — because the
+               control that got here is a switch and not a link: the page did
+               not change, the list did. */
+            <CollectionList
+              query={settledQuery}
+              revealRef={stillness ? undefined : revealRef}
+            />
+          ) : isError ? (
             <div className="mt-6 rounded-xl border border-dashed border-border px-5 py-12 text-center">
               <p className="text-sm text-muted-foreground">
                 {getErrorMessage(error) ||
@@ -559,7 +594,13 @@ export default function ListeningPage() {
                   {collections.isLoading ? (
                     <CollectionStripSkeleton />
                   ) : collections.data ? (
-                    <CollectionStrip collections={collections.data} />
+                    <CollectionStrip
+                      collections={collections.data.pages[0]?.items ?? []}
+                      total={collections.data.pages[0]?.total ?? 0}
+                      // The way to the rest is the switch above, not more
+                      // rail. One list, reached two ways.
+                      onSeeAll={() => setMode("courses")}
+                    />
                   ) : null}
                   {nextUp.isLoading ? (
                     <NextUpSkeleton />

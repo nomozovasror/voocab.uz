@@ -84,6 +84,19 @@ class CollectionOut(BaseModel):
     progress: CollectionProgressOut
 
 
+class CollectionListOut(BaseModel):
+    """One page of collections, and how many there are.
+
+    A total rather than just the rows, for the same reason the catalogue
+    carries one: a list quietly shorter than the library is a list that looks
+    broken, and the strip on the practice page shows a handful and has to be
+    able to say how many it is a handful OF.
+    """
+
+    items: list[CollectionOut] = []
+    total: int
+
+
 class CollectionDetailOut(CollectionOut):
     """One collection, opened.
 

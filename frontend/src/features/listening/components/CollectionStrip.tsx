@@ -19,7 +19,20 @@ import type { Collection } from "@/features/listening/types";
  * up for anything. So a card is never a commitment: opening one costs
  * nothing, abandoning it leaves nothing behind, and a course they wandered
  * into last month still shows exactly what they did.
+ *
+ * **A shortlist, not a browser.** It shows a handful and says how many there
+ * are, and the way to the rest is the switch above the list rather than more
+ * rail. A rail is a bad place to look for something — three cards fit, the
+ * scrollbar hides until it is reached for, and a mouse wheel cannot move it
+ * sideways at all — so past a handful it stops being a display and becomes a
+ * hiding place. The server orders these so the handful is the useful one: in
+ * progress first, then untouched, then finished.
  */
+
+/** How many the rail shows before deferring to the full list. Six is two
+ *  screenfuls of rail at this card width — enough that scrolling it is
+ *  worthwhile, few enough that scrolling it ends. */
+export const STRIP_SIZE = 6;
 
 /** A bar, and only where it means something.
  *
@@ -104,19 +117,39 @@ function CollectionCard({ collection }: { collection: Collection }) {
 
 export function CollectionStrip({
   collections,
+  total,
+  onSeeAll,
 }: {
   collections: Collection[];
+  /** How many there are in all — not how many are shown. Without it the rail
+   *  is silently truncated, which is the same bug the catalogue's own count
+   *  exists to avoid. */
+  total: number;
+  onSeeAll: () => void;
 }) {
   // Nothing published yet is not a state worth drawing. An empty rail with a
   // heading over it is the page announcing a feature rather than offering
   // one, and on a young library that is most of what the reader would see.
   if (collections.length === 0) return null;
 
+  const shown = collections.slice(0, STRIP_SIZE);
+
   return (
     <section aria-label="Collections" className="mb-6">
       <div className="mb-2 flex items-center gap-2">
         <Library className="size-4 text-muted-foreground" aria-hidden />
         <h2 className="text-sm text-foreground">Courses and sets</h2>
+        {/* Only once there is more than is showing. "See all 4" over four
+            cards is a button that goes nowhere new. */}
+        {total > shown.length && (
+          <button
+            type="button"
+            onClick={onSeeAll}
+            className="ml-auto rounded text-xs text-primary transition-colors hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            See all {total}
+          </button>
+        )}
       </div>
       {/* Sideways, with the scrollbar out of the way until reached for. A
           wrapping grid would push the catalogue below the fold the day
@@ -133,7 +166,7 @@ export function CollectionStrip({
           "snap-x snap-mandatory [&>*]:snap-start",
         )}
       >
-        {collections.map((collection) => (
+        {shown.map((collection) => (
           <CollectionCard key={collection.id} collection={collection} />
         ))}
       </div>

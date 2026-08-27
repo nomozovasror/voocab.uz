@@ -477,6 +477,15 @@ export interface Collection {
   progress: CollectionProgress;
 }
 
+/** One page of collections, and how many there are.
+ *
+ *  A total rather than only the rows, for the same reason the catalogue
+ *  carries one: a list quietly shorter than the library looks broken. */
+export interface CollectionList {
+  items: Collection[];
+  total: number;
+}
+
 /** One collection, opened. `items` are the catalogue's own rows — same
  *  measured difficulty, same history, same byline — because a collection is a
  *  different route to the same thing, not a different thing. */

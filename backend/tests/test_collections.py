@@ -412,7 +412,7 @@ async def test_an_unpublished_collection_is_invisible_to_everyone_else() -> None
             # public list is what is published, and the studio list is where
             # an author finds their own.
             r = await client.get("/api/collections", cookies={"access_token": my_token})
-            assert all(x["id"] != collection_id for x in r.json())
+            assert all(x["id"] != collection_id for x in r.json()["items"])
     finally:
         await _cleanup([], mine, theirs)
 
@@ -539,5 +539,150 @@ async def test_deleting_a_collection_leaves_its_materials_alone() -> None:
                 )
             ).all()
             assert items == []
+    finally:
+        await _cleanup([material.id], email)
+
+
+@pytest.mark.asyncio
+async def test_the_list_leads_with_what_is_half_finished() -> None:
+    """In progress, then untouched, then finished.
+
+    Not newest-first, and the difference is the point: what somebody wants
+    from a list of courses is the one they were in the middle of, and only
+    after that the one that is new. Finished ones go last rather than being
+    hidden — they are the record of what has been worked through.
+    """
+    email = f"coll-rank-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    token = create_access_token(str(user.id))
+    made = [
+        await _material(user.id, f"Rank {i} {uuid.uuid4()}", "public")
+        for i in range(3)
+    ]
+
+    try:
+        async with _client() as client:
+            # Created oldest to newest: finished, untouched, half-done. If the
+            # order were by date this would come back exactly reversed.
+            finished = await _make(client, token, f"ZZfinished {uuid.uuid4().hex[:6]}")
+            untouched = await _make(client, token, f"ZZuntouched {uuid.uuid4().hex[:6]}")
+            halfway = await _make(client, token, f"ZZhalfway {uuid.uuid4().hex[:6]}")
+
+            for collection_id, ids in (
+                (finished, [made[0].id]),
+                (untouched, [made[1].id]),
+                (halfway, [made[1].id, made[2].id]),
+            ):
+                await client.put(
+                    f"/api/collections/{collection_id}/items",
+                    json={"material_ids": [str(m) for m in ids]},
+                    cookies={"access_token": token},
+                )
+                await client.patch(
+                    f"/api/collections/{collection_id}",
+                    json={"visibility": "public"},
+                    cookies={"access_token": token},
+                )
+
+            await _sit(user.id, made[0].id)  # finishes the first
+            await _sit(user.id, made[2].id)  # one of the two in `halfway`
+
+            r = await client.get(
+                "/api/collections",
+                params={"q": "ZZ"},
+                cookies={"access_token": token},
+            )
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["total"] == 3
+            assert [x["id"] for x in body["items"]] == [halfway, untouched, finished]
+    finally:
+        await _cleanup([m.id for m in made], email)
+
+
+@pytest.mark.asyncio
+async def test_a_page_of_collections_still_says_how_many_there_are() -> None:
+    """The strip on the practice page shows a handful. A handful with no idea
+    how many it is a handful OF looks truncated by accident."""
+    email = f"coll-page-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    token = create_access_token(str(user.id))
+    material = await _material(user.id, f"Paged {uuid.uuid4()}", "public")
+    tag = f"YY{uuid.uuid4().hex[:6]}"
+
+    try:
+        async with _client() as client:
+            for i in range(3):
+                collection_id = await _make(client, token, f"{tag} course {i}")
+                await client.put(
+                    f"/api/collections/{collection_id}/items",
+                    json={"material_ids": [str(material.id)]},
+                    cookies={"access_token": token},
+                )
+                await client.patch(
+                    f"/api/collections/{collection_id}",
+                    json={"visibility": "public"},
+                    cookies={"access_token": token},
+                )
+
+            r = await client.get(
+                "/api/collections",
+                params={"q": tag, "limit": 2},
+                cookies={"access_token": token},
+            )
+            assert len(r.json()["items"]) == 2
+            assert r.json()["total"] == 3
+
+            seen = []
+            for offset in (0, 2):
+                r = await client.get(
+                    "/api/collections",
+                    params={"q": tag, "limit": 2, "offset": offset},
+                    cookies={"access_token": token},
+                )
+                seen += [x["id"] for x in r.json()["items"]]
+            assert len(set(seen)) == 3
+    finally:
+        await _cleanup([material.id], email)
+
+
+@pytest.mark.asyncio
+async def test_collections_are_searchable_by_title_and_by_author() -> None:
+    """The same field searches both lists, so it had better find a course the
+    way it finds a material."""
+    email = f"coll-search-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    token = create_access_token(str(user.id))
+    material = await _material(user.id, f"Searchable {uuid.uuid4()}", "public")
+    tag = uuid.uuid4().hex[:8]
+
+    try:
+        async with _client() as client:
+            collection_id = await _make(client, token, f"Riverside {tag} set")
+            await client.put(
+                f"/api/collections/{collection_id}/items",
+                json={"material_ids": [str(material.id)]},
+                cookies={"access_token": token},
+            )
+            await client.patch(
+                f"/api/collections/{collection_id}",
+                json={"visibility": "public"},
+                cookies={"access_token": token},
+            )
+
+            for query in (tag, f"{tag} riverside", f"{tag} Collections"):
+                r = await client.get(
+                    "/api/collections",
+                    params={"q": query},
+                    cookies={"access_token": token},
+                )
+                assert r.json()["total"] == 1, query
+
+            r = await client.get(
+                "/api/collections",
+                params={"q": f"{tag} nothing"},
+                cookies={"access_token": token},
+            )
+            assert r.json()["total"] == 0
     finally:
         await _cleanup([material.id], email)
