@@ -24,6 +24,7 @@ from app.main import app
 from app.models.attempt import Attempt, AttemptStatus
 from app.models.collection import Collection, CollectionItem
 from app.models.material import Material
+from app.models.part import Part
 from app.models.user import User
 
 
@@ -95,6 +96,15 @@ async def _cleanup(material_ids: list[uuid.UUID], *emails: str) -> None:
                 )
             ).all():
                 await session.delete(item)
+            await session.flush()
+            # Parts, where a test gave the material any. Nothing here builds
+            # question groups, so a part is the deepest this ever goes.
+            for part in (
+                await session.exec(
+                    select(Part).where(Part.material_id == material_id)
+                )
+            ).all():
+                await session.delete(part)
             await session.flush()
             material = await session.get(Material, material_id)
             if material is not None:
@@ -762,3 +772,198 @@ async def test_a_status_the_endpoint_does_not_have_is_refused() -> None:
         )
         assert r.status_code == 422
     await _cleanup([], email)
+
+
+async def _material_with_parts(
+    author_id: uuid.UUID, title: str, parts: list[int]
+) -> Material:
+    """A public material holding exactly the named parts. Built directly: what
+    is under test is which collections cover what, not the authoring flow."""
+    from app.models.part import Part
+
+    material = await _material(author_id, title, "public")
+    async with async_session_factory() as session:
+        for number in parts:
+            session.add(
+                Part(
+                    material_id=material.id,
+                    order_index=number - 1,
+                    title=f"Part {number}",
+                )
+            )
+        await session.commit()
+    return material
+
+
+@pytest.mark.asyncio
+async def test_covers_finds_the_course_that_drills_a_part() -> None:
+    """The catalogue's own part filter, asked of a route through several
+    papers: does this course have Part 3 in it. A whole paper answers to its
+    parts AND to "full", because a mock-test set and a Part 3 drill are two
+    different things somebody might be looking for."""
+    email = f"coll-covers-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    token = create_access_token(str(user.id))
+    part_three = await _material_with_parts(user.id, f"P3 {uuid.uuid4()}", [3])
+    whole = await _material_with_parts(user.id, f"Whole {uuid.uuid4()}", [1, 2, 3, 4])
+    made = [part_three, whole]
+    tag = f"CV{uuid.uuid4().hex[:6]}"
+
+    try:
+        async with _client() as client:
+            drill = await _make(client, token, f"{tag} part three drill")
+            mocks = await _make(client, token, f"{tag} mock tests")
+            for collection_id, ids in ((drill, [part_three.id]), (mocks, [whole.id])):
+                await client.put(
+                    f"/api/collections/{collection_id}/items",
+                    json={"material_ids": [str(m) for m in ids]},
+                    cookies={"access_token": token},
+                )
+                await client.patch(
+                    f"/api/collections/{collection_id}",
+                    json={"visibility": "public"},
+                    cookies={"access_token": token},
+                )
+
+            async def ids_for(**params) -> list[str]:
+                r = await client.get(
+                    "/api/collections",
+                    params={"q": tag, **params},
+                    cookies={"access_token": token},
+                )
+                assert r.status_code == 200, r.text
+                return [x["id"] for x in r.json()["items"]]
+
+            assert sorted(await ids_for(covers="3")) == sorted([drill, mocks])
+            assert await ids_for(covers="1") == [mocks]
+            # Only the whole paper is a full test; a Part 3 drill is not one.
+            assert await ids_for(covers="full") == [mocks]
+    finally:
+        await _cleanup([m.id for m in made], email)
+
+
+@pytest.mark.asyncio
+async def test_length_bands_and_their_counts() -> None:
+    """How much of somebody's life a course wants, at a glance. The facet
+    counts come from every published collection rather than from what the
+    other filters left, so a menu can never offer an option that returns
+    nothing."""
+    email = f"coll-length-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    token = create_access_token(str(user.id))
+    made = [
+        await _material(user.id, f"Len {i} {uuid.uuid4()}", "public")
+        for i in range(7)
+    ]
+    tag = f"LN{uuid.uuid4().hex[:6]}"
+
+    try:
+        async with _client() as client:
+            short = await _make(client, token, f"{tag} short")
+            medium = await _make(client, token, f"{tag} medium")
+            for collection_id, ids in (
+                (short, [m.id for m in made[:3]]),
+                (medium, [m.id for m in made]),
+            ):
+                await client.put(
+                    f"/api/collections/{collection_id}/items",
+                    json={"material_ids": [str(m) for m in ids]},
+                    cookies={"access_token": token},
+                )
+                await client.patch(
+                    f"/api/collections/{collection_id}",
+                    json={"visibility": "public"},
+                    cookies={"access_token": token},
+                )
+
+            r = await client.get(
+                "/api/collections",
+                params={"q": tag, "length": "short"},
+                cookies={"access_token": token},
+            )
+            assert [x["id"] for x in r.json()["items"]] == [short]
+            assert r.json()["total"] == 1
+            # A menu's own dimension is excluded from its own counts, so
+            # picking Short does not collapse the length menu to Short: every
+            # option still reports the list it would give.
+            lengths = {row["value"]: row["count"] for row in r.json()["lengths"]}
+            assert lengths["short"] >= 1 and lengths["medium"] >= 1
+
+            r = await client.get(
+                "/api/collections",
+                params={"q": tag, "length": "long"},
+                cookies={"access_token": token},
+            )
+            assert r.json()["total"] == 0
+    finally:
+        await _cleanup([m.id for m in made], email)
+
+
+@pytest.mark.asyncio
+async def test_a_filter_value_the_endpoint_does_not_have_is_refused() -> None:
+    email = f"coll-badfilter-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    token = create_access_token(str(user.id))
+    async with _client() as client:
+        for params in ({"covers": "9"}, {"length": "epic"}):
+            r = await client.get(
+                "/api/collections", params=params, cookies={"access_token": token}
+            )
+            assert r.status_code == 422, params
+    await _cleanup([], email)
+
+
+@pytest.mark.asyncio
+async def test_a_facet_count_is_the_list_one_click_away() -> None:
+    """Each count is what that option would leave GIVEN what else is set.
+
+    The alternative — counting over the whole library — is what the catalogue
+    does, and it is wrong here: with a dozen courses and three menus over
+    them, a count that promised twelve and delivered none would be worse than
+    no count at all.
+    """
+    email = f"coll-facet-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    token = create_access_token(str(user.id))
+    part_one = await _material_with_parts(user.id, f"F1 {uuid.uuid4()}", [1])
+    part_two = await _material_with_parts(user.id, f"F2 {uuid.uuid4()}", [2])
+    made = [part_one, part_two]
+    tag = f"FC{uuid.uuid4().hex[:6]}"
+
+    try:
+        async with _client() as client:
+            ones = await _make(client, token, f"{tag} part ones")
+            twos = await _make(client, token, f"{tag} part twos")
+            for collection_id, ids in ((ones, [part_one.id]), (twos, [part_two.id])):
+                await client.put(
+                    f"/api/collections/{collection_id}/items",
+                    json={"material_ids": [str(m) for m in ids]},
+                    cookies={"access_token": token},
+                )
+                await client.patch(
+                    f"/api/collections/{collection_id}",
+                    json={"visibility": "public"},
+                    cookies={"access_token": token},
+                )
+
+            # Unfiltered, both parts are on offer.
+            r = await client.get(
+                "/api/collections",
+                params={"q": tag},
+                cookies={"access_token": token},
+            )
+            covers = {row["value"]: row["count"] for row in r.json()["covers"]}
+            assert covers["1"] == 1 and covers["2"] == 1
+
+            # Narrowed to Finished — nothing has been sat — every option
+            # honestly reports nothing, rather than still advertising two.
+            r = await client.get(
+                "/api/collections",
+                params={"q": tag, "status": "finished"},
+                cookies={"access_token": token},
+            )
+            covers = {row["value"]: row["count"] for row in r.json()["covers"]}
+            assert covers["1"] == 0 and covers["2"] == 0
+            assert r.json()["total"] == 0
+    finally:
+        await _cleanup([m.id for m in made], email)

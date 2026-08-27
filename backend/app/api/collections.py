@@ -70,6 +70,8 @@ async def list_collections(
     status: Annotated[
         str, Query(pattern="^(all|in_progress|not_started|finished)$")
     ] = "all",
+    covers: Annotated[str, Query(pattern="^(all|[1-4]|full)$")] = "all",
+    length: Annotated[str, Query(pattern="^(all|short|medium|long)$")] = "all",
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> CollectionListOut:
@@ -79,6 +81,12 @@ async def list_collections(
     that is the whole point of the ordering: what somebody wants from a list
     of courses is the one they were in the middle of, and only after that the
     one that is new.
+
+    ``covers`` narrows to courses that drill one part of the paper, or to
+    mock-test sets; ``length`` to how much of somebody's life a course wants.
+    Both come back as facet counts, and each count is what that option would
+    leave given whatever else is set — so a menu can never offer an option
+    that returns nothing.
 
     ``total`` is what makes the small version of this list honest. The
     practice page shows a handful above the catalogue, and a handful with no
@@ -90,12 +98,16 @@ async def list_collections(
         user.id,
         query=q.strip(),
         status=status,
+        covers=covers,
+        length=length,
         limit=limit,
         offset=offset,
     )
     return CollectionListOut(
         items=[CollectionOut(**row) for row in page["items"]],
         total=page["total"],
+        covers=page["covers"],
+        lengths=page["lengths"],
     )
 
 

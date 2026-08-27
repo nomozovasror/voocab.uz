@@ -16,6 +16,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { hasPlatformModifier, isApplePlatform } from "@/lib/platform";
 import {
+  COURSE_COVERS_LABEL,
+  COURSE_COVERS_ORDER,
+  COURSE_LENGTH_LABEL,
+  COURSE_LENGTH_ORDER,
   COURSE_STATUS_LABEL,
   COURSE_STATUS_ORDER,
   SCOPE_OPTIONS,
@@ -24,6 +28,8 @@ import {
   scopeLabel,
 } from "@/features/listening/practice";
 import type {
+  CourseCovers,
+  CourseLength,
   CourseStatus,
   FilterOption,
   ListMode,
@@ -33,6 +39,7 @@ import type {
 } from "@/features/listening/practice";
 import type {
   DifficultyBand,
+  PracticeFacet,
   QuestionGroupType,
 } from "@/features/listening/types";
 
@@ -385,6 +392,75 @@ function StatusMenu({
   );
 }
 
+/**
+ * A menu of one-of-many answers, with how many rows each would leave.
+ *
+ * The counts are the difference between a filter and a trap. There are a
+ * dozen courses and three menus over them, so a list is one click from empty
+ * — and an option that returns nothing is a dead end dressed as a choice.
+ * Anything the library does not hold is simply not offered.
+ *
+ * "Any …" is an option in the list rather than a clear button beneath it:
+ * going back to everything is picking an answer, not undoing one.
+ */
+function CountedMenu<T extends string>({
+  value,
+  anyLabel,
+  options,
+  labels,
+  counts,
+  onChange,
+  width,
+}: {
+  value: T | "all";
+  anyLabel: string;
+  options: readonly T[];
+  labels: Record<T | "all", string>;
+  counts: PracticeFacet[];
+  onChange: (value: T | "all") => void;
+  width: string;
+}) {
+  const byValue = new Map(counts.map((row) => [row.value, row.count]));
+  const offered = options.filter((option) => (byValue.get(option) ?? 0) > 0);
+
+  // Nothing to choose between is not a menu. On a young library every course
+  // is a Part 1 drill, and a menu whose one option is the whole list is a
+  // control that can only ever do nothing.
+  if (offered.length === 0) return null;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className={cn(PILL, value !== "all" ? PILL_ON : PILL_OFF)}
+        >
+          {value === "all" ? anyLabel : labels[value]}
+          <ChevronDown className="size-3" aria-hidden />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className={width}>
+        <DropdownMenuRadioGroup
+          value={value}
+          onValueChange={(next) => onChange(next as T | "all")}
+        >
+          <DropdownMenuRadioItem value="all">{anyLabel}</DropdownMenuRadioItem>
+          {offered.map((option) => (
+            <DropdownMenuRadioItem key={option} value={option}>
+              <span className="flex-1">{labels[option]}</span>
+              <span className="tabular-nums text-muted-foreground">
+                {byValue.get(option)}
+              </span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 interface FilterChipsProps {
   filters: PracticeFilterState;
   onChange: (next: Partial<PracticeFilterState>) => void;
@@ -403,9 +479,17 @@ interface FilterChipsProps {
   /** Only what the catalogue actually holds, with counts. */
   typeOptions: FilterOption<QuestionGroupType>[];
   bandOptions: FilterOption<DifficultyBand>[];
-  /** The courses list's one filter — see `CourseStatus`. */
+  /** The courses list's own filters, and what there is to filter by. Three
+   *  different questions: where the reader is with a course, which part of
+   *  the paper it drills, and how much of their life it wants. */
   status: CourseStatus;
   onStatus: (status: CourseStatus) => void;
+  covers: CourseCovers;
+  onCovers: (covers: CourseCovers) => void;
+  length: CourseLength;
+  onLength: (length: CourseLength) => void;
+  coverOptions: PracticeFacet[];
+  lengthOptions: PracticeFacet[];
 }
 
 export function FilterChips({
@@ -419,6 +503,12 @@ export function FilterChips({
   bandOptions,
   status,
   onStatus,
+  covers,
+  onCovers,
+  length,
+  onLength,
+  coverOptions,
+  lengthOptions,
 }: FilterChipsProps) {
   const { scope, showDone, bands, types } = filters;
 
@@ -556,9 +646,34 @@ export function FilterChips({
           )}
         </Group>
 
+        {/* The same four questions the catalogue's row asks, in the same
+            order, about a course instead of a paper: which part of the paper
+            it drills, where the reader is with it, and what is in it. That
+            the two rows come out near enough the same width is a consequence
+            rather than the aim — but it is why the swap reads as one row
+            changing its mind. */}
         <Group ref={coursesRef} active={mode === "courses"}>
           <ChipDivider />
+          <CountedMenu
+            value={covers}
+            anyLabel={COURSE_COVERS_LABEL.all}
+            options={COURSE_COVERS_ORDER}
+            labels={COURSE_COVERS_LABEL}
+            counts={coverOptions}
+            onChange={onCovers}
+            width="w-40"
+          />
           <StatusMenu status={status} onChange={onStatus} />
+          <ChipDivider />
+          <CountedMenu
+            value={length}
+            anyLabel={COURSE_LENGTH_LABEL.all}
+            options={COURSE_LENGTH_ORDER}
+            labels={COURSE_LENGTH_LABEL}
+            counts={lengthOptions}
+            onChange={onLength}
+            width="w-48"
+          />
         </Group>
       </div>
     </div>

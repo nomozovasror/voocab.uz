@@ -484,6 +484,12 @@ export interface Collection {
 export interface CollectionList {
   items: Collection[];
   total: number;
+  /** What there is to filter by, counted over every published collection —
+   *  never over the page and never over what the other filters left. With a
+   *  dozen courses and three menus a list is one click from empty, and a
+   *  count beside each option is what stops a menu being a set of dead ends. */
+  covers: PracticeFacet[];
+  lengths: PracticeFacet[];
 }
 
 /** One collection, opened. `items` are the catalogue's own rows — same

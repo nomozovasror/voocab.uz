@@ -27,6 +27,8 @@ import {
   toggle,
 } from "@/features/listening/practice";
 import type {
+  CourseCovers,
+  CourseLength,
   CourseStatus,
   ListMode,
   PracticeFilterState,
@@ -123,6 +125,8 @@ export default function ListeningPage() {
   // `filters` for the same reason `mode` is: "Clear filters" belongs to the
   // catalogue, and it has no business reaching into the other list.
   const [status, setStatus] = useState<CourseStatus>("all");
+  const [covers, setCovers] = useState<CourseCovers>("all");
+  const [length, setLength] = useState<CourseLength>("all");
   const change = useCallback(
     (next: Partial<PracticeFilterState>) =>
       setFilters((prev) => ({ ...prev, ...next })),
@@ -174,8 +178,10 @@ export default function ListeningPage() {
     const next: Record<string, string> = {};
     if (settledQuery.trim()) next.q = settledQuery.trim();
     if (status !== "all") next.status = status;
+    if (covers !== "all") next.covers = covers;
+    if (length !== "all") next.length = length;
     return next;
-  }, [mode, settledQuery, status]);
+  }, [mode, settledQuery, status, covers, length]);
   const collections = useCollections(collectionParams);
 
   const {
@@ -492,6 +498,15 @@ export default function ListeningPage() {
             onMode={setMode}
             status={status}
             onStatus={setStatus}
+            covers={covers}
+            onCovers={setCovers}
+            length={length}
+            onLength={setLength}
+            // Off the first page, like the catalogue's own facets: every page
+            // carries the same answer, because these describe the library
+            // rather than what came back.
+            coverOptions={collections.data?.pages[0]?.covers ?? []}
+            lengthOptions={collections.data?.pages[0]?.lengths ?? []}
             onToggleBand={toggleBand}
             onToggleType={toggleType}
             typeOptions={typeOptions}
@@ -528,6 +543,8 @@ export default function ListeningPage() {
             <CollectionList
               query={settledQuery}
               status={status}
+              covers={covers}
+              length={length}
               revealRef={stillness ? undefined : revealRef}
             />
           ) : isError ? (

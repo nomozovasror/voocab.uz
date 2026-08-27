@@ -37,6 +37,7 @@ from app.core.database import AsyncSession
 from app.models.attempt import Attempt, AttemptStatus
 from app.models.collection import Collection, CollectionItem
 from app.models.material import Material
+from app.models.part import Part
 from app.models.user import User
 from app.services import listening as listening_service
 
@@ -296,27 +297,22 @@ def _rank(done: int, total: int) -> int:
     return FINISHED if done >= total else IN_PROGRESS
 
 
-async def _progress_for_many(
-    session: AsyncSession,
-    user_id: uuid.UUID,
-    collection_ids: list[uuid.UUID],
-) -> dict[uuid.UUID, dict]:
-    """Everybody's progress through every collection, in two queries.
+async def _items_for_many(
+    session: AsyncSession, collection_ids: list[uuid.UUID]
+) -> tuple[dict[uuid.UUID, list[uuid.UUID]], set[uuid.UUID]]:
+    """The ordered public materials of every collection asked about, in one
+    query, plus the flat set of material ids they mention.
 
-    It used to be two queries EACH, which is fine at five collections and is
-    2N+2 at any number — the sort of cost that stays invisible until somebody
-    publishes forty courses and the practice page starts taking a second to
-    draw.
-
-    Flat instead: one pass for the ordered items of every collection asked
-    about, one for which of those materials the caller has submitted. The rest
-    is arithmetic.
+    Loaded once and handed to everything that needs it. Progress, length and
+    which parts a course covers are three questions about the same list, and
+    fetching it three times is how a page ends up doing thirty queries to draw
+    twelve rows.
     """
-    if not collection_ids:
-        return {}
-
     ordered: dict[uuid.UUID, list[uuid.UUID]] = {cid: [] for cid in collection_ids}
     material_ids: set[uuid.UUID] = set()
+    if not collection_ids:
+        return ordered, material_ids
+
     for collection_id, material_id in (
         await session.exec(
             select(CollectionItem.collection_id, CollectionItem.material_id)
@@ -331,7 +327,23 @@ async def _progress_for_many(
     ).all():
         ordered[collection_id].append(material_id)
         material_ids.add(material_id)
+    return ordered, material_ids
 
+
+async def _progress_for_many(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    ordered: dict[uuid.UUID, list[uuid.UUID]],
+    material_ids: set[uuid.UUID],
+) -> dict[uuid.UUID, dict]:
+    """Everybody's progress through every collection, in one more query.
+
+    It used to be two queries EACH, which is fine at five collections and is
+    2N+2 at any number — the sort of cost that stays invisible until somebody
+    publishes forty courses and the practice page starts taking a second to
+    draw. Flat instead: which of these materials the caller has submitted, and
+    then arithmetic.
+    """
     sat: set[uuid.UUID] = set()
     if material_ids:
         sat = set(
@@ -359,12 +371,79 @@ async def _progress_for_many(
     return out
 
 
+async def _covers_for_many(
+    session: AsyncSession,
+    ordered: dict[uuid.UUID, list[uuid.UUID]],
+    material_ids: set[uuid.UUID],
+) -> dict[uuid.UUID, set[str]]:
+    """Which parts each collection drills, as filter values.
+
+    A set per collection rather than a single answer, because a course is
+    several papers and the useful question is "does it have Part 3 in it" —
+    the same question the catalogue's own part filter asks of one material,
+    asked of a route through several.
+
+    ``"full"`` sits in the same set as the part numbers because it is the same
+    kind of answer: a mock-test set and a Part 3 drill are two things somebody
+    might be looking for, and making them two menus would mean asking twice.
+    """
+    covers: dict[uuid.UUID, set[str]] = {cid: set() for cid in ordered}
+    if not material_ids:
+        return covers
+
+    parts_by_material: dict[uuid.UUID, set[int]] = {}
+    for material_id, order_index in (
+        await session.exec(
+            select(Part.material_id, Part.order_index).where(
+                Part.material_id.in_(material_ids)  # type: ignore[attr-defined]
+            )
+        )
+    ).all():
+        parts_by_material.setdefault(material_id, set()).add(int(order_index) + 1)
+
+    for collection_id, ids in ordered.items():
+        for material_id in ids:
+            parts = parts_by_material.get(material_id, set())
+            covers[collection_id].update(str(n) for n in parts)
+            if len(parts) >= FULL_TEST_PARTS:
+                covers[collection_id].add("full")
+    return covers
+
+
+#: Four parts is a whole paper; anything less is an excerpt from one. The same
+#: number the catalogue calls FULL_TEST_PARTS.
+FULL_TEST_PARTS = 4
+
+#: The options the "Covers" filter offers, in menu order.
+COVER_OPTIONS = ["1", "2", "3", "4", "full"]
+
+#: How long a course is, in materials. Inclusive bounds; ``None`` is open.
+#:
+#: The first question anybody has about a course is how much of their life it
+#: wants, and "eleven materials" only answers that once you have seen a few.
+#: Three bands answer it at a glance: an evening, a fortnight, a syllabus.
+LENGTH_BANDS: dict[str, tuple[int, int | None]] = {
+    "short": (1, 5),
+    "medium": (6, 15),
+    "long": (16, None),
+}
+
+
+def _length_band(size: int) -> str | None:
+    for name, (low, high) in LENGTH_BANDS.items():
+        if size >= low and (high is None or size <= high):
+            return name
+    return None
+
+
 async def list_public(
     session: AsyncSession,
     user_id: uuid.UUID,
     *,
     query: str = "",
     status: str = "all",
+    covers: str = "all",
+    length: str = "all",
     limit: int = 20,
     offset: int = 0,
 ) -> dict:
@@ -373,19 +452,27 @@ async def list_public(
     In progress first, then untouched, then finished — see :func:`_rank`.
     Newest-first is the tiebreak inside each group rather than the sort.
 
-    ``status`` narrows to one of those three. It is the same computation the
-    ordering uses, asked as a question instead of as an order, and ``total``
-    counts what SURVIVES it — a filtered list reporting the unfiltered total
-    is a list that looks like it lost something.
+    Three filters, each a different question and each one the courses list can
+    answer honestly from what it already loads: where the reader is with it
+    (``status``), which part of the paper it drills (``covers``), and how much
+    of their life it wants (``length``). ``total`` counts what survives them —
+    a filtered list reporting the unfiltered total is a list that looks like
+    it lost something between the header and the rows.
+
+    Deliberately absent: a difficulty. A course's "level" would be an average
+    over its materials' measured bands, and calling a mix of Easy and Hard
+    "Medium" is not a measurement, it is an invention — the same claim this
+    codebase refuses everywhere else.
 
     Sorted and paged in Python rather than in SQL, which is a considered
-    exception to how the catalogue works. The rank depends on the caller's
-    attempts crossed with each collection's contents, so ordering by it in SQL
-    means that join in the ORDER BY of every page. Collections are curated by
-    hand and number in the tens where materials number in the thousands, so
-    holding the whole set is cheap and the ordering is exact. The day that
-    stops being true, the shape of this answer — items plus a total — is
-    already the shape the catalogue uses, and the fix is the same one.
+    exception to how the catalogue works. Every one of these predicates
+    depends on the collection's contents crossed with the caller's attempts,
+    so doing it in SQL means those joins in the WHERE and ORDER BY of every
+    page. Collections are curated by hand and number in the tens where
+    materials number in the thousands, so holding the whole set is cheap and
+    the answers are exact. The day that stops being true, the shape of this
+    answer — items, a total and facet counts — is already the catalogue's, and
+    the fix is the one already written.
     """
     statement = select(Collection).where(Collection.visibility == "public")
     # Title, summary and author, every term having to hit. The same field
@@ -405,13 +492,78 @@ async def list_public(
         )
 
     collections = list((await session.exec(statement)).all())
+    ids = [c.id for c in collections]
+    ordered, material_ids = await _items_for_many(session, ids)
     progress_by_id = await _progress_for_many(
-        session, user_id, [c.id for c in collections]
+        session, user_id, ordered, material_ids
     )
+    covers_by_id = await _covers_for_many(session, ordered, material_ids)
     authors = await _authors(session, collections)
 
+    wanted_rank = STATUSES.get(status)
+
+    def matches_status(collection: Collection) -> bool:
+        row = progress_by_id[collection.id]
+        return (
+            wanted_rank is None or _rank(row["done"], row["total"]) == wanted_rank
+        )
+
+    def matches_covers(collection: Collection) -> bool:
+        return covers == "all" or covers in covers_by_id.get(collection.id, set())
+
+    def matches_length(collection: Collection) -> bool:
+        return (
+            length == "all"
+            or _length_band(progress_by_id[collection.id]["total"]) == length
+        )
+
+    # Each count is what THAT option would leave, given whatever else is
+    # already set — so a menu's own dimension is excluded from its own counts,
+    # and every number is the size of the list one click away.
+    #
+    # Stricter than the catalogue's facets, which describe the whole library
+    # and never move. The difference is scale: there, a menu almost never
+    # empties, and a stable menu is worth more than an exact number. Here
+    # there are a dozen courses and three menus over them, so a list is
+    # genuinely one click from nothing — and a count that promised twelve and
+    # delivered none would be worse than no count at all.
+    for_covers = [
+        c for c in collections if matches_status(c) and matches_length(c)
+    ]
+    for_lengths = [
+        c for c in collections if matches_status(c) and matches_covers(c)
+    ]
+    facets = {
+        "covers": [
+            {
+                "value": option,
+                "count": sum(
+                    1 for c in for_covers if option in covers_by_id.get(c.id, set())
+                ),
+            }
+            for option in COVER_OPTIONS
+        ],
+        "lengths": [
+            {
+                "value": name,
+                "count": sum(
+                    1
+                    for c in for_lengths
+                    if _length_band(progress_by_id[c.id]["total"]) == name
+                ),
+            }
+            for name in LENGTH_BANDS
+        ],
+    }
+
+    kept = [
+        c
+        for c in collections
+        if matches_status(c) and matches_covers(c) and matches_length(c)
+    ]
+
     def sort_key(collection: Collection):
-        row = progress_by_id.get(collection.id, {"done": 0, "total": 0})
+        row = progress_by_id[collection.id]
         # Negated timestamp for newest-first inside a rank, so one key sorts
         # both without a second pass.
         return (
@@ -419,32 +571,18 @@ async def list_public(
             -(collection.created_at.timestamp() if collection.created_at else 0),
         )
 
-    wanted = STATUSES.get(status)
-    if wanted is not None:
-        collections = [
-            c
-            for c in collections
-            if _rank(
-                progress_by_id.get(c.id, {"done": 0})["done"],
-                progress_by_id.get(c.id, {"total": 0})["total"],
-            )
-            == wanted
-        ]
-
-    collections.sort(key=sort_key)
+    kept.sort(key=sort_key)
 
     return {
         "items": [
             {
                 **_summarise(collection, authors.get(collection.author_id)),
-                "progress": progress_by_id.get(
-                    collection.id,
-                    {"total": 0, "done": 0, "next_material_id": None},
-                ),
+                "progress": progress_by_id[collection.id],
             }
-            for collection in collections[offset : offset + limit]
+            for collection in kept[offset : offset + limit]
         ],
-        "total": len(collections),
+        "total": len(kept),
+        **facets,
     }
 
 

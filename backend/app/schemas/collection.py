@@ -12,7 +12,11 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.schemas.listening import CatalogueAuthorOut, PracticeMaterialOut
+from app.schemas.listening import (
+    CatalogueAuthorOut,
+    PracticeFacetOut,
+    PracticeMaterialOut,
+)
 
 
 class CollectionCreate(BaseModel):
@@ -95,6 +99,13 @@ class CollectionListOut(BaseModel):
 
     items: list[CollectionOut] = []
     total: int
+    #: What there is to filter by. Each count is what that option would
+    #: leave given whatever else is already set — the size of the list one
+    #: click away. With a dozen courses and three menus over them a list is
+    #: genuinely one click from empty, and a count that promised twelve and
+    #: delivered none would be worse than no count at all.
+    covers: list[PracticeFacetOut] = []
+    lengths: list[PracticeFacetOut] = []
 
 
 class CollectionDetailOut(CollectionOut):

@@ -255,6 +255,53 @@ export const COURSE_STATUS_LABEL: Record<CourseStatus, string> = {
   finished: "Finished",
 };
 
+/**
+ * Which part of the paper a course drills.
+ *
+ * The catalogue's own scope question, asked of a route through several papers
+ * instead of one: does this course have Part 3 in it. `full` sits in the same
+ * menu rather than beside it because it is the same kind of answer — a
+ * mock-test set and a Part 3 drill are two things somebody might be after,
+ * and two menus would be asking twice.
+ *
+ * A whole paper answers to `full` AND to each of its parts. That is not an
+ * inconsistency: it IS four parts, and somebody looking for Part 3 practice
+ * is not wrong to be shown a paper containing one.
+ */
+export type CourseCovers = "all" | "1" | "2" | "3" | "4" | "full";
+
+/** The narrowing answers only. `all` is the absence of one, so it is not in
+ *  the list the menu is built from — it is the line above it. */
+export const COURSE_COVERS_ORDER = ["1", "2", "3", "4", "full"] as const;
+
+export const COURSE_COVERS_LABEL: Record<CourseCovers, string> = {
+  all: "Any part",
+  "1": "Part 1",
+  "2": "Part 2",
+  "3": "Part 3",
+  "4": "Part 4",
+  full: "Full tests",
+};
+
+/**
+ * How much of somebody's life a course wants.
+ *
+ * The first question anybody has about a course, and "eleven materials" only
+ * answers it once you have seen a few. Three bands answer it at a glance: an
+ * evening, a fortnight, a syllabus. The ranges are in the labels because a
+ * band name without its range is a word somebody has to learn.
+ */
+export type CourseLength = "all" | "short" | "medium" | "long";
+
+export const COURSE_LENGTH_ORDER = ["short", "medium", "long"] as const;
+
+export const COURSE_LENGTH_LABEL: Record<CourseLength, string> = {
+  all: "Any length",
+  short: "Short (1–5)",
+  medium: "Medium (6–15)",
+  long: "Long (16+)",
+};
+
 export const EMPTY_FILTERS: PracticeFilterState = {
   scope: "all",
   showDone: false,

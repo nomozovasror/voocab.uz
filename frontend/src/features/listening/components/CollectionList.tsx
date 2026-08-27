@@ -6,7 +6,11 @@ import { getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { COLLECTIONS_PAGE, useCollections } from "@/features/listening/queries";
 import { COURSE_STATUS_LABEL } from "@/features/listening/practice";
-import type { CourseStatus } from "@/features/listening/practice";
+import type {
+  CourseCovers,
+  CourseLength,
+  CourseStatus,
+} from "@/features/listening/practice";
 import {
   CollectionRow,
   CollectionRowSkeleton,
@@ -30,12 +34,16 @@ import {
 export function CollectionList({
   query,
   status,
+  covers,
+  length,
   revealRef,
 }: {
   /** The same field that searches the catalogue. Passed in already settled —
    *  the page holds the typing, this holds a list. */
   query: string;
   status: CourseStatus;
+  covers: CourseCovers;
+  length: CourseLength;
   revealRef?: (el: HTMLLIElement | null) => void;
 }) {
   // Built exactly as the page builds it, so the two calls share one cache
@@ -44,8 +52,10 @@ export function CollectionList({
     const next: Record<string, string> = {};
     if (query.trim()) next.q = query.trim();
     if (status !== "all") next.status = status;
+    if (covers !== "all") next.covers = covers;
+    if (length !== "all") next.length = length;
     return next;
-  }, [query, status]);
+  }, [query, status, covers, length]);
   const {
     data,
     isLoading,
@@ -63,7 +73,11 @@ export function CollectionList({
     [data],
   );
   const total = data?.pages[0]?.total ?? 0;
-  const narrowed = query.trim() !== "" || status !== "all";
+  const narrowed =
+    query.trim() !== "" ||
+    status !== "all" ||
+    covers !== "all" ||
+    length !== "all";
 
   // The same sentinel the catalogue uses, for the same reasons — see the
   // note on it in ListeningPage.
@@ -118,7 +132,7 @@ export function CollectionList({
 
   return (
     <>
-      <Header count={total} status={status} />
+      <Header count={total} status={status} narrowed={narrowed} />
 
       {rows.length === 0 ? (
         <div className="mt-6 flex flex-col items-center gap-2 rounded-xl border border-border-subtle py-16 text-center">
@@ -179,10 +193,12 @@ export function CollectionList({
 function Header({
   count,
   status,
+  narrowed,
   loading,
 }: {
   count?: number;
   status?: CourseStatus;
+  narrowed?: boolean;
   loading?: boolean;
 }) {
   return (
@@ -197,13 +213,16 @@ function Header({
           </span>
         )}
       </p>
-      {/* What the order is, or — once a status is picked — what the list has
-          been narrowed to. The order stops being worth mentioning the moment
-          everything in the list is the same one thing. */}
+      {/* What the order is — but only while it is the interesting fact. Once
+          a status is picked the whole list is that one thing, so the label
+          says so instead; once anything else is narrowing it, the order is
+          still true and no longer worth a line. */}
       <p className="text-xs text-muted-foreground">
         {status && status !== "all"
           ? COURSE_STATUS_LABEL[status]
-          : "In progress first"}
+          : narrowed
+            ? null
+            : "In progress first"}
       </p>
     </div>
   );
