@@ -86,11 +86,13 @@ function MetaLine({ material: m }: { material: PracticeMaterial }) {
 
 interface PracticeRowProps {
   material: PracticeMaterial;
-  /** Its place in the list as it currently stands — 1 for the first row on
-   *  screen, not an id and not a position in the catalogue. Filter or reorder
-   *  the list and the numbers start again at 1, because what they are for is
-   *  "the third one down", which is how somebody refers to a row out loud. */
-  index: number;
+  /** Its place in the SEQUENCE, where there is one — the third lesson of a
+   *  course. Absent in the catalogue, and that absence is the point: there,
+   *  the order is "Newest first" and changes with every chip, so a number
+   *  beside a title claims a ranking that does not exist and that nobody can
+   *  act on. Inside a collection the order is somebody's judgement about what
+   *  to do when, and the number is the whole of what makes it a course. */
+  index?: number;
   innerRef?: (el: HTMLAnchorElement | null) => void;
   onFocus?: () => void;
   /** Registers the row with the list's one IntersectionObserver, which flips
@@ -181,12 +183,14 @@ export function PracticeRow({
                 aria-hidden because the <ol> around these rows already numbers
                 them for a screen reader, and hearing "one, one, Library
                 membership" is the same fact twice. */}
-            <span
-              aria-hidden
-              className="shrink-0 text-base tabular-nums text-foreground"
-            >
-              {index}.
-            </span>
+            {index !== undefined && (
+              <span
+                aria-hidden
+                className="shrink-0 text-base tabular-nums text-foreground"
+              >
+                {index}.
+              </span>
+            )}
             {/* The title, then the tick — the order the sentence is read in:
                 "Library membership, done" rather than "done, Library
                 membership".

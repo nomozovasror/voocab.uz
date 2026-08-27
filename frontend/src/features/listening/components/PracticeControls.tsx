@@ -262,13 +262,17 @@ function ChipDivider() {
 /**
  * The two lists, and which one is showing.
  *
- * A segmented control rather than a tab strip or a pair of links: it is one
- * question with two answers, and the answer that is true has to be readable
- * at a glance from across the row. It sits at the head of the filter bar
- * because it is the widest-scoped thing in it — everything to its right
- * narrows a list, and this decides which list there is.
+ * Its own row, above the filters and looking nothing like them, because it is
+ * not one of them: a filter narrows a list and this decides which list there
+ * is. Inside the filter bar and wearing the same pill, the two read as one
+ * set of equal choices — and the reader is left to work out why turning
+ * "Courses" on emptied half the row beside it.
+ *
+ * Underlined tabs rather than pills for exactly that reason. Nothing else on
+ * this page is underlined, so the shape alone says this one is different in
+ * kind.
  */
-function ModeSwitch({
+export function ModeTabs({
   mode,
   onChange,
 }: {
@@ -279,7 +283,7 @@ function ModeSwitch({
     <div
       role="tablist"
       aria-label="What to show"
-      className="flex items-center gap-0.5"
+      className="flex items-center gap-6"
     >
       {(["materials", "courses"] as const).map((value) => (
         <Button
@@ -291,11 +295,14 @@ function ModeSwitch({
           size="sm"
           onClick={() => onChange(value)}
           className={cn(
-            PILL,
-            "capitalize",
+            "h-8 rounded-none px-0 text-sm capitalize hover:bg-transparent",
+            // The indicator is a border on the button rather than a separate
+            // element, so it can never drift out of line with the word it
+            // belongs to.
+            "border-b-2",
             mode === value
-              ? "bg-foreground/10 text-foreground hover:bg-foreground/10 hover:text-foreground"
-              : PILL_OFF,
+              ? "border-primary text-foreground"
+              : "border-transparent text-muted-foreground hover:text-foreground",
           )}
         >
           {value}
@@ -465,10 +472,9 @@ interface FilterChipsProps {
   filters: PracticeFilterState;
   onChange: (next: Partial<PracticeFilterState>) => void;
   /** Which list is showing. Courses have no part number and no difficulty
-   *  band, so most of this row is put away rather than left there doing
-   *  nothing. */
+   *  band, so this row swaps to the questions a course can answer. The
+   *  control that changes it is not in here — see `ModeTabs`. */
   mode: ListMode;
-  onMode: (mode: ListMode) => void;
   /** The two multi-selects flip one value rather than being handed a new
    *  list, and that is not a style choice: computing `[...bands, band]` here
    *  reads the array off THIS render, so two toggles landing in one batch
@@ -496,7 +502,6 @@ export function FilterChips({
   filters,
   onChange,
   mode,
-  onMode,
   onToggleBand,
   onToggleType,
   typeOptions,
@@ -574,8 +579,6 @@ export function FilterChips({
       aria-label={mode === "courses" ? "Filter collections" : "Filter materials"}
       className="inline-flex flex-wrap items-center justify-center gap-0.5 rounded-2xl border border-border-subtle bg-card/50 p-1"
     >
-      <ModeSwitch mode={mode} onChange={onMode} />
-
       {/*
         The controls the switch swaps between, stacked in one box that resizes
         to whichever is showing.
@@ -844,11 +847,14 @@ export function ListHeader({
           <span>
             <span className="tabular-nums text-foreground">{count}</span>{" "}
             material{count === 1 ? "" : "s"}
+            {/* Said plainly. "12 done, put away" left the reader to work out
+                both what was put away and by whom — beside "4 materials" it
+                read as a contradiction rather than as an explanation of it. */}
             {hiddenDone > 0 && (
               <>
                 {" · "}
-                <span className="tabular-nums">{hiddenDone}</span> done, put
-                away
+                <span className="tabular-nums">{hiddenDone}</span> done{" "}
+                {hiddenDone === 1 ? "one is" : "ones are"} hidden
               </>
             )}
           </span>

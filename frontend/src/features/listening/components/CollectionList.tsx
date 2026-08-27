@@ -12,17 +12,22 @@ import type {
   CourseStatus,
 } from "@/features/listening/practice";
 import {
-  CollectionRow,
-  CollectionRowSkeleton,
-} from "@/features/listening/components/CollectionRow";
+  CollectionBook,
+  CollectionBookSkeleton,
+} from "@/features/listening/components/CollectionBook";
 
 /**
  * The other list.
  *
- * Same column, same width, same rows-with-a-rule as the catalogue, because
- * the switch above them is a switch between two lists and not a link to
- * another page. What differs is what a row IS — a route through the library
- * rather than one paper — and the order they arrive in: in progress, then
+ * A shelf rather than a column of rows, and that is the one place the two
+ * lists deliberately part company. A paper is a line of facts — how long, how
+ * hard, have I done it — and reads as a row. A course is a thing you pick up,
+ * and the fastest way to find the one you were working through is to
+ * recognise it, which a row of text cannot be. So courses are books
+ * (CollectionBook), covered from their own id so the same course looks the
+ * same forever.
+ *
+ * The order is the same argument as everywhere else here: in progress, then
  * untouched, then finished, so the thing somebody was in the middle of is the
  * first thing they see.
  *
@@ -31,6 +36,15 @@ import {
  * the catalogue filters by applies: a part number, a task type and a
  * difficulty band all belong to a paper, not to a route through several.
  */
+/** The shelf. Wrapping rather than a rail: this is the whole list now, and a
+ *  rail is a place to hide things — three fit, the scrollbar hides until it
+ *  is reached for, and a mouse wheel cannot move it sideways at all. */
+const SHELF = "mt-4 grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-3 lg:grid-cols-4";
+
+/** The same entrance the catalogue rows use, applied to a book. */
+const REVEAL =
+  "scale-95 opacity-0 transition-[opacity,scale] delay-100 duration-base ease-out data-[visible=true]:scale-100 data-[visible=true]:opacity-100";
+
 export function CollectionList({
   query,
   status,
@@ -120,11 +134,11 @@ export function CollectionList({
       <>
         <Header loading />
         <SkeletonBlock label="Loading collections">
-          <ol>
-            {Array.from({ length: 5 }, (_, i) => (
-              <CollectionRowSkeleton key={i} />
+          <div className={SHELF}>
+            {Array.from({ length: 4 }, (_, i) => (
+              <CollectionBookSkeleton key={i} />
             ))}
-          </ol>
+          </div>
         </SkeletonBlock>
       </>
     );
@@ -150,27 +164,32 @@ export function CollectionList({
         </div>
       ) : (
         <>
-          <ol
+          <ul
             className={cn(
+              SHELF,
               "transition-opacity duration-fast",
               isPlaceholderData && "opacity-50",
             )}
           >
-            {rows.map((collection, i) => (
-              <CollectionRow
+            {rows.map((collection) => (
+              // Without the observer there is nothing to set `data-visible`,
+              // so the class that starts a book invisible must not be there
+              // either — the same rule the catalogue rows follow.
+              <li
                 key={collection.id}
-                collection={collection}
-                index={i + 1}
-                revealRef={revealRef}
-              />
+                ref={revealRef}
+                className={revealRef ? REVEAL : undefined}
+              >
+                <CollectionBook collection={collection} />
+              </li>
             ))}
-          </ol>
+          </ul>
 
           {isFetchingNextPage && (
-            <ol aria-hidden>
-              <CollectionRowSkeleton />
-              <CollectionRowSkeleton />
-            </ol>
+            <div className={cn(SHELF, "mt-6")} aria-hidden>
+              <CollectionBookSkeleton />
+              <CollectionBookSkeleton />
+            </div>
           )}
           {hasNextPage && <div ref={bottom} aria-hidden className="h-8" />}
           {!hasNextPage && total > COLLECTIONS_PAGE && (

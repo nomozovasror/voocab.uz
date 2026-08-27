@@ -153,7 +153,10 @@ export const COLLECTIONS_PAGE = 12;
  * beats a page number. Keyed by the search so a query is its own list rather
  * than a filter applied afterwards.
  */
-export function useCollections(params: { q?: string; status?: string } = {}) {
+export function useCollections(
+  params: { q?: string; status?: string } = {},
+  { enabled = true }: { enabled?: boolean } = {},
+) {
   return useInfiniteQuery({
     queryKey: [...COLLECTIONS_KEY, params],
     queryFn: ({ pageParam }) =>
@@ -169,6 +172,10 @@ export function useCollections(params: { q?: string; status?: string } = {}) {
     },
     placeholderData: keepPreviousData,
     staleTime: 60_000,
+    // The practice page asks for this only to fill the courses filters and
+    // the field's count, both of which are the other mode's business. Left
+    // on, every visit to the catalogue fetched a list nobody was looking at.
+    enabled,
   });
 }
 

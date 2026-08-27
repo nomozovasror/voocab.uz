@@ -33,35 +33,50 @@ import type { NextUp as NextUpData, PracticeMaterial } from "@/features/listenin
  * with cover images.
  */
 
-/** What the block says it is doing, per reason.
+/**
+ * What the block says it is doing, per reason.
  *
- *  Written here with the rest of the interface's words, and written in full
- *  sentences rather than assembled from fragments — "Part 3 · 52%" is a
- *  readout, and this is meant to be read. */
+ * **The heading is an action; the reason is a line under it.** That division
+ * is doing real work, because the panel beside this one is also about where
+ * the reader goes wrong, and the two used to lead with competing diagnoses —
+ * "Part 1 is where you lose most marks" against "Where you lose marks", each
+ * with a different number attached. A reader with two analyses in front of
+ * them has to decide which to believe, which is a job the page has handed
+ * them rather than done.
+ *
+ * So they are split by job. The panel diagnoses: what you get wrong, in what
+ * kind. This recommends: what to sit. The diagnosis appears here only as the
+ * one-line justification for the recommendation, in the panel's own words and
+ * never with a second figure of its own.
+ *
+ * Written in full sentences rather than assembled from fragments — "Part 3 ·
+ * 52%" is a readout, and this is meant to be read.
+ */
 function heading(data: NextUpData): { title: string; note: string } {
   if (data.reason === "weak_part") {
     return {
-      title: `Part ${data.part} is where you lose most marks`,
-      // The number is the working. Without it the claim is the page asserting
-      // something about somebody with nothing to check it against.
+      title: "Worth sitting next",
+      // The number is the working, and it is the SAME number the sidebar
+      // shows — first-try accuracy on that part — said once here as a reason
+      // rather than restated as a finding.
       note:
         data.accuracy_pct === null
-          ? "Papers with that part in them."
-          : `You get ${data.accuracy_pct}% of it right on a first attempt. These have it in them.`,
+          ? `Papers with Part ${data.part} in them.`
+          : `Your first-try average on Part ${data.part} is ${data.accuracy_pct}%.`,
     };
   }
   if (data.reason === "start") {
     return {
-      title: "Start with Part 1",
-      note: "The gentlest section of the paper, and the one the others build on.",
+      title: "Suggested for you",
+      note: "Part 1 — the gentlest section, and the one the others build on.",
     };
   }
   return {
-    title: "Next up",
+    title: "Suggested for you",
     note:
       data.accuracy_pct === null
         ? "Picked from what you haven't sat yet."
-        : `You average ${data.accuracy_pct}% on a first attempt. These are pitched around there.`,
+        : `Pitched around your first-try average of ${data.accuracy_pct}%.`,
   };
 }
 
@@ -86,9 +101,8 @@ export function NextUp({ data }: { data: NextUpData }) {
         </div>
       </div>
 
-      {/* Not <ol>, and not numbered. The list below is numbered, and a second
-          set of 1-2-3 twenty pixels above it reads as the same list starting
-          twice. */}
+      {/* Not <ol>. Three suggestions are a set, not a sequence — nothing
+          says sit them in this order, and numbering them would say so. */}
       <ul className="mt-3 space-y-0.5">
         {data.items.map((m) => (
           <li key={m.id}>

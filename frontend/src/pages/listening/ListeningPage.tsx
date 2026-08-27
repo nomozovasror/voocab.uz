@@ -44,6 +44,7 @@ import { QUESTION_TYPE_LABEL } from "@/features/listening/parts";
 import {
   FilterChips,
   ListHeader,
+  ModeTabs,
   SearchField,
 } from "@/features/listening/components/PracticeControls";
 import {
@@ -55,10 +56,6 @@ import {
   NextUp,
   NextUpSkeleton,
 } from "@/features/listening/components/NextUp";
-import {
-  CollectionStrip,
-  CollectionStripSkeleton,
-} from "@/features/listening/components/CollectionStrip";
 import { CollectionList } from "@/features/listening/components/CollectionList";
 
 /** How long the pointer has to rest on a row before the cards answer it, and
@@ -168,12 +165,10 @@ export default function ListeningPage() {
     () => catalogueParams({ ...filters, query: settledQuery }, sort),
     [filters, settledQuery, sort],
   );
-  // The strip and the courses list are the same query, deliberately: given
-  // the same parameters they share a cache entry, so switching to courses
-  // draws the list from what the strip already fetched instead of asking
-  // again. The search only applies in courses mode — the strip is a shortlist
-  // above the CATALOGUE, and narrowing it by a search meant for materials
-  // would be answering a question nobody asked.
+  // The same query the courses list itself runs, built the same way so the
+  // two share one cache entry rather than fetching twice. This copy exists
+  // for what the list cannot hand upwards: the filter row's facet counts and
+  // the search field's count, both of which live above it.
   const collectionParams = useMemo(() => {
     if (mode !== "courses") return {};
     const next: Record<string, string> = {};
@@ -183,7 +178,9 @@ export default function ListeningPage() {
     if (length !== "all") next.length = length;
     return next;
   }, [mode, settledQuery, status, covers, length]);
-  const collections = useCollections(collectionParams);
+  const collections = useCollections(collectionParams, {
+    enabled: mode === "courses",
+  });
 
   const {
     data,
@@ -511,12 +508,18 @@ export default function ListeningPage() {
           />
         </div>
 
+        {/* Mode first, then what narrows it. Two rows rather than one, and
+            the order is the order the questions come in: which list am I
+            looking at, and then which part of it. */}
         <div className="mt-4 flex justify-center">
+          <ModeTabs mode={mode} onChange={setMode} />
+        </div>
+
+        <div className="mt-3 flex justify-center">
           <FilterChips
             filters={filters}
             onChange={change}
             mode={mode}
-            onMode={setMode}
             status={status}
             onStatus={setStatus}
             covers={covers}
@@ -631,30 +634,22 @@ export default function ListeningPage() {
                 list's own first row would be, so the eye meets it on the way
                 down rather than having to come back up for it.
               */}
-              {!narrowed && (
-                <>
-                  {/* Structure first, then the one immediate suggestion, then
-                      the library. It is the order the questions get more
-                      specific in: what should I be working through, what
-                      should I do tonight, and what else is there. */}
-                  {collections.isLoading ? (
-                    <CollectionStripSkeleton />
-                  ) : collections.data ? (
-                    <CollectionStrip
-                      collections={collections.data.pages[0]?.items ?? []}
-                      total={collections.data.pages[0]?.total ?? 0}
-                      // The way to the rest is the switch above, not more
-                      // rail. One list, reached two ways.
-                      onSeeAll={() => setMode("courses")}
-                    />
-                  ) : null}
-                  {nextUp.isLoading ? (
-                    <NextUpSkeleton />
-                  ) : nextUp.data ? (
-                    <NextUp data={nextUp.data} />
-                  ) : null}
-                </>
-              )}
+              {/* The suggestion, and only over an unnarrowed list: it
+                  answers "what should I do", and a filter is somebody saying
+                  what they want to do. Leaving it up over a search is the
+                  page talking over the reader — and worse, recommending
+                  materials the filter they just set would have excluded.
+
+                  The courses used to sit above this as a rail, in materials
+                  mode, which made the tabs a lie: half the answer to
+                  "Courses" was already on screen while "Materials" was
+                  selected. The tabs switch the whole column now. */}
+              {!narrowed &&
+                (nextUp.isLoading ? (
+                  <NextUpSkeleton />
+                ) : nextUp.data ? (
+                  <NextUp data={nextUp.data} />
+                ) : null)}
               <ListHeader
                 count={total}
                 filtered={narrowed}
@@ -746,7 +741,6 @@ export default function ListeningPage() {
                     <PracticeRow
                       key={m.id}
                       material={m}
-                      index={i + 1}
                       innerRef={(el) => {
                         rowRefs.current[i] = el;
                       }}

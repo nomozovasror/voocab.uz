@@ -130,8 +130,10 @@ function Header({ collection }: { collection: CollectionDetail }) {
             aria-valuemax={total}
             aria-label={`${done} of ${total} done`}
           >
+            {/* Green, not the accent. Yellow means "this is the action"
+                everywhere else here, and a progress bar is a report. */}
             <div
-              className="h-full rounded-full bg-primary transition-[width] duration-slow ease-out motion-reduce:transition-none"
+              className="h-full rounded-full bg-correct transition-[width] duration-slow ease-out motion-reduce:transition-none"
               style={{ width: `${pct}%` }}
             />
           </div>

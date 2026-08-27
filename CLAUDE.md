@@ -124,6 +124,32 @@ that is what keeps the whole feature as small as it is.
   material looks the same in a collection as in the list. A collection is a
   different route to the same thing, not a different thing.
 
+## A collection's cover is derived, never uploaded
+
+`frontend/src/features/listening/cover.ts` turns a collection's id into a
+stock colour and a printed pattern. The same collection is the same book
+forever, on every device, and nobody uploads anything — which is the whole
+reason a shelf of them is scannable: the reader finds the course they were
+working through by recognising it.
+
+- **The palette is deliberately outside the token system**, and is the one
+  place in the app that is. These are not interface colours — nothing about
+  them means anything — and a cover that changed with the theme would stop
+  being the same book. A small closed set, not free hex, so the shelf stays
+  coherent however many collections there are.
+- The type on a cover is white with fixed alpha, applied inline rather than in
+  a class string, because the stock underneath is always dark whatever the
+  theme is doing.
+- Colour and pattern come from **different parts of the hash**, so seven
+  stocks times five patterns really is thirty-five covers.
+- A hash, not `collections.length % 7`: an index re-covers every book on the
+  shelf the day somebody publishes another one.
+- When uploads arrive, generation stays the default. A shelf where some books
+  have art and the rest have a grey rectangle looks broken.
+
+**Progress bars are green, never the accent.** Yellow means "this is the
+action" everywhere here, and a progress bar is a report.
+
 ## Preferences default to off
 
 `frontend/src/lib/preferences.ts` holds the reader's small on/off choices, in
