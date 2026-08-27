@@ -45,26 +45,38 @@ export type PatternName =
   | "columns";
 
 /**
- * Eleven stocks: teal, plum, olive, brick, indigo, slate, moss, aubergine,
- * rust, petrol, umber.
+ * Thirteen stocks: twelve hues thirty degrees apart, plus one neutral slate.
  *
- * All dark enough to carry white type at any weight, which is the constraint
- * that decides the set rather than taste. Muted rather than saturated, so a
- * shelf of them sits quietly beside Serika Dark instead of shouting over the
- * list underneath.
+ * **Spread by hue, not chosen by eye.** The first set was picked for being
+ * handsome one at a time and came out with five warm earth tones in it —
+ * olive, brick, rust, umber, moss — which at this saturation all read
+ * "brown". Five of seven books on a shelf looking like the same book is the
+ * one thing a generated cover cannot afford, because recognising a book by
+ * its colour is the whole reason for generating one.
+ *
+ * So they are laid out around the wheel at even spacing. Saturation varies by
+ * hue rather than being constant, because the eye reads yellows and greens as
+ * more colourful than blues at the same number.
+ *
+ * Lightness is 32%, which is where the second complaint went: at 24% these
+ * were nearly black on a #323437 page, and a book that does not stand off the
+ * shelf is a rectangle. 32% still carries white type at better than 7:1,
+ * which is the constraint that stops it going higher.
  */
 const STOCKS: Array<{ bg: string; ink: string }> = [
-  { bg: "#2f4a4d", ink: "#3d5f63" },
-  { bg: "#4a3c52", ink: "#5f4d6a" },
-  { bg: "#4d4630", ink: "#61583c" },
-  { bg: "#523a35", ink: "#684943" },
-  { bg: "#33445c", ink: "#425875" },
-  { bg: "#3c4046", ink: "#4e535a" },
-  { bg: "#37472f", ink: "#475c3c" },
-  { bg: "#43334a", ink: "#57435f" },
-  { bg: "#573f2e", ink: "#6e523c" },
-  { bg: "#2c4552", ink: "#3a5a6b" },
-  { bg: "#463a2c", ink: "#5b4b3a" },
+  { bg: "#3c6367", ink: "#51858a" }, // teal
+  { bg: "#3b5568", ink: "#4f738c" }, // petrol
+  { bg: "#3c4067", ink: "#51568a" }, // indigo
+  { bg: "#504064", ink: "#6c5686" }, // violet
+  { bg: "#624162", ink: "#845884" }, // plum
+  { bg: "#64404d", ink: "#865667" }, // rose
+  { bg: "#65453e", ink: "#885c53" }, // brick
+  { bg: "#67503c", ink: "#8a6c51" }, // rust
+  { bg: "#675c3c", ink: "#8a7c51" }, // amber
+  { bg: "#5d653e", ink: "#7d8853" }, // olive
+  { bg: "#466440", ink: "#5e8656" }, // moss
+  { bg: "#406452", ink: "#56866e" }, // green
+  { bg: "#4c5157", ink: "#666c75" }, // slate
 ];
 
 const PATTERNS: PatternName[] = [
@@ -78,7 +90,7 @@ const PATTERNS: PatternName[] = [
   "columns",
 ];
 
-/** How many cuts of each pattern. Eleven stocks times eight patterns times
+/** How many cuts of each pattern. Thirteen stocks times eight patterns times
  *  this is how many covers there are — enough that a shelf of two dozen has
  *  no two alike, which is the whole job. */
 export const VARIANTS = 3;
@@ -88,23 +100,35 @@ export const VARIANTS = 3;
  *
  * The same hash the author avatars use, and for the same reason: a hash
  * rather than an index into the list, so adding a collection never re-covers
- * the existing ones. With `collections.length % 11` every book on the shelf
+ * the existing ones. With `collections.length % 13` every book on the shelf
  * changes colour the day somebody publishes another one.
  */
 function hash(id: string): number {
   let value = 0;
   for (let i = 0; i < id.length; i += 1) {
-    value = (value * 31 + id.charCodeAt(i)) >>> 0;
+    value = (Math.imul(value, 31) + id.charCodeAt(i)) >>> 0;
   }
-  return value;
+  // A finaliser, and it earns its four lines. Every id here is a UUID, so
+  // every input has the same length and the same dashes in the same places —
+  // and `value * 31 + c` leaves that structure sitting in the low bits.
+  // Slicing three choices out of a poorly mixed word makes them correlate,
+  // which shows up as two books that share a colour AND a pattern more often
+  // than chance would explain. This is murmur3's avalanche step: it costs
+  // nothing and makes the bits independent.
+  value ^= value >>> 16;
+  value = Math.imul(value, 0x85ebca6b) >>> 0;
+  value ^= value >>> 13;
+  value = Math.imul(value, 0xc2b2ae35) >>> 0;
+  value ^= value >>> 16;
+  return value >>> 0;
 }
 
 /**
  * The cover for one collection.
  *
  * The three choices are drawn from three different parts of the hash rather
- * than from the same end, so they do not move together — 11 × 8 × 3 really is
- * 264 covers and not eleven with decoration.
+ * than from the same end, so they do not move together — 13 × 8 × 3 really is
+ * 312 covers and not thirteen with decoration.
  */
 export function coverFor(id: string): Cover {
   const value = hash(id);

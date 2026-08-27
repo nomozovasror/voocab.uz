@@ -851,15 +851,22 @@ export function ListHeader({
           <span className="text-foreground">
             <span className="tabular-nums">{count}</span>{" "}
             material{count === 1 ? "" : "s"}
-            {/* Said plainly. "12 done, put away" left the reader to work out
-                both what was put away and by whom — beside "4 materials" it
-                read as a contradiction rather than as an explanation of it. */}
+            {/* Dimmer than the count, because it is a different kind of
+                statement: the count is the answer to "how much is there", and
+                this is a footnote about what the page has done with the rest.
+                At the same weight the two read as one long sentence, and the
+                answer gets lost in its own caveat.
+
+                Said plainly, too. "12 done, put away" left the reader to work
+                out both what was put away and by whom — beside "4 materials"
+                it read as a contradiction rather than as the explanation of
+                one. */}
             {hiddenDone > 0 && (
-              <>
+              <span className="text-muted-foreground">
                 {" · "}
                 <span className="tabular-nums">{hiddenDone}</span> done{" "}
                 {hiddenDone === 1 ? "one is" : "ones are"} hidden
-              </>
+              </span>
             )}
           </span>
         )}
