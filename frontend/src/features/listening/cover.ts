@@ -148,8 +148,21 @@ export function coverFor(id: string): Cover {
  */
 export const COVER_INK = {
   title: "rgba(255,255,255,.94)",
-  author: "rgba(255,255,255,.55)",
+  author: "rgba(255,255,255,.78)",
+  count: "rgba(255,255,255,.6)",
   rule: "rgba(255,255,255,.5)",
+  /**
+   * A wash over the foot of the cover, under the byline.
+   *
+   * The pattern is one step lighter than the stock and the byline was one
+   * step lighter again, so where a band or a wave ran under it the two were
+   * within a shade of each other and the name stopped being readable. The
+   * choice was to keep the pattern out of the lower third — which is where
+   * it looks best — or to darken what is behind the type. This darkens it:
+   * the pattern still runs to the bottom edge, and the type has a ground of
+   * its own whatever it is standing on.
+   */
+  foot: "linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,.32) 45%, transparent)",
   /** The sewn edge: dark down the left, one hairline of light beside it. Nine
    *  pixels of nothing much, and the whole of what says "book" rather than
    *  "tile". */

@@ -36,10 +36,19 @@ import {
  * the catalogue filters by applies: a part number, a task type and a
  * difficulty band all belong to a paper, not to a route through several.
  */
-/** The shelf. Wrapping rather than a rail: this is the whole list now, and a
- *  rail is a place to hide things — three fit, the scrollbar hides until it
- *  is reached for, and a mouse wheel cannot move it sideways at all. */
-const SHELF = "mt-4 grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-3 lg:grid-cols-4";
+/**
+ * The shelf. Wrapping rather than a rail: this is the whole list now, and a
+ * rail is a place to hide things — three fit, the scrollbar hides until it is
+ * reached for, and a mouse wheel cannot move it sideways at all.
+ *
+ * Five across rather than four, and that is not a taste decision. At four the
+ * books came out 186px wide, a row was tall enough that the second one began
+ * below the fold, and a reader with seven collections saw four and had no
+ * reason to think there were more. Five puts them back at about the 156px
+ * they were drawn for, and puts the second row where it can be seen.
+ */
+const SHELF =
+  "mt-4 grid grid-cols-2 gap-x-5 gap-y-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5";
 
 /** The same entrance the catalogue rows use, applied to a book. */
 const REVEAL =
@@ -135,7 +144,7 @@ export function CollectionList({
         <Header loading />
         <SkeletonBlock label="Loading collections">
           <div className={SHELF}>
-            {Array.from({ length: 4 }, (_, i) => (
+            {Array.from({ length: 5 }, (_, i) => (
               <CollectionBookSkeleton key={i} />
             ))}
           </div>
