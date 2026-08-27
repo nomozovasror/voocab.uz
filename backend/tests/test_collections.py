@@ -967,3 +967,64 @@ async def test_a_facet_count_is_the_list_one_click_away() -> None:
             assert r.json()["total"] == 0
     finally:
         await _cleanup([m.id for m in made], email)
+
+
+@pytest.mark.asyncio
+async def test_a_published_collection_that_became_empty_is_not_listed() -> None:
+    """Publishing an empty one is refused, but one can become empty
+    afterwards — the last material in it is withdrawn, or deleted and the item
+    cascades away. What is left is a published promise that opens onto a blank
+    page, which is the thing the publish rule exists to prevent.
+
+    Its author still sees it in the studio, with the reason it cannot go out.
+    """
+    email = f"coll-hollow-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    token = create_access_token(str(user.id))
+    material = await _material(user.id, f"Hollow {uuid.uuid4()}", "public")
+    tag = f"HL{uuid.uuid4().hex[:6]}"
+
+    try:
+        async with _client() as client:
+            collection_id = await _make(client, token, f"{tag} course")
+            await client.put(
+                f"/api/collections/{collection_id}/items",
+                json={"material_ids": [str(material.id)]},
+                cookies={"access_token": token},
+            )
+            await client.patch(
+                f"/api/collections/{collection_id}",
+                json={"visibility": "public"},
+                cookies={"access_token": token},
+            )
+            r = await client.get(
+                "/api/collections", params={"q": tag}, cookies={"access_token": token}
+            )
+            assert r.json()["total"] == 1
+
+            # The material goes, and its place in the course goes with it.
+            async with async_session_factory() as session:
+                for item in (
+                    await session.exec(
+                        select(CollectionItem).where(
+                            CollectionItem.material_id == material.id
+                        )
+                    )
+                ).all():
+                    await session.delete(item)
+                await session.commit()
+
+            r = await client.get(
+                "/api/collections", params={"q": tag}, cookies={"access_token": token}
+            )
+            assert r.json()["total"] == 0
+
+            # Still the author's, and still explained.
+            r = await client.get(
+                "/api/studio/collections", cookies={"access_token": token}
+            )
+            mine = next(x for x in r.json() if x["id"] == collection_id)
+            assert mine["item_count"] == 0
+            assert mine["blocker"] is not None
+    finally:
+        await _cleanup([material.id], email)

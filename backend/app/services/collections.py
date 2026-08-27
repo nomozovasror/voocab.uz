@@ -527,11 +527,12 @@ async def list_public(
     # there are a dozen courses and three menus over them, so a list is
     # genuinely one click from nothing — and a count that promised twelve and
     # delivered none would be worse than no count at all.
+    countable = [c for c in collections if progress_by_id[c.id]["total"] > 0]
     for_covers = [
-        c for c in collections if matches_status(c) and matches_length(c)
+        c for c in countable if matches_status(c) and matches_length(c)
     ]
     for_lengths = [
-        c for c in collections if matches_status(c) and matches_covers(c)
+        c for c in countable if matches_status(c) and matches_covers(c)
     ]
     facets = {
         "covers": [
@@ -559,7 +560,16 @@ async def list_public(
     kept = [
         c
         for c in collections
-        if matches_status(c) and matches_covers(c) and matches_length(c)
+        # Nothing empty. Publishing an empty collection is refused, but one
+        # can still become empty afterwards — its author withdraws the last
+        # material in it, or deletes it and the item cascades away. What is
+        # left is a published promise that opens onto a blank page, which is
+        # the thing the publish rule exists to prevent. Its author still sees
+        # it in the studio, with the reason it cannot go out.
+        if progress_by_id[c.id]["total"] > 0
+        and matches_status(c)
+        and matches_covers(c)
+        and matches_length(c)
     ]
 
     def sort_key(collection: Collection):

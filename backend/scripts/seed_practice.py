@@ -45,6 +45,7 @@ from sqlmodel import select
 from app.core.config import settings
 from app.core.database import async_session_factory
 from app.models.attempt import Attempt, AttemptStatus
+from app.models.collection import Collection, CollectionItem
 from app.models.audio_asset import AudioAsset
 from app.models.audio_blob import AudioBlob
 from app.models.material import Material
@@ -833,6 +834,336 @@ CATALOGUE: list[dict] = [
             ],
         },
     },
+    # --- Six shorter papers ------------------------------------------------
+    #
+    # One task group each rather than two, and that is what they are for: a
+    # catalogue of fifteen long papers cannot fill a collection of sixteen,
+    # and the courses list has a "Long (16+)" band that would otherwise be a
+    # menu option nobody could ever see. They are also what makes a Part 1
+    # drill or a lecture set a real course rather than four papers that
+    # happen to share a number.
+    {
+        "title": "Booking a Taxi to the Airport",
+        "author": "nodira",
+        "band": "easy",
+        "days_ago": 26,
+        "parts": {
+            1: [
+                completion(
+                    "form_completion",
+                    "Complete the booking below. Write ONE WORD AND/OR A NUMBER for each answer.",
+                    "# Airport transfer\n"
+                    "Name | Mr {{1}}\n"
+                    "Pick-up | {{2}} Street\n"
+                    "Date | {{3}} March\n"
+                    "Time | {{4}} am\n"
+                    "Passengers | {{5}}\n"
+                    "Fare quoted | £ {{6}}",
+                    [
+                        ["Brennan"],
+                        ["Hillcrest"],
+                        ["14", "14th", "fourteenth"],
+                        ["5.45", "5:45"],
+                        ["3", "three"],
+                        ["38", "38.00"],
+                    ],
+                    word_limit=1,
+                )
+            ]
+        },
+    },
+    {
+        "title": "Registering at the Health Centre",
+        "author": "malika",
+        "band": "medium",
+        "days_ago": 28,
+        "parts": {
+            1: [
+                completion(
+                    "form_completion",
+                    "Complete the form below. Write ONE WORD AND/OR A NUMBER for each answer.",
+                    "# New patient registration\n"
+                    "Surname | {{1}}\n"
+                    "Date of birth | {{2}} 1998\n"
+                    "Previous doctor | Dr {{3}}\n"
+                    "Allergies | {{4}}\n"
+                    "Preferred day | {{5}}\n"
+                    "Registration fee | £ {{6}}",
+                    [
+                        ["Whitcombe"],
+                        ["9 July", "9th July"],
+                        ["Ahmed"],
+                        ["penicillin"],
+                        ["Thursday"],
+                        ["0", "nothing", "free"],
+                    ],
+                    word_limit=1,
+                )
+            ]
+        },
+    },
+    {
+        "title": "Enquiring About a Cookery Course",
+        "author": "otabek",
+        "band": "medium",
+        "days_ago": 30,
+        "parts": {
+            1: [
+                completion(
+                    "note_completion",
+                    "Complete the notes below. Write NO MORE THAN TWO WORDS AND/OR A NUMBER for each answer.",
+                    "## Evening cookery course\n"
+                    "- Runs for {{1}} weeks\n"
+                    "- Classes start at {{2}}\n"
+                    "- Held in the {{3}} building\n"
+                    "- Bring your own {{4}}\n"
+                    "- Deposit of {{5}} is not refundable\n"
+                    "- Ask for {{6}} on arrival",
+                    [
+                        ["8", "eight"],
+                        ["6.30", "6:30", "6.30 pm"],
+                        ["annexe", "annex"],
+                        ["apron"],
+                        ["£25", "25"],
+                        ["Fiona"],
+                    ],
+                    word_limit=2,
+                )
+            ]
+        },
+    },
+    {
+        "title": "Guided Walk on the Coast Path",
+        "author": "dilshod",
+        "band": "easy",
+        "days_ago": 32,
+        "parts": {
+            2: [
+                completion(
+                    "note_completion",
+                    "Complete the notes below. Write NO MORE THAN TWO WORDS for each answer.",
+                    "## Saturday coast walk\n"
+                    "- Meet by the {{1}} at the harbour\n"
+                    "- The path is closed near the {{2}}\n"
+                    "- Wear boots — the section past the {{3}} is wet\n"
+                    "- Lunch stop at the old {{4}}\n"
+                    "- Back by {{5}}",
+                    [
+                        ["lifeboat station"],
+                        ["quarry"],
+                        ["stream", "brook"],
+                        ["lighthouse"],
+                        ["4.15", "4:15"],
+                    ],
+                    word_limit=2,
+                )
+            ]
+        },
+    },
+    {
+        "title": "Lecture: Why Cities Flood",
+        "author": "nodira",
+        "band": "hard",
+        "days_ago": 34,
+        "parts": {
+            4: [
+                completion(
+                    "note_completion",
+                    "Complete the notes below. Write ONE WORD ONLY for each answer.",
+                    "## Urban flooding\n"
+                    "- Rain cannot soak through {{1}} surfaces\n"
+                    "- Victorian drains were built for a smaller {{2}}\n"
+                    "- Rivers were put into {{3}} beneath the streets\n"
+                    "- The worst damage follows a short, intense {{4}}\n"
+                    "- New schemes hold water in the {{5}} instead",
+                    [
+                        ["hard", "paved"],
+                        ["population"],
+                        ["culverts", "pipes"],
+                        ["storm"],
+                        ["park", "parks"],
+                    ],
+                    word_limit=1,
+                )
+            ]
+        },
+    },
+    {
+        "title": "Seminar: Choosing a Research Question",
+        "author": "malika",
+        "band": "new",
+        "days_ago": 36,
+        "parts": {
+            3: [
+                choice(
+                    "Choose the correct letter, A, B or C.",
+                    [
+                        (
+                            "What does the tutor say about the first draft question?",
+                            [
+                                "it is too broad to answer",
+                                "it repeats an earlier study",
+                                "it needs more sources",
+                            ],
+                            ["a"],
+                        ),
+                        (
+                            "Why does she suggest narrowing it to one city?",
+                            [
+                                "the data is easier to obtain",
+                                "the comparison would be unfair",
+                                "the deadline is close",
+                            ],
+                            ["a"],
+                        ),
+                        (
+                            "What should the students do before the next meeting?",
+                            [
+                                "write the method section",
+                                "read two of the papers listed",
+                                "email their supervisor",
+                            ],
+                            ["b"],
+                        ),
+                    ],
+                )
+            ]
+        },
+    },
+]
+
+
+# --- The collections --------------------------------------------------------
+#
+# Enough of them, and varied enough, that every state the courses list can be
+# in is on the screen at once: in progress, untouched and finished; short,
+# medium and long; a part drill, a lecture set and a pair of mock tests; one
+# with no summary at all and one with a title long enough to be cut off.
+#
+# ``titles`` names materials by their catalogue title rather than by index, so
+# reordering the catalogue above cannot silently rewrite a course. A title
+# that does not match is a loud failure rather than a quiet one — see
+# :func:`_write_collections`.
+#
+# ``sit`` is how many of the course the dev account has already worked
+# through, counted from the start, which is what puts it in one of the three
+# states. ``None`` means "leave it to whatever they have really done", which
+# is the honest state for a course made of papers they may have sat anyway.
+
+COLLECTIONS: list[dict] = [
+    {
+        "title": "Part 1 from scratch",
+        "author": "nodira",
+        "summary": "Six form-filling papers in the order they get harder. Start here if Part 1 is where the marks go.",
+        "sit": 2,
+        "titles": [
+            "Library Membership Enquiry",
+            "Booking a Taxi to the Airport",
+            "Homestay Application",
+            "Registering at the Health Centre",
+            "Booking a Sports Centre Class",
+            "Car Insurance Claim Call",
+        ],
+    },
+    {
+        "title": "Two full mock tests",
+        "author": "dilshod",
+        "summary": "Sit them under exam conditions, a week apart.",
+        "sit": 2,
+        "titles": ["Practice Test 1 — Complete", "Practice Test 2 — Complete"],
+    },
+    {
+        "title": "The lecture set",
+        "author": "malika",
+        "summary": "Part 4 only. One long turn each, no conversation to lean on.",
+        "sit": 0,
+        "titles": [
+            "Lecture: The History of Salt",
+            "Lecture: Urban Beekeeping",
+            "Lecture: How Paper Is Recycled",
+            "Lecture: Why Cities Flood",
+        ],
+    },
+    {
+        # No summary. A course is allowed to be just a name, and the row and
+        # the card both have to look deliberate when it is.
+        "title": "Maps and matching",
+        "author": "otabek",
+        "sit": 1,
+        "titles": [
+            "Riverside Park Redevelopment",
+            "Volunteering at the City Farm",
+            "Whitby Museum Tour",
+        ],
+    },
+    {
+        # Long enough to be cut off in every place it appears. Real courses do
+        # have names like this, and a design that has only been looked at with
+        # short ones is a design that has not been looked at.
+        "title": "Everything, in the order I would work through it with a student preparing over eight weeks",
+        "author": "nodira",
+        "summary": "The whole library, sequenced. Two papers a week, mock tests at the end.",
+        "sit": 3,
+        "titles": [
+            "Library Membership Enquiry",
+            "Booking a Taxi to the Airport",
+            "Homestay Application",
+            "Registering at the Health Centre",
+            "Booking a Sports Centre Class",
+            "Car Insurance Claim Call",
+            "Enquiring About a Cookery Course",
+            "Whitby Museum Tour",
+            "Guided Walk on the Coast Path",
+            "Riverside Park Redevelopment",
+            "Volunteering at the City Farm",
+            "Field Trip Planning Meeting",
+            "Tutorial: Renewable Energy Essay",
+            "Dissertation Feedback Session",
+            "Seminar: Choosing a Research Question",
+            "Lecture: The History of Salt",
+            "Lecture: Urban Beekeeping",
+            "Lecture: How Paper Is Recycled",
+            "Lecture: Why Cities Flood",
+            "Practice Test 1 — Complete",
+            "Practice Test 2 — Complete",
+        ],
+    },
+    {
+        # Resolved at seed time from what the reader has NOT sat, rather than
+        # named. `sit: 0` is not enough to produce an untouched course: the
+        # dev account has its own history over most of the catalogue, so a
+        # course the seed never sat on their behalf still comes out half done.
+        # This is the only way to guarantee the "Not started" state exists,
+        # and the summary is literally true of it.
+        "title": "New this month",
+        "author": "otabek",
+        "summary": "The most recent papers, none of which you have sat.",
+        "fresh": 4,
+        "titles": [],
+    },
+    {
+        "title": "Just the tutorials",
+        "author": "dilshod",
+        "summary": "Part 3. Three or four voices, and the answer is usually what somebody objects to.",
+        "sit": 0,
+        "titles": [
+            "Tutorial: Renewable Energy Essay",
+            "Field Trip Planning Meeting",
+            "Dissertation Feedback Session",
+            "Seminar: Choosing a Research Question",
+        ],
+    },
+    {
+        # Left unpublished. The studio list has a draft state and a blocker
+        # line, and neither can be looked at against a database where every
+        # course is finished.
+        "title": "Weak spots — Part 2 (draft)",
+        "author": "otabek",
+        "summary": "Half built. Not published.",
+        "draft": True,
+        "sit": 0,
+        "titles": ["Whitby Museum Tour"],
+    },
 ]
 
 
@@ -1191,6 +1522,8 @@ async def seed() -> None:
                 "once with Dev login, then re-run with --reset."
             )
 
+        await _write_collections(session, authors, written, me)
+
         await session.commit()
 
         # The bands are a projection now, refilled by the worker on a timer
@@ -1202,6 +1535,103 @@ async def seed() -> None:
         written_count = await difficulty_service.recompute(session)
         print(f"Seeded {len(written)} materials by {len(authors)} authors.")
         print(f"Difficulty computed for {written_count} materials.")
+
+
+async def _write_collections(session, authors: dict, written: list[dict], me) -> None:
+    """The courses, and the reader's way into them.
+
+    Materials are looked up by title and a miss is fatal rather than skipped:
+    a course quietly one paper short is exactly the sort of seed bug that gets
+    mistaken for a UI bug, and it is only ever caused by a typo here.
+
+    Progress is not written. It is counted from attempts
+    (app/services/collections.py), so a course is "in progress" because the
+    dev account has actually sat the first two of its papers — which is also
+    why ``sit`` submits attempts rather than setting a number anywhere.
+    """
+    by_title = {row["material"].title: row for row in written}
+
+    # What the reader has already sat, so a course can be built out of what
+    # they have not. Read after `_own_history` has run, which is why the
+    # collections are written last.
+    sat: set = set()
+    if me is not None:
+        sat = set(
+            (
+                await session.exec(
+                    select(Attempt.material_id).where(
+                        Attempt.user_id == me.id,
+                        Attempt.status == AttemptStatus.SUBMITTED,
+                    )
+                )
+            ).all()
+        )
+
+    for spec in COLLECTIONS:
+        titles = list(spec["titles"])
+        if spec.get("fresh"):
+            titles = [
+                row["material"].title
+                for row in written
+                if row["material"].id not in sat
+            ][: spec["fresh"]]
+            if len(titles) < 2:
+                print(
+                    f"Only {len(titles)} unsat material(s) left — "
+                    f"{spec['title']!r} will not show the untouched state."
+                )
+
+        missing = [t for t in titles if t not in by_title]
+        if missing:
+            raise SystemExit(
+                f"Collection {spec['title']!r} names materials that are not in "
+                f"the catalogue: {missing}"
+            )
+
+        collection = Collection(
+            author_id=authors[spec["author"]].id,
+            title=spec["title"],
+            summary=spec.get("summary", ""),
+            visibility="private" if spec.get("draft") else "public",
+        )
+        session.add(collection)
+        await session.commit()
+        await session.refresh(collection)
+
+        for index, title in enumerate(titles):
+            session.add(
+                CollectionItem(
+                    collection_id=collection.id,
+                    material_id=by_title[title]["material"].id,
+                    order_index=index,
+                )
+            )
+        await session.commit()
+
+        # What puts the course in one of its three states, done the only way
+        # that is true: by sitting the papers.
+        if me is None:
+            continue
+        for title in titles[: spec.get("sit") or 0]:
+            row = by_title[title]
+            questions = [q for qs in row["questions_by_part"].values() for q in qs]
+            if not questions:
+                continue
+            await _submit(
+                session,
+                user_id=me.id,
+                material_id=row["material"].id,
+                question_ids=questions,
+                answered=len(questions),
+                correct=round(len(questions) * 0.7),
+                days_ago=5,
+            )
+            # Kept current as we go: a later course asking for material the
+            # reader has not sat has to know about the papers this loop has
+            # just sat on their behalf.
+            sat.add(row["material"].id)
+
+    print(f"Seeded {len(COLLECTIONS)} collections.")
 
 
 async def clean() -> None:
@@ -1220,6 +1650,27 @@ async def clean() -> None:
         if not author_ids:
             print("Nothing seeded here.")
             return
+
+        # Collections first: they point at the materials, so they have to
+        # stop pointing before the materials can go. Their items go with them
+        # at the database level, but the ORM is happier being told.
+        collections = (
+            await session.exec(
+                select(Collection).where(Collection.author_id.in_(author_ids))  # type: ignore[attr-defined]
+            )
+        ).all()
+        for collection in collections:
+            for item in (
+                await session.exec(
+                    select(CollectionItem).where(
+                        CollectionItem.collection_id == collection.id
+                    )
+                )
+            ).all():
+                await session.delete(item)
+            await session.flush()
+            await session.delete(collection)
+        await session.flush()
 
         materials = (
             await session.exec(
@@ -1304,7 +1755,10 @@ async def clean() -> None:
         for user in users:
             await session.delete(user)
         await session.commit()
-        print(f"Removed {len(materials)} seeded materials and {len(users)} accounts.")
+        print(
+            f"Removed {len(materials)} seeded materials, "
+            f"{len(collections)} collections and {len(users)} accounts."
+        )
 
 
 def main() -> None:
