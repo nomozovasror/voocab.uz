@@ -41,24 +41,19 @@ import {
  * rail is a place to hide things — three fit, the scrollbar hides until it is
  * reached for, and a mouse wheel cannot move it sideways at all.
  *
- * Four across, and the books are CAPPED rather than left to fill the column.
- * Uncapped they came out 186px wide — wider than they were drawn for — and a
- * book is a fixed ratio, so every pixel of extra width is another one and a
- * third of height. That is what pushed the second row off the bottom, and a
- * reader with seven collections seeing four has no reason to think there are
- * more. Capped at 160 the row is sixty pixels shorter, which is the
- * difference between the next row peeking and the next row not existing.
+ * Four across, filling the column. Capping the books was tried and taken out
+ * again: in an 816px column four 160px books leave forty-odd pixels between
+ * each pair however the gap is set, and books rattling in oversized cells
+ * read as a layout that has come apart. The slack is not a gap you can tune —
+ * it is what capping IS.
  *
- * The slack that leaves in each cell is spread evenly rather than pushed to
- * one side: an even shelf with air in it reads as a shelf, and a left-packed
- * one with a gap at the end reads as a mistake.
+ * So the height comes back instead, and the row is as tall as four books on
+ * this column make it. Whether the next row shows above the fold is then a
+ * question about the window rather than about the shelf; the count above it
+ * says how many there are either way.
  */
 const SHELF =
-  "mt-4 grid grid-cols-2 justify-items-center gap-x-5 gap-y-6 sm:grid-cols-3 lg:grid-cols-4";
-
-/** One place on the shelf. The cap is here rather than on the book itself so
- *  that anything else placed on a shelf lines up with the books. */
-const SLOT = "w-full max-w-40";
+  "mt-3 grid grid-cols-2 gap-x-5 gap-y-5 sm:grid-cols-3 lg:grid-cols-4";
 
 /** The same entrance the catalogue rows use, applied to a book. */
 const REVEAL =
@@ -155,9 +150,7 @@ export function CollectionList({
         <SkeletonBlock label="Loading collections">
           <div className={SHELF}>
             {Array.from({ length: 4 }, (_, i) => (
-              <div key={i} className={SLOT}>
-                <CollectionBookSkeleton />
-              </div>
+              <CollectionBookSkeleton key={i} />
             ))}
           </div>
         </SkeletonBlock>
@@ -199,7 +192,7 @@ export function CollectionList({
               <li
                 key={collection.id}
                 ref={revealRef}
-                className={cn(SLOT, revealRef && REVEAL)}
+                className={revealRef ? REVEAL : undefined}
               >
                 <CollectionBook collection={collection} />
               </li>
@@ -207,13 +200,9 @@ export function CollectionList({
           </ul>
 
           {isFetchingNextPage && (
-            <div className={cn(SHELF, "mt-6")} aria-hidden>
-              <div className={SLOT}>
-                <CollectionBookSkeleton />
-              </div>
-              <div className={SLOT}>
-                <CollectionBookSkeleton />
-              </div>
+            <div className={cn(SHELF, "mt-5")} aria-hidden>
+              <CollectionBookSkeleton />
+              <CollectionBookSkeleton />
             </div>
           )}
           {hasNextPage && <div ref={bottom} aria-hidden className="h-8" />}

@@ -270,8 +270,12 @@ export function CollectionBook({ collection }: { collection: Collection }) {
 
       {/* Under the cover: how far through it the reader is, and nothing else.
           The author is on the cover where an author belongs, so repeating it
-          here would be the same name twice in forty pixels. */}
-      <div className="mt-3">
+          here would be the same name twice in forty pixels.
+
+          Kept tight. A book is a fixed ratio, so the cover's height is not
+          negotiable and every pixel this strip spends is a pixel of the next
+          row pushed below the fold. */}
+      <div className="mt-2">
         <div
           className="h-0.5 overflow-hidden rounded-full bg-foreground/10"
           role="progressbar"
@@ -292,7 +296,7 @@ export function CollectionBook({ collection }: { collection: Collection }) {
             style={{ width: `${pct}%` }}
           />
         </div>
-        <p className="mt-2 text-sm text-foreground">
+        <p className="mt-1.5 text-xs text-foreground">
           {finished ? (
             <span className="text-correct">Finished</span>
           ) : done === 0 ? (
@@ -319,9 +323,9 @@ export function CollectionBookSkeleton() {
           <rect width={156} height={214} className="fill-foreground/10" />
         </svg>
       </div>
-      <div className="mt-3">
+      <div className="mt-2">
         <div className="h-0.5 rounded-full bg-foreground/10" />
-        <p className="mt-2 text-sm">
+        <p className="mt-1.5 text-xs">
           <Skeleton className="inline-block h-[0.8em] w-24" />
         </p>
       </div>
