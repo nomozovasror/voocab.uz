@@ -39,6 +39,7 @@ from app.models.collection import Collection, CollectionItem
 from app.models.material import Material
 from app.models.part import Part
 from app.models.user import User
+from app.services import learner_stats
 from app.services import listening as listening_service
 
 #: A collection can be published once it has this many public materials in it.
@@ -844,6 +845,75 @@ async def list_public(
     }
 
 
+async def stats_for(
+    session: AsyncSession, user_id: uuid.UUID, material_ids: list[uuid.UUID]
+) -> dict:
+    """How this learner has done across one collection.
+
+    First-try average is the headline, for the reason it always is here:
+    somebody who sat a course three times and finished on 95% has learned that
+    course. ``best_avg_pct`` sits beside it and is ``None`` until something in
+    it has actually been sat twice — with no retries it is the first-try
+    average under a second name, and two identical numbers labelled
+    differently is a panel inviting you to work out what it means.
+
+    ``time_spent_ms`` counts every attempt, not just first ones: the question
+    it answers is "how long has this course cost me", and a retake costs an
+    evening like anything else.
+    """
+    empty = {
+        "first_try_avg_pct": None,
+        "best_avg_pct": None,
+        "time_spent_ms": 0,
+    }
+    if not material_ids:
+        return empty
+
+    attempts = list(
+        (
+            await session.exec(
+                select(Attempt)
+                .where(
+                    Attempt.user_id == user_id,
+                    Attempt.material_id.in_(material_ids),  # type: ignore[attr-defined]
+                    Attempt.status == AttemptStatus.SUBMITTED,
+                    Attempt.submitted_at.is_not(None),  # type: ignore[attr-defined]
+                )
+                .order_by(Attempt.submitted_at)  # type: ignore[arg-type]
+            )
+        ).all()
+    )
+    if not attempts:
+        return empty
+
+    first: dict[uuid.UUID, Attempt] = {}
+    best: dict[uuid.UUID, int] = {}
+    repeated = False
+    for attempt in attempts:
+        if attempt.material_id in first:
+            repeated = True
+        else:
+            first[attempt.material_id] = attempt
+        pct = learner_stats._score_pct(attempt)
+        if pct is not None:
+            best[attempt.material_id] = max(
+                best.get(attempt.material_id, pct), pct
+            )
+
+    first_scores = [
+        pct
+        for attempt in first.values()
+        if (pct := learner_stats._score_pct(attempt)) is not None
+    ]
+    return {
+        "first_try_avg_pct": learner_stats._mean(first_scores),
+        "best_avg_pct": (
+            learner_stats._mean(list(best.values())) if repeated else None
+        ),
+        "time_spent_ms": sum(a.time_spent_ms or 0 for a in attempts),
+    }
+
+
 async def for_learner(
     session: AsyncSession, user_id: uuid.UUID, collection: Collection
 ) -> dict:
@@ -860,6 +930,7 @@ async def for_learner(
     return {
         **_summarise(collection, author),
         "progress": await progress(session, user_id, ids),
+        "stats": await stats_for(session, user_id, ids),
         "items": await listening_service._catalogue_rows(
             session, user_id, materials
         ),

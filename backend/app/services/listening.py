@@ -1323,13 +1323,21 @@ async def _catalogue_rows(
         )
     ).all():
         row = history.setdefault(
-            attempt.material_id, {"attempts": 0, "best_score": None}
+            attempt.material_id,
+            {"attempts": 0, "best_score": None, "first_score": None},
         )
         row["attempts"] += 1
         score = int(attempt.score or 0)
         row["best_score"] = (
             score if row["best_score"] is None else max(row["best_score"], score)
         )
+        # The first one, kept alongside the best. The row prints the best —
+        # it is somebody's record and the record is their best — but anything
+        # that MEASURES them reads the first, and the collection page's result
+        # map is one of those. Attempts arrive oldest-first, so the first is
+        # simply whichever got here before this one.
+        if row["first_score"] is None:
+            row["first_score"] = score
         row["last_attempt_id"] = attempt.id
         row["last_attempt_at"] = attempt.submitted_at
 
@@ -1370,6 +1378,7 @@ async def _catalogue_rows(
                 ),
                 "attempts": 0,
                 "best_score": None,
+                "first_score": None,
                 "last_attempt_id": None,
                 "last_attempt_at": None,
                 **history.get(m.id, {}),

@@ -86,3 +86,64 @@ export function usePreference(key: PreferenceKey): [boolean, (on: boolean) => vo
 
   return [on, set];
 }
+
+
+/**
+ * A remembered choice that is not a behaviour.
+ *
+ * The rule above — every preference defaults to off — is about behaviours:
+ * something the interface does that nobody asked for. A view choice is not
+ * one of those. It has no "off", and its default is worked out from what is
+ * being looked at rather than from a principle: a collection of eight is a
+ * list, a collection of two hundred is a grid, and the reader overriding
+ * either should have that remembered.
+ *
+ * So it is a separate hook with an explicit fallback, and the caller decides
+ * what the fallback is.
+ */
+export function useRememberedChoice<T extends string>(
+  key: string,
+  fallback: T,
+  allowed: readonly T[],
+): [T, (value: T) => void] {
+  const [value, setValue] = useState<T>(fallback);
+  // What the reader last chose, or nothing. Held separately from the value so
+  // a fallback that changes — a collection loading, and its size deciding the
+  // default — does not overwrite a choice they made.
+  const [chosen, setChosen] = useState<T | null>(null);
+
+  useEffect(() => {
+    let stored: string | null = null;
+    try {
+      stored = localStorage.getItem(key);
+    } catch {
+      // Private windows throw on access. The fallback is the answer.
+    }
+    setChosen(
+      stored && (allowed as readonly string[]).includes(stored)
+        ? (stored as T)
+        : null,
+    );
+    // `allowed` is a literal at every call site; spreading it into the deps
+    // would re-run this on every render for no reason.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+
+  useEffect(() => {
+    setValue(chosen ?? fallback);
+  }, [chosen, fallback]);
+
+  const set = useCallback(
+    (next: T) => {
+      setChosen(next);
+      try {
+        localStorage.setItem(key, next);
+      } catch {
+        // Written where it can be; the session still behaves as asked.
+      }
+    },
+    [key],
+  );
+
+  return [value, set];
+}

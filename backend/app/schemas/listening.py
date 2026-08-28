@@ -819,6 +819,11 @@ class PracticeMaterialOut(BaseModel):
     #: The caller's own history with this material, and nobody else's.
     attempts: int = 0
     best_score: int | None = None
+    #: Their FIRST submitted score, alongside the best. The row prints the
+    #: best — a record is somebody's best — but anything that measures them
+    #: reads the first, which is why both are here and why the collection
+    #: page's result map colours by this one.
+    first_score: int | None = None
     #: The most recent one, so a row can lead straight back to its review.
     last_attempt_id: uuid.UUID | None = None
     last_attempt_at: datetime | None = None

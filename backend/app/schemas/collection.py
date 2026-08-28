@@ -108,6 +108,20 @@ class CollectionListOut(BaseModel):
     lengths: list[PracticeFacetOut] = []
 
 
+class CollectionStatsOut(BaseModel):
+    """How the caller has done across one collection.
+
+    First-try average is the headline for the reason it always is here.
+    ``best_avg_pct`` is ``None`` until something in the course has been sat
+    twice: with no retries it is the same number under a second name, and two
+    identical figures labelled differently is a panel asking to be decoded.
+    """
+
+    first_try_avg_pct: int | None = None
+    best_avg_pct: int | None = None
+    time_spent_ms: int = 0
+
+
 class CollectionDetailOut(CollectionOut):
     """One collection, opened.
 
@@ -116,6 +130,7 @@ class CollectionDetailOut(CollectionOut):
     byline. A collection is a different route to the same thing.
     """
 
+    stats: CollectionStatsOut = CollectionStatsOut()
     items: list[PracticeMaterialOut] = []
 
 

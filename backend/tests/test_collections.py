@@ -1028,3 +1028,81 @@ async def test_a_published_collection_that_became_empty_is_not_listed() -> None:
             assert mine["blocker"] is not None
     finally:
         await _cleanup([material.id], email)
+
+
+@pytest.mark.asyncio
+async def test_a_collection_reports_how_the_caller_has_done_in_it() -> None:
+    """First-try average is the headline; best-of is absent until something
+    has actually been sat twice.
+
+    With no retries the two are the same number under different names, and
+    two identical figures labelled differently is a panel asking to be
+    decoded rather than read.
+    """
+    from datetime import datetime, timezone
+
+    email = f"coll-stats-{uuid.uuid4().hex[:8]}@example.com"
+    user = await _user(email)
+    token = create_access_token(str(user.id))
+    made = [
+        await _material(user.id, f"Stat {i} {uuid.uuid4()}", "public")
+        for i in range(2)
+    ]
+
+    async def sit(material_id, score, total, spent_ms):
+        async with async_session_factory() as session:
+            session.add(
+                Attempt(
+                    user_id=user.id,
+                    material_id=material_id,
+                    status=AttemptStatus.SUBMITTED,
+                    score=score,
+                    total_questions=total,
+                    time_spent_ms=spent_ms,
+                    submitted_at=datetime.now(timezone.utc),
+                )
+            )
+            await session.commit()
+
+    try:
+        async with _client() as client:
+            collection_id = await _make(client, token, f"Stats {uuid.uuid4().hex[:6]}")
+            await client.put(
+                f"/api/collections/{collection_id}/items",
+                json={"material_ids": [str(m.id) for m in made]},
+                cookies={"access_token": token},
+            )
+
+            await sit(made[0].id, 6, 10, 600_000)   # 60% on the first try
+            await sit(made[1].id, 8, 10, 300_000)   # 80% on the first try
+
+            r = await client.get(
+                f"/api/collections/{collection_id}",
+                cookies={"access_token": token},
+            )
+            stats = r.json()["stats"]
+            assert stats["first_try_avg_pct"] == 70
+            assert stats["best_avg_pct"] is None  # nothing sat twice yet
+            assert stats["time_spent_ms"] == 900_000
+
+            # A retake: the first-try average is untouched, the best-of
+            # appears, and the time counts the second evening too.
+            await sit(made[0].id, 10, 10, 200_000)
+            r = await client.get(
+                f"/api/collections/{collection_id}",
+                cookies={"access_token": token},
+            )
+            stats = r.json()["stats"]
+            assert stats["first_try_avg_pct"] == 70
+            assert stats["best_avg_pct"] == 90
+            assert stats["time_spent_ms"] == 1_100_000
+
+            # And the row carries the FIRST score alongside the best, which is
+            # what the grid on that page colours by.
+            row = next(
+                x for x in r.json()["items"] if x["id"] == str(made[0].id)
+            )
+            assert row["first_score"] == 6
+            assert row["best_score"] == 10
+    finally:
+        await _cleanup([m.id for m in made], email)

@@ -393,6 +393,10 @@ export interface PracticeMaterial {
   difficulty: Difficulty;
   attempts: number;
   best_score: number | null;
+  /** Their FIRST submitted score. The row prints the best — a record is
+   *  somebody's best — but anything that MEASURES them reads the first, which
+   *  is why both are here and why the collection grid colours by this one. */
+  first_score: number | null;
   last_attempt_id: string | null;
   last_attempt_at: string | null;
 }
@@ -525,10 +529,21 @@ export interface CollectionList {
   lengths: PracticeFacet[];
 }
 
+/** How the reader has done across one collection.
+ *
+ *  `best_avg_pct` is null until something in it has been sat twice: with no
+ *  retries it is the first-try average under a second name. */
+export interface CollectionStats {
+  first_try_avg_pct: number | null;
+  best_avg_pct: number | null;
+  time_spent_ms: number;
+}
+
 /** One collection, opened. `items` are the catalogue's own rows — same
  *  measured difficulty, same history, same byline — because a collection is a
  *  different route to the same thing, not a different thing. */
 export interface CollectionDetail extends Collection {
+  stats: CollectionStats;
   items: PracticeMaterial[];
 }
 
