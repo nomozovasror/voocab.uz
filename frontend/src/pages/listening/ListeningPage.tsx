@@ -4,7 +4,11 @@ import { Headphones } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useClaimHeaderCentre } from "@/components/layout/header-center";
 import { useDebounced } from "@/hooks/use-debounced";
-import { PREFERENCES, usePreference } from "@/lib/preferences";
+import {
+  PREFERENCES,
+  useRememberedChoice,
+  usePreference,
+} from "@/lib/preferences";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useRevealOnScroll } from "@/hooks/use-reveal-on-scroll";
 import { SkeletonBlock } from "@/components/ui/skeleton";
@@ -21,6 +25,7 @@ import {
   DIFFICULTY_LABEL,
   DIFFICULTY_ORDER,
   EMPTY_FILTERS,
+  LIST_MODES,
   QUESTION_TYPE_ORDER,
   catalogueParams,
   filterOptions,
@@ -117,7 +122,17 @@ export default function ListeningPage() {
   // Which of the two lists is showing. Not part of `filters`, because it does
   // not narrow a list — it changes which list there is, and "Clear filters"
   // has no business putting somebody back on the other one.
-  const [mode, setMode] = useState<ListMode>("materials");
+  //
+  // Remembered, because leaving this page and coming back is something people
+  // do constantly here: open a course, sit a paper, press "All listening" —
+  // and landing on the catalogue after every one of those is the page
+  // forgetting which half of it you were using. Read on the first render
+  // rather than in an effect, so nobody sees a frame of the wrong list.
+  const [mode, setMode] = useRememberedChoice<ListMode>(
+    "voocab-listening-tab",
+    "materials",
+    LIST_MODES,
+  );
   // The courses list's own filter. Its own state rather than a field on
   // `filters` for the same reason `mode` is: "Clear filters" belongs to the
   // catalogue, and it has no business reaching into the other list.

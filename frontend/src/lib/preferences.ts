@@ -101,32 +101,40 @@ export function usePreference(key: PreferenceKey): [boolean, (on: boolean) => vo
  * So it is a separate hook with an explicit fallback, and the caller decides
  * what the fallback is.
  */
+function readChoice<T extends string>(
+  key: string,
+  allowed: readonly T[],
+): T | null {
+  let stored: string | null = null;
+  try {
+    stored = localStorage.getItem(key);
+  } catch {
+    // Private windows and blocked site data throw on access rather than
+    // returning nothing. No choice is the answer.
+  }
+  return stored && (allowed as readonly string[]).includes(stored)
+    ? (stored as T)
+    : null;
+}
+
 export function useRememberedChoice<T extends string>(
   key: string,
   fallback: T,
   allowed: readonly T[],
 ): [T, (value: T) => void] {
-  // Only what the reader actually chose is held in state. The answer is
-  // worked out during render from that and the caller's fallback, rather than
-  // synced into a second piece of state by an effect — an effect would leave
-  // one frame showing the old answer every time the fallback changed, and the
-  // fallback here changes the moment a collection loads and its size decides
-  // the default. That frame is a 200-lesson course drawn as a list.
-  const [chosen, setChosen] = useState<T | null>(null);
+  // Read on the first render rather than in an effect, so the first paint is
+  // already right. An effect would show the fallback for one frame every time
+  // — which for a remembered tab is the wrong list, visibly, on every visit.
+  // The theme does the same thing for the same reason.
+  const [chosen, setChosen] = useState<T | null>(() => readChoice(key, allowed));
 
+  // And re-read when the key changes, because a lazy initialiser only runs
+  // once and the key is per-collection: moving from one course to another
+  // keeps this component mounted and would otherwise carry the first one's
+  // choice into the second. Setting the same value is a no-op, so this costs
+  // nothing on mount.
   useEffect(() => {
-    let stored: string | null = null;
-    try {
-      stored = localStorage.getItem(key);
-    } catch {
-      // Private windows and blocked site data throw on access rather than
-      // returning nothing. The fallback is the answer.
-    }
-    setChosen(
-      stored && (allowed as readonly string[]).includes(stored)
-        ? (stored as T)
-        : null,
-    );
+    setChosen(readChoice(key, allowed));
     // `allowed` is a literal at every call site; putting it in the deps would
     // re-run this on every render for nothing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -144,8 +152,10 @@ export function useRememberedChoice<T extends string>(
     [key],
   );
 
-  // An explicit choice wins over the fallback, which is the whole point of
-  // remembering one: the size picks the view for somebody who has never said,
-  // and stops deciding for anybody who has.
+  // An explicit choice wins over the fallback, worked out during render
+  // rather than synced into a second piece of state: the fallback changes the
+  // moment a collection loads and its size decides the default, and an effect
+  // would show the old answer for a frame — a 200-lesson course drawn as a
+  // list.
   return [chosen ?? fallback, set];
 }

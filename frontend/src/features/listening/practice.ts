@@ -223,7 +223,9 @@ export interface PracticeFilterState {
  * feel like one page rather than two: the same field searches whichever list
  * is showing.
  */
-export type ListMode = "materials" | "courses";
+export const LIST_MODES = ["materials", "courses"] as const;
+
+export type ListMode = (typeof LIST_MODES)[number];
 
 /**
  * The one filter a course has.

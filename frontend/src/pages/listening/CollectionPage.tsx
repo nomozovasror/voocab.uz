@@ -66,8 +66,12 @@ export default function CollectionPage() {
   const revealRef = useRevealOnScroll(!stillness);
 
   const total = data?.items.length ?? 0;
+  // Per collection, not one setting for all of them. A course of six and a
+  // course of two hundred want different views, and a choice made on one is
+  // not a statement about the other — remembered globally, picking `list` on
+  // a short course would open the next 200-lesson one as a list too.
   const [view, setView] = useRememberedChoice<View>(
-    "voocab-collection-view",
+    `voocab-collection-view:${id ?? ""}`,
     total > GRID_FROM ? "grid" : "list",
     VIEWS,
   );
