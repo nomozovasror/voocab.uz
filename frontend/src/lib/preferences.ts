@@ -106,10 +106,12 @@ export function useRememberedChoice<T extends string>(
   fallback: T,
   allowed: readonly T[],
 ): [T, (value: T) => void] {
-  const [value, setValue] = useState<T>(fallback);
-  // What the reader last chose, or nothing. Held separately from the value so
-  // a fallback that changes — a collection loading, and its size deciding the
-  // default — does not overwrite a choice they made.
+  // Only what the reader actually chose is held in state. The answer is
+  // worked out during render from that and the caller's fallback, rather than
+  // synced into a second piece of state by an effect — an effect would leave
+  // one frame showing the old answer every time the fallback changed, and the
+  // fallback here changes the moment a collection loads and its size decides
+  // the default. That frame is a 200-lesson course drawn as a list.
   const [chosen, setChosen] = useState<T | null>(null);
 
   useEffect(() => {
@@ -117,21 +119,18 @@ export function useRememberedChoice<T extends string>(
     try {
       stored = localStorage.getItem(key);
     } catch {
-      // Private windows throw on access. The fallback is the answer.
+      // Private windows and blocked site data throw on access rather than
+      // returning nothing. The fallback is the answer.
     }
     setChosen(
       stored && (allowed as readonly string[]).includes(stored)
         ? (stored as T)
         : null,
     );
-    // `allowed` is a literal at every call site; spreading it into the deps
-    // would re-run this on every render for no reason.
+    // `allowed` is a literal at every call site; putting it in the deps would
+    // re-run this on every render for nothing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
-
-  useEffect(() => {
-    setValue(chosen ?? fallback);
-  }, [chosen, fallback]);
 
   const set = useCallback(
     (next: T) => {
@@ -145,5 +144,8 @@ export function useRememberedChoice<T extends string>(
     [key],
   );
 
-  return [value, set];
+  // An explicit choice wins over the fallback, which is the whole point of
+  // remembering one: the size picks the view for somebody who has never said,
+  // and stops deciding for anybody who has.
+  return [chosen ?? fallback, set];
 }

@@ -158,6 +158,10 @@ export function LessonGrid({
         })}
       </div>
 
+      {/* The legend sits under the grid and is read once. It is not sticky:
+          three colours and their meanings are learned in a glance and then
+          stop being needed, and a key that follows you down two hundred
+          cells is a key that has outstayed its use. */}
       <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted-foreground">
         {BANDS.map((band) => (
           <span key={band.label} className="flex items-center gap-1.5">
@@ -179,17 +183,28 @@ export function LessonGrid({
       </div>
 
       {/*
-        One readout under the grid rather than a floating tooltip on each
-        cell. A tooltip that follows the pointer over two hundred targets is
-        two hundred chances to flicker, and it covers the very cells somebody
-        is comparing. A fixed line below is always in the same place, works
-        the same for the keyboard, and cannot obscure anything.
+        One readout rather than a floating tooltip on each cell. A tooltip
+        chasing the pointer over two hundred targets is two hundred chances to
+        flicker, and it covers the very cells somebody is comparing. One line
+        is always in the same place, works identically for the keyboard, and
+        obscures nothing.
+
+        **Stuck to the bottom of the window**, which is what makes it work at
+        two hundred cells rather than at twenty. Sat at the end of the grid it
+        was fine on a short course and useless on a long one: the reader
+        hovers a cell near the top and the answer is printed a screen and a
+        half below them. Sticky, it rides along and is never further away than
+        the bottom edge — and it settles into its natural place at the end of
+        the grid rather than floating over the page forever.
+
+        It needs its own ground because it now floats over the cells: a
+        translucent panel here would print the answer on top of the numbers it
+        is describing.
 
         Its height is held whether or not anything is under the pointer, so
-        the legend above it does not jump every time the pointer crosses the
-        grid.
+        nothing shifts as the pointer crosses in and out of the grid.
       */}
-      <div className="mt-3 min-h-9 rounded-lg bg-surface-sunken px-3 py-2 text-sm">
+      <div className="sticky bottom-4 z-raised mt-3 min-h-9 rounded-lg border border-border-subtle bg-card px-3 py-2 text-sm shadow-sm">
         {current ? (
           <p className="truncate">
             <span className="text-muted-foreground tabular-nums">
