@@ -79,10 +79,15 @@ ANNOUNCE_LEAD_MS = 400
 #: these is the start; everything before it is the disc talking about itself.
 START_MARKERS = [
     re.compile(r"\bnow turn to (the )?section\b", re.I),
+    re.compile(r"\byou will hear\b", re.I),
     re.compile(r"\bsection (one|two|three|four|\d)\b", re.I),
     re.compile(r"\btest (one|two|three|four|\d)\b", re.I),
-    re.compile(r"\byou will hear\b", re.I),
 ]
+#: "Test 1." on its own is a label, not the test speaking, and it is followed
+#: by two seconds of silence before anything happens. Starting there gives a
+#: recording that opens with a number and a pause. The start is the next line
+#: that actually says something.
+BARE_LABEL = re.compile(r"^(test|section|cd|part)\s*(one|two|three|four|\d+)\s*[.:]?$", re.I)
 #: Dead air at the end goes; speech at the end does not. "That is the end of
 #: Section 1, you now have half a minute to check your answers" is the test
 #: talking, the same as the introduction is.
@@ -148,11 +153,31 @@ def transcribe_head(samples: np.ndarray, rate: int, cache: pathlib.Path) -> list
 
 
 def announcement(segments: list[dict]) -> dict | None:
-    """The first line where the test announces itself, or None."""
+    """The first line where the test actually starts speaking, or None.
+
+    A segment that is only "Test 1." is skipped: it is a label, it is a second
+    long, and two seconds of silence follow it. Cutting there produces a
+    recording that opens with a number and then a pause."""
     for segment in segments:
-        if any(marker.search(segment.get("text", "")) for marker in START_MARKERS):
+        text = segment.get("text", "").strip()
+        if BARE_LABEL.match(text):
+            continue
+        if any(marker.search(text) for marker in START_MARKERS):
             return segment
     return None
+
+
+def speech_onset(mono: np.ndarray, rate: int, anchor_ms: int) -> int:
+    """Where the speech containing ``anchor_ms`` began.
+
+    Whisper's segment boundaries absorb the silence in front of a sentence --
+    it timed "You will hear a number of different recordings" from 24.3s when
+    the words start at 26.45s -- so its start is a good pointer at WHICH
+    sentence and a poor one at WHEN. The anchor is taken from inside the
+    segment and walked back to the last silence before it, which is the real
+    onset."""
+    ends = [b for _, b in silences(mono, rate, 400) if b <= anchor_ms]
+    return ends[-1] if ends else 0
 
 
 def load(path: pathlib.Path) -> tuple[np.ndarray, int]:
@@ -206,8 +231,13 @@ def main() -> int:
               "leaving the front alone rather than guessing")
         start_ms = 0
     else:
-        start_ms = max(0, int(found["start"] * 1000) - ANNOUNCE_LEAD_MS)
-        print(f"  starts at {found['start']:.1f}s: {found['text'].strip()[:58]!r}")
+        # Anchored INSIDE the segment rather than at its edge, so a boundary
+        # that ran early or late does not decide the cut.
+        anchor_ms = int((found["start"] + (found["end"] - found["start"]) * 0.4) * 1000)
+        onset_ms = speech_onset(mono, rate, anchor_ms)
+        start_ms = max(0, onset_ms - ANNOUNCE_LEAD_MS)
+        print(f"  starts at {onset_ms / 1000:.1f}s: {found['text'].strip()[:58]!r}"
+              f"  (whisper said {found['start']:.1f}s)")
         if start_ms > content_ms * MAX_HEAD_FRACTION and not args.force:
             print(f"REFUSING  that would drop {start_ms / 1000:.0f}s, more than "
                   f"{MAX_HEAD_FRACTION:.0%} of the {content_ms / 1000:.0f}s before the "

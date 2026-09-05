@@ -433,21 +433,31 @@ and both were wrong in ways that only listening would catch:
 
 So the first couple of minutes go through Groq's `whisper-large-v3` -- the same
 model the production worker uses -- and the cut lands on the first line where
-the test announces itself:
+the test actually starts speaking:
 
 ```
    0.0 -   6.4   Cambridge English, IELTS 11, Tests 1-4.
    8.2 -  14.6   Published by Cambridge University Press ...
   16.2 -  18.0   This recording is copyright.
   19.8 -  20.9   CD 1.
-  23.0 -  24.3   Test 1.                              <- the cut
-  24.3 -  32.9   You will hear a number of different recordings ...
+  23.5 -  24.4   Test 1.                    <- skipped: a label, then 2s of silence
+  26.4 -  33.0   You will hear a number of different recordings ...   <- the cut
   61.2 -  77.5   Now turn to section one ... You will hear a telephone
                  conversation between an official at a village hall ...
   79.6 -  84.8   First, you have some time to look at questions one to six.
   85   - 116     the pause to read them
   116  - 181     the example, played and explained
 ```
+
+Two details that only listening turned up. **"Test 1." is a label, not the
+test speaking** -- it lasts under a second and two seconds of silence follow
+it, so cutting there gives a recording that opens with a number and a pause;
+segments that are only a label are skipped. And **whisper's segment boundaries
+absorb the silence in front of a sentence** -- it timed "You will hear a number
+of different recordings" from 24.3s when the words start at 26.45s -- so its
+start says WHICH sentence reliably and WHEN badly. The cut is anchored inside
+the matched segment and walked back to the last silence, which is the real
+onset.
 
 The transcript is cached beside the alignment, so tuning the cut does not spend
 the quota again. Parts 2 to 4 open at "Now turn to section three" with no
