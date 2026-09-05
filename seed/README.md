@@ -474,10 +474,16 @@ Cutting means re-encoding, and libsndfile's default lands near 85 kbps against
 a 128 kbps source. `compression_level=0.0` comes back at 113, so a listening
 test is not marked on a worse recording than the book shipped.
 
-`Part.audio_start_ms` looked like the answer and is not: the field exists, the
-Studio editor writes it, and the take page reads it only to draw part
-boundaries on the waveform -- for a single-part material it is ignored outright
-(`ListeningTakePage.tsx`, `i === 0 ||`).
+`Part.audio_start_ms` looked like the answer to the trimming and is not: the
+take page reads it only to draw part boundaries on the waveform, and for a
+single-part material ignores it outright (`ListeningTakePage.tsx`, `i === 0 ||`).
+
+It is not inert, though. The Studio editor DOES bound playback to it, and a
+part left marked `0 - 6105` plays six seconds and stops -- which reads exactly
+like a broken audio file and sent a long hunt through encoders, Xing headers,
+CORS and the HTTP cache before the editor showed the marks on screen. A seeded
+part is the whole recording by construction, so the importer clears both bounds
+on **every** import rather than only when it creates the part.
 
 The importer shifts every timestamp by the recorded offset, transcript and
 replay spans together. cam11-t1-s1: 578s becomes 555s.

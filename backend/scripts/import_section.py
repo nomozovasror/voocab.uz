@@ -284,6 +284,18 @@ async def import_section(section_id: str, owner_id: uuid.UUID) -> None:
                 .order_by(Part.order_index))).first()
             logger.info("material %s already existed, re-pointed at the asset", material.id)
 
+        # The seeded part IS the whole recording -- the book published one
+        # section per file and the trim removed everything that was not it. So
+        # the bounds are cleared on EVERY import, not only when the part is
+        # created: a stray end mark left in the editor bounds playback to it,
+        # and one at 6.1s is indistinguishable from "the audio is broken".
+        if part.audio_start_ms is not None or part.audio_end_ms is not None:
+            logger.info("clearing part bounds %s-%s: the part is the whole recording",
+                        part.audio_start_ms, part.audio_end_ms)
+            part.audio_start_ms = None
+            part.audio_end_ms = None
+            session.add(part)
+
         written = await import_questions(session, part.id, section_id, offset_ms)
         if written:
             # Every authoring write bumps the counter the editor checks against.
