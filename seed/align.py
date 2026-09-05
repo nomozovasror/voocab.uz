@@ -58,6 +58,10 @@ _ONES = ("zero one two three four five six seven eight nine ten eleven twelve "
 _TENS = ("- - twenty thirty forty fifty sixty seventy eighty ninety").split()
 _ORDINALS = {"1st": "first", "2nd": "second", "3rd": "third", "21st": "twenty first",
              "22nd": "twenty second", "23rd": "twenty third", "31st": "thirty first"}
+#: The book prints "£115" and the speaker says "a hundred and fifteen POUNDS".
+#: Dropping the symbol drops a spoken word, and the aligner then has to spend
+#: it on whatever comes next.
+_CURRENCY = {"£": "pounds", "$": "dollars", "€": "euros"}
 
 
 def spell_number(n: int) -> str:
@@ -90,7 +94,11 @@ def say(word: str) -> str:
         return _ORDINALS[lowered]
     digits = re.sub(r"[^0-9]", "", lowered)
     if digits and not re.search(r"[a-z]", lowered):
-        return spell_number(int(digits))
+        spoken = spell_number(int(digits))
+        for symbol, name in _CURRENCY.items():
+            if symbol in lowered:
+                return f"{spoken} {name}"
+        return spoken
     return word
 #: Per-TOKEN, not per-word. "C-H-A-R" is four tokens and takes two seconds to
 #: say letter by letter; judged as one word it looks like drift, and the first

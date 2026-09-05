@@ -97,6 +97,62 @@ def classify(pdf: pathlib.Path, index: int) -> dict:
     return out
 
 
+def script_runs(pages: list[dict]) -> dict[tuple[int, int], list[int]]:
+    """Which pages hold each section's audioscript.
+
+    Sliced between SECTION headings rather than page by page, because the
+    audioscripts are one unbroken block at the back of the book and two things
+    go wrong if each page has to classify itself into it. A page misread as
+    something else leaves a hole -- Cambridge 11 lost Test 3 Section 4 that
+    way. And a section's script does not end where its page does: Section 1
+    finishes partway down the page where Section 2 begins, so the run has to
+    include the next section's first page and let the reader stop at the
+    heading.
+    """
+    starts = []
+    for page in sorted(pages, key=lambda p: p["index"]):
+        if page.get("kind") != "audioscript":
+            continue
+        heading = SECTION_HEADING.search(page.get("heading") or "")
+        if heading:
+            starts.append((page["index"], int(heading.group(1))))
+    if not starts:
+        return {}
+
+    test, previous, runs = 0, 99, []
+    for index, section in starts:
+        if section <= previous:
+            test += 1
+        previous = section
+        runs.append((index, test, section))
+
+    last = max(p["index"] for p in pages if p.get("kind") == "audioscript")
+    out: dict[tuple[int, int], list[int]] = {}
+    for position, (index, test, section) in enumerate(runs):
+        # Up to and INCLUDING the next section's first page: the tail of this
+        # one is on it, above that heading.
+        stop = runs[position + 1][0] if position + 1 < len(runs) else last
+        out[(test, section)] = list(range(index, stop + 1))
+
+    # A heading the reader missed leaves one section with no span at all --
+    # Cambridge 11 lost Test 3 Section 4 that way. Rather than drop it, give it
+    # the block its neighbours bracket and let whatever reads the pages find
+    # the heading itself. Marked, because a guessed span is not a found one.
+    known = sorted(out)
+    for test in {t for t, _ in known}:
+        for section in range(1, 5):
+            if (test, section) in out:
+                continue
+            before = out.get((test, section - 1))
+            after = (out.get((test, section + 1))
+                     or out.get((test + 1, 1))
+                     or [last])
+            if before:
+                out[(test, section)] = list(range(before[0], after[-1] + 1))
+                out[("guessed", test, section)] = True
+    return out
+
+
 def resolve(pages: list[dict]) -> list[dict]:
     """Work out which test and section each listening page belongs to.
 
@@ -205,7 +261,9 @@ def main() -> int:
     longest = max(runs, key=len, default=[])
     scripts = longest
 
-    print(f"\n{'section':<14}{'question pages':<22}{'key page':<10}")
+    scripts_by_section = script_runs(found)
+
+    print(f"\n{'section':<14}{'question pages':<20}{'key':<6}{'audioscript pages'}")
     written = 0
     for test in range(1, 5):
         for section in range(1, 5):
@@ -214,12 +272,17 @@ def main() -> int:
                            and p.get("test") == test and p.get("section") == section)
             key = keys.get(test)
             sid = f"cam{args.book}-t{test}-s{section}"
+            script = scripts_by_section.get((test, section), [])
+            guessed = scripts_by_section.get(("guessed", test, section))
             flag = "" if pages and key is not None else "   <- INCOMPLETE"
-            print(f"{sid:<14}{str(pages):<22}{str(key):<10}{flag}")
+            if guessed:
+                flag += "   <- script span guessed, heading not found"
+            print(f"{sid:<14}{str(pages):<20}{str(key):<6}{str(script)}{flag}")
             if pages and key is not None:
                 conn.execute(
-                    "UPDATE section SET question_pages = ?, key_page = ? WHERE id = ?",
-                    (json.dumps(pages), key, sid))
+                    "UPDATE section SET question_pages = ?, key_page = ?, script_pages = ? "
+                    "WHERE id = ?",
+                    (json.dumps(pages), key, json.dumps(script) if script else None, sid))
                 written += 1
 
     if scripts:

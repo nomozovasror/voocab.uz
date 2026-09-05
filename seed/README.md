@@ -148,6 +148,41 @@ original, and it behaves differently in three ways:
 Its questions are, on the other hand, the cleanest input in the whole corpus:
 digitally re-typeset and rendered as images, not photographed paper.
 
+## Reading the audioscript
+
+`read_audioscript.py` writes `turns.json` -- the text the alignment is aligned
+against, and the last thing in the pipeline that was typed by hand.
+
+```bash
+seed/.venv/bin/python seed/read_audioscript.py cam11-t1-s1
+```
+
+Three things come off the page and only one of them is the words: the speaker
+labels, because a change of speaker is the only boundary the source marks; the
+`Q1`, `Q2` markers down the right margin, which say which turn each answer is
+spoken in; and the dotted rule, which is where the recording pauses for the
+candidate to read the second half of the questions and where the alignment
+needs a star.
+
+### Against the hand transcription
+
+| | by hand | by model |
+|---|---|---|
+| Turns | 41 | **41** |
+| Break position | index 23 | **index 23** |
+| Markers found | 11 | **11, every one on the same turn** |
+| Text | — | **40 of 41 identical** |
+
+The one difference is the model being righter: the book prints `£115` and the
+hand copy had expanded it to "115 pounds". Its underlined answers are tighter
+too -- "stage door" where the hand copy took the whole sentence around it. The
+alignment run from the model's text produces the same replay spans to a tenth
+of a second.
+
+That did surface a real gap, though: dropping `£` drops a spoken word, since
+the speaker says "a hundred and fifteen **pounds**". `say()` now renders the
+symbol, so "£115" aligns as "one hundred and fifteen pounds".
+
 ## Forced alignment, measured
 
 `clean.py` splits a book audioscript into spoken turns. `align.py` aligns a

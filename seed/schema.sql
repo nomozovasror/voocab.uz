@@ -73,6 +73,9 @@ CREATE TABLE IF NOT EXISTS section (
     -- index 7, and assuming otherwise reads Section 2's questions as Section 1's.
     question_pages TEXT,                        -- JSON array of ints
     key_page       INTEGER,
+    -- The pages of the audioscript for THIS section, same indexing. What
+    -- forced alignment reads its text from.
+    script_pages   TEXT,                        -- JSON array of ints
     note          TEXT,
     UNIQUE (book_number, test_no, section_no)
 );

@@ -139,6 +139,7 @@ def cmd_init() -> int:
     for table, column, decl in (
         ("section", "question_pages", "TEXT"),
         ("section", "key_page", "INTEGER"),
+        ("section", "script_pages", "TEXT"),
         ("document", "audioscript_page", "INTEGER"),
     ):
         existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
