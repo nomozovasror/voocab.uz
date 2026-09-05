@@ -1,0 +1,205 @@
+"""Write an aligned seed section into the app database.
+
+    uv run python -m scripts.import_section cam11-t1-s1 --owner <user-uuid>
+
+The other half of the seed pipeline. Extraction lives in ``seed/`` because it
+needs torch and no database; this lives here because it needs the database and
+no torch, and because the rows it writes have to go through the same services
+the API uses rather than around them.
+
+What it writes, for one section:
+
+* an ``AudioBlob`` for the recording, content-addressed and deduped exactly as
+  an upload would be -- a file already ingested is recognised by its SHA-256
+  and not stored twice;
+* one ``AudioSegment`` per **speaker turn**, with the word timings forced
+  alignment produced. The turn is the segment because the book prints it as
+  one: a change of speaker is the only boundary in the source that means
+  anything, and it is the one the review page's transcript lines want;
+* an ``AudioAsset`` claiming the blob for the owner;
+* a ``Material`` and its single ``Part``.
+
+The material is created **private**, and there is no option here to make it
+public: this is copyrighted source, and it is in the database to prove the
+pipeline works rather than to be practised by anybody.
+
+Questions are not written. They come from a stage that does not exist yet, so
+what lands is a draft with its audio and its transcript and nothing to answer
+-- which `publish_blockers()` will say, correctly, is not publishable.
+"""
+
+import argparse
+import asyncio
+import json
+import logging
+import pathlib
+import sqlite3
+import sys
+import uuid
+
+from sqlmodel import select
+
+from app.core.database import async_session_factory
+from app.models.material import Material
+from app.models.part import Part
+from app.models.user import User
+from app.services import audio as audio_service
+from app.services.asr import TranscriptResult, TranscriptSegment, WordTiming
+from app.services.storage import (
+    AUDIO_CONTENT_TYPES,
+    audio_storage_key,
+    get_storage,
+    sha256_hex,
+)
+
+logger = logging.getLogger("scripts.import_section")
+
+REPO = pathlib.Path(__file__).resolve().parent.parent.parent
+SEED = REPO / "seed"
+MATERIALS = REPO / "Materials"
+
+
+def read_alignment(section_id: str) -> tuple[dict, list[TranscriptSegment], str]:
+    """The catalogue row, the turns as transcript segments, and a title.
+
+    A turn with no aligned words is dropped rather than written empty: the
+    aligner skips what it could not place, and a segment with no timing is a
+    row the review page cannot draw.
+    """
+    conn = sqlite3.connect(SEED / "catalogue.db")
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM section WHERE id = ?", (section_id,)).fetchone()
+    conn.close()
+    if row is None:
+        raise SystemExit(f"{section_id} is not in the catalogue")
+
+    work = SEED / "work" / section_id
+    turns = json.loads((work / "turns.json").read_text())
+    aligned = json.loads((work / "aligned.json").read_text())
+
+    by_turn: dict[int, list[dict]] = {}
+    for word in aligned:
+        by_turn.setdefault(word["turn"], []).append(word)
+
+    segments: list[TranscriptSegment] = []
+    for index in sorted(by_turn):
+        words = by_turn[index]
+        speaker = turns[index]["speaker"]
+        segments.append(
+            TranscriptSegment(
+                order_index=len(segments),
+                start_ms=words[0]["start_ms"],
+                end_ms=words[-1]["end_ms"],
+                # The speaker prefix is kept in the TEXT, where it reads as part
+                # of the line, and stripped from the alignment, where it was
+                # never spoken. Same fact, two different jobs.
+                text=f"{speaker.title()}: {turns[index]['text']}",
+                words=[WordTiming(word=w["word"], start_ms=w["start_ms"],
+                                  end_ms=w["end_ms"]) for w in words],
+            )
+        )
+
+    book, test, section = row["book_number"], row["test_no"], row["section_no"]
+    title = f"Cambridge IELTS {book} — Test {test}, Part {section}"
+    return dict(row), segments, title
+
+
+async def import_section(section_id: str, owner_id: uuid.UUID) -> None:
+    row, segments, title = read_alignment(section_id)
+    path = MATERIALS / row["rel_path"]
+    mime_type = AUDIO_CONTENT_TYPES.get(path.suffix.lower())
+    if mime_type is None:
+        raise SystemExit(f"{path.name}: unsupported extension {path.suffix}")
+
+    data = path.read_bytes()
+    sha256 = sha256_hex(data)
+    if sha256 != row["sha256"]:
+        # The catalogue's hash is what the manifest recorded. A mismatch means
+        # the file changed under us, and importing it against a stale alignment
+        # would put the transcript at the wrong times.
+        raise SystemExit(
+            f"{section_id}: audio has changed since the manifest was built "
+            f"({sha256[:12]} != {row['sha256'][:12]}). Re-run seed/manifest.py "
+            "and re-align before importing."
+        )
+
+    result = TranscriptResult(duration_ms=row["duration_ms"], segments=segments)
+    key = audio_storage_key(sha256, mime_type)
+
+    async with async_session_factory() as session:
+        if await session.get(User, owner_id) is None:
+            raise SystemExit(f"no user {owner_id}")
+
+        blob, created = await audio_service.get_or_create_blob(
+            session, sha256=sha256, storage_key=key,
+            size_bytes=len(data), mime_type=mime_type,
+        )
+        if created:
+            await get_storage().put(key, data, mime_type)
+            await audio_service.persist_transcript_result(session, blob, result)
+            logger.info("new blob %s, %d segment(s)", blob.id, len(segments))
+        else:
+            logger.info("dedup: blob %s already %s", blob.id, blob.transcript_status)
+
+        asset = await audio_service.get_or_create_asset(
+            session, owner_id, blob.id, title=title)
+
+        # Re-running must not leave a second copy behind. There is no natural
+        # key on a material, so the title this script generates is the key it
+        # looks itself up by.
+        material = (
+            await session.exec(
+                select(Material).where(
+                    Material.author_id == owner_id, Material.title == title
+                )
+            )
+        ).first()
+        if material is None:
+            material = Material(
+                author_id=owner_id, type="listening", title=title,
+                audio_asset_id=asset.id,
+                visibility="private",  # copyrighted source; never public from here
+            )
+            session.add(material)
+            await session.flush()
+            session.add(Part(
+                material_id=material.id, order_index=0,
+                title=f"Part {row['section_no']}",
+                # NULL/NULL: this part IS the whole recording, because the book's
+                # audio was already published one section per file.
+                audio_start_ms=None, audio_end_ms=None,
+            ))
+            logger.info("created material %s", material.id)
+        else:
+            material.audio_asset_id = asset.id
+            session.add(material)
+            logger.info("material %s already existed, re-pointed at the asset", material.id)
+
+        await session.commit()
+        material_id = str(material.id)
+
+    conn = sqlite3.connect(SEED / "catalogue.db")
+    conn.execute(
+        """UPDATE stage SET status = 'done', attempts = attempts + 1,
+               error = NULL, meta = ?, updated_at = datetime('now')
+           WHERE section_id = ? AND name = 'import'""",
+        (json.dumps({"material_id": material_id, "segments": len(segments),
+                     "visibility": "private"}), section_id))
+    conn.commit()
+    conn.close()
+    print(f"{section_id} -> material {material_id} ({len(segments)} transcript lines, private)")
+
+
+def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("section_id")
+    ap.add_argument("--owner", required=True, type=uuid.UUID)
+    args = ap.parse_args()
+    asyncio.run(import_section(args.section_id, args.owner))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

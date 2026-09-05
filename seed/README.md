@@ -274,6 +274,40 @@ flags every one-word turn ("Yeah.", "OK.", "Sure.") as impossible. Judge
 duration per token, and only on turns of four words or more; of eight turns
 that check flagged, seven were one-word answers and one was real.
 
+## Getting a section onto the site
+
+The catalogue is bookkeeping. Nothing in `seed/` is ever read by the app --
+what a learner can practise lives in Postgres, and `backend/scripts/
+import_section.py` is the one thing that crosses between them:
+
+```
+Materials/ ──► seed/catalogue.db ──► import_section.py ──► Postgres ──► the site
+   mp3+pdf      what is left to do        the crossing        Material     :5173
+```
+
+That script lives in `backend/` rather than here for the same reason the rest
+of this lives here: it needs the database and no torch, where extraction needs
+torch and no database. It writes through the same services the API uses --
+content-addressed blob, dedup on SHA-256, `persist_transcript_result` -- so a
+seeded recording and an uploaded one produce identical rows.
+
+```bash
+cd backend
+DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/app" \
+  uv run --no-sync python -m scripts.import_section cam11-t1-s1 --owner <user-uuid>
+```
+
+**The DATABASE_URL override is not optional.** `backend/.env` points at the
+test database on 5433; the dev app the site talks to is on 5432. Importing
+without it puts the material somewhere the site will never look.
+
+One `AudioSegment` per **speaker turn**, because that is the only boundary the
+source actually marks and the one the review page's transcript lines want.
+Materials are created **private** and the script has no switch to change that:
+this is copyrighted source, in the database to prove the pipeline works rather
+than to be practised. Re-running is safe -- the blob dedups on its hash and the
+material is looked up by the title the script generates.
+
 ## Where this stops
 
 Stage 0 is done: 176 sections catalogued, every file's extension honest, every
@@ -285,6 +319,10 @@ anything. Nothing here writes to the app database.
 `seed/work/cam11-t1-s1/clips/` — a confident alignment and a correct one are
 different claims, and only listening settles the second.
 
-After that: the questions and the answer key, both of which have to be read
-visually rather than extracted, and then the same section written into the
-database as a draft Material.
+`cam11-t1-s1` is now in the dev database as a private draft: audio, 39
+transcript lines with word timings, one part, no questions. `publish_blockers()`
+says it is not publishable, which is correct -- questions come from a stage
+that does not exist yet.
+
+That stage is next: the question pages and the answer key, both of which have
+to be read visually rather than extracted, because the books are scans.
