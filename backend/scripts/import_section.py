@@ -66,8 +66,13 @@ SEED = REPO / "seed"
 MATERIALS = REPO / "Materials"
 
 
-def read_alignment(section_id: str) -> tuple[dict, list[TranscriptSegment], str]:
+def read_alignment(section_id: str, offset_ms: int = 0) -> tuple[dict, list[TranscriptSegment], str]:
     """The catalogue row, the turns as transcript segments, and a title.
+
+    ``offset_ms`` is how much was cut off the front of the recording. Every
+    timestamp here was measured against the untrimmed file, so all of them
+    move by it -- a transcript that still points at the original moments would
+    run three minutes late against the audio actually being served.
 
     A turn with no aligned words is dropped rather than written empty: the
     aligner skips what it could not place, and a segment with no timing is a
@@ -95,8 +100,8 @@ def read_alignment(section_id: str) -> tuple[dict, list[TranscriptSegment], str]
         segments.append(
             TranscriptSegment(
                 order_index=len(segments),
-                start_ms=words[0]["start_ms"],
-                end_ms=words[-1]["end_ms"],
+                start_ms=words[0]["start_ms"] - offset_ms,
+                end_ms=words[-1]["end_ms"] - offset_ms,
                 # Built FROM the words, not from the book's line. `text` and
                 # `words` are two renderings of the same thing and the editor
                 # swaps between them -- it draws `text` normally and rebuilds
@@ -113,8 +118,8 @@ def read_alignment(section_id: str) -> tuple[dict, list[TranscriptSegment], str]
                 # aligned. Losing them costs a little prose; keeping them costs
                 # the invariant.
                 text=" ".join(w["word"] for w in words),
-                words=[WordTiming(word=w["word"], start_ms=w["start_ms"],
-                                  end_ms=w["end_ms"]) for w in words],
+                words=[WordTiming(word=w["word"], start_ms=w["start_ms"] - offset_ms,
+                                  end_ms=w["end_ms"] - offset_ms) for w in words],
             )
         )
 
@@ -133,7 +138,8 @@ def read_alignment(section_id: str) -> tuple[dict, list[TranscriptSegment], str]
     return dict(row), segments, title
 
 
-async def import_questions(session, part_id: uuid.UUID, section_id: str) -> int:
+async def import_questions(session, part_id: uuid.UUID, section_id: str,
+                           offset_ms: int = 0) -> int:
     """Replace this part's question groups with what the seed built.
 
     Replace rather than merge: the groups have no natural key, and a re-run
@@ -167,36 +173,50 @@ async def import_questions(session, part_id: uuid.UUID, section_id: str) -> int:
         session.add(row)
         await session.flush()
         for question in group.questions:
+            # Shifted with the transcript: a replay span is a moment in the
+            # same recording, and half of them moving is worse than none.
+            start = question.replay_start_ms
+            end = question.replay_end_ms
             session.add(Question(
                 group_id=row.id, number=question.number,
                 correct_answers=question.correct_answers,
-                replay_start_ms=question.replay_start_ms,
-                replay_end_ms=question.replay_end_ms,
+                replay_start_ms=None if start is None else max(0, start - offset_ms),
+                replay_end_ms=None if end is None else max(0, end - offset_ms),
             ))
             written += 1
     return written
 
 
 async def import_section(section_id: str, owner_id: uuid.UUID) -> None:
-    row, segments, title = read_alignment(section_id)
-    path = MATERIALS / row["rel_path"]
+    work = SEED / "work" / section_id
+    trim_path = work / "trim.json"
+    trim = json.loads(trim_path.read_text()) if trim_path.exists() else None
+    offset_ms = trim["offset_ms"] if trim else 0
+
+    row, segments, title = read_alignment(section_id, offset_ms)
+
+    # The source is checked even when a trimmed copy is what gets stored: a
+    # changed source means the alignment, and therefore the cut, was measured
+    # against different audio.
+    source = MATERIALS / row["rel_path"]
+    if sha256_hex(source.read_bytes()) != row["sha256"]:
+        raise SystemExit(
+            f"{section_id}: the source audio has changed since the manifest was "
+            f"built. Re-run seed/manifest.py, re-align, and re-trim before importing.")
+
+    path = (work / "audio.mp3") if trim else source
     mime_type = AUDIO_CONTENT_TYPES.get(path.suffix.lower())
     if mime_type is None:
         raise SystemExit(f"{path.name}: unsupported extension {path.suffix}")
 
     data = path.read_bytes()
     sha256 = sha256_hex(data)
-    if sha256 != row["sha256"]:
-        # The catalogue's hash is what the manifest recorded. A mismatch means
-        # the file changed under us, and importing it against a stale alignment
-        # would put the transcript at the wrong times.
-        raise SystemExit(
-            f"{section_id}: audio has changed since the manifest was built "
-            f"({sha256[:12]} != {row['sha256'][:12]}). Re-run seed/manifest.py "
-            "and re-align before importing."
-        )
+    duration_ms = trim["duration_ms"] if trim else row["duration_ms"]
+    if trim:
+        logger.info("using the trimmed copy: %ds cut from the front, %ds from the end",
+                    trim["cut_head_ms"] // 1000, trim["cut_tail_ms"] // 1000)
 
-    result = TranscriptResult(duration_ms=row["duration_ms"], segments=segments)
+    result = TranscriptResult(duration_ms=duration_ms, segments=segments)
     key = audio_storage_key(sha256, mime_type)
 
     async with async_session_factory() as session:
@@ -264,7 +284,7 @@ async def import_section(section_id: str, owner_id: uuid.UUID) -> None:
                 .order_by(Part.order_index))).first()
             logger.info("material %s already existed, re-pointed at the asset", material.id)
 
-        written = await import_questions(session, part.id, section_id)
+        written = await import_questions(session, part.id, section_id, offset_ms)
         if written:
             # Every authoring write bumps the counter the editor checks against.
             material.version += 1
@@ -280,7 +300,8 @@ async def import_section(section_id: str, owner_id: uuid.UUID) -> None:
                error = NULL, meta = ?, updated_at = datetime('now')
            WHERE section_id = ? AND name = 'import'""",
         (json.dumps({"material_id": material_id, "segments": len(segments),
-                     "questions": written, "visibility": "private"}), section_id))
+                     "questions": written, "visibility": "private",
+                     "trimmed_ms": offset_ms}), section_id))
     conn.commit()
     conn.close()
     print(f"{section_id} -> material {material_id} "
