@@ -128,11 +128,21 @@ def load_audio(path: pathlib.Path) -> tuple[torch.Tensor, float]:
     return waveform, duration_s
 
 
-def build_tokens(turns: list[dict]) -> tuple[list[str], list[str], list[int | None]]:
+def build_tokens(
+    turns: list[dict],
+) -> tuple[list[str], list[str], list[int | None], list[int]]:
     """Book words -> alignable tokens, remembering where each token came from.
 
-    Returns the tokens, the original words, and for each token the index of the
-    word it belongs to (``None`` for a star, which belongs to no word).
+    Returns the tokens, the words that survived, for each token the index of
+    the word it belongs to (``None`` for a star), and for each surviving word
+    the turn it was spoken in.
+
+    That last list is built HERE, in the same loop as the words, and that is
+    the whole point of it being here. Deriving it afterwards by re-splitting
+    each turn's text counts words this function threw away -- "..." and the
+    dashes -- so the two lists drift apart at the first one and every word
+    after it lands in the wrong turn. The transcript then shows a line with the
+    next speaker's words tacked onto it, and the replay spans move with them.
 
     A hyphenated word is split, because that is how it is spoken; the word's
     span is then its first token's start to its last token's end. Stars go
@@ -142,8 +152,9 @@ def build_tokens(turns: list[dict]) -> tuple[list[str], list[str], list[int | No
     tokens: list[str] = [STAR]
     owner: list[int | None] = [None]
     words: list[str] = []
+    word_turn: list[int] = []
 
-    for turn in turns:
+    for turn_index, turn in enumerate(turns):
         if turn["speaker"] == "__BREAK__":
             tokens.append(STAR)
             owner.append(None)
@@ -158,12 +169,13 @@ def build_tokens(turns: list[dict]) -> tuple[list[str], list[str], list[int | No
                 continue
             index = len(words)
             words.append(word)  # the book's spelling is what comes back out
+            word_turn.append(turn_index)
             for piece in pieces:
                 tokens.append(piece)
                 owner.append(index)
     tokens.append(STAR)
     owner.append(None)
-    return tokens, words, owner
+    return tokens, words, owner, word_turn
 
 
 def emit_chunked(model, waveform: torch.Tensor, device: str) -> torch.Tensor:
@@ -209,7 +221,7 @@ def main() -> int:
         return 1
 
     turns = json.loads(turns_path.read_text())
-    tokens, words, owner = build_tokens(turns)
+    tokens, words, owner, word_turn = build_tokens(turns)
     waveform, duration_s = load_audio(MATERIALS / row["rel_path"])
     print(f"{args.section_id}: {duration_s / 60:.1f} min audio, {len(words)} words, "
           f"{tokens.count(STAR)} stars, device={args.device}")
@@ -239,17 +251,8 @@ def main() -> int:
         else:
             by_word[word_index] = [start, end, list(scores)]
 
-    # Words back onto their turns, so a question marker can name a time.
-    turn_of_word, cursor = [], 0
-    for i, turn in enumerate(turns):
-        if turn["speaker"] == "__BREAK__":
-            continue
-        for _ in turn["text"].split():
-            turn_of_word.append(i)
-            cursor += 1
-
     aligned = [{"word": words[i], "start_ms": by_word[i][0], "end_ms": by_word[i][1],
-                "turn": turn_of_word[i],
+                "turn": word_turn[i],
                 "tokens": len(by_word[i][2]),
                 "score": round(sum(by_word[i][2]) / len(by_word[i][2]), 3)}
                for i in sorted(by_word)]

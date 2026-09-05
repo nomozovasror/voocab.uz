@@ -25,6 +25,7 @@ import json
 import pathlib
 import re
 import sqlite3
+import subprocess
 import sys
 
 from answer_key import parse_answer
@@ -32,6 +33,33 @@ from answer_key import parse_answer
 SEED = pathlib.Path(__file__).resolve().parent
 WORK = SEED / "work"
 GAP = re.compile(r"\{\{(\d+)\}\}")
+
+
+def gaps_that_render(template: str) -> set[int] | None:
+    """The gap numbers the take page will actually draw, or None if the check
+    could not run.
+
+    The template is not plain text with ``{{N}}`` in it. `form-syntax.ts` reads
+    a leading ``+`` as a table row, ``>`` as a flow-chart step, ``#`` as a
+    heading and ``|`` as the split between a label and its value -- and book
+    prose collides with every one of them. A gap in a table's HEADER row is not
+    drawn at all, which is how "+ £250 deposit ({{3}} payment is required)",
+    lifted straight off the page, turned a ten-question paper into a
+    nine-question one with nothing anywhere reporting a problem.
+
+    This runs that grammar rather than guessing at it. Guessing is what put the
+    gap in a table in the first place.
+    """
+    script = SEED / "check_template.mjs"
+    try:
+        out = subprocess.run(
+            ["node", "--experimental-strip-types", str(script)],
+            input=template, capture_output=True, text=True, timeout=60)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    return {int(n) for n in out.stdout.split() if n.isdigit()}
 
 
 def build(section_id: str) -> int:
@@ -69,6 +97,17 @@ def build(section_id: str) -> int:
                 f"{sorted(numbers)}")
         if len(gaps) != len(set(gaps)):
             problems.append(f"group {gi}: template repeats a gap number")
+
+        rendered = gaps_that_render(group["template"])
+        if rendered is None:
+            print(f"note: could not run the layout check for group {gi} "
+                  "(needs node and frontend/)", file=sys.stderr)
+        elif set(gaps) - rendered:
+            lost = sorted(set(gaps) - rendered)
+            problems.append(
+                f"group {gi}: gaps {lost} are in the template but the take page "
+                f"would not draw them -- a line is colliding with the layout "
+                f"grammar (a leading '+', '>', '#', or a '|')")
 
         questions = []
         for q in group["questions"]:

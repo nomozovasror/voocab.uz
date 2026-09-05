@@ -43,6 +43,7 @@ import uuid
 from sqlmodel import select
 
 from app.core.database import async_session_factory
+from app.models.audio_segment import AudioSegment
 from app.models.material import Material
 from app.models.part import Part
 from app.models.question import Question
@@ -96,14 +97,36 @@ def read_alignment(section_id: str) -> tuple[dict, list[TranscriptSegment], str]
                 order_index=len(segments),
                 start_ms=words[0]["start_ms"],
                 end_ms=words[-1]["end_ms"],
-                # The speaker prefix is kept in the TEXT, where it reads as part
-                # of the line, and stripped from the alignment, where it was
-                # never spoken. Same fact, two different jobs.
-                text=f"{speaker.title()}: {turns[index]['text']}",
+                # Built FROM the words, not from the book's line. `text` and
+                # `words` are two renderings of the same thing and the editor
+                # swaps between them -- it draws `text` normally and rebuilds
+                # the line from `words` on the line being spoken -- so any
+                # difference between them makes the text visibly change as the
+                # audio arrives.
+                #
+                # Two things therefore do not survive into the transcript. The
+                # speaker name, because AudioSegment has nowhere to put one and
+                # a fake entry in `words` would be highlighted as speech and
+                # would sit in the timings `marks.ts` searches. And the standalone
+                # punctuation the book sets between clauses -- "..." and the
+                # dashes -- which is printed, never spoken, and so was never
+                # aligned. Losing them costs a little prose; keeping them costs
+                # the invariant.
+                text=" ".join(w["word"] for w in words),
                 words=[WordTiming(word=w["word"], start_ms=w["start_ms"],
                                   end_ms=w["end_ms"]) for w in words],
             )
         )
+
+    # The invariant the editor relies on, checked here rather than discovered
+    # on the page: joining a segment's words must give back its text.
+    for segment in segments:
+        rebuilt = " ".join(w.word for w in segment.words)
+        if " ".join(segment.text.split()) != " ".join(rebuilt.split()):
+            raise SystemExit(
+                f"{section_id} segment {segment.order_index}: text and words "
+                f"disagree, which makes the line change as the audio reaches "
+                f"it.\n  text:  {segment.text!r}\n  words: {rebuilt!r}")
 
     book, test, section = row["book_number"], row["test_no"], row["section_no"]
     title = f"Cambridge IELTS {book} — Test {test}, Part {section}"
@@ -186,10 +209,21 @@ async def import_section(section_id: str, owner_id: uuid.UUID) -> None:
         )
         if created:
             await get_storage().put(key, data, mime_type)
-            await audio_service.persist_transcript_result(session, blob, result)
-            logger.info("new blob %s, %d segment(s)", blob.id, len(segments))
         else:
-            logger.info("dedup: blob %s already %s", blob.id, blob.transcript_status)
+            logger.info("dedup: blob %s already stored", blob.id)
+
+        # The transcript is rewritten every run, not only on a new blob. A
+        # re-import is what happens after the ALIGNMENT was corrected, and
+        # keeping the old segments because the audio bytes had not changed is
+        # how a fixed alignment silently fails to reach the page.
+        existing = (await session.exec(
+            select(AudioSegment).where(AudioSegment.blob_id == blob.id))).all()
+        for old in existing:
+            await session.delete(old)
+        await session.flush()
+        await audio_service.persist_transcript_result(session, blob, result)
+        logger.info("blob %s: wrote %d segment(s) (replaced %d)",
+                    blob.id, len(segments), len(existing))
 
         asset = await audio_service.get_or_create_asset(
             session, owner_id, blob.id, title=title)
