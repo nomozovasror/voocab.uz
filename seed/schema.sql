@@ -66,6 +66,13 @@ CREATE TABLE IF NOT EXISTS section (
     -- Which naming convention this file arrived under. Kept so a re-inventory
     -- that suddenly parses a file differently is visible rather than silent.
     convention    TEXT    NOT NULL,
+    -- Where this section's questions and its answer key are, as ZERO-BASED pdf
+    -- indices. Filled in by locate_pages.py, which reads every page and asks
+    -- what it is; NULL until it has run. Indices rather than printed page
+    -- numbers because they are not the same: Cambridge 11's printed page 10 is
+    -- index 7, and assuming otherwise reads Section 2's questions as Section 1's.
+    question_pages TEXT,                        -- JSON array of ints
+    key_page       INTEGER,
     note          TEXT,
     UNIQUE (book_number, test_no, section_no)
 );

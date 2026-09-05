@@ -488,6 +488,52 @@ on **every** import rather than only when it creates the part.
 The importer shifts every timestamp by the recorded offset, transcript and
 replay spans together. cam11-t1-s1: 578s becomes 555s.
 
+## Finding the pages
+
+The last thing that was done by hand. `read_questions.py` needs to know which
+pages hold the questions and which holds the key; `locate_pages.py` reads every
+page of a book and writes that into the catalogue, so the flags become an
+override rather than the interface.
+
+```bash
+seed/.venv/bin/python seed/locate_pages.py 11
+seed/.venv/bin/python seed/read_questions.py cam11-t1-s1   # pages from the catalogue
+```
+
+On Cambridge 11 it finds all sixteen sections, the four answer-key pages and
+the start of the audioscripts, and its answer for `cam11-t1-s1` -- pages 7 and
+8, key on 123 -- is the one that was found by hand.
+
+### One page per request, not a contact sheet
+
+A twelve-up sheet was the obvious saving and does not work. The model spends a
+fixed token budget on an image whatever it holds -- 1,488 tokens for a sheet of
+twelve against 1,813 for a single page -- so each thumbnail gets a twelfth of
+the detail. On twelve pages it classified five correctly, invented an answer
+key and two audioscripts that were not there, and drifted a section out of step
+in the middle. Page by page, the same twelve came back twelve out of twelve.
+
+The same measurement settles the dpi question: 90, 120 and 170 dpi all cost
+**1,813 tokens**. Rendering smaller saves nothing and only loses detail.
+
+### Transcribe, then interpret -- twice over
+
+Asked for the test number, the model returns the first question number:
+"Questions 15-20" comes back as test 15. Asked to copy the running header, it
+copies it correctly -- but these books print the header alternately, "Test 2"
+on one side and "Listening" on the other, so a page carries one or the other
+and never both. Filtering on "Listening" threw away every odd page and left
+nine sections of sixteen.
+
+What is actually reliable is the thing printed in large type: `SECTION 3
+Questions 21-30`. Sections run 1,2,3,4 and start over, so a test is one such
+run, and the page after a heading belongs to it if it carries no heading of its
+own. Nothing is inferred that is not printed.
+
+The audioscripts are found the same way: the **start of the longest run** of
+audioscript pages, not the first page anywhere that resembles one. A single
+misread page in the middle of the book made that answer 21 against a true 102.
+
 ## Where this stops
 
 Stage 0 is done: 176 sections catalogued, every file's extension honest, every
@@ -508,7 +554,7 @@ that does not exist yet.
 group, ten questions, fifteen accepted answers, and a replay span on every one
 of them. `publish_blockers()` returns nothing, and it stays private anyway.
 
-The reading is automated and measured on one section. What is not automated is
-finding the pages: `--questions 7,8 --key 123` are still passed in by hand, and
-a contact-sheet pass over each book -- about twelve vision calls -- is what
-would replace that.
+Every stage now runs from the catalogue without a page number passed by hand.
+What has not been done is the other ten books, and the batch runner that would
+take a book from `locate_pages` through to `import_section` without a person
+between the steps.

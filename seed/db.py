@@ -132,6 +132,20 @@ def cmd_init() -> int:
     conn = connect()
     conn.executescript((SEED / "schema.sql").read_text())
 
+    # CREATE TABLE IF NOT EXISTS does nothing to a table that already exists,
+    # so a column added to schema.sql never reaches an existing catalogue.
+    # Adding the missing ones here keeps `init` the single way to bring a
+    # catalogue up to date, without dropping the stage progress to do it.
+    for table, column, decl in (
+        ("section", "question_pages", "TEXT"),
+        ("section", "key_page", "INTEGER"),
+        ("document", "audioscript_page", "INTEGER"),
+    ):
+        existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+            print(f"added {table}.{column}")
+
     for number in sorted({r["book"] for r in rows}):
         title, kind, has_script, note = BOOK_FACTS.get(
             number, (f"Cambridge IELTS {number}", "cambridge", None, None))
@@ -163,8 +177,9 @@ def cmd_init() -> int:
         doc_ids[rel] = conn.execute(
             "SELECT id FROM document WHERE rel_path = ?", (rel,)).fetchone()["id"]
 
-    conn.execute("UPDATE document SET audioscript_page = 103 "
-                 "WHERE rel_path LIKE 'Cambridge 11/%' AND audioscript_page IS NULL")
+    # Left to locate_pages.py, which finds it by reading the book. The hand
+    # value here was 103 -- the PRINTED page -- while every other page number
+    # in the catalogue is a zero-based index. The audioscripts start at 102.
 
     for r in rows:
         conn.execute(

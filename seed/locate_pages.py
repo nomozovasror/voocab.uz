@@ -1,0 +1,237 @@
+"""Ask a model what every page of a book is, and write down where things are.
+
+    seed/.venv/bin/python seed/locate_pages.py 11
+
+The last thing that was being done by hand. `read_questions.py` needs
+``--questions 7,8 --key 123``; this is what works those out, for all sixteen
+sections of a book at once, and puts them in the catalogue.
+
+**One page per request, not a contact sheet.** A twelve-up sheet was the
+obvious saving and it does not work: the model spends a fixed token budget on
+an image whatever it contains -- 1,488 tokens for a sheet of twelve against
+1,813 for a single page -- so each thumbnail gets a twelfth of the detail. On
+the twelve pages measured it classified five correctly, invented an answer key
+and two audioscripts that were not there, and drifted a section out of step in
+the middle. Page by page, the same twelve came back twelve out of twelve.
+
+**Continuation pages are the reason this is not just a regex over headings.**
+A section runs across two or three pages and only the first carries "SECTION 3
+Questions 21-30"; the rest carry the task and nothing else. The model reports
+those as ``continuation`` with no test or section, and they are filled forward
+onto whichever heading last appeared. Read as standalone pages they would
+either be dropped or, worse, attached to the next heading down.
+"""
+
+import argparse
+import base64
+import json
+import pathlib
+import re
+import sqlite3
+import sys
+from concurrent.futures import ThreadPoolExecutor
+
+import pymupdf
+
+import vision
+
+SEED = pathlib.Path(__file__).resolve().parent
+REPO = SEED.parent
+MATERIALS = REPO / "Materials"
+WORK = SEED / "work"
+
+#: 150 is enough for the headings; the token cost is the same at any dpi (the
+#: model resizes), so this is chosen for legibility and upload size alone.
+DPI = 150
+#: Four at a time. The budget is 250k tokens a minute and a page costs about
+#: 1,800, so this is nowhere near it -- it is chosen to keep a 140-page book
+#: near a minute rather than four.
+WORKERS = 4
+
+#: Transcribe, do not interpret. The first version asked for the test number
+#: and got the first question number instead -- "Questions 15-20" came back as
+#: test 15, "Questions 11-20" as test 11. The page does not say which test it
+#: belongs to anywhere except the running header, so that is what gets read,
+#: verbatim, and the arithmetic happens in Python.
+PROMPT = """One page of a Cambridge IELTS book. JSON only, no prose:
+
+{"header":"<the running header line at the very top, verbatim, or null>",
+ "heading":"<the big bold heading like 'SECTION 3   Questions 21-30', verbatim, or null>",
+ "kind":"...",
+ "answer_key_test":<int|null>}
+
+"header" is the small line across the top of the page. In these books it reads
+like "Test 2" on one side and "Listening" or "Reading" on the other. Copy
+whatever is there, both sides, ignoring any watermark or website address.
+
+"heading" is the task heading in large bold type, if the page has one. Copy it
+exactly, including the word SECTION and the question range. Null if the page
+just carries on a task from the page before.
+
+kind: listening_questions | listening_answer_key | audioscript | reading |
+      writing | speaking | contents | intro | blank | other
+
+"answer_key_test" is filled in ONLY on a listening_answer_key page: the test
+number printed above the answers, as in "TEST 3". Null everywhere else."""
+
+HEADER_TEST = re.compile(r"\btest\s*(\d)\b", re.I)
+HEADER_LISTENING = re.compile(r"\blistening\b", re.I)
+SECTION_HEADING = re.compile(r"\bsection\s*(\d)\b", re.I)
+
+
+def classify(pdf: pathlib.Path, index: int) -> dict:
+    """What one page is. Never raises: a page nobody could read is 'other',
+    which shows up as a gap in the report rather than killing a book."""
+    with pymupdf.open(pdf) as doc:
+        png = doc[index].get_pixmap(dpi=DPI).tobytes("png")
+    tmp = WORK / f".page-{index}.png"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_bytes(png)
+    try:
+        out = vision.ask_json(PROMPT, [tmp])
+    except SystemExit:
+        out = {"kind": "other"}
+    finally:
+        tmp.unlink(missing_ok=True)
+    out["index"] = index
+    return out
+
+
+def resolve(pages: list[dict]) -> list[dict]:
+    """Work out which test and section each listening page belongs to.
+
+    Off the SECTION heading and the order of the book, and off nothing else.
+
+    Not off the running header: these books print it alternately, "Test 2" on
+    one side and "Listening" on the other, so a page carries one or the other
+    and never both. Requiring "Listening" threw away every odd-numbered page
+    and left nine sections of sixteen.
+
+    Not off anything the model concludes either. Asked for the test number it
+    returns the first question number -- "Questions 15-20" comes back as test
+    15. The heading transcribes cleanly, the sections run 1,2,3,4 and start
+    over, and a test is one such run. That is enough, and it is all printed.
+    """
+    starts = []
+    for page in sorted(pages, key=lambda p: p["index"]):
+        if page.get("kind") != "listening_questions":
+            continue
+        heading = SECTION_HEADING.search(page.get("heading") or "")
+        if heading:
+            starts.append((page["index"], int(heading.group(1))))
+
+    # A section number that does not advance means the next test has begun.
+    test, previous_section = 0, 99
+    runs = []
+    for index, section in starts:
+        if section <= previous_section:
+            test += 1
+        previous_section = section
+        runs.append({"index": index, "test": test, "section": section})
+
+    by_index = {p["index"]: p for p in pages}
+    for page in pages:
+        page["test"] = page["section"] = None
+    for position, run in enumerate(runs):
+        stop = runs[position + 1]["index"] if position + 1 < len(runs) else 10 ** 9
+        index = run["index"]
+        # The heading page, then every page directly after it that is still
+        # listening and carries no heading of its own.
+        while index < stop:
+            page = by_index.get(index)
+            if page is None or page.get("kind") != "listening_questions":
+                break
+            if index != run["index"] and SECTION_HEADING.search(page.get("heading") or ""):
+                break
+            page["test"], page["section"] = run["test"], run["section"]
+            index += 1
+    return pages
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("book", type=int)
+    ap.add_argument("--refresh", action="store_true",
+                    help="re-read the pages instead of using the cached pass")
+    args = ap.parse_args()
+
+    conn = sqlite3.connect(SEED / "catalogue.db")
+    conn.row_factory = sqlite3.Row
+    docs = conn.execute(
+        "SELECT DISTINCT d.id, d.rel_path FROM document d WHERE d.book_number = ? "
+        "ORDER BY d.rel_path", (args.book,)).fetchall()
+    if not docs:
+        raise SystemExit(f"no documents for book {args.book}")
+
+    found: list[dict] = []
+    for doc_row in docs:
+        pdf = MATERIALS / doc_row["rel_path"]
+        cache = WORK / f"pagemap-book{args.book}-doc{doc_row['id']}.json"
+        if cache.exists() and not args.refresh:
+            pages = json.loads(cache.read_text())
+            print(f"{doc_row['rel_path']}: {len(pages)} pages (cached)")
+        else:
+            with pymupdf.open(pdf) as doc:
+                count = len(doc)
+            print(f"{doc_row['rel_path']}: reading {count} pages ...")
+            with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+                pages = list(pool.map(lambda i: classify(pdf, i), range(count)))
+            cache.write_text(json.dumps(pages, indent=2))
+        for page in resolve(pages):
+            page["doc_id"] = doc_row["id"]
+            found.append(page)
+
+    # test number -> the page its answers are printed on. The model reads the
+    # "TEST 3" above the list; the first page claiming a test wins, which
+    # discards the duplicates it also reports.
+    keys: dict[int, int] = {}
+    for page in sorted(found, key=lambda p: p["index"]):
+        n = page.get("answer_key_test")
+        if page.get("kind") == "listening_answer_key" and n and n not in keys:
+            keys[n] = page["index"]
+    # The START OF THE LONGEST RUN, not the first page anywhere that looks like
+    # one. The audioscripts are forty consecutive pages at the back; a single
+    # page misread as one in the middle of the book would otherwise become the
+    # answer, and did -- index 21 against a true 102.
+    marked = sorted(p["index"] for p in found if p.get("kind") == "audioscript")
+    runs, current = [], []
+    for index in marked:
+        if current and index == current[-1] + 1:
+            current.append(index)
+        else:
+            current = [index]
+            runs.append(current)
+    longest = max(runs, key=len, default=[])
+    scripts = longest
+
+    print(f"\n{'section':<14}{'question pages':<22}{'key page':<10}")
+    written = 0
+    for test in range(1, 5):
+        for section in range(1, 5):
+            pages = sorted(p["index"] for p in found
+                           if p.get("kind") == "listening_questions"
+                           and p.get("test") == test and p.get("section") == section)
+            key = keys.get(test)
+            sid = f"cam{args.book}-t{test}-s{section}"
+            flag = "" if pages and key is not None else "   <- INCOMPLETE"
+            print(f"{sid:<14}{str(pages):<22}{str(key):<10}{flag}")
+            if pages and key is not None:
+                conn.execute(
+                    "UPDATE section SET question_pages = ?, key_page = ? WHERE id = ?",
+                    (json.dumps(pages), key, sid))
+                written += 1
+
+    if scripts:
+        conn.execute("UPDATE document SET audioscript_page = ? WHERE book_number = ?",
+                     (scripts[0], args.book))
+    conn.commit()
+    conn.close()
+    print(f"\n{written}/16 sections located; audioscripts start at index "
+          f"{scripts[0] if scripts else '?'} ({len(scripts)} pages); answer keys at "
+          f"{ {t: keys[t] for t in sorted(keys)} }")
+    return 0 if written == 16 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -163,10 +163,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("section_id")
-    ap.add_argument("--questions", required=True,
-                    help="comma-separated ZERO-BASED pdf page indices of the question pages")
-    ap.add_argument("--key", required=True, type=int,
-                    help="ZERO-BASED pdf page index of the listening answer key")
+    ap.add_argument("--questions",
+                    help="comma-separated ZERO-BASED pdf page indices; defaults to "
+                         "what locate_pages.py put in the catalogue")
+    ap.add_argument("--key", type=int,
+                    help="ZERO-BASED pdf page index of the listening answer key; "
+                         "defaults to the catalogue")
     ap.add_argument("--model", default=vision.DEFAULT_MODEL)
     args = ap.parse_args()
 
@@ -181,7 +183,17 @@ def main() -> int:
 
     pdf = MATERIALS / row["pdf"]
     work = WORK / args.section_id
-    pages = [int(p) for p in args.questions.split(",")]
+    # The flags are an override now, not the interface. locate_pages.py reads
+    # the book and writes these down; passing them by hand is for a section it
+    # got wrong.
+    pages = ([int(p) for p in args.questions.split(",")] if args.questions
+             else json.loads(row["question_pages"] or "null") or [])
+    key_page = args.key if args.key is not None else row["key_page"]
+    if not pages or key_page is None:
+        raise SystemExit(
+            f"{args.section_id}: no pages in the catalogue. Run "
+            f"seed/locate_pages.py {row['book_number']} first, or pass "
+            "--questions and --key.")
     first, last = paper_range(row["section_no"])
 
     shots = vision.render(pdf, pages, work / "pages")
@@ -189,8 +201,8 @@ def main() -> int:
     read = vision.ask_json(
         QUESTION_PROMPT.format(first=first, last=last), shots, model=args.model)
 
-    key_shot = vision.render(pdf, [args.key], work / "pages")
-    print(f"reading the answer key from page index {args.key}")
+    key_shot = vision.render(pdf, [key_page], work / "pages")
+    print(f"reading the answer key from page index {key_page}")
     key = vision.ask_json(
         KEY_PROMPT.format(label=f"Test {row['test_no']}, Section {row['section_no']}",
                           first=first, last=last),
@@ -229,7 +241,7 @@ def main() -> int:
 
     out = work / "questions.src.json"
     out.write_text(json.dumps({
-        "source": {"question_page_indices": pages, "key_page_index": args.key,
+        "source": {"question_page_indices": pages, "key_page_index": key_page,
                    "model": args.model, "read_by": "vision"},
         "groups": groups}, indent=2, ensure_ascii=False))
 
