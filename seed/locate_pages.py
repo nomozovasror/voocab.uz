@@ -65,8 +65,9 @@ like "Test 2" on one side and "Listening" or "Reading" on the other. Copy
 whatever is there, both sides, ignoring any watermark or website address.
 
 "heading" is the task heading in large bold type, if the page has one. Copy it
-exactly, including the word SECTION and the question range. Null if the page
-just carries on a task from the page before.
+exactly, including the word SECTION or PART and the question range -- older
+books say "SECTION 3  Questions 21-30" and newer ones "PART 3  Questions
+21-30". Null if the page just carries on a task from the page before.
 
 kind: listening_questions | listening_answer_key | audioscript | reading |
       writing | speaking | contents | intro | blank | other
@@ -76,14 +77,18 @@ number printed above the answers, as in "TEST 3". Null everywhere else."""
 
 HEADER_TEST = re.compile(r"\btest\s*(\d)\b", re.I)
 HEADER_LISTENING = re.compile(r"\blistening\b", re.I)
-SECTION_HEADING = re.compile(r"\bsection\s*(\d)\b", re.I)
+#: "SECTION 3" in Cambridge 10-14 and "PART 3" from Cambridge 15 on -- IELTS
+#: renamed the listening sections to parts, and a regex that knows only the
+#: older word finds nothing in half the corpus. Cambridge 20's re-typeset
+#: headings ("Test1-listening-part2") fall out of the same pattern.
+SECTION_HEADING = re.compile(r"\b(?:section|part)\s*[-–—]?\s*(\d)\b", re.I)
 
 
-def classify(pdf: pathlib.Path, index: int) -> dict:
+def classify(pdf: pathlib.Path, index: int, dpi: int = DPI) -> dict:
     """What one page is. Never raises: a page nobody could read is 'other',
     which shows up as a gap in the report rather than killing a book."""
     with pymupdf.open(pdf) as doc:
-        png = doc[index].get_pixmap(dpi=DPI).tobytes("png")
+        png = doc[index].get_pixmap(dpi=dpi).tobytes("png")
     tmp = WORK / f".page-{index}.png"
     tmp.parent.mkdir(parents=True, exist_ok=True)
     tmp.write_bytes(png)
@@ -210,6 +215,9 @@ def main() -> int:
     ap.add_argument("book", type=int)
     ap.add_argument("--refresh", action="store_true",
                     help="re-read the pages instead of using the cached pass")
+    ap.add_argument("--recheck", action="store_true",
+                    help="re-read, at higher resolution, only the pages around a "
+                         "section that came out empty")
     args = ap.parse_args()
 
     conn = sqlite3.connect(SEED / "catalogue.db")
@@ -237,6 +245,37 @@ def main() -> int:
         for page in resolve(pages):
             page["doc_id"] = doc_row["id"]
             found.append(page)
+
+    if args.recheck:
+        # A section comes out empty when the one page carrying its heading was
+        # misread -- one page in a book, not a systematic failure. Re-reading
+        # just those, larger, is cheaper and more honest than inferring the
+        # span from its neighbours: a guessed heading is a guessed section.
+        located = {}
+        for page in found:
+            if page.get("test") and page.get("section"):
+                located.setdefault((page["test"], page["section"]), []).append(page["index"])
+        gaps: set[int] = set()
+        for test in range(1, 5):
+            for section in range(1, 5):
+                if (test, section) in located:
+                    continue
+                before = located.get((test, section - 1)) or located.get((test - 1, 4))
+                after = located.get((test, section + 1)) or located.get((test + 1, 1))
+                if before and after:
+                    gaps.update(range(max(before) , min(after) + 1))
+        gaps = {i for i in gaps if i not in
+                {p["index"] for p in found if p.get("test")}}
+        if gaps:
+            pdf = MATERIALS / docs[0]["rel_path"]
+            print(f"re-reading {len(gaps)} page(s) at 220 dpi: {sorted(gaps)}")
+            by_index = {p["index"]: p for p in found}
+            for index in sorted(gaps):
+                fresh = classify(pdf, index, dpi=220)
+                by_index[index].update(fresh)
+            found = resolve(list(by_index.values()))
+            cache = WORK / f"pagemap-book{args.book}-doc{docs[0]['id']}.json"
+            cache.write_text(json.dumps(sorted(found, key=lambda p: p["index"]), indent=2))
 
     # Answer keys are matched to tests BY ORDER, not by the number printed on
     # them. Cambridge 12 numbers its tests 5 to 8, continuing from Cambridge 11

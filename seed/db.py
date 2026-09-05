@@ -80,6 +80,25 @@ FINDINGS: list[tuple[str, str, str, str]] = [
      "iyuce.com headers and footers and red 'Edit by:' lines are print-only noise the "
      "cleaner drops. A large PREDICTING watermark sits on top of the text on at least "
      "one page and hides part of it."),
+    ("20", "blocker",
+     "Cambridge 20's pages cannot be located the way the others' are",
+     "It is four PDFs, one per test, with indices restarting in each, and its "
+     "re-typeset packs several parts onto one page -- 'Test1-listening-part2' and "
+     "'-part3' share a sheet. locate_pages.py assumes one heading per page and one "
+     "document per book, so it finds nothing here. The sixteen sections are blocked "
+     "on the missing audioscript anyway, so this waits for the ASR path rather than "
+     "for a page-map special case."),
+    ("corpus", "info",
+     "Newer books say PART where older ones say SECTION",
+     "IELTS renamed the listening sections to parts around 2020. Cambridge 10-14 print "
+     "'SECTION 3  Questions 21-30' and 15 onwards print 'PART 3'. A heading regex that "
+     "knows only the older word finds nothing in half the corpus -- five books came "
+     "back 0/16 before it accepted both."),
+    ("12", "info",
+     "Cambridge 12 numbers its tests 5 to 8",
+     "It continues from Cambridge 11 rather than starting again, so a book's own test "
+     "numbers say nothing about which of its four tests a page belongs to. Answer keys "
+     "are matched to tests by ORDER for that reason."),
     ("14", "resolved",
      "Cambridge 14 was AAC behind a .mp3 extension",
      "Sixteen files unreadable by libsndfile (no AAC) and by afinfo (trusts the "
