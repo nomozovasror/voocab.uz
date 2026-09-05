@@ -230,6 +230,50 @@ Sections of a book with no audioscript start `blocked` rather than `pending`,
 so Cambridge 20's sixteen are visibly waiting on ASR rather than quietly
 queued behind an alignment that can never run.
 
+## One real section, end to end
+
+`cam11-t1-s1`, its audioscript transcribed by hand from pages 103-104 and
+aligned against the actual recording:
+
+| | |
+|---|---|
+| Throughput | **35.9x realtime** (MPS) — better than the synthetic 29.7x |
+| Median word confidence | **0.99** |
+| Words below 0.35 | 15 of 704 (2.1%) |
+| Answer-span confidence | 0.75 – 0.97 across all ten questions |
+
+It works. Four things the real recording taught that the synthetic one could
+not.
+
+**The printed audioscript is half the recording.** It begins at the first line
+of dialogue: no narrator introduction, no example replay, none of the
+half-minute pauses for reading the questions. 722 words against 9.6 minutes —
+230 seconds of the audio has no text at all. Star tokens absorb it, and the
+alignment then lands the first word at 184.7s rather than at zero.
+
+**Stars are safe at the edges and dangerous inside.** Numbers are the problem:
+the book prints "115" and `[^a-z'\- ]` deletes it, so the word vanished from
+the alignment entirely — 704 words aligned out of 722, and the missing ones
+were the answers. Filling those holes with stars scored well and broke the
+transcript: the star standing in for "200" swallowed the example's entire
+second playing and gave that turn a 71-second span. `say()` spells numbers out
+instead, which leaves no hole for a star to grow in.
+
+**A dotted line in the book is a pause in the recording.** The alignment put a
+61-second gap between Q6 and Q7 with no prompting, exactly where the book
+prints its mid-section rule — which is a free check that the alignment has not
+drifted.
+
+**The confidence score is the instrument; duration heuristics are not.**
+Per-word confidence found the five genuinely uncertain places, one of which is
+a real defect in the source: the book prints "September 1st?" and the speaker
+says "September the first", and the aligner scored it 0.07. The duration checks
+were noisier and wrong in a specific way — "C-H-A-R" held for 2.3 seconds is
+correct, because it is spoken letter by letter, and a words-per-second check
+flags every one-word turn ("Yeah.", "OK.", "Sure.") as impossible. Judge
+duration per token, and only on turns of four words or more; of eight turns
+that check flagged, seven were one-word answers and one was real.
+
 ## Where this stops
 
 Stage 0 is done: 176 sections catalogued, every file's extension honest, every
@@ -237,7 +281,10 @@ duration plausible, and what the PDFs can and cannot give us written down.
 Alignment is a measured prototype against synthetic audio, not yet wired to
 anything. Nothing here writes to the app database.
 
-Next is one real section end to end — `cam11-t1-s1` is the obvious candidate,
-since its audioscript was already located at page 103 — which is what tells us
-whether the cleaning rules, the Q-markers and the digit weakness survive
-contact with the real thing.
+`cam11-t1-s1` is aligned and its ten answer spans are cut to
+`seed/work/cam11-t1-s1/clips/` — a confident alignment and a correct one are
+different claims, and only listening settles the second.
+
+After that: the questions and the answer key, both of which have to be read
+visually rather than extracted, and then the same section written into the
+database as a draft Material.
