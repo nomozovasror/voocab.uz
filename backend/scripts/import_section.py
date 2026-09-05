@@ -23,9 +23,12 @@ The material is created **private**, and there is no option here to make it
 public: this is copyrighted source, and it is in the database to prove the
 pipeline works rather than to be practised by anybody.
 
-Questions are not written. They come from a stage that does not exist yet, so
-what lands is a draft with its audio and its transcript and nothing to answer
--- which `publish_blockers()` will say, correctly, is not publishable.
+Questions are written too, when `seed/work/<id>/questions.json` exists. They go
+in through `FormCompletionGroupIn` rather than straight into the tables: that
+schema is where "the template's gaps must match the question numbers" and "an
+answer may not be blank" actually live, and a seed script that inserted rows
+behind it would be the one caller allowed to write a material the editor could
+never have produced.
 """
 
 import argparse
@@ -42,7 +45,10 @@ from sqlmodel import select
 from app.core.database import async_session_factory
 from app.models.material import Material
 from app.models.part import Part
+from app.models.question import Question
+from app.models.question_group import QuestionGroup
 from app.models.user import User
+from app.schemas.listening import FormCompletionGroupIn
 from app.services import audio as audio_service
 from app.services.asr import TranscriptResult, TranscriptSegment, WordTiming
 from app.services.storage import (
@@ -104,6 +110,50 @@ def read_alignment(section_id: str) -> tuple[dict, list[TranscriptSegment], str]
     return dict(row), segments, title
 
 
+async def import_questions(session, part_id: uuid.UUID, section_id: str) -> int:
+    """Replace this part's question groups with what the seed built.
+
+    Replace rather than merge: the groups have no natural key, and a re-run
+    after a corrected answer key must not leave the old one beside the new.
+    """
+    path = SEED / "work" / section_id / "questions.json"
+    if not path.exists():
+        return 0
+    payload = json.loads(path.read_text())
+
+    # Validated before anything is deleted, so a bad payload leaves the
+    # material exactly as it was rather than emptied.
+    groups = [FormCompletionGroupIn.model_validate(g) for g in payload["groups"]]
+
+    existing = (await session.exec(
+        select(QuestionGroup).where(QuestionGroup.part_id == part_id))).all()
+    for group in existing:
+        for question in (await session.exec(
+                select(Question).where(Question.group_id == group.id))).all():
+            await session.delete(question)
+        await session.delete(group)
+    await session.flush()
+
+    written = 0
+    for order_index, group in enumerate(groups):
+        row = QuestionGroup(
+            part_id=part_id, order_index=order_index, type=group.type,
+            instructions=group.instructions, word_limit=group.word_limit,
+            config=group.config.model_dump(mode="json", exclude_none=True),
+        )
+        session.add(row)
+        await session.flush()
+        for question in group.questions:
+            session.add(Question(
+                group_id=row.id, number=question.number,
+                correct_answers=question.correct_answers,
+                replay_start_ms=question.replay_start_ms,
+                replay_end_ms=question.replay_end_ms,
+            ))
+            written += 1
+    return written
+
+
 async def import_section(section_id: str, owner_id: uuid.UUID) -> None:
     row, segments, title = read_alignment(section_id)
     path = MATERIALS / row["rel_path"]
@@ -162,18 +212,30 @@ async def import_section(section_id: str, owner_id: uuid.UUID) -> None:
             )
             session.add(material)
             await session.flush()
-            session.add(Part(
+            part = Part(
                 material_id=material.id, order_index=0,
                 title=f"Part {row['section_no']}",
                 # NULL/NULL: this part IS the whole recording, because the book's
                 # audio was already published one section per file.
                 audio_start_ms=None, audio_end_ms=None,
-            ))
+            )
+            session.add(part)
+            await session.flush()
             logger.info("created material %s", material.id)
         else:
             material.audio_asset_id = asset.id
             session.add(material)
+            part = (await session.exec(
+                select(Part).where(Part.material_id == material.id)
+                .order_by(Part.order_index))).first()
             logger.info("material %s already existed, re-pointed at the asset", material.id)
+
+        written = await import_questions(session, part.id, section_id)
+        if written:
+            # Every authoring write bumps the counter the editor checks against.
+            material.version += 1
+            session.add(material)
+            logger.info("wrote %d question(s)", written)
 
         await session.commit()
         material_id = str(material.id)
@@ -184,10 +246,11 @@ async def import_section(section_id: str, owner_id: uuid.UUID) -> None:
                error = NULL, meta = ?, updated_at = datetime('now')
            WHERE section_id = ? AND name = 'import'""",
         (json.dumps({"material_id": material_id, "segments": len(segments),
-                     "visibility": "private"}), section_id))
+                     "questions": written, "visibility": "private"}), section_id))
     conn.commit()
     conn.close()
-    print(f"{section_id} -> material {material_id} ({len(segments)} transcript lines, private)")
+    print(f"{section_id} -> material {material_id} "
+          f"({len(segments)} transcript lines, {written} questions, private)")
 
 
 def main() -> int:

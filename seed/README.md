@@ -308,6 +308,55 @@ this is copyrighted source, in the database to prove the pipeline works rather
 than to be practised. Re-running is safe -- the blob dedups on its hash and the
 material is looked up by the title the script generates.
 
+## Questions and the answer key
+
+`questions.src.json` is what comes off the page: the template with its
+``{{N}}`` gaps, the instruction lines, and each answer **exactly as the key
+prints it**. `build_questions.py` expands that into `questions.json`, and
+`import_section.py` writes it.
+
+Keeping the printed form rather than only the expansion is what makes the
+result auditable. When a learner reports a right answer marked wrong, the line
+to check is the one the book actually prints.
+
+### Reading the key is a parser, not a transcription
+
+`answer_key.py` exists because `normalize_answer` is deliberately dumb -- trim,
+collapse whitespace, lowercase, and nothing else. Every phrasing a candidate
+might write has to be in `correct_answers` as its own string, so the key's
+shorthand has to be expanded rather than stored. Two marks, and they compose:
+
+| Printed | Accepted |
+|---|---|
+| `floor/floors` | floor, floors |
+| `(£)115 / a hundred (and) fifteen` | 115, £115, a hundred fifteen, a hundred and fifteen |
+
+Ten questions in Cambridge 11 Test 1 Section 1 become **fifteen** accepted
+answers. Too few marks correct answers wrong; too many marks wrong ones right.
+
+The subtlety that a first attempt gets wrong: **a separator with space around
+it alternates whole phrases; one without space alternates a single word.**
+`urban centres/centers` is "urban centres" or "urban centers", never "centers"
+on its own. Splitting on the separator regardless of spacing silently drops the
+"urban". `answer_key.py` runs its own cases -- `python seed/answer_key.py`.
+
+### Page numbers are not PDF pages
+
+Cambridge 11's printed page 10 is PDF index 7. Two pages of front matter sit
+outside the printed numbering, and reading the offset off the contact sheet
+rather than assuming it is the difference between the Section 1 questions and
+the Section 2 questions. `questions.src.json` records the offset it used.
+
+### What the build step is for
+
+It refuses rather than writes when the template's gaps and the question numbers
+disagree, when a key expands to nothing, or when a margin marker names a turn
+the alignment never placed. All three are a page misread, and all three would
+otherwise reach a learner as a broken question. The importer then validates
+again through `FormCompletionGroupIn` -- the schema is where "gaps must match
+question numbers" actually lives, and a seed script writing behind it would be
+the one caller able to produce a material the editor never could.
+
 ## Where this stops
 
 Stage 0 is done: 176 sections catalogued, every file's extension honest, every
@@ -324,5 +373,9 @@ transcript lines with word timings, one part, no questions. `publish_blockers()`
 says it is not publishable, which is correct -- questions come from a stage
 that does not exist yet.
 
-That stage is next: the question pages and the answer key, both of which have
-to be read visually rather than extracted, because the books are scans.
+`cam11-t1-s1` is complete: audio, 39 transcript lines, one `note_completion`
+group, ten questions, fifteen accepted answers, and a replay span on every one
+of them. `publish_blockers()` returns nothing, and it stays private anyway.
+
+Next is doing that from the page automatically instead of by hand -- the
+reading is the slow part now, not the machinery around it.
