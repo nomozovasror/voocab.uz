@@ -684,6 +684,35 @@ That last one is the shape of nearly every failure in this pipeline: a general
 question gets a general answer, and the fix is to ask a narrower one and do the
 arithmetic here.
 
+## Where the corpus stands
+
+78 of Cambridge 10-19's 160 sections are in the database as private drafts:
+774 questions, 642 of them (83%) carrying a replay span, across eight group
+types. 36 of the 78 are content-complete; the rest are short of nothing but
+replay spans.
+
+The run stopped on a **spend alert**, not on a bug: Groq blocked the
+organization's API access when the $10 threshold was met, and 62 sections
+failed with that message. Raising the threshold and re-running
+`run_pipeline.py --book N` picks each of them up where it stopped -- every
+stage is skipped if it is already done.
+
+What the money went on is worth knowing before raising it. The estimate of
+$2.54 covered ONE clean extraction pass. It did not cover `locate_pages` over
+eleven books (about 1,540 pages at 1,813 tokens each), nor the two batch
+attempts before this one, nor the audioscript replies, which are 700-word
+answers billed at the output rate -- five times the input rate. Three passes
+plus the page scan is roughly where $10 goes.
+
+### The frontier is replay spans, not questions
+
+Nearly every remaining blocker is "not linked to the audio": a question whose
+margin marker the audioscript reader did not find. The questions themselves are
+right; what is missing is the button that plays the moment the answer is said.
+83% of them have it. Improving that number means improving marker recall in
+`read_audioscript.py`, and it is the one thing left that would move a large
+number of materials at once.
+
 ## Where this stops
 
 Stage 0 is done: 176 sections catalogued, every file's extension honest, every
@@ -700,9 +729,9 @@ transcript lines with word timings, one part, no questions. `publish_blockers()`
 says it is not publishable, which is correct -- questions come from a stage
 that does not exist yet.
 
-`cam11-t1-s1` is complete: audio, 39 transcript lines, one `note_completion`
-group, ten questions, fifteen accepted answers, and a replay span on every one
-of them. `publish_blockers()` returns nothing, and it stays private anyway.
+Every stage runs from the catalogue. 78 materials are seeded and private;
+Cambridge 20's sixteen sections are blocked on their missing audioscript and
+wait for an ASR path.
 
 Every stage now runs from the catalogue without a page number passed by hand.
 What has not been done is the other ten books, and the batch runner that would
