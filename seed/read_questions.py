@@ -41,24 +41,44 @@ QUESTION_PROMPT = """\
 These images are consecutive pages of one section of a Cambridge IELTS \
 Listening paper. Read the questions numbered {first} to {last}.
 
-Return ONE JSON object, no prose and no code fence:
+Return ONE JSON object, no prose and no code fence, shaped EXACTLY like this:
 
-{{
-  "groups": [
-    {{
-      "type": "<one of: form_completion, note_completion, table_completion, \
-sentence_completion, summary_completion, short_answer, flow_chart_completion, \
-map_labelling, diagram_labelling, multiple_choice, matching>",
-      "instructions": "<the italic lines above the task, verbatim, newline-separated>",
-      "word_limit": <max words per answer as a number, or null>,
-      "template": "<the task, in the layout grammar below>",
-      "questions": [{{"number": <1-based within this group>, "paper_number": <as printed>}}]
-    }}
-  ]
-}}
+{{"groups": [ <one object per group, as described below> ]}}
 
-A section may hold more than one group -- "Questions 11-14" then "Questions \
-15-20" are two groups, in the order printed.
+The list is always there, even for a single group. A section may hold more \
+than one -- "Questions 11-14" then "Questions 15-20" are two groups, in the \
+order printed. Every group has these fields:
+
+  "type": one of the names below
+  "instructions": the italic lines above the task, verbatim, newline-separated
+  "word_limit": max words per answer as a number, or null
+
+and then a shape that depends on which KIND of task it is. There are three.
+
+**A) GAP-FILL** -- form_completion, note_completion, table_completion, \
+sentence_completion, summary_completion, short_answer, flow_chart_completion. \
+The candidate writes words into blanks:
+
+  "template": "<the task, in the layout grammar below>",
+  "questions": [{{"number": <1-based within this group>, "paper_number": <as printed>}}]
+
+**B) MULTIPLE CHOICE** -- "Choose the correct letter, A, B or C". Each question \
+has its own stem and its own options. There is NO template:
+
+  "pick": <how many letters the candidate chooses, usually 1, or 2 for "Choose TWO letters">,
+  "questions": [{{"number": 1, "paper_number": 21,
+                 "prompt": "<the question stem, without the number>",
+                 "options": ["<A's text>", "<B's text>", "<C's text>"]}}]
+
+**C) MATCHING** -- a lettered box of options printed once above a list of \
+items, each answered with a letter. Also NO template:
+
+  "options": ["<A's text>", "<B's text>", ...],
+  "reuse": <true if it says a letter may be used more than once, else false>,
+  "questions": [{{"number": 1, "paper_number": 21, "prompt": "<the item, without the number>"}}]
+
+map_labelling and diagram_labelling are answered on a picture. If you meet \
+one, still name the type, and use shape (A).
 
 THE LAYOUT GRAMMAR for "template". Every line is one of:
 
@@ -71,8 +91,10 @@ THE LAYOUT GRAMMAR for "template". Every line is one of:
   bare text                   a full-width line
   (blank)                     a blank line
 
-A gap is written {{{{N}}}} where N is the question's number WITHIN THIS GROUP, \
-counting from 1. So a group covering questions 15-20 has gaps {{{{1}}}}..{{{{6}}}}.
+THE LAYOUT GRAMMAR is only for shape (A). A gap is written {{{{N}}}} where N is \
+the question's number WITHIN THIS GROUP, counting from 1. So a group covering \
+questions 15-20 has gaps {{{{1}}}}..{{{{6}}}}. Multiple choice and matching have \
+no template and no gap tokens at all -- their options go in the fields above.
 
 TWO RULES THAT ARE EASY TO GET WRONG, both with examples.
 
@@ -200,6 +222,11 @@ def main() -> int:
     print(f"reading questions {first}-{last} from {len(shots)} page(s) with {args.model}")
     read = vision.ask_json(
         QUESTION_PROMPT.format(first=first, last=last), shots, model=args.model)
+    # Asked for {"groups": [...]}, it sometimes answers with the single group
+    # itself. The content is right either way, so it is wrapped rather than
+    # rejected -- a whole section is not worth losing to a missing bracket.
+    if "groups" not in read and read.get("questions"):
+        read = {"groups": [read]}
 
     key_shot = vision.render(pdf, [key_page], work / "pages")
     print(f"reading the answer key from page index {key_page}")
@@ -226,7 +253,7 @@ def main() -> int:
         template, notes = repair(group.get("template", ""), questions)
         for note in notes:
             print(f"  repaired: {note}")
-        groups.append({
+        out = {
             "type": group.get("type"),
             "instructions": group.get("instructions", ""),
             "word_limit": group.get("word_limit"),
@@ -234,10 +261,20 @@ def main() -> int:
             "questions": [
                 {"number": q.get("number"), "paper_number": q.get("paper_number"),
                  "key": answers.get(q.get("paper_number"), ""),
-                 "marker": f"Q{q.get('paper_number')}"}
+                 "marker": f"Q{q.get('paper_number')}",
+                 # Carried only where the type has them; a gap-fill question
+                 # has neither and a matching item has no options of its own.
+                 **({"prompt": q["prompt"]} if q.get("prompt") else {}),
+                 **({"options": q["options"]} if q.get("options") else {})}
                 for q in questions
             ],
-        })
+        }
+        if group.get("pick"):
+            out["pick"] = group["pick"]
+        if group.get("options"):
+            out["options"] = group["options"]
+            out["reuse"] = bool(group.get("reuse"))
+        groups.append(out)
 
     out = work / "questions.src.json"
     out.write_text(json.dumps({

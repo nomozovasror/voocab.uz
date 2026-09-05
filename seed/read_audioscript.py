@@ -32,6 +32,7 @@ alignment runs with stars rather than assuming the text covers the audio.
 import argparse
 import json
 import pathlib
+import re
 import sqlite3
 import sys
 
@@ -45,10 +46,17 @@ WORK = SEED / "work"
 PROMPT = """These images are consecutive pages of the audioscripts at the back of a
 Cambridge IELTS book. Read ONLY the audioscript for {label}.
 
-It begins at the heading "SECTION {section}" (under "TEST {test}") and ENDS at the
-next "SECTION" heading, which belongs to the next section -- stop there even if
-it is halfway down a page. If the first page starts mid-conversation, the part
-above your section's heading belongs to the previous one; skip it.
+It begins at the heading "SECTION {section}" or "PART {section}" (under "TEST
+{test}") and ENDS at the next such heading, which belongs to the next section --
+stop there even if it is halfway down a page.
+
+The FIRST PAGE almost always opens partway through the PREVIOUS section, above
+your heading. Everything above that heading belongs to the previous section:
+skip it entirely, however much of the page it is.
+
+The only margin markers in this section are Q{first} to Q{last}. If you find
+yourself copying a turn marked with a number below Q{first}, you are still in
+the previous section and have not reached your heading yet.
 
 Return ONE JSON object, no prose and no code fence:
 
@@ -103,8 +111,10 @@ def main() -> int:
     label = f"Test {row['test_no']}, Section {row['section_no']}"
     print(f"reading the audioscript for {label} from pages {pages}")
 
+    first, last = (row["section_no"] - 1) * 10 + 1, row["section_no"] * 10
     read = vision.ask_json(
-        PROMPT.format(label=label, test=row["test_no"], section=row["section_no"]),
+        PROMPT.format(label=label, test=row["test_no"], section=row["section_no"],
+                      first=first, last=last),
         shots, model=args.model, max_tokens=8000)
 
     turns = [
@@ -115,6 +125,21 @@ def main() -> int:
     # A turn with no words is either the break or a misread line; the break is
     # kept because it carries meaning, the rest go.
     turns = [t for t in turns if t["text"] or t["speaker"] == "__BREAK__"]
+
+    # The prompt says to start at this section's heading and the model still
+    # opens with the previous section's tail -- cam11-t1-s2 came back carrying
+    # Q7 to Q10. A marker below this section's range is proof of where the text
+    # actually is, so everything up to and including the last such turn goes.
+    def number(turn: dict) -> int | None:
+        m = re.fullmatch(r"Q(\d+)", (turn.get("marker") or "").strip(), re.I)
+        return int(m.group(1)) if m else None
+
+    strays = [i for i, t in enumerate(turns)
+              if (n := number(t)) is not None and n < first]
+    if strays:
+        cut = strays[-1] + 1
+        print(f"  dropped {cut} turn(s) belonging to the section before this one")
+        turns = turns[cut:]
     (work / "turns.json").write_text(json.dumps(turns, indent=2, ensure_ascii=False))
 
     spoken = [t for t in turns if t["speaker"] != "__BREAK__"]
@@ -124,7 +149,6 @@ def main() -> int:
     print(f"  {len(spoken)} turns, {words} words, {breaks} break(s)")
     print(f"  markers: {markers}")
 
-    first, last = (row["section_no"] - 1) * 10 + 1, row["section_no"] * 10
     expected = {f"Q{n}" for n in range(first, last + 1)}
     missing = sorted(expected - set(markers), key=lambda m: int(m[1:]))
     if missing:

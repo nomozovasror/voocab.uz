@@ -110,7 +110,7 @@ FINDINGS: list[tuple[str, str, str, str]] = [
 ]
 
 #: The stages a section passes through, in the order they block on each other.
-STAGES = ("audioscript", "align", "questions", "answer_key", "import")
+STAGES = ("audioscript", "questions", "answer_key", "align", "trim", "import")
 
 
 def sha256_file(path: pathlib.Path) -> str:

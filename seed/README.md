@@ -569,6 +569,62 @@ The audioscripts are found the same way: the **start of the longest run** of
 audioscript pages, not the first page anywhere that resembles one. A single
 misread page in the middle of the book made that answer 21 against a true 102.
 
+## Running a whole test
+
+`run_pipeline.py` calls the stages in order and records how far each section
+got. It does not absorb them -- every stage stays a program you can run on its
+own, and a stage that fails costs one section rather than a book.
+
+```bash
+seed/.venv/bin/python seed/run_pipeline.py --book 11 --test 1
+seed/.venv/bin/python seed/run_pipeline.py --book 11        # all sixteen
+```
+
+Cambridge 11 Test 1, all four sections, about 50 seconds each:
+
+| | group | questions | with a replay span |
+|---|---|---|---|
+| Part 1 | note completion | 10 | 10 |
+| Part 2 | map labelling + note completion | 6 + 4 | 10 |
+| Part 3 | multiple choice | 10 | 10 |
+| Part 4 | note completion | 10 | 7 |
+
+Part 2 splitting itself into two groups is the reader getting it right: the
+page really is "Questions 11-16, label the map" followed by "Questions 17-20,
+complete the notes".
+
+### The order is not the interesting order
+
+`align` has to run before `questions`, because `build_questions.py` resolves
+each answer's replay span out of `aligned.json`. Run the other way round it
+reports every margin marker as having no turn -- and the first two sections
+passed anyway, because an earlier run had left an alignment on disk. A
+dependency that only shows up on a section nobody has touched is the kind a
+batch finds and a demo does not.
+
+### Three kinds of task, not one
+
+The pipeline was built and measured on a gap-fill and quietly assumed every
+section was one. The first multiple-choice section failed at the import with a
+pydantic literal error, because the importer validated everything as a
+completion group. The reader now emits three shapes -- gap-fill with a
+template, multiple choice with a stem and options per question, matching with a
+lettered box -- the builder keeps letters as an answer KEY rather than
+expanding them as phrasings, and the importer validates through the schema's
+own discriminated union.
+
+### What a section still cannot finish with
+
+* **map and diagram labelling need the picture.** Extracting it from the PDF is
+  a stage that does not exist yet, so those groups import and then fail to
+  publish with "attach the picture the labels go on".
+* **multiple choice needs `option_replay`, not `replay_start_ms`.** A "choose
+  two" has two answers at two moments, so publishing asks where each OPTION is
+  said; the margin marker gives the question's turn and not that.
+* **a marker the audioscript reader missed** costs that answer its replay
+  button. Three of Part 4's ten. It is a warning rather than a failure now:
+  refusing the section threw away nine good questions to protect one button.
+
 ## Where this stops
 
 Stage 0 is done: 176 sections catalogued, every file's extension honest, every

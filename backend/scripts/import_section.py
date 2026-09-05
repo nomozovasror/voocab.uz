@@ -49,7 +49,9 @@ from app.models.part import Part
 from app.models.question import Question
 from app.models.question_group import QuestionGroup
 from app.models.user import User
-from app.schemas.listening import FormCompletionGroupIn
+from pydantic import TypeAdapter
+
+from app.schemas.listening import QuestionGroupIn
 from app.services import audio as audio_service
 from app.services.asr import TranscriptResult, TranscriptSegment, WordTiming
 from app.services.storage import (
@@ -151,8 +153,12 @@ async def import_questions(session, part_id: uuid.UUID, section_id: str,
     payload = json.loads(path.read_text())
 
     # Validated before anything is deleted, so a bad payload leaves the
-    # material exactly as it was rather than emptied.
-    groups = [FormCompletionGroupIn.model_validate(g) for g in payload["groups"]]
+    # material exactly as it was rather than emptied. Through the discriminated
+    # union rather than one member of it: a section is as likely to be multiple
+    # choice or matching as a gap-fill, and validating everything as a
+    # completion group refused the first choice section outright.
+    adapter = TypeAdapter(QuestionGroupIn)
+    groups = [adapter.validate_python(g) for g in payload["groups"]]
 
     existing = (await session.exec(
         select(QuestionGroup).where(QuestionGroup.part_id == part_id))).all()
@@ -177,9 +183,21 @@ async def import_questions(session, part_id: uuid.UUID, section_id: str,
             # same recording, and half of them moving is worse than none.
             start = question.replay_start_ms
             end = question.replay_end_ms
+            # A gap has nothing of its own; a choice question carries its stem
+            # and its options; a matching item carries its stem and answers
+            # from the group's box. Same division as the group's config, one
+            # level down -- see the Question model.
+            config = None
+            prompt = getattr(question, "prompt", None)
+            if prompt is not None:
+                config = {"prompt": prompt}
+                options = getattr(question, "options", None)
+                if options:
+                    config["options"] = list(options)
             session.add(Question(
                 group_id=row.id, number=question.number,
                 correct_answers=question.correct_answers,
+                config=config,
                 replay_start_ms=None if start is None else max(0, start - offset_ms),
                 replay_end_ms=None if end is None else max(0, end - offset_ms),
             ))

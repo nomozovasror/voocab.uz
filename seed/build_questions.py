@@ -33,6 +33,13 @@ from answer_key import parse_answer
 SEED = pathlib.Path(__file__).resolve().parent
 WORK = SEED / "work"
 GAP = re.compile(r"\{\{(\d+)\}\}")
+#: The two that are answered by picking a letter rather than writing words.
+#: They carry no template, so the gap checks below do not apply to them and
+#: their answer key is a letter rather than a list of accepted phrasings.
+LETTERED = {"multiple_choice", "matching"}
+#: A letter, as the key prints it. "17-18.AE" is handled where the group is
+#: built, not here: it is a statement about how two numbers share one question.
+LETTERS = re.compile(r"^[A-H](?:\s*[,/&]?\s*[A-H])*$", re.I)
 
 
 def gaps_that_render(template: str) -> set[int] | None:
@@ -83,41 +90,63 @@ def build(section_id: str) -> int:
                 spans[marker] = (words[0]["start_ms"], words[-1]["end_ms"])
 
     problems: list[str] = []
+    warnings: list[str] = []
     out_groups = []
     for gi, group in enumerate(src["groups"]):
-        gaps = [int(n) for n in GAP.findall(group["template"])]
+        lettered = group["type"] in LETTERED
         numbers = [q["number"] for q in group["questions"]]
 
-        # The template and the questions are two readings of the same page, and
-        # a disagreement between them means one of them was misread. The
-        # backend refuses this too -- better to hear it here, by name.
-        if sorted(gaps) != sorted(numbers):
-            problems.append(
-                f"group {gi}: template gaps {sorted(gaps)} != question numbers "
-                f"{sorted(numbers)}")
-        if len(gaps) != len(set(gaps)):
-            problems.append(f"group {gi}: template repeats a gap number")
+        if not lettered:
+            gaps = [int(n) for n in GAP.findall(group.get("template") or "")]
+            # The template and the questions are two readings of the same page,
+            # and a disagreement means one of them was misread. The backend
+            # refuses this too -- better to hear it here, by name.
+            if sorted(gaps) != sorted(numbers):
+                problems.append(
+                    f"group {gi}: template gaps {sorted(gaps)} != question numbers "
+                    f"{sorted(numbers)}")
+            if len(gaps) != len(set(gaps)):
+                problems.append(f"group {gi}: template repeats a gap number")
 
-        rendered = gaps_that_render(group["template"])
-        if rendered is None:
-            print(f"note: could not run the layout check for group {gi} "
-                  "(needs node and frontend/)", file=sys.stderr)
-        elif set(gaps) - rendered:
-            lost = sorted(set(gaps) - rendered)
+            rendered = gaps_that_render(group.get("template") or "")
+            if rendered is None:
+                print(f"note: could not run the layout check for group {gi} "
+                      "(needs node and frontend/)", file=sys.stderr)
+            elif set(gaps) - rendered:
+                lost = sorted(set(gaps) - rendered)
+                problems.append(
+                    f"group {gi}: gaps {lost} are in the template but the take page "
+                    f"would not draw them -- a line is colliding with the layout "
+                    f"grammar (a leading '+', '>', '#', or a '|')")
+        elif sorted(numbers) != list(range(1, len(numbers) + 1)):
             problems.append(
-                f"group {gi}: gaps {lost} are in the template but the take page "
-                f"would not draw them -- a line is colliding with the layout "
-                f"grammar (a leading '+', '>', '#', or a '|')")
+                f"group {gi}: question numbers {sorted(numbers)} are not 1..N")
 
         questions = []
         for q in group["questions"]:
-            answers = parse_answer(q["key"])
+            if lettered:
+                # A lettered answer is the KEY, not a list of phrasings: the
+                # letters must be picked exactly, and expanding "A" the way a
+                # gap-fill answer is expanded would be nonsense.
+                answers = [c.lower() for c in re.findall(r"[A-H]", q["key"], re.I)]
+                if not LETTERS.match(q["key"].strip()):
+                    problems.append(
+                        f"group {gi} q{q['number']}: {q['key']!r} is not a letter, but "
+                        f"this is a {group['type']} group")
+            else:
+                answers = parse_answer(q["key"])
             if not answers:
                 problems.append(f"group {gi} q{q['number']}: key {q['key']!r} expands to nothing")
             span = spans.get(q.get("marker") or "")
             if q.get("marker") and span is None:
-                problems.append(
-                    f"group {gi} q{q['number']}: marker {q['marker']} has no aligned turn")
+                # A warning, not a problem. The marker was not found in the
+                # audioscript, so this answer gets no "hear it again" -- which
+                # is a degradation, not a broken question, and refusing the
+                # whole section over it threw away nine good questions to
+                # protect one replay button.
+                warnings.append(
+                    f"group {gi} q{q['number']}: marker {q['marker']} was not found in "
+                    "the audioscript, so it gets no replay span")
             questions.append({
                 "number": q["number"],
                 "paper_number": q.get("paper_number"),
@@ -125,16 +154,32 @@ def build(section_id: str) -> int:
                 "correct_answers": answers,
                 "replay_start_ms": span[0] if span else None,
                 "replay_end_ms": span[1] if span else None,
+                **({"prompt": q["prompt"]} if q.get("prompt") else {}),
+                **({"options": q["options"]} if q.get("options") else {}),
             })
 
+        # `config` is what the group's own schema expects, and the three
+        # kinds want three different things in it.
+        if group["type"] == "multiple_choice":
+            config = {"pick": int(group.get("pick") or 1)}
+        elif group["type"] == "matching":
+            config = {"options": group.get("options") or [],
+                      "reuse": bool(group.get("reuse"))}
+        else:
+            config = {"template": group.get("template") or "", "options": [],
+                      "image_letters": 0}
         out_groups.append({
             "type": group["type"],
             "instructions": group["instructions"],
-            "word_limit": group.get("word_limit"),
-            "config": {"template": group["template"], "options": [], "image_letters": 0},
+            # Never on a lettered group: how long an answer may be is not a
+            # question you can ask about a letter, and the schema refuses it.
+            "word_limit": None if lettered else group.get("word_limit"),
+            "config": config,
             "questions": questions,
         })
 
+    for w in warnings:
+        print(f"note: {w}", file=sys.stderr)
     if problems:
         for p in problems:
             print(f"PROBLEM  {p}", file=sys.stderr)
