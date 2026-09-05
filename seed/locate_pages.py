@@ -238,14 +238,19 @@ def main() -> int:
             page["doc_id"] = doc_row["id"]
             found.append(page)
 
-    # test number -> the page its answers are printed on. The model reads the
-    # "TEST 3" above the list; the first page claiming a test wins, which
-    # discards the duplicates it also reports.
-    keys: dict[int, int] = {}
+    # Answer keys are matched to tests BY ORDER, not by the number printed on
+    # them. Cambridge 12 numbers its tests 5 to 8, continuing from Cambridge 11
+    # rather than starting again, so a book's own numbering says nothing about
+    # which of its four tests a page belongs to. The printed number is still
+    # read -- it is what tells four key pages apart from the fifth page that
+    # spills over -- but only the order is trusted.
+    claimed: dict[int, int] = {}
     for page in sorted(found, key=lambda p: p["index"]):
         n = page.get("answer_key_test")
-        if page.get("kind") == "listening_answer_key" and n and n not in keys:
-            keys[n] = page["index"]
+        if page.get("kind") == "listening_answer_key" and n and n not in claimed:
+            claimed[n] = page["index"]
+    in_order = [claimed[n] for n in sorted(claimed)]
+    keys = {position + 1: index for position, index in enumerate(in_order[:4])}
     # The START OF THE LONGEST RUN, not the first page anywhere that looks like
     # one. The audioscripts are forty consecutive pages at the back; a single
     # page misread as one in the middle of the book would otherwise become the
