@@ -75,6 +75,25 @@ kind: listening_questions | listening_answer_key | audioscript | reading |
 "answer_key_test" is filled in ONLY on a listening_answer_key page: the test
 number printed above the answers, as in "TEST 3". Null everywhere else."""
 
+#: Asked to classify a page, the model answers the audioscript pages of some
+#: books with their running title -- "Audioscripts" -- rather than the PART
+#: heading further down, and books 15 and 19 lost nineteen sections between
+#: them that way. A general question got a general answer; this asks the one
+#: thing that is actually needed.
+SCRIPT_PROMPT = """This page is from the audioscripts at the back of a Cambridge IELTS
+book. JSON only, no prose:
+
+{"starts_here": <true if a new section's audioscript BEGINS on this page, else false>,
+ "test": <the test number printed above that heading, or null>,
+ "part": <the section or part number in that heading, 1-4, or null>}
+
+A new one begins where the page prints a heading like "SECTION 3" or "PART 3",
+usually under a "TEST 2" line. The word "Audioscripts" is the running title of
+every one of these pages and is NOT a heading -- ignore it.
+
+If the page only carries on a conversation that started earlier, "starts_here"
+is false and the other two are null."""
+
 HEADER_TEST = re.compile(r"\btest\s*(\d)\b", re.I)
 HEADER_LISTENING = re.compile(r"\blistening\b", re.I)
 #: "SECTION 3" in Cambridge 10-14 and "PART 3" from Cambridge 15 on -- IELTS
@@ -215,6 +234,9 @@ def main() -> int:
     ap.add_argument("book", type=int)
     ap.add_argument("--refresh", action="store_true",
                     help="re-read the pages instead of using the cached pass")
+    ap.add_argument("--scripts", action="store_true",
+                    help="re-read only the audioscript pages, asking directly which "
+                         "test and part each one starts")
     ap.add_argument("--recheck", action="store_true",
                     help="re-read, at higher resolution, only the pages around a "
                          "section that came out empty")
@@ -245,6 +267,34 @@ def main() -> int:
         for page in resolve(pages):
             page["doc_id"] = doc_row["id"]
             found.append(page)
+
+    if args.scripts:
+        pdf = MATERIALS / docs[0]["rel_path"]
+        marked = [p["index"] for p in found if p.get("kind") == "audioscript"]
+        print(f"re-reading {len(marked)} audioscript page(s), asking directly")
+        by_index = {p["index"]: p for p in found}
+
+        def ask_one(index: int) -> tuple[int, dict]:
+            shot = WORK / f".script-{index}.png"
+            shot.parent.mkdir(parents=True, exist_ok=True)
+            with pymupdf.open(pdf) as doc:
+                shot.write_bytes(doc[index].get_pixmap(dpi=DPI).tobytes("png"))
+            try:
+                return index, vision.ask_json(SCRIPT_PROMPT, [shot])
+            except SystemExit:
+                return index, {}
+            finally:
+                shot.unlink(missing_ok=True)
+
+        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+            for index, said in pool.map(ask_one, marked):
+                if said.get("starts_here") and said.get("part"):
+                    by_index[index]["heading"] = f"PART {said['part']}"
+                    if said.get("test"):
+                        by_index[index]["header"] = f"Test {said['test']}"
+        found = list(by_index.values())
+        cache = WORK / f"pagemap-book{args.book}-doc{docs[0]['id']}.json"
+        cache.write_text(json.dumps(sorted(found, key=lambda p: p["index"]), indent=2))
 
     if args.recheck:
         # A section comes out empty when the one page carrying its heading was

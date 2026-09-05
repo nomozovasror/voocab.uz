@@ -24,6 +24,12 @@ import re
 import sqlite3
 import sys
 
+#: "11&12", "11-12", "11 and 12" -- how the key prints a question that takes
+#: two of the paper's numbers. A "Choose TWO letters" is ONE question worth two
+#: marks (see question_marks() in the backend), so the pair is not two entries
+#: with one letter each; it is one entry with both.
+PAIRED_KEY = re.compile(r"^\s*(\d+)\s*(?:&|and|[-–—])\s*(\d+)\s*$")
+
 import vision
 
 SEED = pathlib.Path(__file__).resolve().parent
@@ -234,16 +240,47 @@ def main() -> int:
         KEY_PROMPT.format(label=f"Test {row['test_no']}, Section {row['section_no']}",
                           first=first, last=last),
         key_shot, model=args.model)
-    answers = {int(k): v for k, v in key.get("answers", {}).items()}
+    # A key line can be labelled for two numbers at once. int() on "11&12"
+    # raised, which took eighteen sections down in the first full batch.
+    answers: dict[int, str] = {}
+    paired: dict[int, int] = {}          # second number -> first
+    for label, value in key.get("answers", {}).items():
+        label = str(label)
+        pair = PAIRED_KEY.match(label)
+        if pair:
+            # NOT `first, second` -- that shadowed the section's own first
+            # paper number and made the coverage check expect "29-30" for a
+            # whole section, failing nineteen of them.
+            head, tail = int(pair.group(1)), int(pair.group(2))
+            answers[head] = value
+            paired[tail] = head
+            continue
+        try:
+            answers[int(str(label).strip())] = value
+        except ValueError:
+            print(f"  cannot read the key label {label!r}", file=sys.stderr)
 
     # The two readings are independent, so a disagreement is a misread page
     # rather than a quirk of one prompt. Reported, not silently patched.
+    # Where the key pairs two numbers, the second one is not a question of its
+    # own -- it is the second mark of the first. Drop any the reader emitted
+    # for it, so the group's numbering stays 1..N with no hole.
+    for group in read.get("groups", []):
+        kept = [q for q in group.get("questions", [])
+                if q.get("paper_number") not in paired]
+        if len(kept) != len(group.get("questions", [])):
+            for number, q in enumerate(kept, start=1):
+                q["number"] = number
+            group["questions"] = kept
+
     problems = []
     numbered = [q for g in read.get("groups", []) for q in g.get("questions", [])]
     papers = sorted(q.get("paper_number") for q in numbered)
-    if papers != list(range(first, last + 1)):
-        problems.append(f"questions cover {papers}, expected {first}-{last}")
-    missing = [n for n in range(first, last + 1) if n not in answers]
+    covered = sorted(set(papers) | set(paired))
+    if covered != list(range(first, last + 1)):
+        problems.append(f"questions cover {covered}, expected {first}-{last}")
+    missing = [n for n in range(first, last + 1)
+               if n not in answers and n not in paired]
     if missing:
         problems.append(f"the key is missing {missing}")
 

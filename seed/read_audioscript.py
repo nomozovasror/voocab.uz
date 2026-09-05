@@ -43,6 +43,15 @@ REPO = SEED.parent
 MATERIALS = REPO / "Materials"
 WORK = SEED / "work"
 
+#: Groq takes three images a request and rejects a body much over a megabyte,
+#: and a base64 page at 170 dpi is nearly 400 KB. Audioscripts are dense text
+#: rather than fine line-work, so they read fine smaller. Three pages at 120
+#: dpi was still over the limit thirteen times, so: two, smaller. A section's
+#: script is its own page plus the next section's, and the second is only there
+#: for the tail above that heading.
+MAX_PAGES = 2
+SCRIPT_DPI = 110
+
 PROMPT = """These images are consecutive pages of the audioscripts at the back of a
 Cambridge IELTS book. Read ONLY the audioscript for {label}.
 
@@ -106,8 +115,17 @@ def main() -> int:
             f"{args.section_id}: no audioscript pages in the catalogue. Run "
             f"seed/locate_pages.py {row['book_number']} first, or pass --pages.")
 
+    if len(pages) > MAX_PAGES:
+        # The span runs from this section's heading to the next one's page, so
+        # the front of it is the part that matters; a longer span comes from a
+        # heading the locator had to guess at.
+        print(f"  span is {len(pages)} pages; reading the first {MAX_PAGES}",
+              file=sys.stderr)
+        pages = pages[:MAX_PAGES]
+
     work = WORK / args.section_id
-    shots = vision.render(MATERIALS / row["pdf"], pages, work / "pages")
+    shots = vision.render(MATERIALS / row["pdf"], pages, work / "pages",
+                          dpi=SCRIPT_DPI)
     label = f"Test {row['test_no']}, Section {row['section_no']}"
     print(f"reading the audioscript for {label} from pages {pages}")
 

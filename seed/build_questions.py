@@ -44,6 +44,9 @@ LETTERS = re.compile(r"^[A-H](?:\s*[,/&]?\s*[A-H])*$", re.I)
 #: Printed on the page, so read rather than counted from the answers: the key
 #: only names the ones that happen to be right.
 LETTER_RANGE = re.compile(r"letters?\s+([A-Z])\s*[-–—]\s*([A-Z])", re.I)
+#: The key prints "A, E  IN EITHER ORDER" against a pair. The phrase is a note
+#: to the marker, not part of the answer.
+KEY_NOTE = re.compile(r"\b(in either order|in any order)\b", re.I)
 
 
 def gaps_that_render(template: str) -> set[int] | None:
@@ -128,17 +131,18 @@ def build(section_id: str) -> int:
 
         questions = []
         for q in group["questions"]:
+            printed = KEY_NOTE.sub("", q["key"]).strip(" ,;")
             if lettered:
                 # A lettered answer is the KEY, not a list of phrasings: the
                 # letters must be picked exactly, and expanding "A" the way a
                 # gap-fill answer is expanded would be nonsense.
-                answers = [c.lower() for c in re.findall(r"[A-H]", q["key"], re.I)]
-                if not LETTERS.match(q["key"].strip()):
+                answers = [c.lower() for c in re.findall(r"[A-H]", printed, re.I)]
+                if not LETTERS.match(printed):
                     problems.append(
-                        f"group {gi} q{q['number']}: {q['key']!r} is not a letter, but "
+                        f"group {gi} q{q['number']}: {printed!r} is not a letter, but "
                         f"this is a {group['type']} group")
             else:
-                answers = parse_answer(q["key"])
+                answers = parse_answer(printed)
             if not answers:
                 problems.append(f"group {gi} q{q['number']}: key {q['key']!r} expands to nothing")
             span = spans.get(q.get("marker") or "")
@@ -186,9 +190,15 @@ def build(section_id: str) -> int:
                 if span:
                     drawn = ord(span.group(2).upper()) - ord(span.group(1).upper()) + 1
                 else:
-                    problems.append(
-                        f"group {gi}: a labelling task whose instructions do not say "
-                        "which letters are on the picture")
+                    # Fall back to the letters the answers actually use. Fewer
+                    # than are drawn, but a labelling task that publishes with a
+                    # short box beats one that does not publish at all.
+                    used = {c.upper() for q in group["questions"]
+                            for c in re.findall(r"[A-Z]", q["key"], re.I)}
+                    drawn = (ord(max(used)) - ord("A") + 1) if used else 0
+                    print(f"note: group {gi}: the instructions do not say which letters "
+                          f"are on the picture; using A-{chr(ord('A') + drawn - 1)} "
+                          "from the answer key", file=sys.stderr)
             config = {"template": group.get("template") or "", "options": [],
                       "image_letters": drawn}
         out_groups.append({
