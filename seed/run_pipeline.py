@@ -38,9 +38,12 @@ BACKEND = REPO / "backend"
 #: and the first two sections only passed because an earlier run had left an
 #: alignment on disk.
 #:
+#: `picture` comes after `questions` and not before, because build_questions.py
+#: rewrites questions.json and would erase the picture it had just been given.
+#:
 #: `questions` covers the answer key as well: both come off the same pages in
 #: one reading and are checked against each other.
-STAGES = ("audioscript", "align", "questions", "trim", "import")
+STAGES = ("audioscript", "align", "questions", "picture", "trim", "import")
 
 
 #: A stage can be more than one program. `questions` reads the pages and then
@@ -62,6 +65,8 @@ def command(stage: str, section_id: str, owner: str) -> list[str]:
             return [str(PYTHON), str(SEED / "read_questions.py"), section_id]
         case "align":
             return [str(PYTHON), str(SEED / "align.py"), section_id]
+        case "picture":
+            return [str(PYTHON), str(SEED / "extract_image.py"), section_id]
         case "trim":
             return [str(PYTHON), str(SEED / "trim_audio.py"), section_id]
         case "import":

@@ -613,17 +613,38 @@ lettered box -- the builder keeps letters as an answer KEY rather than
 expanding them as phrasings, and the importer validates through the schema's
 own discriminated union.
 
-### What a section still cannot finish with
+### The picture, and where each option is said
 
-* **map and diagram labelling need the picture.** Extracting it from the PDF is
-  a stage that does not exist yet, so those groups import and then fail to
-  publish with "attach the picture the labels go on".
-* **multiple choice needs `option_replay`, not `replay_start_ms`.** A "choose
-  two" has two answers at two moments, so publishing asks where each OPTION is
-  said; the margin marker gives the question's turn and not that.
-* **a marker the audioscript reader missed** costs that answer its replay
-  button. Three of Part 4's ten. It is a warning rather than a failure now:
-  refusing the section threw away nine good questions to protect one button.
+Two things a section needed before it could publish, and neither could come
+from the reader.
+
+**A labelling task is answered on a picture**, and a vision model returns text.
+`extract_image.py` finds it by its **border**: the picture is printed inside a
+drawn box, and a scanned page renders that box as long runs of dark pixels --
+two horizontal rules across most of the width, two vertical down most of the
+height. On Cambridge 11's map they land at 20% and 79% down and 7% and 75%
+across, which is the box to the pixel. A bounding box asked of a model would
+have been a guess in the same place. The copier's black bars at the top and
+bottom of every scan are excluded first, being the outermost runs on the sheet.
+
+How many letters are drawn on it is read off the instruction line -- "Write the
+correct letter **A-I**" is nine -- rather than counted from the answer key,
+which only names the ones that happen to be right.
+
+**A choice question is linked to the audio per OPTION**, not per question: a
+"choose TWO" has two answers at two moments, so publishing asks where each
+chosen letter is said. The margin marker gives the turn where the answer is
+given and the answer is the correct option, so that turn is what every correct
+letter points at.
+
+`picture` runs after `questions` rather than before, because
+`build_questions.py` rewrites `questions.json` and would erase the picture it
+had just been handed.
+
+With both in, Cambridge 11 Test 1 publishes complete on Parts 1, 2 and 3. Part
+4 is three questions short of it, because the audioscript reader did not find
+three of its margin markers -- a warning rather than a failure, since refusing
+the section would throw away nine good questions to protect one replay button.
 
 ## Where this stops
 

@@ -53,11 +53,14 @@ from pydantic import TypeAdapter
 
 from app.schemas.listening import QuestionGroupIn
 from app.services import audio as audio_service
+from app.services import images as image_service
 from app.services.asr import TranscriptResult, TranscriptSegment, WordTiming
+from app.services.image_codec import read_image
 from app.services.storage import (
     AUDIO_CONTENT_TYPES,
     audio_storage_key,
     get_storage,
+    image_storage_key,
     sha256_hex,
 )
 
@@ -171,6 +174,29 @@ async def import_questions(session, part_id: uuid.UUID, section_id: str,
 
     written = 0
     for order_index, group in enumerate(groups):
+        # A labelling group is unpublishable without the picture its letters
+        # sit on, and the picture is the one thing on the page a vision model
+        # cannot hand back -- extract_image.py cuts it out and names it here.
+        picture = payload["groups"][order_index].get("picture")
+        if picture:
+            data = (SEED / "work" / section_id / picture["path"]).read_bytes()
+            sha = sha256_hex(data)
+            sized = read_image(data)
+            if sized is None:
+                raise SystemExit(
+                    f"{section_id}: group {order_index}'s picture is not a PNG, "
+                    "JPEG or WebP the server will take")
+            mime, width, height = sized
+            key = image_storage_key(sha, mime)
+            blob, created = await image_service.get_or_create_blob(
+                session, sha256=sha, storage_key=key, size_bytes=len(data),
+                mime_type=mime, width=width, height=height)
+            if created:
+                await get_storage().put(key, data, mime)
+            group.config.image = blob.id
+            logger.info("group %d: picture %dx%d (%s)", order_index, width, height,
+                        "new" if created else "dedup")
+
         row = QuestionGroup(
             part_id=part_id, order_index=order_index, type=group.type,
             instructions=group.instructions, word_limit=group.word_limit,
@@ -194,6 +220,14 @@ async def import_questions(session, part_id: uuid.UUID, section_id: str,
                 options = getattr(question, "options", None)
                 if options:
                     config["options"] = list(options)
+                # Shifted like every other timestamp: a choice question's
+                # moments live in the same recording the trim moved.
+                replay = getattr(question, "option_replay", None) or {}
+                if replay:
+                    config["option_replay"] = {
+                        letter: [max(0, at[0] - offset_ms), max(0, at[1] - offset_ms)]
+                        for letter, at in replay.items()
+                    }
             session.add(Question(
                 group_id=row.id, number=question.number,
                 correct_answers=question.correct_answers,

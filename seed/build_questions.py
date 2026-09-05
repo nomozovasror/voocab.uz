@@ -40,6 +40,10 @@ LETTERED = {"multiple_choice", "matching"}
 #: A letter, as the key prints it. "17-18.AE" is handled where the group is
 #: built, not here: it is a statement about how two numbers share one question.
 LETTERS = re.compile(r"^[A-H](?:\s*[,/&]?\s*[A-H])*$", re.I)
+#: "Write the correct letter A-I" -- how many letters are drawn on the picture.
+#: Printed on the page, so read rather than counted from the answers: the key
+#: only names the ones that happen to be right.
+LETTER_RANGE = re.compile(r"letters?\s+([A-Z])\s*[-–—]\s*([A-Z])", re.I)
 
 
 def gaps_that_render(template: str) -> set[int] | None:
@@ -147,6 +151,15 @@ def build(section_id: str) -> int:
                 warnings.append(
                     f"group {gi} q{q['number']}: marker {q['marker']} was not found in "
                     "the audioscript, so it gets no replay span")
+            # A choice question is linked to the audio per OPTION, not per
+            # question: a "choose TWO" has two answers at two moments, so
+            # publishing asks where each chosen letter is said. The margin
+            # marker gives the turn where the answer is given, and the answer
+            # is the correct option -- so that turn is what every correct
+            # letter points at. Where a "choose two" shares one marker both
+            # letters get the same span, which is what the book itself says.
+            option_replay = ({letter: [span[0], span[1]] for letter in answers}
+                             if span and group["type"] == "multiple_choice" else {})
             questions.append({
                 "number": q["number"],
                 "paper_number": q.get("paper_number"),
@@ -156,6 +169,7 @@ def build(section_id: str) -> int:
                 "replay_end_ms": span[1] if span else None,
                 **({"prompt": q["prompt"]} if q.get("prompt") else {}),
                 **({"options": q["options"]} if q.get("options") else {}),
+                **({"option_replay": option_replay} if option_replay else {}),
             })
 
         # `config` is what the group's own schema expects, and the three
@@ -166,8 +180,17 @@ def build(section_id: str) -> int:
             config = {"options": group.get("options") or [],
                       "reuse": bool(group.get("reuse"))}
         else:
+            drawn = 0
+            if group["type"] in ("map_labelling", "diagram_labelling"):
+                span = LETTER_RANGE.search(group.get("instructions") or "")
+                if span:
+                    drawn = ord(span.group(2).upper()) - ord(span.group(1).upper()) + 1
+                else:
+                    problems.append(
+                        f"group {gi}: a labelling task whose instructions do not say "
+                        "which letters are on the picture")
             config = {"template": group.get("template") or "", "options": [],
-                      "image_letters": 0}
+                      "image_letters": drawn}
         out_groups.append({
             "type": group["type"],
             "instructions": group["instructions"],
