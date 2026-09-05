@@ -27,3 +27,14 @@ backend/media/
 # Editors
 .idea/
 .vscode/
+
+# Source books and recordings for the seed pipeline. Copyrighted material and
+# 2.6GB of it: the pipeline reads from here, and nothing in here is ever
+# committed. seed/manifest.json records what was found, which is the part
+# worth keeping under version control.
+Materials/
+seed/.venv/
+seed/work/
+# Rebuilt in seconds by `seed/db.py init`. Worth backing up once stage progress
+# accumulates in it -- that part is real work, not a fact about a file.
+seed/catalogue.db
