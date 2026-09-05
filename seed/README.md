@@ -414,61 +414,63 @@ is a billing decision, not an engineering one.
 
 ## Cutting the preamble
 
-What goes is the book-level preamble that repeats on all 176 recordings --
-"you will hear a number of different recordings ... the test is in four
-sections". What stays is the section, and a section starts before its first
-word:
-
-```
-   0 -  49s   general instructions          <- cut
-  49 -  85s   "you will hear a conversation between ...
-               first you have some time to look at questions 1 to 10"
-  85 - 116s   the pause to read them
- 116 - 181s   the example, played and explained
- 185s         the conversation begins
-```
+What goes is the disc announcing itself. What stays is everything the candidate
+is meant to hear, in order.
 
 ```bash
 seed/.venv/bin/python seed/trim_audio.py cam11-t1-s1
 ```
 
-### The first version cut the test off the test
+**The preamble is transcribed, not guessed at.** Two earlier versions guessed
+and both were wrong in ways that only listening would catch:
 
-It cut at the first aligned word, on the reasoning that audio the audioscript
-has no text for is not the section. That is true of the general instructions
-and false of everything else in the list above: the recording opened
-mid-conversation, with nothing saying what the candidate was about to hear and
-no time to read the questions. Sitting a paper is not only hearing the words
-on it.
+* cutting at the alignment's first word took the section introduction and the
+  half-minute reading pause away with the branding, so the recording opened
+  mid-conversation with nothing saying what was coming;
+* cutting a fixed lead ahead of the reading pause landed in the middle of "the
+  test is in four sections", because silence says where sentences end and
+  nothing about which sentence is which.
 
-**The cut is anchored on the reading pause.** That pause is the longest silence
-before the content and is unmistakable -- 30.7 seconds where nothing else comes
-within 27 -- and the speech immediately before it is the section introduction
-by construction. Keeping a fixed lead ahead of it keeps the introduction and
-everything after it.
+So the first couple of minutes go through Groq's `whisper-large-v3` -- the same
+model the production worker uses -- and the cut lands on the first line where
+the test announces itself:
 
-Then the cut is **snapped back to a gap between sentences**, because thirty
-seconds before the pause lands mid-word more often than not. Back rather than
-forward: a little too much introduction costs seconds, and a little too little
-costs the sentence that says what is coming.
+```
+   0.0 -   6.4   Cambridge English, IELTS 11, Tests 1-4.
+   8.2 -  14.6   Published by Cambridge University Press ...
+  16.2 -  18.0   This recording is copyright.
+  19.8 -  20.9   CD 1.
+  23.0 -  24.3   Test 1.                              <- the cut
+  24.3 -  32.9   You will hear a number of different recordings ...
+  61.2 -  77.5   Now turn to section one ... You will hear a telephone
+                 conversation between an official at a village hall ...
+  79.6 -  84.8   First, you have some time to look at questions one to six.
+  85   - 116     the pause to read them
+  116  - 181     the example, played and explained
+```
 
-At the end, dead air goes and speech does not. "That is the end of Section 1,
-you now have half a minute to check your answers" is the test talking, the same
-as the introduction is.
+The transcript is cached beside the alignment, so tuning the cut does not spend
+the quota again. Parts 2 to 4 open at "Now turn to section three" with no
+branding in front of it, so there is usually nothing to cut -- which is the
+difference between the parts, arrived at from what is actually said rather than
+from a rule about which part it is.
 
-A section where no such pause is found is not trimmed at the front at all, and
-a cut that would take more than three quarters of the preamble is refused.
-Guessing where a preamble ends is what removed the test the first time.
+A recording where no announcement is found is not trimmed at the front at all,
+and a cut taking more than three quarters of the preamble is refused. At the
+end, dead air goes and speech does not: "you now have half a minute to check
+your answers" is the test talking too.
+
+Cutting means re-encoding, and libsndfile's default lands near 85 kbps against
+a 128 kbps source. `compression_level=0.0` comes back at 113, so a listening
+test is not marked on a worse recording than the book shipped.
 
 `Part.audio_start_ms` looked like the answer and is not: the field exists, the
 Studio editor writes it, and the take page reads it only to draw part
 boundaries on the waveform -- for a single-part material it is ignored outright
-(`ListeningTakePage.tsx`, `i === 0 ||`). Trimming the stored copy is what
-reaches a learner.
+(`ListeningTakePage.tsx`, `i === 0 ||`).
 
 The importer shifts every timestamp by the recorded offset, transcript and
-replay spans together. cam11-t1-s1: 578s becomes 528s, the conversation starts
-at 135.6s where it started at 184.7s, and Q1's replay moves with it.
+replay spans together. cam11-t1-s1: 578s becomes 555s.
 
 ## Where this stops
 
