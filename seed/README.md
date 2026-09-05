@@ -13,7 +13,14 @@ different answer is a change somebody can see.
 
 ```bash
 uv venv --python 3.14 seed/.venv
-uv pip install --python seed/.venv/bin/python torch torchaudio soundfile
+uv pip install --python seed/.venv/bin/python torch torchaudio soundfile pymupdf
+```
+
+The whole run, once a book's pages are located:
+
+```bash
+seed/.venv/bin/python seed/locate_pages.py 11      # once per book
+seed/.venv/bin/python seed/run_pipeline.py --book 11
 ```
 
 Python 3.14 works — torch 2.14 and torchaudio 2.11 both ship `cp314` macOS
@@ -645,6 +652,37 @@ With both in, Cambridge 11 Test 1 publishes complete on Parts 1, 2 and 3. Part
 4 is three questions short of it, because the audioscript reader did not find
 three of its margin markers -- a warning rather than a failure, since refusing
 the section would throw away nine good questions to protect one replay button.
+
+## What a hundred and sixty sections found that four did not
+
+The first full batch put 56 of 160 through every stage. The other 104 named
+four faults, and every one of them is a thing a single worked example cannot
+show.
+
+**Two size limits, 58 failures.** Groq takes three images a request and refuses
+a body much over a megabyte; an audioscript span can be four pages at 400 KB
+each. Capped at two and rendered at 110 dpi -- audioscripts are dense text
+rather than fine line-work and read fine small.
+
+**Paired answer keys, 18 failures.** The key prints "11&12 IN EITHER ORDER"
+against a question taking two of the paper's numbers. The parsing was the
+smaller half of it: a "Choose TWO letters" is ONE question worth two marks, not
+two questions with one letter each, so the second number is dropped rather than
+given a question of its own.
+
+**A variable shadowed, 19 failures.** Unpacking a paired label as `first,
+second` overwrote the section's own first paper number, so after reading
+"29&30" the coverage check expected a whole section to cover 29-30. The model
+had read every one of those pages correctly.
+
+**Audioscript headings, 19 sections.** Asked to classify a page, the model
+answers the audioscript pages of some books with their running title --
+"Audioscripts" -- rather than the PART heading below it. `--scripts` asks the
+one thing needed rather than a general question, and recovered all but two.
+
+That last one is the shape of nearly every failure in this pipeline: a general
+question gets a general answer, and the fix is to ask a narrower one and do the
+arithmetic here.
 
 ## Where this stops
 
