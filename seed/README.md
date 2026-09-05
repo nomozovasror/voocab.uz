@@ -357,6 +357,61 @@ again through `FormCompletionGroupIn` -- the schema is where "gaps must match
 question numbers" actually lives, and a seed script writing behind it would be
 the one caller able to produce a material the editor never could.
 
+## Reading the page with a model
+
+`read_questions.py` does by machine what the section above describes doing by
+hand, and writes the same `questions.src.json` -- so `build_questions.py`
+checks its work exactly as it checks a person's. That split is the design: this
+stage is allowed to be wrong, and the next stage is where being wrong is
+caught.
+
+```bash
+seed/.venv/bin/python seed/read_questions.py cam11-t1-s1 --questions 7,8 --key 123
+```
+
+Groq has two models that can see: `qwen/qwen3.8-27b`, which answers directly,
+and `qwen/qwen3.6-27b`, a reasoning model that puts a `<think>` block in front
+of its answer. The first is the default. Requests go through `curl`, because
+the endpoint sits behind Cloudflare and answers urllib's default User-Agent
+with a 403 that says nothing about why.
+
+**Two calls, not one.** The questions come off the question pages and the key
+off the key page, and they are independent readings of the same ten answers.
+When the gaps and the key lines disagree, a page was misread. One call would
+buy one fewer request and throw that check away.
+
+### On the one section measured, it reads better than a person
+
+Against the version transcribed by hand from the same pages: the template came
+back **identical**, and the answer key came back **more accurate**. The key
+prints `(£)115 / a/one hundred (and) fifteen`; reading it off a contact sheet,
+a person read `a hundred` and lost two accepted answers. Fifteen accepted
+answers by hand, seventeen by machine, and the two extra ones are right.
+
+### What it gets wrong is what a rule fixes
+
+Two mistakes survived a prompt that had a worked example for each, because the
+model transcribes what it sees line by line and "merge this into the line
+above" is not what the page looks like. Both are unambiguous, so `repair()`
+fixes them rather than asking again:
+
+* **A lone `+` line is prose, not a table.** A table needs a header row and a
+  body row, so a `+` line with no `+` neighbour cannot be one -- and as a
+  one-row table it is all header, where gaps are not drawn at all. This is the
+  exact mistake that cost question 3, made independently by a person and by a
+  model, which is why the check for it is not optional.
+* **The printed question number is not part of the template.** Removed only
+  where the digits match that gap's own paper number, so "seats 100" is never
+  touched.
+
+### The rate limit is the bulk constraint, not the model
+
+A page at 170 dpi costs about 3,400 input tokens and the free tier allows
+7,000 a minute -- two pages. `vision.py` waits and retries on the limit
+(the error says how long), so a batch survives it, but at roughly three pages
+a minute the 176 sections are hours of waiting rather than hours of work. That
+is a billing decision, not an engineering one.
+
 ## Where this stops
 
 Stage 0 is done: 176 sections catalogued, every file's extension honest, every
@@ -377,5 +432,7 @@ that does not exist yet.
 group, ten questions, fifteen accepted answers, and a replay span on every one
 of them. `publish_blockers()` returns nothing, and it stays private anyway.
 
-Next is doing that from the page automatically instead of by hand -- the
-reading is the slow part now, not the machinery around it.
+The reading is automated and measured on one section. What is not automated is
+finding the pages: `--questions 7,8 --key 123` are still passed in by hand, and
+a contact-sheet pass over each book -- about twelve vision calls -- is what
+would replace that.

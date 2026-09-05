@@ -1,0 +1,136 @@
+"""The one place that knows how to show a page to a model.
+
+Groq's OpenAI-compatible chat endpoint, with images inlined as data URLs. Two
+Qwen models there can see: `qwen/qwen3.8-27b` answers directly, and
+`qwen/qwen3.6-27b` is a reasoning model that emits a `<think>` block first.
+The default is the former, because a JSON extractor that has to be dug out of
+prose is one more thing to get wrong.
+
+Requests go out through `curl` rather than `urllib`: the endpoint sits behind
+Cloudflare, which answers urllib's default User-Agent with a 403 and an error
+code that says nothing about the real problem.
+"""
+
+import base64
+import json
+import pathlib
+import re
+import subprocess
+import sys
+import tempfile
+import time
+
+URL = "https://api.groq.com/openai/v1/chat/completions"
+DEFAULT_MODEL = "qwen/qwen3.8-27b"
+#: What a reasoning model puts in front of its answer.
+THINK = re.compile(r"<think>.*?</think>\s*", re.S)
+#: Models fence JSON even when asked not to.
+FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.M)
+
+
+def api_key() -> str:
+    """Read from backend/.env rather than taking a parameter: it is the same
+    key the app uses, and a second copy is a second thing to rotate."""
+    env = pathlib.Path(__file__).resolve().parent.parent / "backend" / ".env"
+    for line in env.read_text().splitlines():
+        if line.startswith("GROQ_API_KEY="):
+            return line.split("=", 1)[1].strip()
+    raise SystemExit("GROQ_API_KEY is not in backend/.env")
+
+
+#: The free tier allows 7000 input tokens a minute and a page image at 170 dpi
+#: costs about 3400 of them, so two pages is already the budget. The error says
+#: how long to wait, which is better than any interval we would pick.
+WAIT = re.compile(r"try again in ([\d.]+)s")
+MAX_ATTEMPTS = 5
+
+
+def ask(prompt: str, images: list[pathlib.Path], *, model: str = DEFAULT_MODEL,
+        max_tokens: int = 4000, temperature: float = 0.0) -> str:
+    """One question about one or more page images. Returns the reply text.
+
+    Waits and retries on a rate limit rather than failing: a batch that dies
+    two thirds of the way through a book is worse than one that takes longer."""
+    content: list[dict] = [{"type": "text", "text": prompt}]
+    for path in images:
+        data = base64.b64encode(path.read_bytes()).decode()
+        content.append({"type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{data}"}})
+
+    body = {"model": model, "temperature": temperature, "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": content}]}
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        reply = _post(body)
+        error = reply.get("error", {})
+        if error.get("code") != "rate_limit_exceeded":
+            break
+        seconds = float(m.group(1)) + 1 if (m := WAIT.search(error.get("message", ""))) else 20.0
+        print(f"  rate limited, waiting {seconds:.0f}s "
+              f"(attempt {attempt}/{MAX_ATTEMPTS})", file=sys.stderr)
+        time.sleep(seconds)
+    if "choices" not in reply:
+        raise SystemExit(f"API said: {json.dumps(reply)[:400]}")
+    return reply["choices"][0]["message"]["content"]
+
+
+def _post(body: dict) -> dict:
+    """One request. Split out so the retry above reads as a retry."""
+    # The payload carries base64 pages and is far past a comfortable argv.
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        json.dump(body, fh)
+        payload = fh.name
+    try:
+        out = subprocess.run(
+            ["curl", "-sS", "-X", "POST", URL,
+             "-H", f"Authorization: Bearer {api_key()}",
+             "-H", "Content-Type: application/json",
+             "--data-binary", f"@{payload}"],
+            capture_output=True, text=True, timeout=300)
+    finally:
+        pathlib.Path(payload).unlink(missing_ok=True)
+
+    if out.returncode != 0:
+        raise SystemExit(f"curl failed: {out.stderr[:300]}")
+    try:
+        return json.loads(out.stdout)
+    except json.JSONDecodeError:
+        raise SystemExit(f"not JSON from the API: {out.stdout[:300]}")
+
+
+def ask_json(prompt: str, images: list[pathlib.Path], **kwargs) -> dict:
+    """`ask`, with the reply parsed as JSON.
+
+    Strips a reasoning block and a code fence before parsing, because both
+    arrive whatever the prompt says and neither is worth a retry."""
+    text = FENCE.sub("", THINK.sub("", ask(prompt, images, **kwargs)).strip()).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        # The model wrote prose around the object often enough to be worth one
+        # rescue attempt before giving up on the page.
+        start, end = text.find("{"), text.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                return json.loads(text[start:end + 1])
+            except json.JSONDecodeError:
+                pass
+        raise SystemExit(f"reply was not JSON ({exc}):\n{text[:600]}")
+
+
+def render(pdf: pathlib.Path, pages: list[int], out_dir: pathlib.Path,
+           dpi: int = 170) -> list[pathlib.Path]:
+    """Page images for the model, by ZERO-BASED pdf index.
+
+    Not by the number printed on the page: Cambridge 11's printed page 10 is
+    index 7, and assuming otherwise reads Section 2's questions as Section 1's.
+    Whatever knows the offset passes indices in."""
+    import pymupdf
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paths = []
+    with pymupdf.open(pdf) as doc:
+        for index in pages:
+            path = out_dir / f"page{index:03d}.png"
+            doc[index].get_pixmap(dpi=dpi).save(path)
+            paths.append(path)
+    return paths
