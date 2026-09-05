@@ -414,47 +414,61 @@ is a billing decision, not an engineering one.
 
 ## Cutting the preamble
 
-A Cambridge recording opens with about three minutes that are not the test:
-the general instructions, "now turn to Section 1", the half-minute to read the
-questions, and the example played once as a demonstration before the section
-starts over. It closes with another minute of "you now have half a minute to
-check your answers". For cam11-t1-s1 that is 183 seconds at the front and 44 at
-the back of a 578-second file.
+What goes is the book-level preamble that repeats on all 176 recordings --
+"you will hear a number of different recordings ... the test is in four
+sections". What stays is the section, and a section starts before its first
+word:
+
+```
+   0 -  49s   general instructions          <- cut
+  49 -  85s   "you will hear a conversation between ...
+               first you have some time to look at questions 1 to 10"
+  85 - 116s   the pause to read them
+ 116 - 181s   the example, played and explained
+ 185s         the conversation begins
+```
 
 ```bash
 seed/.venv/bin/python seed/trim_audio.py cam11-t1-s1
 ```
 
-**Where to cut is not guessed -- it is where the alignment starts.** Audio
-before the first aligned word is audio the audioscript has no text for, which
-is the definition of "not the section". So it adapts on its own to the thing
-that made this awkward to hard-code: Part 1 carries a long preamble because it
-carries the example, and Parts 2 to 4 carry a much shorter one.
+### The first version cut the test off the test
 
-Nothing the book prints is lost. The Section 1 audioscript begins at "Hello?",
-and the example is inside the conversation that follows -- what goes is the
-narration and the demonstration playing, not the exchange itself.
+It cut at the first aligned word, on the reasoning that audio the audioscript
+has no text for is not the section. That is true of the general instructions
+and false of everything else in the list above: the recording opened
+mid-conversation, with nothing saying what the candidate was about to hear and
+no time to read the questions. Sitting a paper is not only hearing the words
+on it.
 
-`Part.audio_start_ms` looked like the answer and is not: it exists, the Studio
-editor writes it, and the take page reads it only to draw part boundaries on
-the waveform -- for a single-part material it is ignored outright
+**The cut is anchored on the reading pause.** That pause is the longest silence
+before the content and is unmistakable -- 30.7 seconds where nothing else comes
+within 27 -- and the speech immediately before it is the section introduction
+by construction. Keeping a fixed lead ahead of it keeps the introduction and
+everything after it.
+
+Then the cut is **snapped back to a gap between sentences**, because thirty
+seconds before the pause lands mid-word more often than not. Back rather than
+forward: a little too much introduction costs seconds, and a little too little
+costs the sentence that says what is coming.
+
+At the end, dead air goes and speech does not. "That is the end of Section 1,
+you now have half a minute to check your answers" is the test talking, the same
+as the introduction is.
+
+A section where no such pause is found is not trimmed at the front at all, and
+a cut that would take more than three quarters of the preamble is refused.
+Guessing where a preamble ends is what removed the test the first time.
+
+`Part.audio_start_ms` looked like the answer and is not: the field exists, the
+Studio editor writes it, and the take page reads it only to draw part
+boundaries on the waveform -- for a single-part material it is ignored outright
 (`ListeningTakePage.tsx`, `i === 0 ||`). Trimming the stored copy is what
-actually reaches a learner, and it halves the download as well.
+reaches a learner.
 
 The importer shifts every timestamp by the recorded offset, transcript and
-replay spans together. Q1 sat at 209.9s in the source and sits at 26.7s in what
-is served.
-
-### The check that nearly refused the cut it exists to approve
-
-The trim is only as good as the alignment under it, so the opening is scored
-before it is trusted -- but **over a window, not on the first word**. That word
-sits directly against the star that swallowed three minutes of narration and is
-systematically the least certain thing on the page: on cam11-t1-s1 it scores
-0.40 while the first ten words average 0.84. The first version of this check
-thresholded the single word and duly refused a cut that was correct. A
-preamble longer than 45% of the file, or than five minutes, is refused too.
-`--force` is for when somebody has listened and disagrees.
+replay spans together. cam11-t1-s1: 578s becomes 528s, the conversation starts
+at 135.6s where it started at 184.7s, and Q1's replay moves with it.
 
 ## Where this stops
 
