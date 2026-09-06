@@ -84,7 +84,14 @@ Return ONE JSON object, no prose and no code fence:
 Rules that matter:
 
 * One entry per speaker turn, in order. A turn that runs over several printed
-  lines is ONE entry.
+  lines is ONE entry, unless a marker falls inside it.
+* **Start a NEW entry at every margin marker, even when the speaker has not
+  changed.** Sections 2 and 4 are usually one person talking without
+  interruption, and putting the whole talk in a single entry makes it
+  impossible to say where each answer falls. Break the text so that each
+  marked line begins its own entry, carrying that marker, and repeat the same
+  speaker label on each. A talk with ten markers is therefore at least eleven
+  entries, not one.
 * Where the page has a horizontal dotted or dashed rule across it, emit
   {{"speaker": "__BREAK__", "text": "", "marker": null, "answer": null}} at that
   point. It marks a pause in the recording and it must not be dropped.
