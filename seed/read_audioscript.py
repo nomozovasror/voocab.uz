@@ -89,9 +89,13 @@ Rules that matter:
   changed.** Sections 2 and 4 are usually one person talking without
   interruption, and putting the whole talk in a single entry makes it
   impossible to say where each answer falls. Break the text so that each
-  marked line begins its own entry, carrying that marker, and repeat the same
-  speaker label on each. A talk with ten markers is therefore at least eleven
-  entries, not one.
+  marked line begins its own entry, carrying that marker. A talk with ten
+  markers is therefore at least eleven entries, not one.
+* **A lecture often has NO speaker labels at all** -- no left column, just
+  paragraphs with markers down the right. That is normal for sections 2 and 4.
+  Use "SPEAKER" as the speaker for every entry there and break the text at the
+  markers exactly as above. Do not return one entry for the whole talk, and do
+  not return nothing because there was no name to copy.
 * Where the page has a horizontal dotted or dashed rule across it, emit
   {{"speaker": "__BREAK__", "text": "", "marker": null, "answer": null}} at that
   point. It marks a pause in the recording and it must not be dropped.
@@ -101,6 +105,60 @@ Rules that matter:
   by:", Chinese text). None of it is spoken.
 * "marker" and "answer" are usually null. Fill them only where the book really
   prints a Q number in the margin or really underlines words."""
+
+
+#: Asked to transcribe AND mark at once, the model segments by paragraph and
+#: attaches at most one marker to each -- a first paragraph carrying Q31 and
+#: Q32 came back with neither. Three rounds of telling it to break at the
+#: markers instead did not move it. So the markers are asked for on their own,
+#: which is the one thing that has worked every time in this pipeline: a narrow
+#: question gets a reliable answer.
+MARKER_PROMPT = """These pages are the audioscript for {label} of a Cambridge IELTS book.
+
+Down the RIGHT-HAND MARGIN it prints Q numbers, one against each line where an
+answer is spoken. List EVERY one you can see for questions {first} to {last}.
+
+JSON only, no prose:
+
+{{"markers": [{{"q": <number>, "quote": "<8 to 15 words of the line it sits
+against, copied exactly>"}}]}}
+
+The quote must be text you can actually read on the page, copied word for word,
+long enough to find again. Where two numbers share one line ("Q31" and "Q32"
+against the same sentence), list them separately with the same quote.
+
+Do not invent a marker you cannot see, and do not skip one because its line
+looks like the paragraph above it."""
+
+
+def attach_markers(turns: list[dict], found: list[dict]) -> int:
+    """Put each marker on the turn whose text carries its quoted line."""
+    def key(text: str) -> str:
+        return re.sub(r"[^a-z0-9 ]", "", (text or "").lower())
+
+    placed = 0
+    for item in found:
+        number, quote = item.get("q"), key(item.get("quote", ""))
+        if not number or len(quote) < 12:
+            continue
+        # The longest run of the quote that any turn actually contains: the
+        # model's copy drifts by a word or two, and an exact match would miss
+        # most of them.
+        words = quote.split()
+        best = None
+        for size in range(len(words), 3, -1):
+            probe = " ".join(words[:size])
+            best = next((t for t in turns if probe in key(t["text"])), None)
+            if best:
+                break
+        if best is None:
+            continue
+        existing = marker_syntax.numbers(best.get("marker"))
+        if number not in existing:
+            best["marker"] = (f"{best['marker']} Q{number}"
+                              if best.get("marker") else f"Q{number}")
+            placed += 1
+    return placed
 
 
 def main() -> int:
@@ -141,9 +199,11 @@ def main() -> int:
           + (f" in {len(windows)} windows" if len(windows) > 1 else ""))
 
     turns: list[dict] = []
+    rendered: list[list[pathlib.Path]] = []
     for window in windows:
         shots = vision.render(MATERIALS / row["pdf"], window, work / "pages",
                               dpi=SCRIPT_DPI, jpeg=True)
+        rendered.append(shots)
         read = vision.ask_json(prompt, shots, model=args.model, max_tokens=8000)
         got = [
             {"speaker": t.get("speaker") or "", "text": (t.get("text") or "").strip(),
@@ -186,6 +246,20 @@ def main() -> int:
         print(f"  dropped {len(turns) - ahead} turn(s) belonging to the next section")
         turns = turns[:ahead]
     (work / "turns.json").write_text(json.dumps(turns, indent=2, ensure_ascii=False))
+
+    # A second, narrow pass for anything the transcription did not mark.
+    seen_now = {n for t in turns for n in nums(t)}
+    if set(range(first, last + 1)) - seen_now:
+        # Every window, not just the last one that happens to still be in
+        # scope: a marker missed on page one is not on page three.
+        placed = 0
+        for shots in rendered:
+            marks = vision.ask_json(
+                MARKER_PROMPT.format(label=label, first=first, last=last),
+                shots, model=args.model, max_tokens=2000).get("markers", [])
+            placed += attach_markers(turns, marks)
+        if placed:
+            print(f"  a second pass placed {placed} marker(s) the transcription missed")
 
     spoken = [t for t in turns if t["speaker"] != "__BREAK__"]
     words = sum(len(t["text"].split()) for t in spoken)
