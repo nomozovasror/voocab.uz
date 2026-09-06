@@ -686,32 +686,23 @@ arithmetic here.
 
 ## Where the corpus stands
 
-78 of Cambridge 10-19's 160 sections are in the database as private drafts:
-774 questions, 642 of them (83%) carrying a replay span, across eight group
-types. 36 of the 78 are content-complete; the rest are short of nothing but
-replay spans.
+128 of Cambridge 10-19's 160 sections are in the database as private drafts:
+1,227 questions, 999 of them (81%) carrying a replay span, across eight group
+types. 54 are content-complete; the rest are short of nothing but replay spans.
 
-The run stopped on a **spend alert**, not on a bug: Groq blocked the
-organization's API access when the $10 threshold was met, and 62 sections
-failed with that message. Raising the threshold and re-running
-`run_pipeline.py --book N` picks each of them up where it stopped -- every
-stage is skipped if it is already done.
+The 32 that did not finish are a long tail rather than one fault -- seven
+labelling groups whose picture has no drawn border to find, a handful of
+template collisions, two sections whose audioscript pages were never located,
+and a few replies that came back truncated.
 
-What the money went on is worth knowing before raising it. The estimate of
-$2.54 covered ONE clean extraction pass. It did not cover `locate_pages` over
-eleven books (about 1,540 pages at 1,813 tokens each), nor the two batch
-attempts before this one, nor the audioscript replies, which are 700-word
-answers billed at the output rate -- five times the input rate. Three passes
-plus the page scan is roughly where $10 goes.
+### What the money went on
 
-### The frontier is replay spans, not questions
-
-Nearly every remaining blocker is "not linked to the audio": a question whose
-margin marker the audioscript reader did not find. The questions themselves are
-right; what is missing is the button that plays the moment the answer is said.
-83% of them have it. Improving that number means improving marker recall in
-`read_audioscript.py`, and it is the one thing left that would move a large
-number of materials at once.
+The first attempt stopped on a spend alert at $10, and the estimate that
+preceded it was $2.54. Both numbers were right about different things: $2.54
+covered ONE clean extraction pass, and what actually ran was `locate_pages`
+over eleven books (about 1,540 pages), four batch attempts rather than one, and
+audioscript replies averaging 1,558 tokens billed at the output rate -- five
+times the input rate. Estimate the passes, not the pass.
 
 ## Where this stops
 
