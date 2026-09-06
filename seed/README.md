@@ -686,23 +686,42 @@ arithmetic here.
 
 ## Where the corpus stands
 
-128 of Cambridge 10-19's 160 sections are in the database as private drafts:
-1,227 questions, 999 of them (81%) carrying a replay span, across eight group
-types. 54 are content-complete; the rest are short of nothing but replay spans.
+131 of Cambridge 10-19's 160 sections are in the database as private drafts:
+1,255 questions, 1,054 of them (84%) carrying a replay span. **68 are
+content-complete.**
 
-The 32 that did not finish are a long tail rather than one fault -- seven
-labelling groups whose picture has no drawn border to find, a handful of
-template collisions, two sections whose audioscript pages were never located,
-and a few replies that came back truncated.
+### The windowing fix worked, and less than it looked like it would
 
-### What the money went on
+Reading a long audioscript in overlapping windows was aimed at a clear signal:
+markers were missed far more often at the end of a section than the start, and
+that slope is what truncation looks like.
 
-The first attempt stopped on a spend alert at $10, and the estimate that
-preceded it was $2.54. Both numbers were right about different things: $2.54
-covered ONE clean extraction pass, and what actually ran was `locate_pages`
-over eleven books (about 1,540 pages), four batch attempts rather than one, and
-audioscript replies averaging 1,558 tokens billed at the output rate -- five
-times the input rate. Estimate the passes, not the pass.
+```
+position    1    2    3    4    5    6    7    8    9   10
+before     32   39   36   28   24   26   33   39   50   54
+after      29   37   31   29   14   21   27   35   36   41
+```
+
+The tail did come down -- position 10 from 54 misses to 41, position 9 from 50
+to 36 -- and 15 sections stopped missing markers altogether. But the slope did
+not flatten, and positions 1 to 4 barely moved. So truncation was *a* cause and
+not *the* cause: something else loses markers evenly across a section, and it
+is still losing about one in five.
+
+Worth saying plainly because the measurement invited the wrong conclusion. A
+signal that points at one explanation can be real and still be partial.
+
+### What is left, and it is a long tail
+
+* **7 labelling groups whose picture has no drawn border.** `extract_image.py`
+  finds a picture by the box printed around it; some diagrams are not boxed.
+* **5 sections whose questions do not cover the expected range** -- a page
+  misread, one at a time.
+* **2 with no audioscript pages located**, 2 import validations, and a handful
+  of truncated or interrupted replies.
+
+None of these share a cause, which is the difference between this list and
+every earlier one.
 
 ## Where this stops
 
