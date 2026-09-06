@@ -43,14 +43,18 @@ REPO = SEED.parent
 MATERIALS = REPO / "Materials"
 WORK = SEED / "work"
 
-#: Groq takes three images a request and rejects a body much over a megabyte,
-#: and a base64 page at 170 dpi is nearly 400 KB. Audioscripts are dense text
-#: rather than fine line-work, so they read fine smaller. Three pages at 120
-#: dpi was still over the limit thirteen times, so: two, smaller. A section's
-#: script is its own page plus the next section's, and the second is only there
-#: for the tail above that heading.
-MAX_PAGES = 2
-SCRIPT_DPI = 110
+#: Three images a request is Groq's limit and it is a COUNT, not a size -- so
+#: the way to fit more pages is not to shrink them further but to send fewer
+#: bytes each and then make more than one request. As JPEG a page is half the
+#: size it is as PNG (216 KB against 458 at 110 dpi), which buys the headroom
+#: to read at 130 instead.
+#:
+#: Capping at two pages and stopping there was the previous fix and it cost
+#: real answers: 60 sections have a script spanning more than two pages, and 30
+#: of them lost their last margin marker with the tail. A span longer than the
+#: cap is now read in overlapping windows and stitched.
+PAGES_PER_CALL = 3
+SCRIPT_DPI = 130
 
 PROMPT = """These images are consecutive pages of the audioscripts at the back of a
 Cambridge IELTS book. Read ONLY the audioscript for {label}.
@@ -115,31 +119,33 @@ def main() -> int:
             f"{args.section_id}: no audioscript pages in the catalogue. Run "
             f"seed/locate_pages.py {row['book_number']} first, or pass --pages.")
 
-    if len(pages) > MAX_PAGES:
-        # The span runs from this section's heading to the next one's page, so
-        # the front of it is the part that matters; a longer span comes from a
-        # heading the locator had to guess at.
-        print(f"  span is {len(pages)} pages; reading the first {MAX_PAGES}",
-              file=sys.stderr)
-        pages = pages[:MAX_PAGES]
-
     work = WORK / args.section_id
-    shots = vision.render(MATERIALS / row["pdf"], pages, work / "pages",
-                          dpi=SCRIPT_DPI)
     label = f"Test {row['test_no']}, Section {row['section_no']}"
-    print(f"reading the audioscript for {label} from pages {pages}")
-
     first, last = (row["section_no"] - 1) * 10 + 1, row["section_no"] * 10
-    read = vision.ask_json(
-        PROMPT.format(label=label, test=row["test_no"], section=row["section_no"],
-                      first=first, last=last),
-        shots, model=args.model, max_tokens=8000)
+    prompt = PROMPT.format(label=label, test=row["test_no"],
+                           section=row["section_no"], first=first, last=last)
 
-    turns = [
-        {"speaker": t.get("speaker") or "", "text": (t.get("text") or "").strip(),
-         "marker": t.get("marker") or None, "answer": t.get("answer") or None}
-        for t in read.get("turns", [])
-    ]
+    # Overlapping windows: each carries the last page of the one before it, so
+    # a turn that straddles a page break is seen whole by at least one call.
+    windows = [pages[i:i + PAGES_PER_CALL]
+               for i in range(0, max(1, len(pages) - 1), PAGES_PER_CALL - 1)] or [pages]
+    print(f"reading the audioscript for {label} from pages {pages}"
+          + (f" in {len(windows)} windows" if len(windows) > 1 else ""))
+
+    turns: list[dict] = []
+    for window in windows:
+        shots = vision.render(MATERIALS / row["pdf"], window, work / "pages",
+                              dpi=SCRIPT_DPI, jpeg=True)
+        read = vision.ask_json(prompt, shots, model=args.model, max_tokens=8000)
+        got = [
+            {"speaker": t.get("speaker") or "", "text": (t.get("text") or "").strip(),
+             "marker": t.get("marker") or None, "answer": t.get("answer") or None}
+            for t in read.get("turns", [])
+        ]
+        # Stitch on the overlap: a window repeats what the one before it
+        # already said, so anything already present by its text is dropped.
+        seen = {t["text"] for t in turns if t["text"]}
+        turns.extend(t for t in got if t["text"] not in seen or not t["text"])
     # A turn with no words is either the break or a misread line; the break is
     # kept because it carries meaning, the rest go.
     turns = [t for t in turns if t["text"] or t["speaker"] == "__BREAK__"]
@@ -158,6 +164,16 @@ def main() -> int:
         cut = strays[-1] + 1
         print(f"  dropped {cut} turn(s) belonging to the section before this one")
         turns = turns[cut:]
+
+    # And the same at the other end. Reading a long span in windows means the
+    # last window runs into the NEXT section, which came back carrying Q31 to
+    # Q39 on a section whose own range ends at Q30. Everything from the first
+    # marker above this section's range belongs to the next one.
+    ahead = next((i for i, t in enumerate(turns)
+                  if (n := number(t)) is not None and n > last), None)
+    if ahead is not None:
+        print(f"  dropped {len(turns) - ahead} turn(s) belonging to the next section")
+        turns = turns[:ahead]
     (work / "turns.json").write_text(json.dumps(turns, indent=2, ensure_ascii=False))
 
     spoken = [t for t in turns if t["speaker"] != "__BREAK__"]

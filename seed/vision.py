@@ -54,8 +54,9 @@ def ask(prompt: str, images: list[pathlib.Path], *, model: str = DEFAULT_MODEL,
     content: list[dict] = [{"type": "text", "text": prompt}]
     for path in images:
         data = base64.b64encode(path.read_bytes()).decode()
+        mime = "image/jpeg" if path.suffix == ".jpg" else "image/png"
         content.append({"type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{data}"}})
+                        "image_url": {"url": f"data:{mime};base64,{data}"}})
 
     body = {"model": model, "temperature": temperature, "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": content}]}
@@ -117,8 +118,12 @@ def ask_json(prompt: str, images: list[pathlib.Path], **kwargs) -> dict:
         raise SystemExit(f"reply was not JSON ({exc}):\n{text[:600]}")
 
 
+#: Groq takes three images a request. Not a size limit -- a count.
+MAX_IMAGES = 3
+
+
 def render(pdf: pathlib.Path, pages: list[int], out_dir: pathlib.Path,
-           dpi: int = 170) -> list[pathlib.Path]:
+           dpi: int = 170, jpeg: bool = False) -> list[pathlib.Path]:
     """Page images for the model, by ZERO-BASED pdf index.
 
     Not by the number printed on the page: Cambridge 11's printed page 10 is
@@ -130,7 +135,16 @@ def render(pdf: pathlib.Path, pages: list[int], out_dir: pathlib.Path,
     paths = []
     with pymupdf.open(pdf) as doc:
         for index in pages:
-            path = out_dir / f"page{index:03d}.png"
-            doc[index].get_pixmap(dpi=dpi).save(path)
+            pixmap = doc[index].get_pixmap(dpi=dpi)
+            if jpeg:
+                # These pages are photographs of paper, which is the one thing
+                # PNG is bad at: the same page is 458 KB as PNG and 216 KB as
+                # JPEG at 110 dpi. Half the bytes is a page and a half more per
+                # request, or the same pages read larger.
+                path = out_dir / f"page{index:03d}.jpg"
+                path.write_bytes(pixmap.tobytes("jpeg", jpg_quality=80))
+            else:
+                path = out_dir / f"page{index:03d}.png"
+                pixmap.save(path)
             paths.append(path)
     return paths
