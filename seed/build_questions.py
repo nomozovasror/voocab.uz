@@ -28,6 +28,7 @@ import sqlite3
 import subprocess
 import sys
 
+import markers as marker_syntax
 from answer_key import parse_answer
 
 SEED = pathlib.Path(__file__).resolve().parent
@@ -96,16 +97,19 @@ def build(section_id: str) -> int:
         aligned = json.loads((work / "aligned.json").read_text())
         turns = json.loads((work / "turns.json").read_text())
 
-    #: marker -> the span of the turn it is printed against
-    spans: dict[str, tuple[int, int]] = {}
+    #: paper number -> the span of the turn its marker is printed against. Keyed
+    #: by NUMBER rather than by the marker string, because one turn can carry
+    #: two of them ("Q21/22") and both answers are given in it.
+    spans: dict[int, tuple[int, int]] = {}
     if aligned and turns:
         for index, turn in enumerate(turns):
-            marker = turn.get("marker")
-            if not marker:
+            wanted = marker_syntax.numbers(turn.get("marker"))
+            if not wanted or marker_syntax.is_example(turn.get("marker")):
                 continue
             words = [w for w in aligned if w["turn"] == index]
             if words:
-                spans[marker] = (words[0]["start_ms"], words[-1]["end_ms"])
+                for n in wanted:
+                    spans[n] = (words[0]["start_ms"], words[-1]["end_ms"])
 
     problems: list[str] = []
     warnings: list[str] = []
@@ -164,7 +168,7 @@ def build(section_id: str) -> int:
                 answers = parse_answer(printed)
             if not answers:
                 problems.append(f"group {gi} q{q['number']}: key {q['key']!r} expands to nothing")
-            span = spans.get(q.get("marker") or "")
+            span = spans.get(q.get("paper_number"))
             if q.get("marker") and span is None:
                 # A warning, not a problem. The marker was not found in the
                 # audioscript, so this answer gets no "hear it again" -- which

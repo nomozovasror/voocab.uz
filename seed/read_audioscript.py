@@ -36,6 +36,7 @@ import re
 import sqlite3
 import sys
 
+import markers as marker_syntax
 import vision
 
 SEED = pathlib.Path(__file__).resolve().parent
@@ -154,12 +155,15 @@ def main() -> int:
     # opens with the previous section's tail -- cam11-t1-s2 came back carrying
     # Q7 to Q10. A marker below this section's range is proof of where the text
     # actually is, so everything up to and including the last such turn goes.
-    def number(turn: dict) -> int | None:
-        m = re.fullmatch(r"Q(\d+)", (turn.get("marker") or "").strip(), re.I)
-        return int(m.group(1)) if m else None
+    # A turn can carry more than one marker -- "Q21/22" is one line answering
+    # two questions -- so these look at every number in the string, not at a
+    # single one. Matching only "Q21" treated "Q21/22" as no marker at all.
+    def nums(turn: dict) -> list[int]:
+        return [] if marker_syntax.is_example(turn.get("marker")) \
+            else marker_syntax.numbers(turn.get("marker"))
 
     strays = [i for i, t in enumerate(turns)
-              if (n := number(t)) is not None and n < first]
+              if (ns := nums(t)) and max(ns) < first]
     if strays:
         cut = strays[-1] + 1
         print(f"  dropped {cut} turn(s) belonging to the section before this one")
@@ -170,7 +174,7 @@ def main() -> int:
     # Q39 on a section whose own range ends at Q30. Everything from the first
     # marker above this section's range belongs to the next one.
     ahead = next((i for i, t in enumerate(turns)
-                  if (n := number(t)) is not None and n > last), None)
+                  if (ns := nums(t)) and min(ns) > last), None)
     if ahead is not None:
         print(f"  dropped {len(turns) - ahead} turn(s) belonging to the next section")
         turns = turns[:ahead]
@@ -178,13 +182,13 @@ def main() -> int:
 
     spoken = [t for t in turns if t["speaker"] != "__BREAK__"]
     words = sum(len(t["text"].split()) for t in spoken)
-    markers = [t["marker"] for t in turns if t["marker"]]
+    seen_numbers = sorted({n for t in turns for n in nums(t)})
+    markers = [f"Q{n}" for n in seen_numbers]
     breaks = sum(1 for t in turns if t["speaker"] == "__BREAK__")
     print(f"  {len(spoken)} turns, {words} words, {breaks} break(s)")
     print(f"  markers: {markers}")
 
-    expected = {f"Q{n}" for n in range(first, last + 1)}
-    missing = sorted(expected - set(markers), key=lambda m: int(m[1:]))
+    missing = [f"Q{n}" for n in range(first, last + 1) if n not in set(seen_numbers)]
     if missing:
         print(f"  MISSING markers: {missing} -- those answers get no replay span",
               file=sys.stderr)
