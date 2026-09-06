@@ -33,6 +33,17 @@ from answer_key import parse_answer
 SEED = pathlib.Path(__file__).resolve().parent
 WORK = SEED / "work"
 GAP = re.compile(r"\{\{(\d+)\}\}")
+#: What each group type's `config` may hold, as the backend schema names it.
+#: Checked here because pydantic IGNORES a key it does not declare: writing
+#: "pick" instead of "answers_per_question" produced a group that silently
+#: asked for one answer while its question held two, and the error that
+#: followed named neither field.
+CONFIG_KEYS = {
+    "multiple_choice": {"answers_per_question"},
+    "matching": {"options", "allow_reuse"},
+}
+DEFAULT_CONFIG_KEYS = {"template", "options", "image_letters", "image", "image_adapt"}
+
 #: The two that are answered by picking a letter rather than writing words.
 #: They carry no template, so the gap checks below do not apply to them and
 #: their answer key is a letter rather than a list of accepted phrasings.
@@ -132,6 +143,14 @@ def build(section_id: str) -> int:
         questions = []
         for q in group["questions"]:
             printed = KEY_NOTE.sub("", q["key"]).strip(" ,;")
+            if lettered and not printed:
+                # The key line was the note and nothing else, which means the
+                # letters printed under it were not read. Better to say so than
+                # to write a question with no answer.
+                problems.append(
+                    f"group {gi} q{q['number']}: the key line was {q['key']!r} with no "
+                    "letters -- they are printed on the lines below it")
+                continue
             if lettered:
                 # A lettered answer is the KEY, not a list of phrasings: the
                 # letters must be picked exactly, and expanding "A" the way a
@@ -179,10 +198,24 @@ def build(section_id: str) -> int:
         # `config` is what the group's own schema expects, and the three
         # kinds want three different things in it.
         if group["type"] == "multiple_choice":
-            config = {"pick": int(group.get("pick") or 1)}
+            # How many letters the group asks for is COUNTED from its answers,
+            # not taken from the reader. A "Choose TWO letters" printed as
+            # "11&12  IN EITHER ORDER / A / C" came back with pick=1 and two
+            # letters, which the schema rightly refused. The key is the
+            # evidence; the instruction line is a description of it.
+            picked = max((len(q["correct_answers"]) for q in questions), default=1)
+            claimed = int(group.get("pick") or 1)
+            if picked != claimed:
+                print(f"note: group {gi}: the reader said pick={claimed}, the answer "
+                      f"key says {picked}; using the key", file=sys.stderr)
+            # `answers_per_question`, not `pick`: pydantic drops a key the
+            # model does not declare without a word, so the group came out
+            # asking for one answer while its question held two and the schema
+            # refused it with a message about neither.
+            config = {"answers_per_question": picked}
         elif group["type"] == "matching":
             config = {"options": group.get("options") or [],
-                      "reuse": bool(group.get("reuse"))}
+                      "allow_reuse": bool(group.get("reuse"))}
         else:
             drawn = 0
             if group["type"] in ("map_labelling", "diagram_labelling"):
@@ -201,6 +234,13 @@ def build(section_id: str) -> int:
                           "from the answer key", file=sys.stderr)
             config = {"template": group.get("template") or "", "options": [],
                       "image_letters": drawn}
+        allowed = CONFIG_KEYS.get(group["type"], DEFAULT_CONFIG_KEYS)
+        unknown = set(config) - allowed
+        if unknown:
+            problems.append(
+                f"group {gi}: config key(s) {sorted(unknown)} are not what a "
+                f"{group['type']} group takes ({sorted(allowed)}) -- the server would "
+                "drop them without a word")
         out_groups.append({
             "type": group["type"],
             "instructions": group["instructions"],

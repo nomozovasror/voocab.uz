@@ -141,7 +141,23 @@ Return ONE JSON object, no prose and no code fence:
 Copy each line character for character, keeping every slash, parenthesis, and \
 alternative. "(£)115 / a hundred (and) fifteen" must come back exactly like \
 that -- do NOT expand, simplify, or choose between alternatives. Expanding \
-them is another program's job and it needs the printed form to do it."""
+them is another program's job and it needs the printed form to do it.
+
+ONE LAYOUT TO WATCH FOR. Where a question takes two of the paper's numbers, \
+the key prints the pair, then the words IN EITHER ORDER, and then the two \
+letters on the lines BELOW it, indented:
+
+    11&12   IN EITHER ORDER
+            A
+            C
+    13      health problems
+
+Those two letters are the answer. Return them together under the pair and drop \
+the note:
+
+    {{"11&12": "A, C", "13": "health problems"}}
+
+Returning {{"11&12": "IN EITHER ORDER"}} loses the answer entirely."""
 
 
 def repair(template: str, questions: list[dict]) -> tuple[str, list[str]]:
