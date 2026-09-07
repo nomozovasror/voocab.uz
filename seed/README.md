@@ -723,6 +723,36 @@ signal that points at one explanation can be real and still be partial.
 None of these share a cause, which is the difference between this list and
 every earlier one.
 
+## NVIDIA measured, and not adopted
+
+`vision.py` takes `SEED_VISION=groq|nvidia` because the cost of this pipeline
+is dominated by iteration rather than by one clean pass, and a free tier
+removes that variable instead of predicting it better. The switch was then
+measured against the hand transcription of `cam11-t1-s1` before anything was
+re-read with it, and the measurement said no.
+
+Of the six vision entries in NVIDIA's catalogue visible to this account, one
+serves: `meta/llama-3.2-11b-vision-instruct`. `phi-3-vision` and `nvidia/vila`
+return 404 for the account; `llama-3.2-90b-vision-instruct` is listed and times
+out after five minutes on a **text-only** request, so it is not serving either.
+
+On the same page, against Groq's `qwen/qwen3.8-27b`:
+
+| | Groq 27B | NVIDIA 11B |
+|---|---|---|
+| Images per request | 3 | **1** |
+| Turns read | 41 | 24 |
+| Margin markers found | **11 of 11** | **1 of 11** |
+| Answers the narrow marker question | yes | returns prose, not JSON |
+
+The transcription itself is passable. The margin markers are not, and they are
+the whole point: they are what gives an answer its replay span, and a material
+is not publishable without them. A narrow question -- the one framing that has
+rescued every other stage here -- came back as an essay about the page.
+
+The provider switch stays in, because it costs nothing to keep and the
+catalogue changes. The default does not move.
+
 ## Where this stops
 
 Stage 0 is done: 176 sections catalogued, every file's extension honest, every
