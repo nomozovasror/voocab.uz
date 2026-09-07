@@ -31,6 +31,13 @@ REPO = SEED.parent
 PYTHON = SEED / ".venv" / "bin" / "python"
 BACKEND = REPO / "backend"
 
+#: Stages whose failure is a loss of quality rather than of content. An
+#: untrimmed material still publishes -- publish_blockers() asks for questions
+#: and answers and audio, not for the disc announcement to be gone -- so
+#: stopping the run there would hold back a finished paper over 26 seconds of
+#: preamble that can be cut later.
+OPTIONAL = {"trim", "picture"}
+
 #: The order they depend on each other in, which is not the order they are
 #: interesting in. `align` has to come before `questions` because
 #: build_questions.py resolves each answer's replay span out of aligned.json --
@@ -52,8 +59,14 @@ STAGES = ("audioscript", "align", "questions", "picture", "trim", "import")
 #: which is exactly what happened the first time this ran.
 def commands(stage: str, section_id: str, owner: str) -> list[list[str]]:
     if stage == "questions":
-        return [[str(PYTHON), str(SEED / "read_questions.py"), section_id],
-                [str(PYTHON), str(SEED / "build_questions.py"), section_id]]
+        steps = []
+        # Reading the pages again costs money and cannot improve on a reading
+        # that is already on disk. Rebuilding from it is free, and is what a
+        # re-run after a corrected transcript actually needs.
+        if not (SEED / "work" / section_id / "questions.src.json").exists():
+            steps.append([str(PYTHON), str(SEED / "read_questions.py"), section_id])
+        steps.append([str(PYTHON), str(SEED / "build_questions.py"), section_id])
+        return steps
     return [command(stage, section_id, owner)]
 
 
@@ -154,6 +167,10 @@ def main() -> int:
             record(conn, section_id, stage, ok, note)
             mark = "ok  " if ok else "FAIL"
             print(f"  {stage:<12} {mark} {time.perf_counter() - begin:>5.0f}s  {note}")
+            if not ok and stage in OPTIONAL:
+                print(f"  {stage:<12} skipped, carrying on: the material can "
+                      "publish without it")
+                continue
             if not ok:
                 stalled.append((section_id, stage, note))
                 break

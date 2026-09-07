@@ -111,6 +111,25 @@ def build(section_id: str) -> int:
                 for n in wanted:
                     spans[n] = (words[0]["start_ms"], words[-1]["end_ms"])
 
+    # A section's questions are its own. The question pages of Section 1 and
+    # Section 2 sit on the same sheets, so the reader hands back groups for
+    # both -- and the answer key, asked only for this section's range, leaves
+    # the other one's keys empty. Dropping them here rather than failing on an
+    # empty key is the same rule the audioscript reader applies to a marker
+    # outside its range: out of range is proof it belongs to the neighbour.
+    section_no = int(section_id.split("-s")[1])
+    lo, hi = (section_no - 1) * 10 + 1, section_no * 10
+    kept = []
+    for group in src["groups"]:
+        papers = [q.get("paper_number") for q in group.get("questions", [])
+                  if q.get("paper_number")]
+        if papers and not any(lo <= n <= hi for n in papers):
+            print(f"note: dropping a {group['type']} group covering {min(papers)}-"
+                  f"{max(papers)}; this section is {lo}-{hi}", file=sys.stderr)
+            continue
+        kept.append(group)
+    src = {**src, "groups": kept}
+
     problems: list[str] = []
     warnings: list[str] = []
     out_groups = []
