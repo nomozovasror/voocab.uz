@@ -130,8 +130,42 @@ def build(section_id: str) -> int:
         kept.append(group)
     src = {**src, "groups": kept}
 
+    def locate(answers: list[str]) -> tuple[int, int] | None:
+        """Where an answer's own words are said, for a gap the book did not mark.
+
+        The margin marker is the better source and is used wherever it exists:
+        it names the turn the answer is given in, which is what a learner wants
+        to hear, and it is right even when the answer is a spelled-out number
+        that the alignment mangles. This is the fallback for the questions no
+        marker was found for -- roughly one in twenty after four rounds of
+        chasing them.
+
+        Only an UNAMBIGUOUS match counts. A phrase that appears twice in the
+        recording could send a learner to either, and a replay at the wrong
+        moment is worse than no replay button: it teaches them they misheard
+        something they never heard.
+        """
+        if not aligned:
+            return None
+        stream = [re.sub(r"[^a-z0-9]", "", w["word"].lower()) for w in aligned]
+        for answer in sorted(answers, key=len, reverse=True):
+            wanted = [re.sub(r"[^a-z0-9]", "", w.lower()) for w in answer.split()]
+            wanted = [w for w in wanted if w]
+            if not wanted or len("".join(wanted)) < 4:
+                continue
+            hits = [i for i in range(len(stream) - len(wanted) + 1)
+                    if stream[i:i + len(wanted)] == wanted]
+            if len(hits) == 1:
+                at = hits[0]
+                # A couple of seconds of run-up, so the answer is heard in the
+                # sentence that carries it rather than bare.
+                start = max(0, at - 12)
+                return aligned[start]["start_ms"], aligned[at + len(wanted) - 1]["end_ms"]
+        return None
+
     problems: list[str] = []
     warnings: list[str] = []
+    recovered = 0
     out_groups = []
     for gi, group in enumerate(src["groups"]):
         lettered = group["type"] in LETTERED
@@ -188,6 +222,10 @@ def build(section_id: str) -> int:
             if not answers:
                 problems.append(f"group {gi} q{q['number']}: key {q['key']!r} expands to nothing")
             span = spans.get(q.get("paper_number"))
+            if span is None and not lettered:
+                span = locate(answers)
+                if span:
+                    recovered += 1
             if q.get("marker") and span is None:
                 # A warning, not a problem. The marker was not found in the
                 # audioscript, so this answer gets no "hear it again" -- which
@@ -274,6 +312,10 @@ def build(section_id: str) -> int:
             "questions": questions,
         })
 
+    if recovered:
+        print(f"note: {recovered} replay span(s) found by searching the alignment for "
+              "the answer's own words, the book having marked no margin number",
+              file=sys.stderr)
     for w in warnings:
         print(f"note: {w}", file=sys.stderr)
     if problems:
