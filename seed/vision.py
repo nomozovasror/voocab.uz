@@ -145,6 +145,12 @@ def ask(prompt: str, images: list[pathlib.Path], *, model: str = DEFAULT_MODEL,
             **({"reasoning_effort": EFFORT} if EFFORT else {})}
     for attempt in range(1, MAX_ATTEMPTS + 1):
         reply = _post(body)
+        if not isinstance(reply, dict):
+            # An endpoint that answers with a JSON array -- an error payload,
+            # usually. Said plainly here rather than as an AttributeError on
+            # the next line, which names neither the provider nor the page.
+            raise SystemExit(f"{PROVIDER} answered with a "
+                             f"{type(reply).__name__}: {json.dumps(reply)[:300]}")
         error = reply.get("error", {})
         if error.get("code") != "rate_limit_exceeded":
             break

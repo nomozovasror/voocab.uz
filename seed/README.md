@@ -687,8 +687,9 @@ arithmetic here.
 ## Where the corpus stands
 
 **All 160** of Cambridge 10-19's sections are in the database as private
-drafts: 1,528 questions, 1,480 of them (97%) carrying a replay span. **146 are
-content-complete.** The last eleven, and the repairs below, cost **$0.12**.
+drafts: 1,528 questions, 1,520 of them (**99%**) carrying a replay span. **153
+are content-complete.** The last eleven sections and every repair below came to
+**$0.14**.
 
 ### The windowing fix worked, and less than it looked like it would
 
@@ -734,12 +735,9 @@ disk, and the two causes are worth naming because neither is a misreading:
   a gap is never drawn either. Both are corrections to the reading, made in
   `questions.src.json`.
 
-What remains:
-
-* **48 questions across 14 seeded materials** with no replay span. This is the
-  one-in-five the windowing fix did not reach, and it is the only thing between
-  146 content-complete and 160.
-* **Cambridge 20's 16 sections**, still blocked on their missing audioscript.
+What remains is **8 questions across 7 materials**, each one a phrase the
+alignment cannot place unambiguously, plus `cam13-t3-s2` and Cambridge 20's
+sixteen -- both waiting on audio nobody has a script for.
 
 ### The catalogue is not self-repairing, and `--force` is why
 
@@ -896,6 +894,64 @@ seed/.venv/bin/python seed/verify.py --ids   # feed straight to run_pipeline
 One section still sits at 0.509 with all nine of its answers heard in its own
 transcript, which is the reason this is written as two checks and not one: a
 low score is a section to look at, not a verdict.
+
+## The last forty replay spans, and what they were actually waiting for
+
+Fourteen materials held 48 questions with no replay span, nine of them Part 4 --
+a monologue, which is broken into turns only at its markers, so a missed marker
+loses the boundary as well as the span. The obvious reading was that the
+transcription runs out of steam near the end, and the missing numbers do
+cluster at 37 to 40.
+
+It was not that. Of the 40, **34 had the answer's own words sitting in their
+own transcript already** -- the text was there and only the margin number was
+missing. And `build_questions.py` has searched the alignment for exactly that
+since the commit before this one. Those sections were simply built before it
+did, and nothing rebuilds a section whose stage says done.
+
+So the fix cost nothing: rebuild thirteen sections from readings already on
+disk, and 30 spans appeared. Which is the same lesson as the stale `turns.json`
+in book 15, from the other direction: **the pipeline has no way to know that a
+stage's output is older than the code that would produce it.** Both times the
+data was fine and the file was old.
+
+### Bracketing, which narrows the search rather than relaxing the rule
+
+`locate()` takes only an unambiguous match, because a replay at the wrong
+moment is worse than none. Four answers were said two or three times in their
+recording and were refused.
+
+The paper asks its questions in the order the recording answers them, so a gap
+with no marker is bracketed by the nearest markers either side of it. Searching
+inside that stretch is not a guess about where the answer is -- it is what the
+numbering already says, built from markers the book itself printed. The
+uniqueness rule then applies unchanged, to a shorter recording. Two of the four
+came back.
+
+### A sheet the scan never had
+
+`cam13-t3-s2` came out with no audioscript at all, and re-reading its pages
+produced a transcript that aligned at 0.292 against a corpus median of 0.915 --
+uniformly low, not a tail, which is what a *plausible transcript of the wrong
+audio* looks like.
+
+Reading the margins of book 13's audioscript pages settles it. Every test runs
+1 to 40 continuously across five or six sheets; test 3 has four, and its
+margins jump from Q9 to Q21. The printed folios say the rest: pdf 106 is
+printed page 108 and pdf 108 is printed page 111, so one of 109 and 110 -- the
+sheet carrying SECTION 2 -- was never scanned.
+
+No re-read fixes that, so it is written into the section's `note` and
+`verify.py` prints it beside the score. Its questions and answers are sound;
+they come off the question paper and the answer key, which are both in the
+book. What it cannot have is a transcript, and therefore replay spans, until
+either a complete scan turns up or the recording is transcribed by ASR -- which
+is the same path Cambridge 20 is waiting on.
+
+This one is worth stating plainly because of how it presented: after the
+re-read the section **passed** `publish_blockers()`. Ten markers, ten spans,
+nothing missing. It was wrong in the one way that function cannot see, and only
+the alignment score said so.
 
 ## NVIDIA measured, and not adopted
 

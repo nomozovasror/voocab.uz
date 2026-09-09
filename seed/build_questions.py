@@ -182,7 +182,24 @@ def build(section_id: str) -> int:
         kept.append(group)
     src = {**src, "groups": kept}
 
-    def locate(answers: list[str]) -> tuple[int, int] | None:
+    def between(paper: int | None) -> tuple[int, int]:
+        """The stretch of recording a question's answer has to fall inside.
+
+        The paper asks its questions in the order the recording answers them,
+        so a gap with no marker is bracketed by the nearest markers either
+        side of it. That is not a guess about where the answer is -- it is
+        what the numbering already says, and the markers it is built from are
+        the ones the book printed.
+        """
+        if paper is None:
+            return 0, 1 << 62
+        before = [spans[n][1] for n in spans if n < paper]
+        after = [spans[n][0] for n in spans if n > paper]
+        return (max(before) if before else 0,
+                min(after) if after else 1 << 62)
+
+    def locate(answers: list[str], window: tuple[int, int] = (0, 1 << 62)
+               ) -> tuple[int, int] | None:
         """Where an answer's own words are said, for a gap the book did not mark.
 
         The margin marker is the better source and is used wherever it exists:
@@ -196,17 +213,23 @@ def build(section_id: str) -> int:
         recording could send a learner to either, and a replay at the wrong
         moment is worse than no replay button: it teaches them they misheard
         something they never heard.
+
+        `window` narrows the recording before that rule is applied rather than
+        relaxing it: a phrase said three times, once inside the stretch the
+        numbering allows, is still said once where it could possibly count.
         """
         if not aligned:
             return None
         stream = [re.sub(r"[^a-z0-9]", "", w["word"].lower()) for w in aligned]
+        lo, hi = window
         for answer in sorted(answers, key=len, reverse=True):
             wanted = [re.sub(r"[^a-z0-9]", "", w.lower()) for w in answer.split()]
             wanted = [w for w in wanted if w]
             if not wanted or len("".join(wanted)) < 4:
                 continue
             hits = [i for i in range(len(stream) - len(wanted) + 1)
-                    if stream[i:i + len(wanted)] == wanted]
+                    if stream[i:i + len(wanted)] == wanted
+                    and lo <= aligned[i]["start_ms"] <= hi]
             if len(hits) == 1:
                 at = hits[0]
                 # A couple of seconds of run-up, so the answer is heard in the
@@ -286,7 +309,11 @@ def build(section_id: str) -> int:
                 problems.append(f"group {gi} q{q['number']}: key {q['key']!r} expands to nothing")
             span = spans.get(q.get("paper_number"))
             if span is None and not lettered:
-                span = locate(answers)
+                # Unbracketed first, because a phrase said once in the whole
+                # recording needs no help. The window is what rescues the
+                # answer said twice, where only one of the two can be the one
+                # this question is asking about.
+                span = locate(answers) or locate(answers, between(q.get("paper_number")))
                 if span:
                     recovered += 1
             if q.get("marker") and span is None:

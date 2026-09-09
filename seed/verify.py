@@ -36,10 +36,12 @@ import argparse
 import json
 import pathlib
 import re
+import sqlite3
 import statistics
 import sys
 
-WORK = pathlib.Path(__file__).resolve().parent / "work"
+SEED = pathlib.Path(__file__).resolve().parent
+WORK = SEED / "work"
 #: Where a real disagreement sits, well below the 0.91 the corpus runs at and
 #: well above the 0.23 of the worst genuine failure found so far.
 FLOOR = 0.70
@@ -118,10 +120,21 @@ def main() -> int:
         print(f"none below {args.below}")
         return 0
 
+    # A section already known to be unfixable carries the reason in the
+    # catalogue. Printing it here is what stops the same page being chased
+    # twice: one of these is a sheet the scan never had, and no re-read of the
+    # pages it does have will ever produce it.
+    conn = sqlite3.connect(SEED / "catalogue.db")
+    notes = dict(conn.execute("SELECT id, note FROM section WHERE note IS NOT NULL"))
+    conn.close()
+
     print(f"{'section':<14}{'align':>7}  answers heard")
     for fit, name, answers in sorted(flagged, key=lambda r: r[0]):
         told = f"{answers[0]}/{answers[1]}" if answers else "-"
         print(f"{name:<14}{fit:>7.3f}  {told}")
+        note = notes.get(name, "")
+        if note and not note.startswith("trimmed:"):
+            print(f"{'':<14}         {note[:96]}")
     print(f"\n{len(flagged)} to look at. Re-read and re-align one with\n"
           f"  seed/run_pipeline.py <id> --force audioscript,align,questions,import\n"
           "and see whether the score moves; that is the whole test.")
