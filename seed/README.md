@@ -953,6 +953,88 @@ re-read the section **passed** `publish_blockers()`. Ten markers, ten spans,
 nothing missing. It was wrong in the one way that function cannot see, and only
 the alignment score said so.
 
+## Hearing a section there is no page to read
+
+Two things in this corpus have audio and no audioscript: Cambridge 20, which
+prints none, and `cam13-t3-s2`, whose sheet the scanner missed. Seventeen
+sections that stop at the first stage.
+
+`hear_audio.py` writes the same `turns.json` that `read_audioscript.py` writes,
+from the recording instead of the page. `run_pipeline.py` picks between them
+off `book.has_audioscript`, and nothing downstream changes -- which is the
+point of the two writing one file.
+
+**Only the words come from the transcriber.** `align.py` still supplies the
+timings: it was measured at a median 40ms against known timings, and a
+transcriber's own word timestamps are a second, worse guess at something
+already solved. Measured against `cam11-t1-s1`, which has a real audioscript to
+be wrong about:
+
+| | |
+|---|---|
+| The book's words, in order, in the transcript | **98.0%** |
+| Its ten answers found in the transcript | **10 of 10** |
+| Turns, with speakers | 49, MAN / WOMAN / NARRATOR |
+| Time and cost for one section | **12s, $0.005** |
+
+The extra turns over the book's 41 are the narrator announcements, which the
+audioscript does not print and the recording does contain. Having them is
+better than not: they are eight more anchors for the alignment.
+
+### The markers do not come with them
+
+Nothing in a recording says "this sentence answers question 13". That is
+printed knowledge, and it is what gives an answer its replay span.
+`build_questions.py` covers the gap-fills by searching the alignment for the
+answer's own words, and cannot cover a letter: "choose TWO letters" is answered
+by picking B and D, and neither letter is ever spoken.
+
+`mark_answers.py` asks the question that is left -- here are the turns, here is
+what the answer to Q13 actually says, which turn is it given in? It is a
+question about meaning, which is the one thing worth spending a model on, and
+it runs inside the `questions` stage between reading the page and building from
+it. It does nothing when every question already carries a marker.
+
+**Checked before believed**, on the same reasoning as everywhere else here: a
+paper asks its questions in the order the recording answers them, so a
+placement that goes backwards is dropped rather than written. Two questions
+sharing one turn is allowed -- the book itself prints "17&18" against a single
+line -- and the same question named twice keeps the first.
+
+`cam13-t3-s2` end to end: alignment **0.292 to 0.914** against a corpus median
+of 0.915, and all eight of its lettered answers placed, at 65s, 90s, 124s,
+143s, 164s, 192s, 275s and 304s of a 381-second recording. That ordering is
+most of the evidence that they are right.
+
+### One universe of page numbers, or four
+
+Cambridge 20 is four PDFs of one test each, so "page 2" names four different
+pages and the test number is a property of the FILE rather than of anything
+printed on the sheet. `locate_pages.py` had one index space and one set of four
+tests in it.
+
+It now settles one **universe** at a time -- a run of page indices that mean
+something together, with the tests it covers. Nine books are one universe of
+four tests; book 20 is four universes of one. Inside a single-test universe a
+page needs no printed test number to belong: being in that file is the
+evidence. The `--keys` and `--recheck` passes work per universe unchanged.
+
+### Where Cambridge 20 stands
+
+Its listening pages are found -- test 1 prints questions 1-15, 16-24, 25-30 and
+31-40 across four sheets, so a sheet serves two sections, which is handled.
+What it does not print is a PART heading, so the section a page belongs to has
+to come from the question numbers on it; that pass is not written yet.
+
+Its answer key is worse. It sits across two pages, and the first of them
+carries the end of the reading key as well -- asked for listening 1 to 5, a
+model reads back TRUE, FALSE, NOT GIVEN, which are reading answers off the same
+sheet. That is book 14's failure again in a book where `--keys` has no LISTENING
+heading to find.
+
+So Cambridge 20 needs two narrow passes written for its shape, and its audio is
+ready for both.
+
 ## NVIDIA measured, and not adopted
 
 `vision.py` takes `SEED_VISION=groq|nvidia` because the cost of this pipeline

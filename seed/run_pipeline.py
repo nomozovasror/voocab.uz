@@ -9,6 +9,12 @@ not absorb them. A stage that fails is recorded against that section and the
 run moves to the next one: one misread page should cost one section, not a
 book.
 
+A book that prints no audioscript is HEARD rather than read: the catalogue
+says so with `book.has_audioscript = 0`, and the `audioscript` stage then runs
+`hear_audio.py` against the recording instead of `read_audioscript.py` against
+the page. Everything downstream is unchanged, which is the point of the two
+writing the same file.
+
 `import` runs under the BACKEND venv, not this one. The two halves of the
 pipeline have deliberately separate environments -- extraction needs torch and
 no database, the import needs the database and no torch -- and the only place
@@ -69,7 +75,13 @@ STAGES = ("audioscript", "align", "questions", "picture", "trim", "import")
 #: builds what the importer wants: reading without building leaves
 #: questions.src.json on disk and a material with no questions in the database,
 #: which is exactly what happened the first time this ran.
-def commands(stage: str, section_id: str, owner: str) -> list[list[str]]:
+def commands(stage: str, section_id: str, owner: str, heard: bool = False
+             ) -> list[list[str]]:
+    if stage == "audioscript" and heard:
+        # No page to read, so the recording is the source. Same output file,
+        # same everything after it: what changes is where the words came from,
+        # and the catalogue is what knows that.
+        return [[str(PYTHON), str(SEED / "hear_audio.py"), section_id]]
     if stage == "questions":
         steps = []
         # Reading the pages again costs money and cannot improve on a reading
@@ -77,6 +89,11 @@ def commands(stage: str, section_id: str, owner: str) -> list[list[str]]:
         # re-run after a corrected transcript actually needs.
         if not (SEED / "work" / section_id / "questions.src.json").exists():
             steps.append([str(PYTHON), str(SEED / "read_questions.py"), section_id])
+        # Between reading the page and building from it, because it needs the
+        # answer key the first produces and the second turns markers into
+        # spans. Does nothing when every question already carries a marker,
+        # which is the normal case.
+        steps.append([str(PYTHON), str(SEED / "mark_answers.py"), section_id])
         steps.append([str(PYTHON), str(SEED / "build_questions.py"), section_id])
         return steps
     return [command(stage, section_id, owner)]
@@ -100,7 +117,8 @@ def command(stage: str, section_id: str, owner: str) -> list[str]:
     raise ValueError(stage)
 
 
-def run(stage: str, section_id: str, owner: str) -> tuple[bool, str]:
+def run(stage: str, section_id: str, owner: str, heard: bool = False
+        ) -> tuple[bool, str]:
     """One stage. Returns whether it worked and the last of what it said."""
     env = {"PYTHONPATH": str(SEED), "PYTORCH_ENABLE_MPS_FALLBACK": "1",
            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin", "HOME": str(pathlib.Path.home())}
@@ -113,7 +131,7 @@ def run(stage: str, section_id: str, owner: str) -> tuple[bool, str]:
                 if name in os.environ})
     cwd = BACKEND if stage == "import" else REPO
     said = ""
-    for argv in commands(stage, section_id, owner):
+    for argv in commands(stage, section_id, owner, heard):
         out = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True)
         lines = (out.stdout + out.stderr).strip().splitlines()
         said = lines[-1][:150] if lines else ""
@@ -176,7 +194,15 @@ def main() -> int:
     started = time.perf_counter()
     finished, stalled = 0, []
 
+    # Which books print no audioscript. Read once: it is a property of the
+    # book, and asking per section would be sixteen identical questions.
+    heard_books = {r["number"] for r in conn.execute(
+        "SELECT number FROM book WHERE has_audioscript = 0")}
+
     for section_id in ids:
+        heard = conn.execute(
+            "SELECT book_number FROM section WHERE id = ?",
+            (section_id,)).fetchone()["book_number"] in heard_books
         done = {r["name"] for r in conn.execute(
             "SELECT name FROM stage WHERE section_id = ? AND status = 'done'",
             (section_id,))}
@@ -192,7 +218,7 @@ def main() -> int:
                 print(f"  {stage:<12} done already")
                 continue
             begin = time.perf_counter()
-            ok, note = run(stage, section_id, args.owner)
+            ok, note = run(stage, section_id, args.owner, heard)
             record(conn, section_id, stage, ok, note)
             mark = "ok  " if ok else "FAIL"
             print(f"  {stage:<12} {mark} {time.perf_counter() - begin:>5.0f}s  {note}")

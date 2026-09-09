@@ -1,4 +1,4 @@
-"""The one place that knows how to show a page to a model.
+"""The one place that knows how to show a page to a model, or play it one.
 
 Three providers, all speaking OpenAI's chat format with images inlined as data
 URLs, chosen with `SEED_VISION=groq|gemini|nvidia`:
@@ -73,8 +73,11 @@ PROVIDERS = {
 #: wrong by a known factor; no ledger at all makes it wrong by an unknown one.
 #: Checked 2026-09-08.
 PRICES = {
+    #: `audio` is a separate rate where the provider charges one -- Gemini
+    #: bills a second of recording at twice a token of text -- and defaults to
+    #: `in` where it does not.
     "groq":   {"in": 0.29, "out": 0.59},
-    "gemini": {"in": 0.25, "out": 1.50},   # 3.1-flash-lite, the default below
+    "gemini": {"in": 0.25, "out": 1.50, "audio": 0.50},   # 3.1-flash-lite
     "nvidia": {"in": 0.00, "out": 0.00},
 }
 #: Every request's token counts, appended as one JSON object per line. This is
@@ -129,17 +132,43 @@ MAX_ATTEMPTS = 5
 
 def ask(prompt: str, images: list[pathlib.Path], *, model: str = DEFAULT_MODEL,
         max_tokens: int = 4000, temperature: float = 0.0) -> str:
-    """One question about one or more page images. Returns the reply text.
-
-    Waits and retries on a rate limit rather than failing: a batch that dies
-    two thirds of the way through a book is worse than one that takes longer."""
+    """One question about one or more page images. Returns the reply text."""
     content: list[dict] = [{"type": "text", "text": prompt}]
     for path in images:
         data = base64.b64encode(path.read_bytes()).decode()
         mime = "image/jpeg" if path.suffix == ".jpg" else "image/png"
         content.append({"type": "image_url",
                         "image_url": {"url": f"data:{mime};base64,{data}"}})
+    return _send(content, model, max_tokens, temperature, len(images), audio=False)
 
+
+def listen(prompt: str, recording: pathlib.Path, *, model: str = DEFAULT_MODEL,
+           max_tokens: int = 8000, temperature: float = 0.0) -> str:
+    """One question about a recording. Returns the reply text.
+
+    Here because the transport, the retry, the key and the ledger are the same
+    ones a page goes through, and a second copy of all four is four more things
+    to keep in step. What differs is the rate: a provider that bills audio
+    separately bills it dearer, and the ledger says so.
+
+    The pipeline uses this where a book prints no audioscript -- Cambridge 20,
+    and one section of 13 whose sheet the scan is missing. The words are what
+    is wanted from it; the TIMINGS still come from `align.py`, which was
+    measured at 40ms against known timings and is a better source than any
+    transcriber's own guess."""
+    data = base64.b64encode(recording.read_bytes()).decode()
+    fmt = recording.suffix.lstrip(".").lower()
+    content = [{"type": "text", "text": prompt},
+               {"type": "input_audio", "input_audio": {"data": data, "format": fmt}}]
+    return _send(content, model, max_tokens, temperature, 1, audio=True)
+
+
+def _send(content: list[dict], model: str, max_tokens: int, temperature: float,
+          parts: int, *, audio: bool) -> str:
+    """The retry, the ledger and the unwrapping, shared by every caller.
+
+    Waits and retries on a rate limit rather than failing: a batch that dies
+    two thirds of the way through a book is worse than one that takes longer."""
     body = {"model": model, "temperature": temperature, "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": content}],
             **({"reasoning_effort": EFFORT} if EFFORT else {})}
@@ -158,13 +187,13 @@ def ask(prompt: str, images: list[pathlib.Path], *, model: str = DEFAULT_MODEL,
         print(f"  rate limited, waiting {seconds:.0f}s "
               f"(attempt {attempt}/{MAX_ATTEMPTS})", file=sys.stderr)
         time.sleep(seconds)
-    record(reply.get("usage") or {}, model, len(images))
+    record(reply.get("usage") or {}, model, parts, audio=audio)
     if "choices" not in reply:
         raise SystemExit(f"API said: {json.dumps(reply)[:400]}")
     return reply["choices"][0]["message"]["content"]
 
 
-def record(usage: dict, model: str, images: int) -> None:
+def record(usage: dict, model: str, images: int, *, audio: bool = False) -> None:
     """Append one request's token counts to the ledger.
 
     Written from `sys.argv` rather than passed down through nine callers: what
@@ -173,6 +202,7 @@ def record(usage: dict, model: str, images: int) -> None:
     if not usage:
         return
     price = PRICES.get(PROVIDER, {"in": 0.0, "out": 0.0})
+    rate_in = price.get("audio", price["in"]) if audio else price["in"]
     got, made = usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
     try:
         LEDGER.parent.mkdir(parents=True, exist_ok=True)
@@ -182,8 +212,8 @@ def record(usage: dict, model: str, images: int) -> None:
                 "by": pathlib.Path(sys.argv[0]).stem,
                 "for": sys.argv[1] if len(sys.argv) > 1 else None,
                 "provider": PROVIDER, "model": model, "images": images,
-                "in": got, "out": made,
-                "usd": round(got / 1e6 * price["in"] + made / 1e6 * price["out"], 6),
+                "audio": audio, "in": got, "out": made,
+                "usd": round(got / 1e6 * rate_in + made / 1e6 * price["out"], 6),
             }, fh)
             fh.write("\n")
     except OSError:
@@ -214,12 +244,15 @@ def _post(body: dict) -> dict:
         raise SystemExit(f"not JSON from the API: {out.stdout[:300]}")
 
 
-def ask_json(prompt: str, images: list[pathlib.Path], **kwargs) -> dict:
-    """`ask`, with the reply parsed as JSON.
+def ask_json(prompt: str, images: list[pathlib.Path],
+             recording: pathlib.Path | None = None, **kwargs) -> dict:
+    """`ask` -- or `listen`, given a recording -- with the reply parsed as JSON.
 
     Strips a reasoning block and a code fence before parsing, because both
     arrive whatever the prompt says and neither is worth a retry."""
-    text = FENCE.sub("", THINK.sub("", ask(prompt, images, **kwargs)).strip()).strip()
+    reply = (listen(prompt, recording, **kwargs) if recording is not None
+             else ask(prompt, images, **kwargs))
+    text = FENCE.sub("", THINK.sub("", reply).strip()).strip()
     try:
         return json.loads(text)
     except json.JSONDecodeError as exc:

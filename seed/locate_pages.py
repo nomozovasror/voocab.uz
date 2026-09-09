@@ -243,6 +243,99 @@ def resolve(pages: list[dict]) -> list[dict]:
     return pages
 
 
+def settle(pages: list[dict], tests: list[int], conn, book: int
+           ) -> tuple[int, list[int], dict[int, int]]:
+    """Turn one universe of pages into catalogue rows; returns how many it
+    wrote, where the audioscripts start, and the key page of each test.
+
+    A universe is a run of page indices that mean something together. For nine
+    of these books that is the whole book: one PDF, four tests, one index
+    space. Cambridge 20 is four PDFs of one test each, so "page 2" names four
+    different pages and the test number is a property of the FILE rather than
+    of anything printed on the sheet. Splitting on that is what lets both
+    shapes go through the same code: the caller says what a universe is and
+    which tests it covers, and none of the reasoning below has to know.
+    """
+    # Answer keys are matched to tests BY ORDER, not by the number printed on
+    # them. Cambridge 12 numbers its tests 5 to 8, continuing from Cambridge 11
+    # rather than starting again, so a book's own numbering says nothing about
+    # which of its four tests a page belongs to. The printed number is still
+    # read -- it is what tells four key pages apart from the fifth page that
+    # spills over -- but only the order is trusted.
+    listening = sorted(p["index"] for p in pages
+                       if p.get("kind") == "listening_answer_key")
+    if any(p.get("kind") == "reading_answer_key" for p in pages):
+        # --keys has separated the two papers, so order alone settles it, which
+        # is what this comment has claimed all along. Consecutive pages are one
+        # test's key spilling over, so each RUN is a test and its first page is
+        # the one to read. This does not need a printed test number, and book
+        # 14 -- whose test 2 listening key has none -- is why that matters.
+        runs = []
+        for index in listening:
+            if runs and index == runs[-1][-1] + 1:
+                runs[-1].append(index)
+            else:
+                runs.append([index])
+        in_order = [run[0] for run in runs]
+    else:
+        # Without that pass a reading key is indistinguishable from a listening
+        # one, so the printed number is all there is to go on.
+        claimed: dict[int, int] = {}
+        for page in sorted(pages, key=lambda p: p["index"]):
+            # A one-test file needs no number on the page for the same reason
+            # its question sheets do not: there is only one test it can be.
+            n = page.get("answer_key_test") or (tests[0] if len(tests) == 1 else None)
+            if page.get("kind") == "listening_answer_key" and n and n not in claimed:
+                claimed[n] = page["index"]
+        in_order = [claimed[n] for n in sorted(claimed)]
+    keys = {position + 1: index for position, index in enumerate(in_order[:4])}
+    # The START OF THE LONGEST RUN, not the first page anywhere that looks like
+    # one. The audioscripts are forty consecutive pages at the back; a single
+    # page misread as one in the middle of the book would otherwise become the
+    # answer, and did -- index 21 against a true 102.
+    marked = sorted(p["index"] for p in pages if p.get("kind") == "audioscript")
+    runs, current = [], []
+    for index in marked:
+        if current and index == current[-1] + 1:
+            current.append(index)
+        else:
+            current = [index]
+            runs.append(current)
+    longest = max(runs, key=len, default=[])
+    scripts = longest
+
+    scripts_by_section = script_runs(pages)
+
+    print(f"\n{'section':<14}{'question pages':<20}{'key':<6}{'audioscript pages'}")
+    written = 0
+    for test in tests:
+        for section in range(1, 5):
+            # In a universe that IS one test, a page needs no printed test
+            # number to belong to it -- being in that file is the evidence,
+            # and Cambridge 20 prints no test number on its question pages at
+            # all. Where a universe holds four tests the page must say which.
+            sheets = sorted(p["index"] for p in pages
+                            if p.get("kind") == "listening_questions"
+                            and (p.get("test") == test or len(tests) == 1)
+                            and p.get("section") == section)
+            key = keys.get(test)
+            sid = f"cam{book}-t{test}-s{section}"
+            script = scripts_by_section.get((test, section), [])
+            guessed = scripts_by_section.get(("guessed", test, section))
+            flag = "" if sheets and key is not None else "   <- INCOMPLETE"
+            if guessed:
+                flag += "   <- script span guessed, heading not found"
+            print(f"{sid:<14}{str(sheets):<20}{str(key):<6}{str(script)}{flag}")
+            if sheets and key is not None:
+                conn.execute(
+                    "UPDATE section SET question_pages = ?, key_page = ?, script_pages = ? "
+                    "WHERE id = ?",
+                    (json.dumps(sheets), key, json.dumps(script) if script else None, sid))
+                written += 1
+
+    return written, scripts, keys
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -396,75 +489,25 @@ def main() -> int:
             cache = WORK / f"pagemap-book{args.book}-doc{docs[0]['id']}.json"
             cache.write_text(json.dumps(sorted(found, key=lambda p: p["index"]), indent=2))
 
-    # Answer keys are matched to tests BY ORDER, not by the number printed on
-    # them. Cambridge 12 numbers its tests 5 to 8, continuing from Cambridge 11
-    # rather than starting again, so a book's own numbering says nothing about
-    # which of its four tests a page belongs to. The printed number is still
-    # read -- it is what tells four key pages apart from the fifth page that
-    # spills over -- but only the order is trusted.
-    listening = sorted(p["index"] for p in found
-                       if p.get("kind") == "listening_answer_key")
-    if any(p.get("kind") == "reading_answer_key" for p in found):
-        # --keys has separated the two papers, so order alone settles it, which
-        # is what this comment has claimed all along. Consecutive pages are one
-        # test's key spilling over, so each RUN is a test and its first page is
-        # the one to read. This does not need a printed test number, and book
-        # 14 -- whose test 2 listening key has none -- is why that matters.
-        runs = []
-        for index in listening:
-            if runs and index == runs[-1][-1] + 1:
-                runs[-1].append(index)
-            else:
-                runs.append([index])
-        in_order = [run[0] for run in runs]
-    else:
-        # Without that pass a reading key is indistinguishable from a listening
-        # one, so the printed number is all there is to go on.
-        claimed: dict[int, int] = {}
-        for page in sorted(found, key=lambda p: p["index"]):
-            n = page.get("answer_key_test")
-            if page.get("kind") == "listening_answer_key" and n and n not in claimed:
-                claimed[n] = page["index"]
-        in_order = [claimed[n] for n in sorted(claimed)]
-    keys = {position + 1: index for position, index in enumerate(in_order[:4])}
-    # The START OF THE LONGEST RUN, not the first page anywhere that looks like
-    # one. The audioscripts are forty consecutive pages at the back; a single
-    # page misread as one in the middle of the book would otherwise become the
-    # answer, and did -- index 21 against a true 102.
-    marked = sorted(p["index"] for p in found if p.get("kind") == "audioscript")
-    runs, current = [], []
-    for index in marked:
-        if current and index == current[-1] + 1:
-            current.append(index)
-        else:
-            current = [index]
-            runs.append(current)
-    longest = max(runs, key=len, default=[])
-    scripts = longest
+    # One universe per document where a document is a test, otherwise one for
+    # the book. `by_test` comes from the sections themselves, which is the only
+    # place that already knows which file holds which test.
+    universes = [(found, [1, 2, 3, 4])]
+    if len(docs) > 1:
+        by_doc: dict[int, int] = {}
+        for row in conn.execute(
+                "SELECT document_id, test_no FROM section WHERE book_number = ? "
+                "AND document_id IS NOT NULL", (args.book,)):
+            by_doc[row["document_id"]] = row["test_no"]
+        universes = [([p for p in found if p.get("doc_id") == doc], [test])
+                     for doc, test in sorted(by_doc.items(), key=lambda kv: kv[1])]
 
-    scripts_by_section = script_runs(found)
-
-    print(f"\n{'section':<14}{'question pages':<20}{'key':<6}{'audioscript pages'}")
-    written = 0
-    for test in range(1, 5):
-        for section in range(1, 5):
-            pages = sorted(p["index"] for p in found
-                           if p.get("kind") == "listening_questions"
-                           and p.get("test") == test and p.get("section") == section)
-            key = keys.get(test)
-            sid = f"cam{args.book}-t{test}-s{section}"
-            script = scripts_by_section.get((test, section), [])
-            guessed = scripts_by_section.get(("guessed", test, section))
-            flag = "" if pages and key is not None else "   <- INCOMPLETE"
-            if guessed:
-                flag += "   <- script span guessed, heading not found"
-            print(f"{sid:<14}{str(pages):<20}{str(key):<6}{str(script)}{flag}")
-            if pages and key is not None:
-                conn.execute(
-                    "UPDATE section SET question_pages = ?, key_page = ?, script_pages = ? "
-                    "WHERE id = ?",
-                    (json.dumps(pages), key, json.dumps(script) if script else None, sid))
-                written += 1
+    written, scripts, keys = 0, [], {}
+    for pages, tests in universes:
+        wrote, its_scripts, its_keys = settle(pages, tests, conn, args.book)
+        written += wrote
+        scripts = scripts or its_scripts
+        keys.update(its_keys)
 
     if scripts:
         conn.execute("UPDATE document SET audioscript_page = ? WHERE book_number = ?",
