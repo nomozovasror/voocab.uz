@@ -88,6 +88,58 @@ def gaps_that_render(template: str) -> set[int] | None:
     return {int(n) for n in out.stdout.split() if n.isdigit()}
 
 
+def to_group_numbering(group: dict) -> int | None:
+    """Renumber a group the reading left on the paper's numbering, and say
+    what it started at.
+
+    A group's `number` is its position within the group -- the paper's own
+    numbering lives in `paper_number`, which is what the margin markers and
+    the answer key are matched on. The reading gets this right for the first
+    group of a section for the trivial reason that the two agree there, and
+    then hands back 5..10 for the second. The template says the same thing, so
+    the group is consistent with itself and every check here passes; the
+    backend then refuses the import, because its schema asks the gaps to run
+    1..N.
+
+    Only a contiguous run is shifted. Numbers with a hole in them are a
+    misreading, and renumbering would hide it -- that is left to fail below.
+    """
+    numbers = [q["number"] for q in group["questions"]]
+    gaps = [int(n) for n in GAP.findall(group.get("template") or "")]
+
+    low = run_start(numbers)
+    if low:
+        for q in group["questions"]:
+            # Where the reading gave no paper number, the number it did give
+            # WAS the paper's -- that is the whole of this bug.
+            q.setdefault("paper_number", q["number"])
+            q["number"] -= low - 1
+
+    # The two halves can slip apart: the reading numbers the questions from 1
+    # and leaves the template on the paper's numbering, or the other way
+    # round. Each is shifted on its own evidence, so the pair that disagreed
+    # meets in the same place.
+    start = run_start(gaps)
+    if start:
+        group["template"] = GAP.sub(
+            lambda m: "{{%d}}" % (int(m[1]) - start + 1), group["template"])
+    return low or start
+
+
+def run_start(numbers: list[int]) -> int | None:
+    """Where a contiguous run starts, if it starts anywhere but 1.
+
+    Only a contiguous run is shifted. Numbers with a hole in them are a
+    misreading, and renumbering would hide it -- that is left to fail below.
+    """
+    if not numbers or sorted(numbers) == list(range(1, len(numbers) + 1)):
+        return None
+    low, high = min(numbers), max(numbers)
+    if len(set(numbers)) != len(numbers) or high - low + 1 != len(numbers):
+        return None
+    return low
+
+
 def build(section_id: str) -> int:
     work = WORK / section_id
     src = json.loads((work / "questions.src.json").read_text())
@@ -169,6 +221,17 @@ def build(section_id: str) -> int:
     out_groups = []
     for gi, group in enumerate(src["groups"]):
         lettered = group["type"] in LETTERED
+        if not group.get("questions"):
+            # An empty group is never what the page says. It reached the
+            # database as a part carrying a group with nothing in it, which
+            # publish_blockers reports as "add at least one question" -- true,
+            # and no help at all in finding the page that was misread.
+            problems.append(f"group {gi}: {group['type']} with no questions")
+            continue
+        shifted = to_group_numbering(group)
+        if shifted:
+            print(f"note: group {gi} was numbered {shifted} off the paper; "
+                  "renumbered to start at 1", file=sys.stderr)
         numbers = [q["number"] for q in group["questions"]]
 
         if not lettered:

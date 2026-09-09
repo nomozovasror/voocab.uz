@@ -206,7 +206,14 @@ def main() -> int:
         rendered.append(shots)
         read = vision.ask_json(prompt, shots, model=args.model, max_tokens=8000)
         got = [
-            {"speaker": t.get("speaker") or "", "text": (t.get("text") or "").strip(),
+            # The page prints "OFFICIAL:" and the prompt asks for the label
+            # verbatim, so a model is right either way -- but this string is
+            # the segment's speaker in the app, where the colon is the
+            # renderer's business and not the book's. Some providers keep it,
+            # some drop it; stripped here so the transcript reads the same
+            # whichever one answered.
+            {"speaker": (t.get("speaker") or "").strip().rstrip(":").strip(),
+             "text": (t.get("text") or "").strip(),
              "marker": t.get("marker") or None, "answer": t.get("answer") or None}
             for t in read.get("turns", [])
         ]

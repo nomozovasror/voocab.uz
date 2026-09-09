@@ -203,6 +203,35 @@ def repair(template: str, questions: list[dict]) -> tuple[str, list[str]]:
     return template, notes
 
 
+def key_answers(said) -> dict:
+    """The key as a number -> printed answer mapping, however it came back.
+
+    The prompt asks for an object keyed by question number and usually gets
+    one. Once in a few hundred pages the same model answers with a list of
+    {"number": .., "answer": ..} instead -- the same information, a shape the
+    prompt did not ask for -- and `.items()` on it took a section down with
+    `'list' object has no attribute 'get'`, which names neither the page nor
+    the problem. Both shapes say the same thing, so both are read; anything
+    else fails by name."""
+    answers = said.get("answers") if isinstance(said, dict) else said
+    if isinstance(answers, dict):
+        return answers
+    if isinstance(answers, list):
+        out = {}
+        for row in answers:
+            if not isinstance(row, dict):
+                continue
+            label = row.get("number", row.get("question", row.get("label")))
+            value = row.get("answer", row.get("key", row.get("value")))
+            if label is not None and value is not None:
+                out[label] = value
+        if out:
+            return out
+    raise SystemExit(
+        f"the answer key came back as {type(answers).__name__}, not a mapping "
+        "of question number to answer")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -260,7 +289,7 @@ def main() -> int:
     # raised, which took eighteen sections down in the first full batch.
     answers: dict[int, str] = {}
     paired: dict[int, int] = {}          # second number -> first
-    for label, value in key.get("answers", {}).items():
+    for label, value in key_answers(key).items():
         label = str(label)
         pair = PAIRED_KEY.match(label)
         if pair:
@@ -288,6 +317,22 @@ def main() -> int:
             for number, q in enumerate(kept, start=1):
                 q["number"] = number
             group["questions"] = kept
+
+    # A page can carry the tail of one part and the head of the next -- book
+    # 15's test 1 prints questions 29-30 on the same sheet as 31-40 -- so a
+    # section's pages are not exclusively its own, and reading them returns
+    # the neighbour's questions too. Anything outside this section's numbers
+    # belongs to the section that asked for it, not to this one.
+    dropped = 0
+    for group in read.get("groups", []) if isinstance(read, dict) else []:
+        kept = [q for q in group.get("questions", [])
+                if first <= (q.get("paper_number") or 0) <= last]
+        dropped += len(group.get("questions", [])) - len(kept)
+        group["questions"] = kept
+    if isinstance(read, dict):
+        read["groups"] = [g for g in read.get("groups", []) if g.get("questions")]
+    if dropped:
+        print(f"  {dropped} question(s) on these pages belong to another part, dropped")
 
     problems = []
     numbered = [q for g in read.get("groups", []) for q in g.get("questions", [])]
