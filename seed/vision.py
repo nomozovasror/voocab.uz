@@ -1,18 +1,35 @@
 """The one place that knows how to show a page to a model.
 
-Two providers, both speaking OpenAI's chat format with images inlined as data
-URLs, chosen with `SEED_VISION=groq|nvidia`:
+Three providers, all speaking OpenAI's chat format with images inlined as data
+URLs, chosen with `SEED_VISION=groq|gemini|nvidia`:
 
 * **groq** -- `qwen/qwen3.8-27b`. Fast, and metered: this pipeline's cost is
   dominated not by one pass over the corpus but by how many passes it takes to
   get a stage right, which is not knowable in advance. Four passes and a
   page-location scan came to $10.
+* **gemini** -- `gemini-3.1-flash-lite`, the cheapest thing in the catalogue
+  that reads a page, and measured against the hand transcription before it was
+  adopted: 41 turns, 11 of 11 margin markers on the same turns, at a cent a
+  section. `SEED_VISION_MODEL` overrides it, and `gemini-flash-lite-latest` is
+  an alias Google keeps pointed at the current one. NOTE that `PRICES` below
+  is written for THIS model; a bigger one makes the ledger read low.
 * **nvidia** -- build.nvidia.com's catalogue, free through the developer
   programme and rate-limited near 40 requests a minute instead. That trade is
   the right way round for work that is mostly iteration.
 
+Measure a new provider before adopting it. `nvidia` is in this table and is
+not the default, because the measurement said no -- see the README. What has
+to hold is not "does it transcribe the page" but "does it answer the narrow
+question", and the margin markers are where that has been decided every time.
+
 Being one file is the point. Nine other scripts read pages through this and
 none of them knows which provider answered.
+
+Every request's token counts go to `work/usage.jsonl`, and `spend.py` adds
+them up. This exists because the first estimate of what the corpus would cost
+was made by reading the code, and came out eight times under: the number that
+matters is not what one page costs but how many times a page is read, and only
+a ledger knows that.
 
 Requests go out through `curl` rather than `urllib`: Groq sits behind
 Cloudflare, which answers urllib's default User-Agent with a 403 and an error
@@ -37,6 +54,12 @@ PROVIDERS = {
         "model": "qwen/qwen3.8-27b",
         "images": 3,
     },
+    "gemini": {
+        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "env": "GEMINI_API_KEY",
+        "model": "gemini-3.1-flash-lite",
+        "images": 3,
+    },
     "nvidia": {
         "url": "https://integrate.api.nvidia.com/v1/chat/completions",
         "env": "NVIDIA_API_KEY",
@@ -44,6 +67,26 @@ PROVIDERS = {
         "images": 4,
     },
 }
+#: What a provider charges per million tokens, in and out. Kept here because
+#: the alternative -- and what happened -- is an estimate made by reading the
+#: code and guessing at the multiplier. A rate that has moved makes the ledger
+#: wrong by a known factor; no ledger at all makes it wrong by an unknown one.
+#: Checked 2026-09-08.
+PRICES = {
+    "groq":   {"in": 0.29, "out": 0.59},
+    "gemini": {"in": 0.25, "out": 1.50},   # 3.1-flash-lite, the default below
+    "nvidia": {"in": 0.00, "out": 0.00},
+}
+#: Every request's token counts, appended as one JSON object per line. This is
+#: the only record of what a pass over the corpus costs: the provider's console
+#: gives a total per day, which cannot say which stage spent it.
+LEDGER = pathlib.Path(__file__).resolve().parent / "work" / "usage.jsonl"
+#: qwen3 is a reasoning model and `<think>` is billed as output, at twice the
+#: rate of the page that prompted it, before being thrown away by `read_json`.
+#: Groq takes an effort setting; left unset the default stands, because what
+#: reasoning is worth here is a measurement nobody has made yet.
+EFFORT = os.environ.get("SEED_VISION_EFFORT")
+
 PROVIDER = os.environ.get("SEED_VISION", "groq").lower()
 if PROVIDER not in PROVIDERS:
     raise SystemExit(f"SEED_VISION={PROVIDER!r}; expected one of {sorted(PROVIDERS)}")
@@ -56,12 +99,18 @@ THINK = re.compile(r"<think>.*?</think>\s*", re.S)
 FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.M)
 
 
-def api_key() -> str:
-    """The current provider's key, from backend/.env.
+def api_key(provider: str = "") -> str:
+    """A provider's key, from backend/.env; the current one unless named.
 
     Read from there rather than taken as a parameter: for Groq it is the same
-    key the app itself uses, and a second copy is a second thing to rotate."""
-    name = PROVIDERS[PROVIDER]["env"]
+    key the app itself uses, and a second copy is a second thing to rotate.
+
+    Naming one matters because not every caller is reading a page.
+    `trim_audio.py` posts to Groq's transcription endpoint whatever is reading
+    the pages, and took the current provider's key -- so the moment the pages
+    moved to Gemini it sent a Gemini key to Groq and was told, accurately and
+    uselessly, "Invalid API Key"."""
+    name = PROVIDERS[provider or PROVIDER]["env"]
     env = pathlib.Path(__file__).resolve().parent.parent / "backend" / ".env"
     for line in env.read_text().splitlines():
         if line.startswith(f"{name}="):
@@ -92,7 +141,8 @@ def ask(prompt: str, images: list[pathlib.Path], *, model: str = DEFAULT_MODEL,
                         "image_url": {"url": f"data:{mime};base64,{data}"}})
 
     body = {"model": model, "temperature": temperature, "max_tokens": max_tokens,
-            "messages": [{"role": "user", "content": content}]}
+            "messages": [{"role": "user", "content": content}],
+            **({"reasoning_effort": EFFORT} if EFFORT else {})}
     for attempt in range(1, MAX_ATTEMPTS + 1):
         reply = _post(body)
         error = reply.get("error", {})
@@ -102,9 +152,36 @@ def ask(prompt: str, images: list[pathlib.Path], *, model: str = DEFAULT_MODEL,
         print(f"  rate limited, waiting {seconds:.0f}s "
               f"(attempt {attempt}/{MAX_ATTEMPTS})", file=sys.stderr)
         time.sleep(seconds)
+    record(reply.get("usage") or {}, model, len(images))
     if "choices" not in reply:
         raise SystemExit(f"API said: {json.dumps(reply)[:400]}")
     return reply["choices"][0]["message"]["content"]
+
+
+def record(usage: dict, model: str, images: int) -> None:
+    """Append one request's token counts to the ledger.
+
+    Written from `sys.argv` rather than passed down through nine callers: what
+    is wanted is which program spent it, and that is exactly what argv says.
+    Never raises -- a ledger that can stop a batch is worse than no ledger."""
+    if not usage:
+        return
+    price = PRICES.get(PROVIDER, {"in": 0.0, "out": 0.0})
+    got, made = usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+    try:
+        LEDGER.parent.mkdir(parents=True, exist_ok=True)
+        with LEDGER.open("a") as fh:
+            json.dump({
+                "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "by": pathlib.Path(sys.argv[0]).stem,
+                "for": sys.argv[1] if len(sys.argv) > 1 else None,
+                "provider": PROVIDER, "model": model, "images": images,
+                "in": got, "out": made,
+                "usd": round(got / 1e6 * price["in"] + made / 1e6 * price["out"], 6),
+            }, fh)
+            fh.write("\n")
+    except OSError:
+        pass
 
 
 def _post(body: dict) -> dict:

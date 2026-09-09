@@ -138,7 +138,8 @@ def transcribe_head(samples: np.ndarray, rate: int, cache: pathlib.Path) -> list
         out = subprocess.run(
             ["curl", "-sS", "-X", "POST",
              "https://api.groq.com/openai/v1/audio/transcriptions",
-             "-H", f"Authorization: Bearer {vision.api_key()}",
+             # Groq's endpoint, so Groq's key -- whoever is reading the pages.
+             "-H", f"Authorization: Bearer {vision.api_key('groq')}",
              "-F", f"file=@{clip}", "-F", "model=whisper-large-v3",
              "-F", "language=en", "-F", "response_format=verbose_json",
              "-F", "timestamp_granularities[]=segment"],
