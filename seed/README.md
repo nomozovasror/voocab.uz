@@ -686,9 +686,9 @@ arithmetic here.
 
 ## Where the corpus stands
 
-131 of Cambridge 10-19's 160 sections are in the database as private drafts:
-1,255 questions, 1,054 of them (84%) carrying a replay span. **68 are
-content-complete.**
+**All 160** of Cambridge 10-19's sections are in the database as private
+drafts: 1,528 questions, 1,480 of them (97%) carrying a replay span. **146 are
+content-complete.** The last eleven, and the repairs below, cost **$0.12**.
 
 ### The windowing fix worked, and less than it looked like it would
 
@@ -713,15 +713,189 @@ signal that points at one explanation can be real and still be partial.
 
 ### What is left, and it is a long tail
 
-* **7 labelling groups whose picture has no drawn border.** `extract_image.py`
-  finds a picture by the box printed around it; some diagrams are not boxed.
-* **5 sections whose questions do not cover the expected range** -- a page
-  misread, one at a time.
-* **2 with no audioscript pages located**, 2 import validations, and a handful
-  of truncated or interrupted replies.
+The borderless-picture search closed the largest item on this list: nine
+labelling groups that had come back "no bordered picture found" now have their
+crop, and all nine sections are content-complete.
 
-None of these share a cause, which is the difference between this list and
-every earlier one.
+Six more were recovered without a single API call, off readings already on
+disk, and the two causes are worth naming because neither is a misreading:
+
+* **A group numbered off the paper.** A group's `number` runs 1..N within the
+  group; the paper's numbering lives in `paper_number`. The reading gets that
+  right for a section's first group -- the two agree there -- and hands back
+  5..10 for the second. Sometimes only the template slips, sometimes only the
+  questions, so `build_questions.py` now shifts each on its own evidence and
+  they meet in the same place. A run with a hole in it is still refused: that
+  is a misreading, and renumbering would hide it.
+* **A line colliding with the layout grammar**, in the two shapes it takes.
+  A form's fields read as `##` headings, where a gap is given rather than
+  answered and so never drawn; and a table cell that wrapped onto its own line,
+  which broke a run of `+` rows in two and made the next row a header -- where
+  a gap is never drawn either. Both are corrections to the reading, made in
+  `questions.src.json`.
+
+What remains:
+
+* **48 questions across 14 seeded materials** with no replay span. This is the
+  one-in-five the windowing fix did not reach, and it is the only thing between
+  146 content-complete and 160.
+* **Cambridge 20's 16 sections**, still blocked on their missing audioscript.
+
+### The catalogue is not self-repairing, and `--force` is why
+
+`--force` redoes a stage from the start, and a stage that then fails on the API
+is recorded as failed -- even though its output is still on disk and its
+material still in the database. Fourteen sections read that way: catalogued as
+barely started, actually seeded with ten questions each. The stage table is a
+record of what ran, not of what exists, and the two drift the moment a forced
+run is interrupted. They were reconciled against the evidence -- the files in
+`work/` and the materials in the database -- and the numbers above are the
+reconciled ones.
+
+## What it costs, and why the first estimate was eight times under
+
+The estimate was $2.50 and the bill was $20, with books left. The estimate was
+made by reading the code: a page image is about 3,400 input tokens, Groq asks
+$0.29 a million for them, there are about 240 page reads in a book. All three
+of those numbers are right, and their product is not the answer, because the
+question is not what a page costs. It is **how many times a page is read**.
+
+A rate is a thing you can look up. A multiplier is a thing you have to measure,
+and nothing here was measuring it. So `vision.py` now appends every request's
+token counts to `work/usage.jsonl` and `spend.py` adds them up:
+
+```
+seed/.venv/bin/python seed/spend.py            # by program
+seed/.venv/bin/python seed/spend.py --by for   # by section
+```
+
+The column to watch is `out/call`, not the total.
+
+### Switching provider does not fix this
+
+Checked 2026-09-08, per million tokens:
+
+| | in | out |
+|---|---|---|
+| Groq `qwen3-32b` | **$0.29** | **$0.59** |
+| Gemini 3.5 Flash-Lite | $0.30 | $2.50 |
+| Gemini 3.1 Flash-Lite | $0.25 | $1.50 |
+| Gemini 3.8 / 3.7 / 3.6 Flash | $0.75 | $3.75 |
+
+Groq is already among the cheapest inputs available and is four times cheaper
+on output than the nearest Gemini. A `gemini` provider is in the table because
+a free tier and a second account are worth having when one is spend-blocked,
+not because it is cheaper per token. It is not.
+
+### The suspect is reasoning, and it is not yet a finding
+
+`qwen3-32b` thinks before it answers, `<think>` is billed as output at twice
+the rate of the page that prompted it, and `read_json` throws it away. The
+audioscript stage allows 8,000 output tokens a request. That is the shape of a
+bill nobody expected, and it is a hypothesis until the ledger has a day in it.
+
+`SEED_VISION_EFFORT` passes Groq a reasoning effort. It defaults to unset --
+the provider's own default -- because what the thinking is worth here has not
+been measured, and the last thing this pipeline needs is a second number
+adopted on a guess. Measure it the way NVIDIA was measured: against the hand
+transcription of `cam11-t1-s1`, on the margin markers, before anything else is
+re-read with it.
+
+### The cheapest run is the one that reads nothing
+
+Six sections were recovered today without a single request, off readings
+already on disk. That is the real lever, and `--force` was working against it:
+bare, it redid every stage from the page reads down, so a fix in
+`build_questions.py` was paid for twice. It now takes the stages to redo --
+
+```
+seed/run_pipeline.py cam18-t3-s1 --force questions,import
+```
+
+-- and `questions` reuses `questions.src.json` when it is there, so that run
+costs nothing. Fourteen sections had also been recorded as barely started while
+sitting complete in the database: a bare `--force` that died on the API had
+overwritten their stage rows.
+
+## Gemini measured, and adopted
+
+Groq blocked on a spend alert with eleven sections to go, so the provider
+switch got used for the first time. `gemini-3.1-flash-lite` was measured the
+way NVIDIA was -- against the hand transcription of `cam11-t1-s1`, on the
+margin markers, before anything was re-read with it:
+
+| | Groq 27B | Gemini 3.1 Flash-Lite |
+|---|---|---|
+| Turns | 41 | **41** |
+| Margin markers found | 11 of 11 | **11 of 11, on the same turns** |
+| Turns identical | — | 32 of 41, the rest 0.97+ |
+| One section's audioscript | — | **12s, $0.01** |
+
+The differences are punctuation and where an underline stops. It reads pages
+as well as the model it replaced, at a price the ledger can now show: eleven
+sections, three whole-book page maps, four re-read audioscripts and a dozen
+repairs came to twelve cents.
+
+One defect, and not the model's: it returns the speaker label with the colon
+the page prints. That is right, and the app then shows "OFFICIAL:" as a
+speaker. `read_audioscript.py` strips it, so a transcript reads the same
+whichever provider answered.
+
+**`run_pipeline.py` was swallowing the choice.** It builds a clean environment
+for each stage rather than inheriting one, which is right, and `SEED_VISION`
+was not in it -- so a batch launched with `SEED_VISION=gemini` ran every stage
+on Groq and said nothing. Six sections failed on a spend limit they had been
+told to route around.
+
+## Two ways a stage exits zero and is wrong
+
+Everything else here asks whether a stage *ran*. These two ask whether it was
+*right*, by comparing one stage's output against another's, and each found
+sections that every existing check had passed.
+
+### An entire test answered from the reading paper
+
+Cambridge 14's test 2 was seeded with answers like TRUE, NOT GIVEN and roman
+numerals -- a reading paper's answer shapes, in a listening material. These
+books print the listening key and the reading key on facing pages and they look
+alike: forty numbered answers under a heading a classifier cannot always see.
+Test 2's listening key has no test number printed on it, so it was skipped, and
+the reading key on the next page claimed test 2. Four sections took their
+answers from it. Nothing failed.
+
+`--keys` asks the one question that separates them -- "does this page say
+LISTENING or READING?" -- and marks the reading keys as what they are. The
+claim then runs on order alone, which this file has always said was the thing
+to trust, and no longer needs a printed number to do it.
+
+The tell was arithmetic, and worth keeping: **the four listening keys of a book
+sit at a regular stride.** Every book runs 2 apart. Book 14 read 118, 121, 122,
+124, and the 3 and the 1 are the whole of the bug.
+
+### A transcript from pages that were later corrected
+
+`verify.py` scores each section by how well its audioscript aligned to its own
+recording. Forced alignment always returns a path, so a transcript belonging to
+another section still aligns -- it just aligns badly. The corpus median word
+score is **0.915**; twelve sections sat between 0.04 and 0.67.
+
+Five of them were book 15, and the cause was ordinary and invisible: their
+`turns.json` was read before `locate_pages` had corrected their audioscript
+pages, and nothing re-read it. The catalogue said the right pages; the file on
+disk came from the wrong ones; every stage after it believed the file.
+
+Re-reading one moved it from **0.043 to 0.958**, which is the whole test. All
+twelve were re-read, and one page added to book 13's last audioscript, whose
+span stopped a page short of the end of the book.
+
+```
+seed/.venv/bin/python seed/verify.py
+seed/.venv/bin/python seed/verify.py --ids   # feed straight to run_pipeline
+```
+
+One section still sits at 0.509 with all nine of its answers heard in its own
+transcript, which is the reason this is written as two checks and not one: a
+low score is a section to look at, not a verdict.
 
 ## NVIDIA measured, and not adopted
 
