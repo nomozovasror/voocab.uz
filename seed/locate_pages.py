@@ -103,6 +103,21 @@ HEADER_LISTENING = re.compile(r"\blistening\b", re.I)
 SECTION_HEADING = re.compile(r"\b(?:section|part)\s*[-–—]?\s*(\d)\b", re.I)
 
 
+KEY_PROMPT = """This page is from the answer keys at the back of a Cambridge IELTS
+book. These books print the LISTENING key and the READING key for a test on
+facing pages, and they look alike: both are a numbered list of forty answers.
+
+Answer only these two things about THIS page.
+
+1. Which paper's answers are printed here? The page or the block above the
+   numbers says LISTENING or READING. If neither word is on the page, say
+   "unknown" -- do NOT guess from the answers themselves.
+2. Which test does it belong to, as printed ("TEST 2", "Test 6")? If no test
+   number is printed on this page, say null.
+
+Reply with only {"paper": "listening|reading|unknown", "test": <number|null>}."""
+
+
 def classify(pdf: pathlib.Path, index: int, dpi: int = DPI) -> dict:
     """What one page is. Never raises: a page nobody could read is 'other',
     which shows up as a gap in the report rather than killing a book."""
@@ -237,6 +252,9 @@ def main() -> int:
     ap.add_argument("--scripts", action="store_true",
                     help="re-read only the audioscript pages, asking directly which "
                          "test and part each one starts")
+    ap.add_argument("--keys", action="store_true",
+                    help="re-read only the answer key pages, asking directly "
+                         "whether each is the listening key or the reading one")
     ap.add_argument("--recheck", action="store_true",
                     help="re-read, at higher resolution, only the pages around a "
                          "section that came out empty")
@@ -296,6 +314,48 @@ def main() -> int:
         cache = WORK / f"pagemap-book{args.book}-doc{docs[0]['id']}.json"
         cache.write_text(json.dumps(sorted(found, key=lambda p: p["index"]), indent=2))
 
+    if args.keys:
+        # A listening key and a reading key are the same page to a classifier:
+        # forty numbered answers under a heading it cannot always see. Cambridge
+        # 14 printed test 2's listening key with no test number on it, so the
+        # reading key on the next page claimed test 2 -- and three sections
+        # went into the database answered from the wrong paper. Nothing failed;
+        # the answers were simply wrong. So this asks the one thing that tells
+        # the two apart, rather than inferring it from a stride or a shape.
+        pdf = MATERIALS / docs[0]["rel_path"]
+        candidates = [p["index"] for p in found
+                      if (p.get("kind") or "").endswith("answer_key")]
+        print(f"re-reading {len(candidates)} answer key page(s), asking directly")
+        by_index = {p["index"]: p for p in found}
+
+        def ask_key(index: int) -> tuple[int, dict]:
+            shot = WORK / f".key-{index}.png"
+            shot.parent.mkdir(parents=True, exist_ok=True)
+            with pymupdf.open(pdf) as doc:
+                shot.write_bytes(doc[index].get_pixmap(dpi=DPI).tobytes("png"))
+            try:
+                return index, vision.ask_json(KEY_PROMPT, [shot])
+            except SystemExit:
+                return index, {}
+            finally:
+                shot.unlink(missing_ok=True)
+
+        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+            for index, said in pool.map(ask_key, candidates):
+                paper = (said.get("paper") or "").lower()
+                if paper == "reading":
+                    # Kept in the map as what it is, so it stops being a
+                    # candidate for a test rather than disappearing.
+                    by_index[index]["kind"] = "reading_answer_key"
+                    by_index[index]["answer_key_test"] = None
+                elif paper == "listening":
+                    by_index[index]["kind"] = "listening_answer_key"
+                    if said.get("test"):
+                        by_index[index]["answer_key_test"] = said["test"]
+        found = list(by_index.values())
+        cache = WORK / f"pagemap-book{args.book}-doc{docs[0]['id']}.json"
+        cache.write_text(json.dumps(sorted(found, key=lambda p: p["index"]), indent=2))
+
     if args.recheck:
         # A section comes out empty when the one page carrying its heading was
         # misread -- one page in a book, not a systematic failure. Re-reading
@@ -306,6 +366,14 @@ def main() -> int:
             if page.get("test") and page.get("section"):
                 located.setdefault((page["test"], page["section"]), []).append(page["index"])
         gaps: set[int] = set()
+        # The two pages either side of the hole are re-read even though they
+        # are spoken for. That is not an exception to the rule below, it is
+        # the failure itself: a section goes missing because the page carrying
+        # its heading was read as the previous section's last page or the
+        # next one's first, and there is often no unclaimed page between them
+        # at all. Excluding them left `--recheck` with nothing to do on
+        # exactly the books it was written for.
+        edges: set[int] = set()
         for test in range(1, 5):
             for section in range(1, 5):
                 if (test, section) in located:
@@ -313,8 +381,9 @@ def main() -> int:
                 before = located.get((test, section - 1)) or located.get((test - 1, 4))
                 after = located.get((test, section + 1)) or located.get((test + 1, 1))
                 if before and after:
-                    gaps.update(range(max(before) , min(after) + 1))
-        gaps = {i for i in gaps if i not in
+                    gaps.update(range(max(before), min(after) + 1))
+                    edges.update({max(before), min(after)})
+        gaps = {i for i in gaps if i in edges or i not in
                 {p["index"] for p in found if p.get("test")}}
         if gaps:
             pdf = MATERIALS / docs[0]["rel_path"]
@@ -333,12 +402,30 @@ def main() -> int:
     # which of its four tests a page belongs to. The printed number is still
     # read -- it is what tells four key pages apart from the fifth page that
     # spills over -- but only the order is trusted.
-    claimed: dict[int, int] = {}
-    for page in sorted(found, key=lambda p: p["index"]):
-        n = page.get("answer_key_test")
-        if page.get("kind") == "listening_answer_key" and n and n not in claimed:
-            claimed[n] = page["index"]
-    in_order = [claimed[n] for n in sorted(claimed)]
+    listening = sorted(p["index"] for p in found
+                       if p.get("kind") == "listening_answer_key")
+    if any(p.get("kind") == "reading_answer_key" for p in found):
+        # --keys has separated the two papers, so order alone settles it, which
+        # is what this comment has claimed all along. Consecutive pages are one
+        # test's key spilling over, so each RUN is a test and its first page is
+        # the one to read. This does not need a printed test number, and book
+        # 14 -- whose test 2 listening key has none -- is why that matters.
+        runs = []
+        for index in listening:
+            if runs and index == runs[-1][-1] + 1:
+                runs[-1].append(index)
+            else:
+                runs.append([index])
+        in_order = [run[0] for run in runs]
+    else:
+        # Without that pass a reading key is indistinguishable from a listening
+        # one, so the printed number is all there is to go on.
+        claimed: dict[int, int] = {}
+        for page in sorted(found, key=lambda p: p["index"]):
+            n = page.get("answer_key_test")
+            if page.get("kind") == "listening_answer_key" and n and n not in claimed:
+                claimed[n] = page["index"]
+        in_order = [claimed[n] for n in sorted(claimed)]
     keys = {position + 1: index for position, index in enumerate(in_order[:4])}
     # The START OF THE LONGEST RUN, not the first page anywhere that looks like
     # one. The audioscripts are forty consecutive pages at the back; a single
