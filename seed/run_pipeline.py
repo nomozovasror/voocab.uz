@@ -16,10 +16,22 @@ that has to know both is here.
 
 Nothing is redone. A stage already marked done is skipped unless --force, so a
 run that stops halfway can simply be run again.
+
+--force takes the stages to redo, and a bare --force still means all of them.
+The distinction is a cost: `audioscript` and `questions` are page reads that
+are paid for, and everything after them is arithmetic over what they left on
+disk. A build fixed in `build_questions.py` wants
+
+    seed/run_pipeline.py cam18-t3-s1 --force questions,import
+
+which pays for nothing. A bare --force on the same section re-reads both pages
+-- and if the API then refuses, the section is recorded as having failed a
+stage whose output is still sitting in `work/`.
 """
 
 import argparse
 import json
+import os
 import pathlib
 import sqlite3
 import subprocess
@@ -92,6 +104,13 @@ def run(stage: str, section_id: str, owner: str) -> tuple[bool, str]:
     """One stage. Returns whether it worked and the last of what it said."""
     env = {"PYTHONPATH": str(SEED), "PYTORCH_ENABLE_MPS_FALLBACK": "1",
            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin", "HOME": str(pathlib.Path.home())}
+    # The environment is built rather than inherited, so a stage runs the same
+    # way from any shell. That silently swallowed SEED_VISION: a whole batch
+    # ran on the provider the runner was NOT told to use, and said nothing.
+    # These three are the knobs vision.py reads, and they have to get through.
+    env.update({name: os.environ[name] for name in
+                ("SEED_VISION", "SEED_VISION_MODEL", "SEED_VISION_EFFORT")
+                if name in os.environ})
     cwd = BACKEND if stage == "import" else REPO
     said = ""
     for argv in commands(stage, section_id, owner):
@@ -126,7 +145,9 @@ def main() -> int:
     ap.add_argument("--book", type=int)
     ap.add_argument("--test", type=int)
     ap.add_argument("--owner", default="d2b9f563-9669-4fb3-b6dc-51536c8baac1")
-    ap.add_argument("--force", action="store_true", help="redo stages already done")
+    ap.add_argument("--force", nargs="?", const="*", metavar="STAGE,STAGE",
+                    help="redo stages already done: bare, every one of them; "
+                         "with a comma-separated list, only those")
     ap.add_argument("--stop-after", help="last stage to run")
     args = ap.parse_args()
 
@@ -144,6 +165,14 @@ def main() -> int:
         raise SystemExit("name some sections, or pass --book")
 
     stages = STAGES[:STAGES.index(args.stop_after) + 1] if args.stop_after else STAGES
+    # Which stages a --force applies to. Bare --force means all of them, which
+    # is what it has always meant; naming them is what keeps a rebuild from
+    # being a re-read. `questions` and `audioscript` are the two stages that
+    # cost money, and a build fixed here is a build that does not need either.
+    forced = set(STAGES) if args.force == "*" else {
+        name.strip() for name in (args.force or "").split(",") if name.strip()}
+    if unknown := forced - set(STAGES):
+        raise SystemExit(f"--force names no such stage: {', '.join(sorted(unknown))}")
     started = time.perf_counter()
     finished, stalled = 0, []
 
@@ -159,7 +188,7 @@ def main() -> int:
             if stage in blocked:
                 print(f"  {stage:<12} blocked")
                 break
-            if stage in done and not args.force:
+            if stage in done and stage not in forced:
                 print(f"  {stage:<12} done already")
                 continue
             begin = time.perf_counter()
