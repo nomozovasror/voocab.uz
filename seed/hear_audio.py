@@ -102,13 +102,26 @@ def main() -> int:
     work.mkdir(parents=True, exist_ok=True)
     source = MATERIALS / row["rel_path"]
 
+    # Two ways to hear, chosen by what the provider can do rather than by a
+    # flag: a chat model that takes audio can be asked for speaker turns, and a
+    # dedicated ASR gives back sentences with no speaker at all. The second is
+    # a real loss on a conversation and none on a Part 4 monologue -- and it is
+    # what there is when the first one's daily quota is spent.
+    dictated = vision.PROVIDER in vision.TRANSCRIBERS
     with tempfile.TemporaryDirectory() as temp:
         small = pathlib.Path(temp) / "listen.mp3"
         seconds = downsample(source, small)
         size = small.stat().st_size / 1e6
-        print(f"listening to {seconds:.0f}s of {source.name} ({size:.1f} MB at "
-              f"{RATE} Hz) with {args.model}")
-        said = vision.ask_json(PROMPT, [], recording=small, model=args.model)
+        how = "transcribing" if dictated else "listening to"
+        print(f"{how} {seconds:.0f}s of {source.name} ({size:.1f} MB at "
+              f"{RATE} Hz) with "
+              f"{vision.TRANSCRIBERS[vision.PROVIDER]['model'] if dictated else args.model}")
+        if dictated:
+            spoken = [{"speaker": "SPEAKER", "text": (seg.get("text") or "").strip()}
+                      for seg in vision.transcribe(small)]
+        else:
+            spoken = vision.ask_json(PROMPT, [], recording=small,
+                                     model=args.model).get("turns", [])
 
     turns = [
         {"speaker": (t.get("speaker") or "").strip().rstrip(":").strip(),
@@ -117,7 +130,7 @@ def main() -> int:
          # field is written empty rather than left out, so what reads this
          # cannot tell a section heard from a section read.
          "marker": None, "answer": None}
-        for t in said.get("turns", [])
+        for t in spoken
     ]
     turns = [t for t in turns if t["text"] or t["speaker"] == "__BREAK__"]
     if not turns:

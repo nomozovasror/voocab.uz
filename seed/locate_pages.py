@@ -317,9 +317,18 @@ def settle(pages: list[dict], tests: list[int], conn, book: int
     # which of its four tests a page belongs to. The printed number is still
     # read -- it is what tells four key pages apart from the fifth page that
     # spills over -- but only the order is trusted.
+    # `has_key` because one sheet can be two things. Cambridge 20 prints part
+    # 4's questions down the top of a page and the whole listening key
+    # underneath, and `kind` holds one word: calling it the key lost the
+    # questions, calling it questions lost the key. The page keeps its kind and
+    # carries a flag for the other role.
     listening = sorted(p["index"] for p in pages
-                       if p.get("kind") == "listening_answer_key")
-    if any(p.get("kind") == "reading_answer_key" for p in pages):
+                       if p.get("kind") == "listening_answer_key" or p.get("has_key"))
+    # Either mark means the same thing: somebody has separated the listening
+    # key from the reading one, so the printed test number is no longer the
+    # only evidence and order can be trusted. Asking only about the reading
+    # kind missed the files where the separation was recorded the other way.
+    if any(p.get("kind") == "reading_answer_key" or p.get("has_key") for p in pages):
         # --keys has separated the two papers, so order alone settles it, which
         # is what this comment has claimed all along. Consecutive pages are one
         # test's key spilling over, so each RUN is a test and its first page is

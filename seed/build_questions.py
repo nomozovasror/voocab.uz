@@ -51,7 +51,12 @@ DEFAULT_CONFIG_KEYS = {"template", "options", "image_letters", "image", "image_a
 LETTERED = {"multiple_choice", "matching"}
 #: A letter, as the key prints it. "17-18.AE" is handled where the group is
 #: built, not here: it is a statement about how two numbers share one question.
-LETTERS = re.compile(r"^[A-H](?:\s*[,/&]?\s*[A-H])*$", re.I)
+#: A-K, not A-H. Eight is what a "choose the correct letter" offers and what
+#: the first books in this corpus used; a matching group picks from a box that
+#: can hold more, and Cambridge 20 answers one of them "I". The key came back
+#: as a letter this pattern did not recognise, so it expanded to nothing and
+#: took the section down without naming the letter it had refused.
+LETTERS = re.compile(r"^[A-K](?:\s*[,/&]?\s*[A-K])*$", re.I)
 #: "Write the correct letter A-I" -- how many letters are drawn on the picture.
 #: Printed on the page, so read rather than counted from the answers: the key
 #: only names the ones that happen to be right.
@@ -182,6 +187,20 @@ def build(section_id: str) -> int:
         kept.append(group)
     src = {**src, "groups": kept}
 
+    # What is left has to be the whole section. Dropping a neighbour's group is
+    # right, and dropping so much that four questions stand in for ten is a
+    # misread page -- and one that nothing downstream can see, because
+    # publish_blockers() asks whether the questions present are sound, not
+    # whether they are all of them. Two of Cambridge 20's sections went into
+    # the database with two and four questions and were counted complete.
+    covered = {n for g in kept for q in g["questions"]
+               if (n := q.get("paper_number")) is not None}
+    short = [n for n in range(lo, hi + 1) if n not in covered]
+    if covered and short:
+        raise SystemExit(
+            f"PROBLEM  after dropping, questions {short} of {lo}-{hi} are "
+            "missing; the page was misread")
+
     def between(paper: int | None) -> tuple[int, int]:
         """The stretch of recording a question's answer has to fall inside.
 
@@ -298,7 +317,7 @@ def build(section_id: str) -> int:
                 # A lettered answer is the KEY, not a list of phrasings: the
                 # letters must be picked exactly, and expanding "A" the way a
                 # gap-fill answer is expanded would be nonsense.
-                answers = [c.lower() for c in re.findall(r"[A-H]", printed, re.I)]
+                answers = [c.lower() for c in re.findall(r"[A-K]", printed, re.I)]
                 if not LETTERS.match(printed):
                     problems.append(
                         f"group {gi} q{q['number']}: {printed!r} is not a letter, but "

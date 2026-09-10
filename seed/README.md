@@ -687,9 +687,9 @@ arithmetic here.
 ## Where the corpus stands
 
 **All 160** of Cambridge 10-19's sections are in the database as private
-drafts: 1,528 questions, 1,520 of them (**99%**) carrying a replay span. **153
-are content-complete.** The last eleven sections and every repair below came to
-**$0.14**.
+drafts, and **11 of Cambridge 20's 16**: 1,622 questions, 1,614 of them
+(**100%**) carrying a replay span, **162 content-complete**. Everything since
+the ledger started has cost **$0.50**.
 
 ### The windowing fix worked, and less than it looked like it would
 
@@ -1090,6 +1090,60 @@ the unread count from 97 pages to zero.
 Worth the space because of how it hid. Nothing crashed, nothing was logged, and
 the cost was a whole book. The fix that mattered was not the retry; it was
 refusing to write down a failure as if it were an observation.
+
+## Cambridge 20, and where its listening key actually is
+
+The book prints its answers under 答案 with no paper named, so the question was
+which of the lists is the listening one. Reading the page cannot say. **The
+recording can**: a listening answer is a word the speaker says, so a key
+belongs to the listening paper if its answers turn up in that section's own
+transcript, and `hear_audio.py` produces one.
+
+The first four lists found -- the ones near the writing section -- scored
+**0/10** against their recordings. They are the reading keys, and the answers
+say so once you look: `potatoes, butter, meat` against a reading passage called
+Frozen Food.
+
+Scanning a whole file found the real one, and it is not at the back at all:
+
+| test | file | page | answers heard in its own recording |
+|---|---|---|---|
+| 1 | TEST 1.pdf | 4 | **9 of 10** |
+| 2 | TEST 2.pdf | 6 | **9 of 10** |
+| 3 | TEST 3.pdf | 5 | **8 of 10** |
+| 4 | TEST 4.pdf | 5 | — |
+
+(The three misses are a number and a three-letter word, which the check skips,
+and one word the speaker inflects differently.)
+
+**The listening key sits immediately after the listening questions**, before
+the reading passages start -- and on three of the four files it shares a sheet
+with part 4's questions, printed above it. A page in this pipeline had one
+`kind`, so calling that sheet the key lost the questions and calling it
+questions lost the key. It keeps its kind and carries `has_key` for the other
+role.
+
+### What went through, and what did not
+
+Eleven of sixteen, first pass. Two more faults came out of it:
+
+* **A matching group can answer "I".** `LETTERS` was `A-H`, which is what a
+  multiple choice offers; a box of options can hold more. The key expanded to
+  nothing and took the section down without naming the letter it refused.
+* **A section can be left short by its own repairs.** `build_questions.py`
+  drops a group belonging to the neighbouring part, which is right, and
+  nothing checked that what remained still covered the section. Two sections
+  went into the database with two and four questions of ten -- and were counted
+  content-complete, because `publish_blockers()` asks whether the questions
+  present are sound, not whether they are all of them. It now refuses a section
+  the drops have left short.
+
+The five still out are pages Groq's `qwen3.8-27b` will not read straight: a
+four-column table read as one run-on line, question numbers coming back 7-10
+for a section asking 11-20, and JSON that breaks mid-string. Re-reading gives
+the same answer, so it is the model and not the weather. Gemini read these same
+pages correctly when it located them, and its daily quota is what they are
+waiting on.
 
 ## NVIDIA measured, and not adopted
 

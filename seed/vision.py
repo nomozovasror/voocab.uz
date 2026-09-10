@@ -169,6 +169,53 @@ def listen(prompt: str, recording: pathlib.Path, *, model: str = DEFAULT_MODEL,
     return _send(content, model, max_tokens, temperature, 1, audio=True)
 
 
+#: Providers that transcribe through a separate endpoint rather than by taking
+#: audio in a chat message. Groq is one: its chat models refuse `input_audio`.
+TRANSCRIBERS = {
+    "groq": {"url": "https://api.groq.com/openai/v1/audio/transcriptions",
+             "model": "whisper-large-v3"},
+}
+
+
+def transcribe(recording: pathlib.Path, *, provider: str = "") -> list[dict]:
+    """A recording's segments, from a provider's transcription endpoint.
+
+    The other way to hear a section. `listen()` sends the audio to a chat model
+    and can ask it for speaker turns; this posts to a dedicated ASR and gets
+    segments back, which are sentences rather than turns -- so a conversation
+    comes back without who is speaking. That is a real loss on Parts 1 and 3
+    and no loss at all on a Part 4 monologue.
+
+    It exists because the two are blocked by different things: a spend limit on
+    one account, a daily request quota on the other, and a book with sixteen
+    sections to hear should not wait on whichever is out today."""
+    name = provider or PROVIDER
+    if name not in TRANSCRIBERS:
+        raise SystemExit(f"{name} has no transcription endpoint; use listen()")
+    where = TRANSCRIBERS[name]
+    with tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False) as fh:
+        fh.write(f'header = "Authorization: Bearer {api_key(name)}"\n')
+        config = fh.name
+    pathlib.Path(config).chmod(0o600)
+    try:
+        out = subprocess.run(
+            ["curl", "-sS", "-X", "POST", where["url"], "--config", config,
+             "-F", f"file=@{recording}", "-F", f"model={where['model']}",
+             "-F", "language=en", "-F", "response_format=verbose_json"],
+            capture_output=True, text=True, timeout=600)
+    finally:
+        pathlib.Path(config).unlink(missing_ok=True)
+    if out.returncode != 0:
+        raise SystemExit(f"curl failed: {out.stderr[:300]}")
+    reply = json.loads(out.stdout)
+    if "segments" not in reply:
+        raise SystemExit(f"{name} said: {json.dumps(reply)[:300]}")
+    # Priced by the minute rather than the token, so the ledger records the
+    # request and what it cost in tokens is not a number that exists.
+    record({"prompt_tokens": 0, "completion_tokens": 0}, where["model"], 1, audio=True)
+    return reply["segments"]
+
+
 def _send(content: list[dict], model: str, max_tokens: int, temperature: float,
           parts: int, *, audio: bool) -> str:
     """The retry, the ledger and the unwrapping, shared by every caller.
