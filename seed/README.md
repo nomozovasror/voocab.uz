@@ -1034,9 +1034,25 @@ Its key page indexing was wrong in a way only this book could show:
 which for a whole-book universe is 1, 2, 3, 4 and for a one-test file is
 always 1. Tests 2 to 4 looked up their own number and found nothing.
 
-Fifteen of sixteen sections have their question pages and half have their key.
-What is left is the answer key of tests 3 and 4, which nothing has recognised
-as one yet.
+Fifteen of sixteen sections have their question pages. The key is the thing
+still open, and the reason is worth writing down.
+
+`--keys` asked whether a page said LISTENING or READING and was told neither,
+because **this book prints its key under 答案 and names no paper at all.** The
+prompt is language-agnostic now and reports each list it finds with the heading
+verbatim; a list under a heading that names no paper is recorded as
+`answer_list` rather than guessed at, since guessing from the answers is
+exactly what put a test of reading answers into book 14.
+
+The lists are found -- doc 11 pages 20 (1-10) and 21 (11-40), doc 12 page 23,
+doc 13 page 21, doc 14 page 20 -- and which of them is the listening one cannot
+be read off the page.
+
+**The recording settles it.** A listening answer is a word the speaker says, so
+a key belongs to the listening paper if its answers turn up in that section's
+own transcript, and `hear_audio.py` now produces one for every section of this
+book. That is the same cross-check `verify.py` already runs over the corpus,
+pointed at a different question, and it is the next thing to write.
 
 ## An error recorded as a fact
 

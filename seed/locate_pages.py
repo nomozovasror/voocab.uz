@@ -108,17 +108,22 @@ book. These books print the LISTENING key and the READING key for a test on
 facing pages, and they look alike: both are a numbered list of forty answers.
 
 One page can carry both -- the tail of the reading key above the start of the
-listening one -- so answer about the LISTENING answers specifically.
+listening one -- so answer about each list of answers on the page separately.
 
-1. Are any LISTENING answers printed on this page at all? The block above them
-   says LISTENING. Do not guess from the answers themselves.
-2. If they are, which question numbers do they run from and to ON THIS PAGE?
-3. Are reading answers also on this page?
-4. Which test does it belong to, as printed ("TEST 2", "Test 6")? If no test
-   number is printed on this page, say null.
+1. Does the page list ANSWERS against question numbers -- short words or
+   letters, one per number -- rather than questions to be answered?
+2. For each such list: which numbers does it run from and to ON THIS PAGE, and
+   which paper is it for? Say "listening" or "reading" ONLY if the page says
+   so. The heading may be in another language, or there may be none at all --
+   then say "unknown". Do NOT guess the paper from the answers themselves.
+3. Copy the heading above each list verbatim, in whatever script it is
+   printed.
+4. Which test does the page belong to, as printed ("TEST 2", "Test 6")? Null
+   if no test number is printed here.
 
-Reply with only {"listening": true|false, "first": <number|null>,
-"last": <number|null>, "also_reading": true|false, "test": <number|null>}."""
+Reply with only {"lists": [{"paper": "listening|reading|unknown",
+"first": <number>, "last": <number>, "heading": "<verbatim|null>"}],
+"test": <number|null>}."""
 
 
 NUMBER_PROMPT = """One page of an IELTS practice test. Two things about it.
@@ -537,7 +542,8 @@ def main() -> int:
         # the two it happened to label. Cambridge 20 labelled one.
         wanted = len({p.get("doc_id") for p in found}) if len(docs) > 1 else 4
         candidates = [p for p in found
-                      if (p.get("kind") or "").endswith("answer_key")]
+                      if (p.get("kind") or "").endswith("answer_key")
+                      or p.get("kind") == "answer_list"]
         if len([p for p in candidates
                 if p.get("kind") == "listening_answer_key"]) < wanted:
             # Nothing the first pass called a key at all, which is what a book
@@ -554,17 +560,31 @@ def main() -> int:
         with ThreadPoolExecutor(max_workers=WORKERS) as pool:
             for page, said in pool.map(
                     lambda p: read_one(p, KEY_PROMPT, "key"), candidates):
-                if said.get("listening"):
+                lists = [l for l in (said.get("lists") or []) if isinstance(l, dict)]
+                if not lists:
+                    continue
+                papers = {(l.get("paper") or "unknown").lower() for l in lists}
+                page["answer_lists"] = lists
+                if said.get("test"):
+                    page["answer_key_test"] = said["test"]
+                if "listening" in papers:
                     page["kind"] = "listening_answer_key"
-                    page["key_numbers"] = [said.get("first"), said.get("last")]
-                    if said.get("test"):
-                        page["answer_key_test"] = said["test"]
-                elif said.get("first") is not None or said.get("also_reading"):
+                elif papers == {"reading"}:
                     # Reading answers and no listening ones. Kept in the map as
                     # what it is, so it stops being a candidate for a test
                     # rather than disappearing.
                     page["kind"] = "reading_answer_key"
                     page["answer_key_test"] = None
+                else:
+                    # An answer list under a heading that names no paper --
+                    # Cambridge 20 prints its key under 答案 and nothing else.
+                    # Which paper it belongs to cannot be read off the page,
+                    # and guessing from the answers is what put a whole test of
+                    # reading answers into book 14. The recording settles it:
+                    # a listening answer is a word the speaker says. That check
+                    # lives in verify.py and needs the audio, so this stops
+                    # here and says what it found.
+                    page["kind"] = "answer_list"
         save_all(args.book, docs, found)
 
     if args.recheck:
