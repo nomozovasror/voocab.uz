@@ -19,6 +19,8 @@ that check away for the sake of one fewer request.
 
 import argparse
 import json
+import subprocess
+import html
 import pathlib
 import re
 import sqlite3
@@ -178,6 +180,61 @@ def repair(template: str, questions: list[dict]) -> tuple[str, list[str]]:
        that is part of the sentence ("seats 100") is never touched.
     """
     notes: list[str] = []
+
+    # 0. A `+` in the middle of a line starts a row there. The reading runs a
+    #    row's last cell together with the next row's first -- "Free {{3}} with
+    #    every living room set + {{4}} And Oliver | Mid-range prices" is the end
+    #    of one restaurant and the start of the next. Split only where what
+    #    follows looks like a row (it has a cell bar), so a "+" that is really
+    #    arithmetic stays where it is.
+    split: list[str] = []
+    #: Lines this rule created. Rule 1 below turns a `+` line with no `+`
+    #: neighbour back into prose, and these have none -- the continuation they
+    #: were cut from sits between them and the row above. Undoing the split
+    #: immediately is what happened, so they are named and left alone.
+    rows: set[int] = set()
+    for line in template.split("\n"):
+        head, sep, tail = line.partition(" + ")
+        if sep and "|" in tail and not head.lstrip().startswith("#"):
+            split.append(head.rstrip())
+            rows.add(len(split))
+            split.append("+ " + tail.lstrip())
+            notes.append(f"split a row that ran into the next: {tail.strip()[:44]!r}")
+        else:
+            split.append(line)
+    template = "\n".join(split)
+
+    # 0b. A bare line inside a table is that row's next line, not prose. The
+    #     page prints a company, then two or three lines of notes under it,
+    #     then the next company; the reading gives the notes as plain lines,
+    #     which end the run of `+` rows -- and the row after them becomes a new
+    #     table's HEADER, where a gap is never drawn. Cambridge 20 lost seven
+    #     of its ten that way.
+    #
+    #     A bar with nothing before it continues the row above, so the notes
+    #     fill the rightmost cells: one bar in the line means it carries the
+    #     last two columns, none means the last one. Which column a note
+    #     belongs to is not printed anywhere, and the right-hand one is where
+    #     these books put them.
+    filled: list[str] = []
+    columns = 0
+    for line in template.split("\n"):
+        bare = line.strip()
+        if bare.startswith("+"):
+            columns = columns or bare[1:].count("|") + 1
+            filled.append(line)
+            continue
+        if columns and bare and not bare.startswith(("#", ">")):
+            cells = bare.count("|") + 1
+            if cells < columns:
+                filled.append("+ " + "| " * (columns - cells) + bare)
+                notes.append(f"a note under a table row was made part of it: "
+                             f"{bare[:44]!r}")
+                continue
+        columns = 0 if not bare else columns
+        filled.append(line)
+    template = "\n".join(filled)
+
     lines = template.split("\n")
     out: list[str] = []
     for i, line in enumerate(lines):
@@ -185,11 +242,30 @@ def repair(template: str, questions: list[dict]) -> tuple[str, list[str]]:
         neighbour = any(
             lines[j].lstrip().startswith("+")
             for j in (i - 1, i + 1) if 0 <= j < len(lines))
-        if plus and not neighbour and out:
+        if plus and not neighbour and out and i not in rows:
             out[-1] = f"{out[-1].rstrip()} {line.lstrip()}"
             notes.append(f"merged a stray '+' line into the one above: {line.strip()[:52]!r}")
             continue
         out.append(line)
+
+    # 3. A table's header row written as a heading. `# Name | Location | ...`
+    #    above a run of `+` rows is that table's column names -- the model
+    #    reads them as the block's title because on the page they are in bold
+    #    above it. Left alone, the first BODY row becomes the header instead,
+    #    and a header's gaps are never drawn: Cambridge 20's Test 1 lost gap 1
+    #    that way. Only converted when the cell counts agree, which is what
+    #    makes it a header rather than a coincidence.
+    for i, line in enumerate(out[:-1]):
+        head = line.lstrip()
+        below = out[i + 1].lstrip()
+        if not (head.startswith("# ") and below.startswith("+ ")):
+            continue
+        cells = head[2:].count("|")
+        if cells and cells == below[2:].count("|"):
+            out[i] = "+ " + head[2:]
+            notes.append(f"a table's header row was written as a heading: "
+                         f"{head[:52]!r}")
+
     template = "\n".join(out)
 
     for q in questions:
@@ -201,6 +277,28 @@ def repair(template: str, questions: list[dict]) -> tuple[str, list[str]]:
         if n:
             notes.append(f"removed the printed number {paper} in front of gap {number}")
     return template, notes
+
+
+def web_text(url: str) -> str:
+    """A page's visible text, scripts included.
+
+    These sites render the paper from JavaScript string literals, so stripping
+    `<script>` first -- the obvious thing -- throws the questions away and
+    leaves a page of navigation. The escapes are undone before the tags are,
+    which turns those literals back into the markup they hold.
+    """
+    out = subprocess.run(
+        ["curl", "-sS", "-L", "--max-time", "60", "-A", "Mozilla/5.0", url],
+        capture_output=True, text=True, timeout=90)
+    if out.returncode != 0:
+        raise SystemExit(f"could not fetch {url}: {out.stderr[:200]}")
+    page = (out.stdout.replace("\\'", "'").replace('\\"', '"')
+            .replace("\\n", "\n").replace("\\/", "/"))
+    page = re.sub(r"<(script|style)\b.*?</\1>", " ", page, flags=re.S | re.I)
+    page = re.sub(r"<br\s*/?>|</p>|</li>|</h[1-6]>|</div>|</tr>", "\n", page, flags=re.I)
+    page = re.sub(r"</t[dh]>", " | ", page, flags=re.I)
+    page = html.unescape(re.sub(r"<[^>]+>", " ", page))
+    return "\n".join(" ".join(l.split()) for l in page.split("\n") if l.strip())
 
 
 def key_answers(said) -> dict:
@@ -243,6 +341,10 @@ def main() -> int:
                     help="ZERO-BASED pdf page index of the listening answer key; "
                          "defaults to the catalogue")
     ap.add_argument("--model", default=vision.DEFAULT_MODEL)
+    ap.add_argument("--web", metavar="URL",
+                    help="read the questions from this page's text instead of "
+                         "the PDF's images; the answer key still comes from the "
+                         "book")
     args = ap.parse_args()
 
     conn = sqlite3.connect(SEED / "catalogue.db")
@@ -269,10 +371,28 @@ def main() -> int:
             "--questions and --key.")
     first, last = paper_range(row["section_no"])
 
-    shots = vision.render(pdf, pages, work / "pages")
-    print(f"reading questions {first}-{last} from {len(shots)} page(s) with {args.model}")
-    read = vision.ask_json(
-        QUESTION_PROMPT.format(first=first, last=last), shots, model=args.model)
+    if args.web:
+        # The page as TEXT, where a text of it exists. A vision model reading a
+        # re-typeset table is guessing at where the columns are -- Cambridge
+        # 20's Test 1 came back as one run-on line and would not build. The
+        # same table as characters has no such doubt.
+        #
+        # The ANSWERS still come off the book's own key page below. A third
+        # party's page is used for the shape of the questions and never for
+        # what the answers are, so the worst a wrong page can do is fail the
+        # coverage check.
+        page_text = web_text(args.web)
+        print(f"reading questions {first}-{last} from {args.web} "
+              f"({len(page_text.split())} words) with {args.model}")
+        read = vision.ask_json(
+            QUESTION_PROMPT.format(first=first, last=last)
+            + "\n\nThe page, as text:\n\n" + page_text[:60000], [],
+            model=args.model, max_tokens=8000)
+    else:
+        shots = vision.render(pdf, pages, work / "pages")
+        print(f"reading questions {first}-{last} from {len(shots)} page(s) with {args.model}")
+        read = vision.ask_json(
+            QUESTION_PROMPT.format(first=first, last=last), shots, model=args.model)
     # Asked for {"groups": [...]}, it sometimes answers with the single group
     # itself. The content is right either way, so it is wrapped rather than
     # rejected -- a whole section is not worth losing to a missing bracket.
@@ -361,17 +481,55 @@ def main() -> int:
     problems = []
     numbered = [q for g in read.get("groups", []) for q in g.get("questions", [])]
     papers = sorted(q.get("paper_number") for q in numbered)
-    covered = sorted(set(papers) | set(paired))
+    # `paired` is read off the whole key page, so it carries the pairs of every
+    # part on it -- "33&34" from part 4 made a part 3 section look as though it
+    # covered question 34. Only this section's own numbers count, on the same
+    # reasoning that drops a neighbour's questions above.
+    covered = sorted({n for n in set(papers) | set(paired) if first <= n <= last})
     if covered != list(range(first, last + 1)):
         problems.append(f"questions cover {covered}, expected {first}-{last}")
+    # A pick-2 question answers two numbers with one key line, so the second
+    # of the pair has no entry of its own and is not missing. `paired` covers
+    # the pairs the key labelled "23&24"; this covers the ones it listed
+    # singly, which is the same fold the groups get below.
+    spanned = set()
+    for group in read.get("groups", []) if isinstance(read, dict) else []:
+        span = group.get("pick") or 1
+        for question in group.get("questions", []):
+            start = question.get("paper_number")
+            if span > 1 and start is not None and answers.get(start):
+                spanned.update(range(start + 1, start + span))
     missing = [n for n in range(first, last + 1)
-               if n not in answers and n not in paired]
+               if n not in answers and n not in paired and n not in spanned]
     if missing:
         problems.append(f"the key is missing {missing}")
 
     groups = []
     for group in read.get("groups", []):
         questions = group.get("questions", [])
+        # A "choose TWO letters" is ONE question over two of the paper's
+        # numbers. The key usually says so by labelling the line "23&24", and
+        # `paired` above handles that. Where it instead lists 23 and leaves 24
+        # blank, the reading gives two questions and the second has no answer
+        # -- which fails as "the key line was '' with no letters" and names
+        # neither the pair nor the group. Folded here, where what the group
+        # asks for is known.
+        span = group.get("pick") or 1
+        if span > 1 and len(questions) > 1:
+            kept, skip = [], set()
+            for i, q in enumerate(questions):
+                number = q.get("paper_number")
+                if number in skip:
+                    continue
+                if not answers.get(number):
+                    kept.append(q)
+                    continue
+                kept.append(q)
+                skip.update(range(number + 1, number + span))
+            if len(kept) != len(questions):
+                print(f"  {len(questions) - len(kept)} question(s) folded into "
+                      f"the pick-{span} question they share a mark with")
+                questions = kept
         template, notes = repair(group.get("template", ""), questions)
         for note in notes:
             print(f"  repaired: {note}")

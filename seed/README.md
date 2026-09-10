@@ -686,10 +686,10 @@ arithmetic here.
 
 ## Where the corpus stands
 
-**All 160** of Cambridge 10-19's sections are in the database as private
-drafts, and **11 of Cambridge 20's 16**: 1,622 questions, 1,614 of them
-(**100%**) carrying a replay span, **162 content-complete**. Everything since
-the ledger started has cost **$0.50**.
+**All 176** sections of Cambridge 10 to 20 are in the database as private
+drafts: 1,679 questions, 1,668 of them (**99%**) carrying a replay span,
+**168 content-complete**. Everything since the ledger started has cost
+**$0.54**.
 
 ### The windowing fix worked, and less than it looked like it would
 
@@ -1138,12 +1138,63 @@ Eleven of sixteen, first pass. Two more faults came out of it:
   present are sound, not whether they are all of them. It now refuses a section
   the drops have left short.
 
-The five still out are pages Groq's `qwen3.8-27b` will not read straight: a
-four-column table read as one run-on line, question numbers coming back 7-10
-for a section asking 11-20, and JSON that breaks mid-string. Re-reading gives
-the same answer, so it is the model and not the weather. Gemini read these same
-pages correctly when it located them, and its daily quota is what they are
-waiting on.
+The last five were pages no vision model would read straight: a four-column
+table came back as one run-on line, question numbers as 7-10 for a section
+asking 11-20, JSON breaking mid-string. Re-reading gave the same answer every
+time, so it was the model and not the weather.
+
+### Reading the page as text, when a text of it exists
+
+`read_questions.py --web URL` takes the questions from a page's text instead of
+the PDF's images. A vision model reading a re-typeset table is inferring where
+the columns are; the same table as characters leaves nothing to infer.
+
+The answers still come off the book's own key page. A third party's page is
+used for the SHAPE of the questions and never for what the answers are, so the
+worst a wrong page can do is fail the coverage check.
+
+**Which is also how the page is identified.** These sites number their tests
+their own way, and nothing on the page says which Cambridge book it is. What
+says it is the answer key we already read out of the PDF and checked against
+the recordings: `fish, roof, Spanish, vegetarian, Audley, hotel, reviews,
+local, 30, average` on one side and `Fish, Roof, Spanish, Vegetarians, Audley,
+Hotel, Reviews, Local, Thirty, Average` on the other is not a coincidence.
+Tests 201, 203 and 204 matched Cambridge 20's tests 1, 3 and 4 that way before
+a word of them was used.
+
+The page is fetched with its `<script>` blocks intact and unescaped first --
+these sites render the paper from JavaScript string literals, so stripping
+scripts the obvious way throws the questions away and leaves the navigation.
+
+### Four repairs a table needs, and one a pair does
+
+Text removed the transcription errors and left the structural ones, which are
+the same on any source:
+
+* **A note under a table row is part of that row.** The page prints a company,
+  two lines of notes, then the next company. Read as plain lines they end the
+  run of `+` rows, and the row after them becomes a new table's header -- where
+  a gap is never drawn. Cambridge 20 lost seven of ten that way. They fill the
+  rightmost cells: which column a note belongs to is printed nowhere, and the
+  right-hand one is where these books put them.
+* **A `+` mid-line starts a row there**, where one row's last cell runs into
+  the next row's first.
+* **A table's header row written as a heading.** `# Name | Location | ...`
+  above a run of `+` rows is the column names, read as the block's title
+  because that is how the page prints them. Converted only when the cell
+  counts agree.
+* **The second half of a "choose TWO" that the key listed singly.** `paired`
+  handles a key line labelled "23&24"; where the key instead lists 23 and
+  leaves 24 blank, the reading gives two questions and the second has no
+  answer. Folded into the question it shares a mark with.
+
+And two checks that were counting a pair wrong in opposite directions: the
+coverage check in `build_questions.py` counted only the number a pick-2
+question starts at, so a correct section looked as though it were missing every
+second question; and the key check counted a paired second number as a missing
+answer. A `paired` map read off a whole key page also carries the pairs of
+every part on it, and "33&34" from part 4 made a part 3 section look as though
+it covered question 34.
 
 ## NVIDIA measured, and not adopted
 

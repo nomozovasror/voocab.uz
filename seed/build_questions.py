@@ -193,8 +193,17 @@ def build(section_id: str) -> int:
     # publish_blockers() asks whether the questions present are sound, not
     # whether they are all of them. Two of Cambridge 20's sections went into
     # the database with two and four questions and were counted complete.
-    covered = {n for g in kept for q in g["questions"]
-               if (n := q.get("paper_number")) is not None}
+    # A "choose TWO letters" is ONE question worth two marks, so it covers two
+    # of the paper's numbers -- the book prints "21&22" against it. Counting
+    # only the number it starts at made a correct section look like it was
+    # missing every second question.
+    covered = set()
+    for group in kept:
+        span = group.get("pick") or 1
+        for question in group["questions"]:
+            start = question.get("paper_number")
+            if start is not None:
+                covered.update(range(start, start + span))
     short = [n for n in range(lo, hi + 1) if n not in covered]
     if covered and short:
         raise SystemExit(
