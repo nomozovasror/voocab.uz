@@ -114,8 +114,26 @@ def main() -> int:
         print(" ".join(name for _, name, _ in sorted(flagged, key=lambda r: r[0])))
         return 0
 
+    conn = sqlite3.connect(SEED / "catalogue.db")
+    elsewhere = conn.execute(
+        "SELECT id, question_source FROM section "
+        "WHERE question_source IS NOT NULL ORDER BY id").fetchall()
+
     middle = statistics.median(fit for fit, _, _ in rows)
-    print(f"{len(rows)} aligned sections, median word score {middle:.3f}\n")
+    print(f"{len(rows)} aligned sections, median word score {middle:.3f}")
+    if elsewhere:
+        # Said every time rather than kept in a column nobody opens. The book
+        # is the source of record; these are the sections whose question
+        # wording came from a page on the internet because the PDF would not
+        # read straight. Their ANSWERS still came off the book's key, so this
+        # is a provenance note and not a doubt about correctness.
+        where = sorted({url for _, url in elsewhere})
+        print(f"{len(elsewhere)} section(s) had their questions read from "
+              f"{len(where)} page(s) rather than the book:")
+        for url in where:
+            named = [sid for sid, u in elsewhere if u == url]
+            print(f"  {url}\n    {', '.join(named)}")
+    print()
     if not flagged:
         print(f"none below {args.below}")
         return 0

@@ -1166,6 +1166,21 @@ The page is fetched with its `<script>` blocks intact and unescaped first --
 these sites render the paper from JavaScript string literals, so stripping
 scripts the obvious way throws the questions away and leaves the navigation.
 
+**And it is written down.** `section.question_source` is NULL where the
+questions came off the book's own pages, which is 169 of the 176, and holds the
+URL for the seven where they did not. `verify.py` prints them every run rather
+than leaving it in a column nobody opens:
+
+```
+7 section(s) had their questions read from 3 page(s) rather than the book:
+  https://practicepteonline.com/ielts-listening-test-201/
+    cam20-t1-s1, cam20-t1-s3
+```
+
+The book stays the source of record. This says which sections have a second
+provenance for their wording, so that a question that later reads oddly can be
+checked against the page it actually came from.
+
 ### Four repairs a table needs, and one a pair does
 
 Text removed the transcription errors and left the structural ones, which are

@@ -76,6 +76,14 @@ CREATE TABLE IF NOT EXISTS section (
     -- The pages of the audioscript for THIS section, same indexing. What
     -- forced alignment reads its text from.
     script_pages   TEXT,                        -- JSON array of ints
+    -- NULL where the questions were read off the book's own pages, which is
+    -- the normal case and the one to prefer. Otherwise the URL they were read
+    -- from instead: five of Cambridge 20's tables would not come off the PDF
+    -- straight, and a text of the same paper had no columns to guess at. The
+    -- ANSWERS are never taken from there -- they come off the book's key page
+    -- whatever this says -- but where a question's wording came from is not
+    -- something to have to work out later from a commit message.
+    question_source TEXT,
     note          TEXT,
     UNIQUE (book_number, test_no, section_no)
 );

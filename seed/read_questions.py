@@ -567,6 +567,14 @@ def main() -> int:
               f"word_limit={group['word_limit']}")
     for p in problems:
         print(f"PROBLEM  {p}", file=sys.stderr)
+
+    # Written into the catalogue, not only into the file beside the work, so
+    # "which sections did not come off the book's own pages" is one query
+    # rather than a grep over a hundred and seventy directories.
+    conn.execute("UPDATE section SET question_source = ? WHERE id = ?",
+                 (args.web, args.section_id))
+    conn.commit()
+
     print(f"\nwrote {out.relative_to(REPO)} -- now run build_questions.py, "
           "which is where a misread page is caught")
     return 1 if problems else 0
