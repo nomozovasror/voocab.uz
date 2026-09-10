@@ -363,14 +363,40 @@ def settle(pages: list[dict], tests: list[int], conn, book: int
     # page misread as one in the middle of the book would otherwise become the
     # answer, and did -- index 21 against a true 102.
     marked = sorted(p["index"] for p in pages if p.get("kind") == "audioscript")
+    # A single page inside a long run of audioscripts that came back as
+    # something else is a misreading, not the end of the run. Book 17 called
+    # one page "reading" -- it prints PART 4 and eight margin numbers -- and
+    # the run stopped there, so every section after it got a guessed span and
+    # one of them was transcribed from the wrong pages entirely. Bridged, and
+    # the bridged page is treated as what the pages either side of it are.
     runs, current = [], []
     for index in marked:
-        if current and index == current[-1] + 1:
-            current.append(index)
+        if current and index - current[-1] <= 2:
+            current.extend(range(current[-1] + 1, index + 1))
         else:
             current = [index]
             runs.append(current)
     longest = max(runs, key=len, default=[])
+    within = {p["index"]: p for p in pages}
+    # One more page at the end of the block, where the page after it is an
+    # answer key. The audioscripts run until the keys begin, so a single sheet
+    # between them belongs to the block whatever it was called -- book 13's
+    # last page of PART 4 came back as "reading" and its section was left
+    # transcribed from one page instead of two. Bounded to one page and to
+    # that position: anywhere else, a misreading should stay visible rather
+    # than be absorbed.
+    if longest:
+        after = longest[-1] + 1
+        beyond = within.get(after + 1, {})
+        if (after in within and within[after].get("kind") != "audioscript"
+                and (beyond.get("kind") or "").endswith("answer_key")):
+            longest = longest + [after]
+
+    for index in longest:
+        page = within.get(index)
+        if page is not None and page.get("kind") != "audioscript":
+            page["kind"] = "audioscript"
+            page["bridged"] = True
     scripts = longest
 
     scripts_by_section = script_runs(pages)

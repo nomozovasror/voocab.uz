@@ -1278,6 +1278,51 @@ now.
 That is the third section this year found to have gone in short, and all three
 were found by the same check rather than by anyone looking.
 
+## One page misread, and a section transcribed from somewhere else
+
+`cam17-t3-s4` was the last thing the verifier flagged: 0.509 against a corpus
+median of 0.914, with all nine of its word answers present in its own
+transcript. Two signals disagreeing, which is the interesting kind.
+
+The score across the section says what happened:
+
+```
+0.92   0.76   0.70   0.54   0.08   0.06
+```
+
+Not a bad section -- a section that starts right and comes apart. Its markers
+finish the story: Q31 to Q38, and then **Q31 again**, then Q37, Q38, Q39, Q40.
+The transcript holds this section's audioscript followed by another one.
+
+Its span in the catalogue was six pages where its neighbours have two, and it
+carried the `script span guessed, heading not found` flag it has carried since
+it was located. Reading the margins settles where the audioscript actually is:
+page 104 is PART 4 with Q31-38 down the side, page 105 carries Q39-40.
+
+**Page 104 had been classified `reading`.** One page, in the middle of the
+audioscript block. The block is found as the longest run of consecutive
+audioscript pages, so it stopped at 103 -- and every section after that got a
+guessed span, and one of them was transcribed from the wrong pages.
+
+Two rules now, and the second is narrower than the first attempt:
+
+* **A one-page gap inside the run is bridged.** A single page that came back
+  as something else, with audioscript either side of it, is a misreading and
+  not a boundary.
+* **One page past the end of the run, where an answer key follows it.** The
+  audioscripts run until the keys begin, so a single sheet between them belongs
+  to the block. Book 13's last page of PART 4 came back as `reading` too, and
+  its section had been transcribed from one page instead of two.
+
+The first version of the second rule was "anything between the first
+audioscript page and the first key", which is the same idea and far too much of
+it: one page misread as an audioscript early in a book made the whole of it the
+block, and twenty-eight sections had their spans rewritten to the question
+papers. The README already said why -- *the start of the longest run, not the
+first page anywhere that looks like one* -- and the rule now says it too.
+
+Re-read against pages 104 to 106: **0.509 to 0.933**, ten markers of ten.
+
 ## NVIDIA measured, and not adopted
 
 `vision.py` takes `SEED_VISION=groq|nvidia` because the cost of this pipeline
