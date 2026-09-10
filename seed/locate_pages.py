@@ -107,15 +107,35 @@ KEY_PROMPT = """This page is from the answer keys at the back of a Cambridge IEL
 book. These books print the LISTENING key and the READING key for a test on
 facing pages, and they look alike: both are a numbered list of forty answers.
 
-Answer only these two things about THIS page.
+One page can carry both -- the tail of the reading key above the start of the
+listening one -- so answer about the LISTENING answers specifically.
 
-1. Which paper's answers are printed here? The page or the block above the
-   numbers says LISTENING or READING. If neither word is on the page, say
-   "unknown" -- do NOT guess from the answers themselves.
-2. Which test does it belong to, as printed ("TEST 2", "Test 6")? If no test
+1. Are any LISTENING answers printed on this page at all? The block above them
+   says LISTENING. Do not guess from the answers themselves.
+2. If they are, which question numbers do they run from and to ON THIS PAGE?
+3. Are reading answers also on this page?
+4. Which test does it belong to, as printed ("TEST 2", "Test 6")? If no test
    number is printed on this page, say null.
 
-Reply with only {"paper": "listening|reading|unknown", "test": <number|null>}."""
+Reply with only {"listening": true|false, "first": <number|null>,
+"last": <number|null>, "also_reading": true|false, "test": <number|null>}."""
+
+
+NUMBER_PROMPT = """One page of an IELTS practice test. Two things about it.
+
+1. Which paper is it from? Both papers number their questions 1 to 40, so the
+   numbers cannot tell them apart -- the page can. A READING page carries a
+   long prose passage, or questions about one. A LISTENING page carries a
+   form, a table, a set of notes, a map or a list of options to pick from,
+   with nothing to read for meaning. If it is neither, say "other".
+
+2. List EVERY question number printed on it, in order: the numbers down the
+   left of each question, and the numbers inside the gaps of a table, a form
+   or a set of notes. Read the numbers themselves -- do not infer them from a
+   "Questions 11-16" heading, which some books do not print and which does not
+   always say where the page ends.
+
+Reply with only {"paper": "listening|reading|other", "numbers": [...]}"""
 
 
 def classify(pdf: pathlib.Path, index: int, dpi: int = DPI) -> dict:
@@ -128,8 +148,14 @@ def classify(pdf: pathlib.Path, index: int, dpi: int = DPI) -> dict:
     tmp.write_bytes(png)
     try:
         out = vision.ask_json(PROMPT, [tmp])
-    except SystemExit:
-        out = {"kind": "other"}
+    except SystemExit as why:
+        # NOT "other". A page nobody could read and a page that really is
+        # something else are different facts, and recording them as one hid a
+        # book: 34 of Cambridge 20's 35 test-2 pages came back "other" from
+        # failed requests, and every pass downstream believed it. Marked
+        # unread instead, so a re-run knows to ask again and the report can
+        # say how many there were.
+        out = {"kind": None, "unread": str(why)[:120]}
     finally:
         tmp.unlink(missing_ok=True)
     out["index"] = index
@@ -243,6 +269,30 @@ def resolve(pages: list[dict]) -> list[dict]:
     return pages
 
 
+def sheet_of(docs, page: dict) -> pathlib.Path:
+    """The PDF a page came from.
+
+    A page is identified by its document AND its index, never by the index
+    alone. For nine of these books that distinction costs nothing, because
+    there is one document; Cambridge 20 is four PDFs of one test each, where
+    "page 2" names four different sheets. The narrow passes below re-read
+    pages by number, and rendering all of them from the first document is how
+    a pass reads test 1's page 2 four times and writes each answer onto
+    whichever entry it met first.
+    """
+    row = next(d for d in docs if d["id"] == page.get("doc_id"))
+    return MATERIALS / row["rel_path"]
+
+
+def save_all(book: int, docs, found: list[dict]) -> None:
+    """Write every document's page map back to its own cache."""
+    for row in docs:
+        pages = [p for p in found if p.get("doc_id") == row["id"]]
+        if pages:
+            (WORK / f"pagemap-book{book}-doc{row['id']}.json").write_text(
+                json.dumps(sorted(pages, key=lambda p: p["index"]), indent=2))
+
+
 def settle(pages: list[dict], tests: list[int], conn, book: int
            ) -> tuple[int, list[int], dict[int, int]]:
     """Turn one universe of pages into catalogue rows; returns how many it
@@ -288,7 +338,12 @@ def settle(pages: list[dict], tests: list[int], conn, book: int
             if page.get("kind") == "listening_answer_key" and n and n not in claimed:
                 claimed[n] = page["index"]
         in_order = [claimed[n] for n in sorted(claimed)]
-    keys = {position + 1: index for position, index in enumerate(in_order[:4])}
+    # Numbered by the tests this universe actually covers, not by position in
+    # it. For a whole-book universe those are the same thing -- 1, 2, 3, 4 --
+    # and for Cambridge 20's one-test files they are not: every key came back
+    # as test 1's, so tests 2 to 4 looked up their own number and found
+    # nothing.
+    keys = dict(zip(tests, in_order))
     # The START OF THE LONGEST RUN, not the first page anywhere that looks like
     # one. The audioscripts are forty consecutive pages at the back; a single
     # page misread as one in the middle of the book would otherwise become the
@@ -317,7 +372,7 @@ def settle(pages: list[dict], tests: list[int], conn, book: int
             sheets = sorted(p["index"] for p in pages
                             if p.get("kind") == "listening_questions"
                             and (p.get("test") == test or len(tests) == 1)
-                            and p.get("section") == section)
+                            and section in (p.get("sections") or [p.get("section")]))
             key = keys.get(test)
             sid = f"cam{book}-t{test}-s{section}"
             script = scripts_by_section.get((test, section), [])
@@ -345,6 +400,9 @@ def main() -> int:
     ap.add_argument("--scripts", action="store_true",
                     help="re-read only the audioscript pages, asking directly which "
                          "test and part each one starts")
+    ap.add_argument("--numbers", action="store_true",
+                    help="re-read the listening pages, asking only which question "
+                         "numbers are on each, and take the part from those")
     ap.add_argument("--keys", action="store_true",
                     help="re-read only the answer key pages, asking directly "
                          "whether each is the listening key or the reading one")
@@ -379,33 +437,91 @@ def main() -> int:
             page["doc_id"] = doc_row["id"]
             found.append(page)
 
+    def read_one(page: dict, prompt: str, tag: str, dpi: int = DPI) -> tuple[dict, dict]:
+        """One page, rendered from its own document, and what a model said
+        about it. Returns the page itself rather than its index, because an
+        index alone does not name a page in a book that is four files."""
+        shot = WORK / f".{tag}-{page.get('doc_id')}-{page['index']}.png"
+        shot.parent.mkdir(parents=True, exist_ok=True)
+        with pymupdf.open(sheet_of(docs, page)) as doc:
+            if not 0 <= page["index"] < doc.page_count:
+                # A page map that outlived the book it describes, or one an
+                # earlier run mixed two documents into. Said and skipped: a
+                # stale entry should cost its own page, not the whole book.
+                print(f"  page {page['index']} is not in "
+                      f"{sheet_of(docs, page).name}; skipped", file=sys.stderr)
+                return page, {}
+            shot.write_bytes(doc[page["index"]].get_pixmap(dpi=dpi).tobytes("png"))
+        try:
+            return page, vision.ask_json(prompt, [shot])
+        except SystemExit:
+            return page, {}
+        finally:
+            shot.unlink(missing_ok=True)
+
     if args.scripts:
-        pdf = MATERIALS / docs[0]["rel_path"]
-        marked = [p["index"] for p in found if p.get("kind") == "audioscript"]
+        marked = [p for p in found if p.get("kind") == "audioscript"]
         print(f"re-reading {len(marked)} audioscript page(s), asking directly")
-        by_index = {p["index"]: p for p in found}
-
-        def ask_one(index: int) -> tuple[int, dict]:
-            shot = WORK / f".script-{index}.png"
-            shot.parent.mkdir(parents=True, exist_ok=True)
-            with pymupdf.open(pdf) as doc:
-                shot.write_bytes(doc[index].get_pixmap(dpi=DPI).tobytes("png"))
-            try:
-                return index, vision.ask_json(SCRIPT_PROMPT, [shot])
-            except SystemExit:
-                return index, {}
-            finally:
-                shot.unlink(missing_ok=True)
-
         with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-            for index, said in pool.map(ask_one, marked):
+            for page, said in pool.map(
+                    lambda p: read_one(p, SCRIPT_PROMPT, "script"), marked):
                 if said.get("starts_here") and said.get("part"):
-                    by_index[index]["heading"] = f"PART {said['part']}"
+                    page["heading"] = f"PART {said['part']}"
                     if said.get("test"):
-                        by_index[index]["header"] = f"Test {said['test']}"
-        found = list(by_index.values())
-        cache = WORK / f"pagemap-book{args.book}-doc{docs[0]['id']}.json"
-        cache.write_text(json.dumps(sorted(found, key=lambda p: p["index"]), indent=2))
+                        page["header"] = f"Test {said['test']}"
+        save_all(args.book, docs, found)
+
+    if args.numbers:
+        # A page belongs to a part because of the numbers on it. That is
+        # normally read off the PART heading, and Cambridge 20 prints none:
+        # its four sheets carry questions 1-15, 16-24, 25-30 and 31-40, so the
+        # first of them is a page and a half of paper with nothing anywhere
+        # saying where part 1 stops. The numbers say it -- 1-10 is part 1,
+        # 11-20 part 2, and so on.
+        #
+        # A page can therefore belong to TWO parts, which is why this writes a
+        # list. `read_questions.py` drops whatever falls outside the part it
+        # was asked for, so a shared sheet is read twice and each reading
+        # keeps its own half.
+        # Not only the pages the first pass called listening. On a book it does
+        # not recognise, that pass is exactly what has gone wrong -- Cambridge
+        # 20 came back with three listening pages in test 1 and none at all in
+        # tests 2 and 3. What can be relied on instead is the order of an IELTS
+        # paper: listening comes first, so every page before the first reading
+        # page is a candidate. A page with no question numbers on it answers
+        # with none and costs a twentieth of a cent.
+        sheets = []
+        for row in docs:
+            pages = sorted((p for p in found if p.get("doc_id") == row["id"]),
+                           key=lambda p: p["index"])
+            after = next((p["index"] for p in pages
+                          if p.get("kind") in ("reading", "writing", "speaking")),
+                         len(pages))
+            sheets += [p for p in pages
+                       if p["index"] < after or p.get("kind") == "listening_questions"]
+        print(f"re-reading {len(sheets)} listening page(s), asking only for numbers")
+        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+            for page, said in pool.map(
+                    lambda p: read_one(p, NUMBER_PROMPT, "numbers"), sheets):
+                numbers = sorted({n for n in (said.get("numbers") or [])
+                                  if isinstance(n, int) and 1 <= n <= 40})
+                # Both papers number 1 to 40, so the numbers alone put reading
+                # questions into listening sections -- Cambridge 20's test 2
+                # offered eight reading pages that way. The page says which it
+                # is; the numbers say which part of it.
+                if not numbers or said.get("paper") != "listening":
+                    continue
+                parts = sorted({(n - 1) // 10 + 1 for n in numbers})
+                page["sections"] = parts
+                page["section"] = parts[0]
+                # A page with listening question numbers on it IS a listening
+                # question page, whatever the first pass called it.
+                page["kind"] = "listening_questions"
+                print(f"  {sheet_of(docs, page).stem} page {page['index']}: "
+                      f"questions {numbers[0]}-{numbers[-1]} -> part"
+                      f"{'s' if len(parts) > 1 else ''} "
+                      f"{', '.join(str(p) for p in parts)}")
+        save_all(args.book, docs, found)
 
     if args.keys:
         # A listening key and a reading key are the same page to a classifier:
@@ -415,39 +531,41 @@ def main() -> int:
         # went into the database answered from the wrong paper. Nothing failed;
         # the answers were simply wrong. So this asks the one thing that tells
         # the two apart, rather than inferring it from a stride or a shape.
-        pdf = MATERIALS / docs[0]["rel_path"]
-        candidates = [p["index"] for p in found
+        # A book with four tests wants four listening keys. Fewer than that
+        # means the first pass did not find them, not that the book has none,
+        # and the narrow question is worth asking of more pages rather than of
+        # the two it happened to label. Cambridge 20 labelled one.
+        wanted = len({p.get("doc_id") for p in found}) if len(docs) > 1 else 4
+        candidates = [p for p in found
                       if (p.get("kind") or "").endswith("answer_key")]
+        if len([p for p in candidates
+                if p.get("kind") == "listening_answer_key"]) < wanted:
+            # Nothing the first pass called a key at all, which is what a book
+            # printing its key under a heading the classifier does not know
+            # looks like -- Cambridge 20 buries it among writing and speaking
+            # material. Everything it could not place is asked instead: more
+            # requests than the usual case, and only in the case where the
+            # usual one has already come back empty.
+            placed = {"listening_questions", "reading", "writing", "audioscript",
+                      "intro", "contents"}
+            candidates = [p for p in found if p.get("kind") not in placed]
         print(f"re-reading {len(candidates)} answer key page(s), asking directly")
-        by_index = {p["index"]: p for p in found}
-
-        def ask_key(index: int) -> tuple[int, dict]:
-            shot = WORK / f".key-{index}.png"
-            shot.parent.mkdir(parents=True, exist_ok=True)
-            with pymupdf.open(pdf) as doc:
-                shot.write_bytes(doc[index].get_pixmap(dpi=DPI).tobytes("png"))
-            try:
-                return index, vision.ask_json(KEY_PROMPT, [shot])
-            except SystemExit:
-                return index, {}
-            finally:
-                shot.unlink(missing_ok=True)
 
         with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-            for index, said in pool.map(ask_key, candidates):
-                paper = (said.get("paper") or "").lower()
-                if paper == "reading":
-                    # Kept in the map as what it is, so it stops being a
-                    # candidate for a test rather than disappearing.
-                    by_index[index]["kind"] = "reading_answer_key"
-                    by_index[index]["answer_key_test"] = None
-                elif paper == "listening":
-                    by_index[index]["kind"] = "listening_answer_key"
+            for page, said in pool.map(
+                    lambda p: read_one(p, KEY_PROMPT, "key"), candidates):
+                if said.get("listening"):
+                    page["kind"] = "listening_answer_key"
+                    page["key_numbers"] = [said.get("first"), said.get("last")]
                     if said.get("test"):
-                        by_index[index]["answer_key_test"] = said["test"]
-        found = list(by_index.values())
-        cache = WORK / f"pagemap-book{args.book}-doc{docs[0]['id']}.json"
-        cache.write_text(json.dumps(sorted(found, key=lambda p: p["index"]), indent=2))
+                        page["answer_key_test"] = said["test"]
+                elif said.get("first") is not None or said.get("also_reading"):
+                    # Reading answers and no listening ones. Kept in the map as
+                    # what it is, so it stops being a candidate for a test
+                    # rather than disappearing.
+                    page["kind"] = "reading_answer_key"
+                    page["answer_key_test"] = None
+        save_all(args.book, docs, found)
 
     if args.recheck:
         # A section comes out empty when the one page carrying its heading was

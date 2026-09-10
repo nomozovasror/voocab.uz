@@ -173,20 +173,25 @@ def _send(content: list[dict], model: str, max_tokens: int, temperature: float,
             "messages": [{"role": "user", "content": content}],
             **({"reasoning_effort": EFFORT} if EFFORT else {})}
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        reply = _post(body)
+        reply = unwrap(_post(body))
+        if retry_later(reply):
+            # Providers say this differently -- Groq with a code and a number
+            # of seconds, Gemini with a 429 inside a one-element array -- and the
+            # difference used to decide whether a page was retried or silently
+            # recorded as unreadable. Four workers against Gemini turned 34 of
+            # one book's 35 pages into "other" that way.
+            seconds = float(m.group(1)) + 1 if (m := WAIT.search(json.dumps(reply))) else 20.0
+            print(f"  rate limited, waiting {seconds:.0f}s "
+                  f"(attempt {attempt}/{MAX_ATTEMPTS})", file=sys.stderr)
+            time.sleep(seconds)
+            continue
         if not isinstance(reply, dict):
             # An endpoint that answers with a JSON array -- an error payload,
             # usually. Said plainly here rather than as an AttributeError on
             # the next line, which names neither the provider nor the page.
             raise SystemExit(f"{PROVIDER} answered with a "
                              f"{type(reply).__name__}: {json.dumps(reply)[:300]}")
-        error = reply.get("error", {})
-        if error.get("code") != "rate_limit_exceeded":
-            break
-        seconds = float(m.group(1)) + 1 if (m := WAIT.search(error.get("message", ""))) else 20.0
-        print(f"  rate limited, waiting {seconds:.0f}s "
-              f"(attempt {attempt}/{MAX_ATTEMPTS})", file=sys.stderr)
-        time.sleep(seconds)
+        break
     record(reply.get("usage") or {}, model, parts, audio=audio)
     if "choices" not in reply:
         raise SystemExit(f"API said: {json.dumps(reply)[:400]}")
@@ -218,6 +223,36 @@ def record(usage: dict, model: str, images: int, *, audio: bool = False) -> None
             fh.write("\n")
     except OSError:
         pass
+
+
+#: Every way the providers here say "not now, ask again". Rate limits and an
+#: overloaded model are one category to a caller: both mean the request was
+#: fine and the moment was not.
+LATER = ("rate_limit_exceeded", "resource_exhausted", "429", "rate limit",
+         "quota", "503", "overloaded", "unavailable")
+
+
+def unwrap(reply):
+    """The reply object, whatever the provider wrapped it in.
+
+    Gemini returns its ERRORS as a one-element JSON array and its successes as
+    an object. Checking the error before unwrapping is checking a list for
+    keys it cannot have, so every 429 and every 503 read as an unrecognised
+    reply and was raised instead of retried -- which is how a whole book came
+    back classified as pages nobody could read."""
+    if isinstance(reply, list) and len(reply) == 1 and isinstance(reply[0], dict):
+        return reply[0]
+    return reply
+
+
+def retry_later(reply) -> bool:
+    """Whether a reply is the provider asking to be asked again later."""
+    error = unwrap(reply)
+    error = error.get("error") if isinstance(error, dict) else None
+    if not isinstance(error, dict):
+        return False
+    said = f"{error.get('code')} {error.get('status')} {error.get('message')}".lower()
+    return any(mark in said for mark in LATER)
 
 
 def _post(body: dict) -> dict:

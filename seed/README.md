@@ -1021,19 +1021,59 @@ evidence. The `--keys` and `--recheck` passes work per universe unchanged.
 
 ### Where Cambridge 20 stands
 
-Its listening pages are found -- test 1 prints questions 1-15, 16-24, 25-30 and
-31-40 across four sheets, so a sheet serves two sections, which is handled.
-What it does not print is a PART heading, so the section a page belongs to has
-to come from the question numbers on it; that pass is not written yet.
+Its listening pages are found. `--numbers` asks each page which paper it is
+from and which question numbers are printed on it, and takes the part from
+those: 1-10 is part 1, 11-20 part 2. Both papers number 1 to 40, so the
+numbers alone put reading questions into listening sections until the page was
+asked which paper it belonged to -- a reading page carries prose to read, a
+listening page carries a form or a map. A sheet can hold two parts, which is
+why a page now claims a list of them and `read_questions.py` keeps its half.
 
-Its answer key is worse. It sits across two pages, and the first of them
-carries the end of the reading key as well -- asked for listening 1 to 5, a
-model reads back TRUE, FALSE, NOT GIVEN, which are reading answers off the same
-sheet. That is book 14's failure again in a book where `--keys` has no LISTENING
-heading to find.
+Its key page indexing was wrong in a way only this book could show:
+`settle()` numbered the four answer keys by their POSITION in the universe,
+which for a whole-book universe is 1, 2, 3, 4 and for a one-test file is
+always 1. Tests 2 to 4 looked up their own number and found nothing.
 
-So Cambridge 20 needs two narrow passes written for its shape, and its audio is
-ready for both.
+Fifteen of sixteen sections have their question pages and half have their key.
+What is left is the answer key of tests 3 and 4, which nothing has recognised
+as one yet.
+
+## An error recorded as a fact
+
+Cambridge 20 would not classify. Test 2 came back as 34 pages of "other" out of
+35, and the same pages read one at a time came back correctly every time.
+
+`classify()` ended with
+
+```python
+    except SystemExit:
+        out = {"kind": "other"}
+```
+
+so a request that failed and a page that really is something else were the same
+fact. The pass reported a fully classified book, every stage downstream
+believed it, and the only symptom was that a book with sixteen sections located
+none.
+
+They are separate facts now -- a page nobody could read is `unread`, with what
+went wrong kept beside it -- and writing that down is what showed the cause in
+one line:
+
+```
+gemini answered with a list: [{"error": {"code": 429, "message": "You exceeded ...
+gemini answered with a list: [{"error": {"code": 503, "message": "This model is ...
+```
+
+**Gemini returns its errors as a one-element JSON array and its successes as an
+object.** The retry checked `reply.get("error")` on something that has no keys,
+so every 429 and every 503 read as an unrecognised reply and was raised instead
+of waited out. Unwrapping first, and treating an overloaded model as the same
+category as a rate limit -- the request was fine, the moment was not -- took
+the unread count from 97 pages to zero.
+
+Worth the space because of how it hid. Nothing crashed, nothing was logged, and
+the cost was a whole book. The fix that mattered was not the retry; it was
+refusing to write down a failure as if it were an observation.
 
 ## NVIDIA measured, and not adopted
 

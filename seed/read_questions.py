@@ -279,17 +279,41 @@ def main() -> int:
     if "groups" not in read and read.get("questions"):
         read = {"groups": [read]}
 
-    key_shot = vision.render(pdf, [key_page], work / "pages")
-    print(f"reading the answer key from page index {key_page}")
-    key = vision.ask_json(
-        KEY_PROMPT.format(label=f"Test {row['test_no']}, Section {row['section_no']}",
-                          first=first, last=last),
-        key_shot, model=args.model)
+    def read_key(index: int) -> dict:
+        shot = vision.render(pdf, [index], work / "pages")
+        print(f"reading the answer key from page index {index}")
+        return key_answers(vision.ask_json(
+            KEY_PROMPT.format(
+                label=f"Test {row['test_no']}, Section {row['section_no']}",
+                first=first, last=last),
+            shot, model=args.model))
+
+    printed = read_key(key_page)
+    # Forty answers do not always fit on one sheet. Where the numbers this
+    # section needs are not all on the page the catalogue names, the key ran
+    # over onto the next one -- Cambridge 20 splits its listening key at
+    # question 10, and the sections after that would otherwise come back with
+    # no answers at all and no explanation. Asked for only when short, so a
+    # book whose key fits pays nothing for the possibility that it might not.
+    def short() -> bool:
+        return any(n not in printed and
+                   not any(PAIRED_KEY.match(str(k)) and
+                           n in range(int(PAIRED_KEY.match(str(k)).group(1)),
+                                      int(PAIRED_KEY.match(str(k)).group(2)) + 1)
+                           for k in printed)
+                   for n in range(first, last + 1))
+
+    if short():
+        spill = read_key(key_page + 1)
+        # The first page wins where both name a number: it is the one the
+        # catalogue vouched for.
+        printed = {**spill, **printed}
+
     # A key line can be labelled for two numbers at once. int() on "11&12"
     # raised, which took eighteen sections down in the first full batch.
     answers: dict[int, str] = {}
     paired: dict[int, int] = {}          # second number -> first
-    for label, value in key_answers(key).items():
+    for label, value in printed.items():
         label = str(label)
         pair = PAIRED_KEY.match(label)
         if pair:
