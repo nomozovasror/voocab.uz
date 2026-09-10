@@ -1160,19 +1160,30 @@ Tried next, on the same pages. It is not in the same class as the llama:
 | paper and question numbers on a listening sheet | listening, 1-15 | **listening, 1-15** | listening, 1-16 |
 | first three answers on the 答案 page | potatoes, butter, meat | **potatoes, butter, meat** | `"NG 9.T"`, `"10.F 11.T"` |
 
-Two for two, matching Gemini exactly, on the reading the llama filled in.
-Throughput is what rules it out here rather than accuracy:
+Two for two, matching Gemini exactly, on the reading the llama filled in. So
+the objection is not accuracy. It is that this is not a batch tool:
 
+* **The rate limit is per MODEL and it is hard.** After about four requests it
+  answers 429 and stops recovering: three single pages in a row, each waiting
+  100 seconds across five retries, all failed. On the same key at the same
+  minute `llama-3.2-11b` answers normally, so it is kimi's quota that is spent,
+  not the account's.
 * **One page a request.** Two audioscript pages in one call did not answer
   within 300 seconds.
 * **It reasons first, and the thinking is billed as output** in a separate
   `reasoning_content`. A budget that fits the answer does not fit the thinking,
   and the request then costs a full answer and returns nothing.
-* **The rate limit on this account is tighter than the work.** Five retries at
-  twenty seconds each were not enough to read two pages.
 
-Worth re-measuring if that last one changes. What it is good at is exactly
-where the llama fails, and this pipeline's remaining work is that reading.
+A pass over one book is roughly two hundred requests and the cost of this
+pipeline is measured in passes, so four before a wall is not a candidate for
+the sweep.
+
+**It may still be right for the last mile.** What is left of Cambridge 20 is
+not a sweep: it is five answer-list pages that have to be read exactly --
+`potatoes, butter, meat` and not `"NG 9.T"` -- and five is a number kimi's
+limit does not reach. Gemini reads them just as well and the choice may never
+have to be made; it is worth knowing there is a second reader for the one job
+where being right matters more than being quick.
 
 ### Three faults it found on the way through
 
