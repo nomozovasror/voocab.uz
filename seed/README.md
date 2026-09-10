@@ -1121,6 +1121,41 @@ rescued every other stage here -- came back as an essay about the page.
 The provider switch stays in, because it costs nothing to keep and the
 catalogue changes. The default does not move.
 
+### Measured again, on a different question, with the same answer
+
+Asked about it a second time -- with Gemini's daily quota spent and Groq
+spend-blocked, so a free provider was worth another look -- on the work that
+was actually blocked. Three pages of Cambridge 20, against readings already
+verified:
+
+| asked | true | `llama-3.2-11b-vision-instruct` |
+|---|---|---|
+| which paper is this page from | listening | **listening** |
+| which paper is this page from | reading | **reading** |
+| question numbers on a listening page | 1-15 | 1-16 |
+| question numbers on a reading page | 6-13 of them | **all forty** |
+| first three printed answers on a key page | potatoes, butter, meat | `"NG 9.T"`, `"10.F 11.T"` |
+
+The pattern is the same one the markers showed. **The coarse judgement is
+sound and the exact reading is not.** Which paper a page belongs to, it gets
+right every time. What is printed on the page, it fills in: forty numbers on a
+sheet that carries a dozen, and answers with the question numbers glued into
+them.
+
+It also needs `response_format` to produce JSON at all, and then writes a
+paragraph before it -- which `read_json`'s brace-hunting rescue happens to
+survive, so that part is not the objection.
+
+Not adopted, and for a sharper reason than last time: what is left to do needs
+exactly the reading it cannot do. Cambridge 20's four answer lists are printed
+under 答案 with no paper named, and telling the listening one from the reading
+one means reading the answers themselves correctly.
+
+**The entry was broken and silent.** `nvidia/llama-3.1-nemotron-nano-vl-8b-v1`,
+named here since the first measurement, is no longer served to this account, so
+`SEED_VISION=nvidia` had not worked for some time and nothing said so. It now
+names a model the catalogue still has, at one image a request rather than four.
+
 ## Where this stops
 
 Stage 0 is done: 176 sections catalogued, every file's extension honest, every

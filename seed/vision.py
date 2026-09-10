@@ -14,8 +14,10 @@ URLs, chosen with `SEED_VISION=groq|gemini|nvidia`:
   an alias Google keeps pointed at the current one. NOTE that `PRICES` below
   is written for THIS model; a bigger one makes the ledger read low.
 * **nvidia** -- build.nvidia.com's catalogue, free through the developer
-  programme and rate-limited near 40 requests a minute instead. That trade is
-  the right way round for work that is mostly iteration.
+  programme and rate-limited near 40 requests a minute instead. Measured twice
+  and not adopted either time; see the README. Kept because a free tier is
+  worth having when the other two are blocked, and because the catalogue
+  changes.
 
 Measure a new provider before adopting it. `nvidia` is in this table and is
 not the default, because the measurement said no -- see the README. What has
@@ -63,8 +65,12 @@ PROVIDERS = {
     "nvidia": {
         "url": "https://integrate.api.nvidia.com/v1/chat/completions",
         "env": "NVIDIA_API_KEY",
-        "model": "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
-        "images": 4,
+        # The catalogue moves under this entry: the model named here before
+        # (nemotron-nano-vl-8b-v1) is no longer served to this account, so
+        # SEED_VISION=nvidia had been broken for a while and nothing said so.
+        # Checked 2026-09-10.
+        "model": "meta/llama-3.2-11b-vision-instruct",
+        "images": 1,
     },
 }
 #: What a provider charges per million tokens, in and out. Kept here because
