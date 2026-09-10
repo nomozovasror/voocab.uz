@@ -201,7 +201,20 @@ def _send(content: list[dict], model: str, max_tokens: int, temperature: float,
     record(reply.get("usage") or {}, model, parts, audio=audio)
     if "choices" not in reply:
         raise SystemExit(f"API said: {json.dumps(reply)[:400]}")
-    return reply["choices"][0]["message"]["content"]
+    message = reply["choices"][0].get("message") or {}
+    said = message.get("content")
+    if not said:
+        # A reasoning model that spent the whole budget thinking. Its thoughts
+        # come back in `reasoning_content` and are billed as output, so the
+        # request cost what a full answer costs and produced nothing -- and
+        # returning None here handed the caller a TypeError several frames
+        # away from the cause.
+        thought = len((message.get("reasoning_content") or "").split())
+        raise SystemExit(
+            f"{model} returned no content"
+            + (f"; it spent {thought} words reasoning first, so max_tokens "
+               f"({max_tokens}) was too small" if thought else ""))
+    return said
 
 
 def record(usage: dict, model: str, images: int, *, audio: bool = False) -> None:
@@ -252,13 +265,19 @@ def unwrap(reply):
 
 
 def retry_later(reply) -> bool:
-    """Whether a reply is the provider asking to be asked again later."""
-    error = unwrap(reply)
-    error = error.get("error") if isinstance(error, dict) else None
-    if not isinstance(error, dict):
+    """Whether a reply is the provider asking to be asked again later.
+
+    Read off the WHOLE reply rather than an `error` object inside it. Three
+    providers, three shapes: Groq nests a code under "error", Gemini wraps the
+    same thing in a one-element array, and NVIDIA answers a rate limit with a
+    bare {"status": 429, "title": "Too Many Requests"} and no "error" key at
+    all. Looking for the object first is how each new shape arrived as a
+    failure instead of a wait."""
+    said = unwrap(reply)
+    if not isinstance(said, (dict, list)) or (
+            isinstance(said, dict) and "choices" in said):
         return False
-    said = f"{error.get('code')} {error.get('status')} {error.get('message')}".lower()
-    return any(mark in said for mark in LATER)
+    return any(mark in json.dumps(said).lower() for mark in LATER)
 
 
 def _post(body: dict) -> dict:
@@ -267,15 +286,26 @@ def _post(body: dict) -> dict:
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
         json.dump(body, fh)
         payload = fh.name
+    # The key goes in a config file rather than in argv, where it is readable
+    # by anything that can list processes -- and where it turned up verbatim
+    # in a TimeoutExpired traceback, which is how this was noticed.
+    with tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False) as fh:
+        fh.write(f'header = "Authorization: Bearer {api_key()}"\n'
+                 'header = "Content-Type: application/json"\n')
+        config = fh.name
+    pathlib.Path(config).chmod(0o600)
     try:
         out = subprocess.run(
-            ["curl", "-sS", "-X", "POST", URL,
-             "-H", f"Authorization: Bearer {api_key()}",
-             "-H", "Content-Type: application/json",
+            ["curl", "-sS", "-X", "POST", URL, "--config", config,
              "--data-binary", f"@{payload}"],
             capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        # Raised with the whole command in it, payload path and all. Said
+        # plainly instead, since the caller only needs to know it timed out.
+        raise SystemExit(f"{PROVIDER} did not answer within 300s")
     finally:
         pathlib.Path(payload).unlink(missing_ok=True)
+        pathlib.Path(config).unlink(missing_ok=True)
 
     if out.returncode != 0:
         raise SystemExit(f"curl failed: {out.stderr[:300]}")

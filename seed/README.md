@@ -1151,6 +1151,50 @@ exactly the reading it cannot do. Cambridge 20's four answer lists are printed
 under 答案 with no paper named, and telling the listening one from the reading
 one means reading the answers themselves correctly.
 
+### `moonshotai/kimi-k3`, and why quality was not the problem
+
+Tried next, on the same pages. It is not in the same class as the llama:
+
+| asked | true | kimi-k3 | llama-3.2-11b |
+|---|---|---|---|
+| paper and question numbers on a listening sheet | listening, 1-15 | **listening, 1-15** | listening, 1-16 |
+| first three answers on the 答案 page | potatoes, butter, meat | **potatoes, butter, meat** | `"NG 9.T"`, `"10.F 11.T"` |
+
+Two for two, matching Gemini exactly, on the reading the llama filled in.
+Throughput is what rules it out here rather than accuracy:
+
+* **One page a request.** Two audioscript pages in one call did not answer
+  within 300 seconds.
+* **It reasons first, and the thinking is billed as output** in a separate
+  `reasoning_content`. A budget that fits the answer does not fit the thinking,
+  and the request then costs a full answer and returns nothing.
+* **The rate limit on this account is tighter than the work.** Five retries at
+  twenty seconds each were not enough to read two pages.
+
+Worth re-measuring if that last one changes. What it is good at is exactly
+where the llama fails, and this pipeline's remaining work is that reading.
+
+### Three faults it found on the way through
+
+None of them are about the model, and all three were live in every provider.
+
+**A rate limit that did not look like one.** NVIDIA answers with a bare
+`{"status": 429, "title": "Too Many Requests"}` and no `error` object, so the
+check written for Groq's shape and widened for Gemini's still missed it and
+raised instead of waiting. It reads the whole reply now rather than an object
+inside it, which is the third shape and the last time this should need doing.
+
+**The key was in argv.** `_post` passed `Authorization: Bearer ...` as a curl
+argument, readable by anything that can list processes -- and it appeared
+verbatim in a `TimeoutExpired` traceback, which is how it was noticed. It goes
+in a 0600 config file now, and a timeout is reported as a timeout rather than
+by printing the command.
+
+**A reasoning model that spends the budget thinking** returned
+`content: null`, which was handed back as `None` and became a `TypeError`
+several frames from the cause. Said plainly now, with how many words it thought
+and what the budget was.
+
 **The entry was broken and silent.** `nvidia/llama-3.1-nemotron-nano-vl-8b-v1`,
 named here since the first measurement, is no longer served to this account, so
 `SEED_VISION=nvidia` had not worked for some time and nothing said so. It now
