@@ -34,6 +34,7 @@ from it, and does nothing at all when every question already has a marker.
 import argparse
 import json
 import pathlib
+import re
 import sys
 
 import vision
@@ -74,12 +75,18 @@ def describe(group: dict, question: dict) -> str:
     the letter points at is the whole of the evidence."""
     number = question.get("paper_number") or question.get("number")
     asked = (question.get("prompt") or group.get("instructions") or "").strip()
-    answers = question.get("correct_answers") or []
+    # `key` in questions.src.json, which is what this stage runs against;
+    # `correct_answers` only exists after build_questions.py has expanded it.
+    # Reading the built name off the source file gave every question
+    # "correct: (unknown)", so the model was being asked where an answer it had
+    # not been told is given -- and answered, reasonably, with nothing.
+    answers = (question.get("correct_answers")
+               or [a for a in [question.get("key")] if a])
     options = question.get("options") or group.get("options") or []
 
     said = []
     for answer in answers:
-        letter = answer.strip().lower()
+        letter = str(answer).strip().lower()
         if len(letter) == 1 and "a" <= letter <= "z" and options:
             index = ord(letter) - ord("a")
             if index < len(options):
@@ -89,6 +96,39 @@ def describe(group: dict, question: dict) -> str:
         said.append(answer)
     return (f"Q{number}: {asked[:200]}\n"
             f"    correct: {'; '.join(said) or '(unknown)'}")
+
+
+def already_known(work: pathlib.Path, wanted: list[tuple[int, str]],
+                  groups: list[dict]) -> dict[int, int]:
+    """The turn each answer is in, for the answers that say so themselves.
+
+    An answer whose words appear exactly once in the alignment needs no model
+    to place it -- `build_questions.py` uses that to make a replay span. Here
+    it is used for something else: as a set of answers whose turn is already
+    known, to check the model's placements against. A reading that gets these
+    wrong is a reading to throw away, and there is no reason to find that out
+    only when a learner presses replay.
+    """
+    path = work / "aligned.json"
+    if not path.exists():
+        return {}
+    aligned = json.loads(path.read_text())
+    stream = [re.sub(r"[^a-z0-9]", "", w["word"].lower()) for w in aligned]
+    keys = {q.get("paper_number") or q.get("number"): q.get("key")
+            for g in groups for q in g["questions"]}
+    known = {}
+    for number, _ in wanted:
+        for answer in str(keys.get(number) or "").split("/"):
+            words = [w for w in (re.sub(r"[^a-z0-9]", "", x.lower())
+                                 for x in answer.split()) if w]
+            if not words or len("".join(words)) < 4:
+                continue
+            hits = [i for i in range(len(stream) - len(words) + 1)
+                    if stream[i:i + len(words)] == words]
+            if len(hits) == 1:
+                known[number] = aligned[hits[0]]["turn"]
+                break
+    return known
 
 
 def main() -> int:
@@ -111,13 +151,22 @@ def main() -> int:
     groups = json.loads(source.read_text())["groups"]
 
     marked = {n for t in turns for n in _numbers(t.get("marker"))}
-    wanted = []
+    # EVERY question goes in the prompt, and only the unmarked ones come out of
+    # it. Asking about the four a section is missing, out of ten, gives the
+    # model four sentences and no sense of where in the recording it is; the
+    # six it already knows are the anchors that place the four. Measured on
+    # cam19-t2-s4: asked about four it put two in the wrong part of the
+    # recording, asked about ten it got seven exactly right and none wrong.
+    # The extra questions cost nothing -- it is the same one request -- and
+    # they are what the check below has to work with.
+    wanted, missing = [], set()
     for group in groups:
         for question in group["questions"]:
             number = question.get("paper_number") or question.get("number")
-            if args.all or number not in marked:
-                wanted.append((number, describe(group, question)))
-    if not wanted:
+            wanted.append((number, describe(group, question)))
+            if number not in marked:
+                missing.add(number)
+    if not missing:
         print(f"  every question already carries a marker")
         return 0
 
@@ -135,10 +184,67 @@ def main() -> int:
         ((int(p["turn"]), int(p["q"])) for p in said.get("placements", [])
          if isinstance(p, dict) and p.get("q") is not None and p.get("turn") is not None),
         key=lambda pair: pair[1])
+    # Measured before anything is written. One turn either way is the answer
+    # sitting across a boundary, which a replay span survives; further than
+    # that is a placement in the wrong part of the recording, and if the model
+    # does that to answers whose turn is knowable it is doing it to the others
+    # too.
+    known = already_known(work, wanted, groups)
+    placed_by = {int(p["q"]): int(p["turn"]) for p in said.get("placements", [])
+                 if isinstance(p, dict) and p.get("q") is not None
+                 and p.get("turn") is not None}
+    checked = {n: t for n, t in known.items() if n in placed_by}
+    astray = [n for n, t in checked.items() if abs(placed_by[n] - t) > 1]
+    if len(checked) >= 3:
+        print(f"  checked against {len(checked)} answer(s) that name their own "
+              f"turn: {len(checked) - len(astray)} within one turn")
+    if astray and len(checked) >= 3 and len(astray) > len(checked) // 4:
+        print(f"  REFUSED the whole reading: Q{', Q'.join(str(n) for n in astray)} "
+              f"of {len(checked)} checkable were placed more than one turn from "
+              "where their own words are", file=sys.stderr)
+        return 1
+
+    # Where the book's own markers already are. They bound a missing question
+    # far better than a running floor does: Q39 sits between whatever turn
+    # carries Q38 and whatever carries Q40, and that is true whether or not
+    # the markers around it happen to run in order -- cam12-t3-s4 prints Q38
+    # on one turn and Q37 on the next, and a floor that walked through the
+    # context placements refused the one real answer because of it.
+    at = {n: i for i, t in enumerate(turns) for n in _numbers(t.get("marker"))}
+
+    def allowed(number: int) -> tuple[int, int]:
+        """The turns a missing question can be in, from its NEAREST numbered
+        neighbours either side.
+
+        Nearest, not the extreme of all of them: a book's markers are not
+        always in order -- cam12-t3-s4 prints Q38 on turn 7 and Q37 on turn 8
+        -- and taking the furthest turn below made the window for Q39 a single
+        turn that excluded the right one. Q38 and Q40 are what actually bound
+        it.
+        """
+        below = max((n for n in at if n < number), default=None)
+        above = min((n for n in at if n > number), default=None)
+        low = at[below] if below is not None else 0
+        high = at[above] if above is not None else len(turns) - 1
+        return (low, high) if low <= high else (high, low)
+
     real = {i for i, _ in spoken}
     asked = dict(wanted)
     floor, placed, refused, done = -1, 0, [], set()
     for turn, number in placements:
+        if number in missing and at:
+            # Bounded by the book rather than by the walk.
+            low, high = allowed(number)
+            if not low <= turn <= high:
+                refused.append(number)
+                continue
+            done.add(number)
+            existing = _numbers(turns[turn].get("marker"))
+            if turn in real and number not in existing:
+                turns[turn]["marker"] = (f"{turns[turn]['marker']} Q{number}"
+                                         if turns[turn].get("marker") else f"Q{number}")
+                placed += 1
+            continue
         # `done` because the same question came back against two turns, and
         # writing both puts one question in two places in the recording --
         # which is the failure this whole file is written to avoid. The first
@@ -153,6 +259,9 @@ def main() -> int:
             continue
         floor = turn
         done.add(number)
+        if number not in missing:
+            # Sent for context, not to be written. Its marker is the book's.
+            continue
         existing = _numbers(turns[turn].get("marker"))
         if number not in existing:
             turns[turn]["marker"] = (f"{turns[turn]['marker']} Q{number}"
@@ -160,9 +269,9 @@ def main() -> int:
             placed += 1
 
     turns_path.write_text(json.dumps(turns, indent=2, ensure_ascii=False))
-    print(f"  placed {placed} of {len(wanted)} missing marker(s) by meaning")
-    if placed and placed < len(wanted):
-        print(f"  {len(wanted) - placed} still unplaced", file=sys.stderr)
+    print(f"  placed {placed} of {len(missing)} missing marker(s) by meaning")
+    if placed and placed < len(missing):
+        print(f"  {len(missing) - placed} still unplaced", file=sys.stderr)
     if refused:
         print(f"  refused {len(refused)}: Q{', Q'.join(str(n) for n in refused)} "
               "went backwards or named no turn", file=sys.stderr)

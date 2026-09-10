@@ -221,10 +221,22 @@ def build(section_id: str) -> int:
         """
         if paper is None:
             return 0, 1 << 62
-        before = [spans[n][1] for n in spans if n < paper]
-        after = [spans[n][0] for n in spans if n > paper]
-        return (max(before) if before else 0,
-                min(after) if after else 1 << 62)
+        # The NEAREST marker either side, and from where its turn starts rather
+        # than where it ends. Two things this section got wrong:
+        #
+        # Two questions can share a turn -- the book prints "17&18" against one
+        # line -- so an answer with no marker of its own often lies inside the
+        # turn the marker before it names. Bounding at that turn's end puts the
+        # window in the silence between two turns.
+        #
+        # And a book's markers are not always in order: cam12-t3-s4 prints Q37
+        # on a later turn than Q38, so taking the furthest span below Q39
+        # started its window after the word it was looking for. Q38 and Q40 are
+        # what bound Q39, whatever the ones further out are doing.
+        below = max((n for n in spans if n < paper), default=None)
+        above = min((n for n in spans if n > paper), default=None)
+        return (spans[below][0] if below is not None else 0,
+                spans[above][1] if above is not None else 1 << 62)
 
     def locate(answers: list[str], window: tuple[int, int] = (0, 1 << 62)
                ) -> tuple[int, int] | None:

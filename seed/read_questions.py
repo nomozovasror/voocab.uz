@@ -55,7 +55,15 @@ Return ONE JSON object, no prose and no code fence, shaped EXACTLY like this:
 
 The list is always there, even for a single group. A section may hold more \
 than one -- "Questions 11-14" then "Questions 15-20" are two groups, in the \
-order printed. Every group has these fields:
+order printed.
+
+TWO GROUPS IN A ROW OFTEN CARRY THE SAME INSTRUCTION LINE. "Questions 11 and \
+12: Choose TWO letters, A-E" followed by "Questions 13 and 14: Choose TWO \
+letters, A-E" is two groups asking two different things, not one group \
+repeated. What separates them is the numbers, never the wording. Return one \
+object for each, and account for every number from {first} to {last}.
+
+Every group has these fields:
 
   "type": one of the names below
   "instructions": the italic lines above the task, verbatim, newline-separated
@@ -570,10 +578,13 @@ def main() -> int:
 
     # Written into the catalogue, not only into the file beside the work, so
     # "which sections did not come off the book's own pages" is one query
-    # rather than a grep over a hundred and seventy directories.
-    conn.execute("UPDATE section SET question_source = ? WHERE id = ?",
-                 (args.web, args.section_id))
-    conn.commit()
+    # rather than a grep over a hundred and seventy directories. Its own
+    # connection: the one opened at the top is closed as soon as the section
+    # row is read, which is right -- a reading takes minutes and holding a
+    # write lock across it would block every other section in a batch.
+    with sqlite3.connect(SEED / "catalogue.db") as catalogue:
+        catalogue.execute("UPDATE section SET question_source = ? WHERE id = ?",
+                          (args.web, args.section_id))
 
     print(f"\nwrote {out.relative_to(REPO)} -- now run build_questions.py, "
           "which is where a misread page is caught")

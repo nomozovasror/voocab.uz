@@ -687,9 +687,9 @@ arithmetic here.
 ## Where the corpus stands
 
 **All 176** sections of Cambridge 10 to 20 are in the database as private
-drafts: 1,679 questions, 1,668 of them (**99%**) carrying a replay span,
-**168 content-complete**. Everything since the ledger started has cost
-**$0.54**.
+drafts, and **all 176 are content-complete**: 1,680 questions, every one of
+them carrying a replay span. Everything since the ledger started has cost
+**$0.57**.
 
 ### The windowing fix worked, and less than it looked like it would
 
@@ -1210,6 +1210,73 @@ second question; and the key check counted a paired second number as a missing
 answer. A `paired` map read off a whole key page also carries the pairs of
 every part on it, and "33&34" from part 4 made a part 3 section look as though
 it covered question 34.
+
+## The last eleven answers, and the two rules that were quietly wrong
+
+Eleven questions still had no replay span. None of them needed a better model.
+
+**`mark_answers.py` was asking where an answer it had not been told is given.**
+It read the answer from `correct_answers`, which only exists after
+`build_questions.py` has expanded the key -- and it runs BEFORE that, against
+`questions.src.json`, where the answer is `key`. Every question reached the
+model as "correct: (unknown)", and the model answered, reasonably, with
+nothing. Reading the right field turned "placed 0 of 10" into "placed 10 of 10".
+
+**It was also asking about too few.** Only the unmarked questions went into the
+prompt -- four out of ten, with no sense of where in the recording they sat.
+Sending all ten and writing only the four costs the same one request and gives
+the model the six the book already placed as anchors. On `cam19-t2-s4`: asked
+about four it put two in the wrong part of the recording; asked about ten it
+got seven exactly right and none wrong.
+
+### Checking a placement against an answer that names its own turn
+
+An answer whose words appear exactly once in the alignment needs no model to
+place it. `mark_answers.py` now works those out first and uses them as a
+control: if the model puts them more than one turn from where their own words
+are, the whole reading is refused rather than written.
+
+It earned its place on the first run. `cam19-t2-s4` came back with two of four
+checkable placements in the wrong part of the recording and was refused; the
+same section, asked with all ten questions, agreed with nine of nine.
+
+On `cam20-t1-s1`, where nothing was checked before it went in: 4 placements
+exactly right, 3 one turn out, 0 wrong, against seven answers that name their
+own turn. One turn out is the answer sitting across a boundary, which a replay
+span survives.
+
+### The same mistake in two places: nearest, not furthest
+
+The last question, `cam12-t3-s4`'s Q39, took both.
+
+A missing question is bounded by the markers around it -- Q39 lies between
+whatever turn carries Q38 and whatever carries Q40. Both `mark_answers.py` and
+`build_questions.py` took the FURTHEST marker below rather than the nearest,
+and **a book's markers are not always in order**: this section prints Q38 on
+turn 7 and Q37 on turn 8. Taking the furthest start below Q39 began its window
+at 398.0s, and the word it was looking for is at 388.7s.
+
+`build_questions.py` also bounded the window at the previous marker's turn
+END. Two questions can share a turn -- the book prints "17&18" against one
+line -- so an answer with no marker of its own often lies inside the turn the
+marker before it names; bounding at that turn's end puts the window in the
+silence between two turns.
+
+Nearest neighbour, from where its turn starts: "food" appears three times in
+that recording and exactly once inside the window the book allows.
+
+### A section that had been missing two questions all along
+
+Rebuilding all 176 to check the change refused one that had been counted
+complete since it was seeded. `cam12-t3-s2` covers 11&12, then 15 to 20:
+questions 13 and 14 are not there. The page has them -- "Questions 11 and 12:
+Choose TWO letters, A-E" is followed by "Questions 13 and 14: Choose TWO
+letters, A-E" -- and the reading collapsed the two into one, because what
+separates them is the numbers and not a word of the wording. The prompt says so
+now.
+
+That is the third section this year found to have gone in short, and all three
+were found by the same check rather than by anyone looking.
 
 ## NVIDIA measured, and not adopted
 
