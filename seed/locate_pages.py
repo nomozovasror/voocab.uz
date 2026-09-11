@@ -80,19 +80,22 @@ number printed above the answers, as in "TEST 3". Null everywhere else."""
 #: heading further down, and books 15 and 19 lost nineteen sections between
 #: them that way. A general question got a general answer; this asks the one
 #: thing that is actually needed.
-SCRIPT_PROMPT = """This page is from the audioscripts at the back of a Cambridge IELTS
-book. JSON only, no prose:
+SCRIPT_PROMPT = """This page is from the audioscripts at the back of an IELTS book.
+JSON only, no prose:
 
-{"starts_here": <true if a new section's audioscript BEGINS on this page, else false>,
- "test": <the test number printed above that heading, or null>,
- "part": <the section or part number in that heading, 1-4, or null>}
+{"starts": [{"part": <the section or part number, 1-4>,
+             "test": <the test number printed above it, or null>}]}
 
-A new one begins where the page prints a heading like "SECTION 3" or "PART 3",
-usually under a "TEST 2" line. The word "Audioscripts" is the running title of
-every one of these pages and is NOT a heading -- ignore it.
+List EVERY section whose audioscript begins on this page, in the order they
+appear. One begins where the page prints a heading like "SECTION 3", "PART 3"
+or "LISTENING SECTION 3", usually under a "TEST 2" line.
 
-If the page only carries on a conversation that started earlier, "starts_here"
-is false and the other two are null."""
+Usually there is one. There can be two: a section's script ends partway down
+the page and the next one starts below it. There can be none, where the page
+only carries on a conversation that started earlier -- then "starts" is [].
+
+The running title of these pages -- "Audioscripts", "Test 2 Transcript" -- is
+NOT a heading. Ignore it."""
 
 HEADER_TEST = re.compile(r"\btest\s*(\d)\b", re.I)
 HEADER_LISTENING = re.compile(r"\blistening\b", re.I)
@@ -101,6 +104,15 @@ HEADER_LISTENING = re.compile(r"\blistening\b", re.I)
 #: older word finds nothing in half the corpus. Cambridge 20's re-typeset
 #: headings ("Test1-listening-part2") fall out of the same pattern.
 SECTION_HEADING = re.compile(r"\b(?:section|part)\s*[-–—]?\s*(\d)\b", re.I)
+#: IELTS Trainer prints each of its first two tests twice: once as "Test 1
+#: Training", which teaches the task with worked examples, and once as "Test 1
+#: Exam practice", which is the paper. Only the paper has a recording -- the
+#: training exercises are the short tracks the manifest leaves behind -- so a
+#: training page swept into a section would put questions in front of a
+#: learner that nothing in their audio answers. "General Training" is the
+#: other IELTS module and has nothing to do with it; Cambridge 10 prints
+#: eighteen such pages and every one of them is Reading.
+TRAINING = re.compile(r"(?<!general )\btraining\b", re.I)
 
 
 KEY_PROMPT = """This page is from the answer keys at the back of a Cambridge IELTS
@@ -183,6 +195,10 @@ def script_runs(pages: list[dict]) -> dict[tuple[int, int], list[int]]:
     for page in sorted(pages, key=lambda p: p["index"]):
         if page.get("kind") != "audioscript":
             continue
+        for part in page.get("script_parts") or []:
+            starts.append((page["index"], int(part)))
+        if page.get("script_parts"):
+            continue
         heading = SECTION_HEADING.search(page.get("heading") or "")
         if heading:
             starts.append((page["index"], int(heading.group(1))))
@@ -196,13 +212,37 @@ def script_runs(pages: list[dict]) -> dict[tuple[int, int], list[int]]:
         previous = section
         runs.append((index, test, section))
 
-    last = max(p["index"] for p in pages if p.get("kind") == "audioscript")
+    held = {p["index"] for p in pages if p.get("kind") == "audioscript"}
+    last = max(held)
+
+    def between(first: int, stop: int) -> list[int]:
+        """The audioscript pages from one heading to the next, and no others.
+
+        For a Cambridge book every page in that range is an audioscript page
+        and this is just `range`. IELTS Trainer interleaves: each test's four
+        transcript pages sit after that test's nine pages of answer key, so
+        the range from Test 1 Section 4 to Test 2 Section 1 spans the whole of
+        Test 2's key -- thirteen pages of answers that would be read as if
+        somebody had spoken them.
+
+        It stops at the first page that is not one rather than skipping over
+        it. The only reason the next section's heading page is included at all
+        is that this section's tail sits above that heading on the same sheet,
+        and a heading twelve pages and an answer key later shares nothing with
+        anything here."""
+        run = []
+        for index in range(first, stop + 1):
+            if index not in held:
+                break
+            run.append(index)
+        return run
+
     out: dict[tuple[int, int], list[int]] = {}
     for position, (index, test, section) in enumerate(runs):
         # Up to and INCLUDING the next section's first page: the tail of this
         # one is on it, above that heading.
         stop = runs[position + 1][0] if position + 1 < len(runs) else last
-        out[(test, section)] = list(range(index, stop + 1))
+        out[(test, section)] = between(index, stop)
 
     # A heading the reader missed leaves one section with no span at all --
     # Cambridge 11 lost Test 3 Section 4 that way. Rather than drop it, give it
@@ -218,9 +258,14 @@ def script_runs(pages: list[dict]) -> dict[tuple[int, int], list[int]]:
                      or out.get((test + 1, 1))
                      or [last])
             if before:
-                out[(test, section)] = list(range(before[0], after[-1] + 1))
+                out[(test, section)] = between(before[0], after[-1])
                 out[("guessed", test, section)] = True
     return out
+
+
+def teaching(page: dict) -> bool:
+    """A page that shows how the task works rather than setting it."""
+    return bool(TRAINING.search(f"{page.get('header') or ''} {page.get('heading') or ''}"))
 
 
 def resolve(pages: list[dict]) -> list[dict]:
@@ -240,19 +285,42 @@ def resolve(pages: list[dict]) -> list[dict]:
     """
     starts = []
     for page in sorted(pages, key=lambda p: p["index"]):
-        if page.get("kind") != "listening_questions":
+        if page.get("kind") != "listening_questions" or teaching(page):
             continue
+        # The printed test number comes off the running line either way. It
+        # is not used to number the tests -- Cambridge 12 calls its four tests
+        # 5 to 8 -- only to tell a repeated section number apart from a new
+        # test that happens to start at one.
+        printed = HEADER_TEST.search(page.get("header") or "")
+        printed = int(printed.group(1)) if printed else None
         heading = SECTION_HEADING.search(page.get("heading") or "")
         if heading:
-            starts.append((page["index"], int(heading.group(1))))
+            starts.append((page["index"], int(heading.group(1)), printed))
+            continue
+        # The running line, when the heading carries no section number. IELTS
+        # Trainer puts the whole address there -- "Test 2 Exam practice |
+        # Listening Section 3" -- and leaves the heading to say "Questions
+        # 26-30", so the rule above finds nothing and the book comes back
+        # 2 sections of 24. No Cambridge page is touched by this: not one of
+        # the 176 already located has a section number in its running line.
+        inline = SECTION_HEADING.search(page.get("header") or "")
+        if inline:
+            starts.append((page["index"], int(inline.group(1)), printed))
 
     # A section number that does not advance means the next test has begun.
-    test, previous_section = 0, 99
+    test, previous_section, previous_test = 0, 99, None
     runs = []
-    for index, section in starts:
+    for index, section, printed in starts:
+        # Where the section comes from the running line, EVERY page of a
+        # section carries it, not just the first -- so the same number
+        # arriving again is the rest of that section, not the next test
+        # starting at it. Only a different printed test number says otherwise.
+        if (runs and section == previous_section
+                and printed in (None, previous_test)):
+            continue
         if section <= previous_section:
             test += 1
-        previous_section = section
+        previous_section, previous_test = section, printed
         runs.append({"index": index, "test": test, "section": section})
 
     by_index = {p["index"]: p for p in pages}
@@ -268,6 +336,8 @@ def resolve(pages: list[dict]) -> list[dict]:
             if page is None or page.get("kind") != "listening_questions":
                 break
             if index != run["index"] and SECTION_HEADING.search(page.get("heading") or ""):
+                break
+            if teaching(page):
                 break
             page["test"], page["section"] = run["test"], run["section"]
             index += 1
@@ -298,7 +368,8 @@ def save_all(book: int, docs, found: list[dict]) -> None:
                 json.dumps(sorted(pages, key=lambda p: p["index"]), indent=2))
 
 
-def settle(pages: list[dict], tests: list[int], conn, book: int
+def settle(pages: list[dict], tests: list[int], conn, book: int,
+           roster: dict[tuple[int, int], str]
            ) -> tuple[int, list[int], dict[int, int]]:
     """Turn one universe of pages into catalogue rows; returns how many it
     wrote, where the audioscripts start, and the key page of each test.
@@ -389,6 +460,7 @@ def settle(pages: list[dict], tests: list[int], conn, book: int
         after = longest[-1] + 1
         beyond = within.get(after + 1, {})
         if (after in within and within[after].get("kind") != "audioscript"
+                and not (within[after].get("kind") or "").endswith("answer_key")
                 and (beyond.get("kind") or "").endswith("answer_key")):
             longest = longest + [after]
 
@@ -414,7 +486,13 @@ def settle(pages: list[dict], tests: list[int], conn, book: int
                             and (p.get("test") == test or len(tests) == 1)
                             and section in (p.get("sections") or [p.get("section")]))
             key = keys.get(test)
-            sid = f"cam{book}-t{test}-s{section}"
+            # From the catalogue, never built from the book number. Three of
+            # these books are not "cam" anything -- the Trainer's sections are
+            # trn-t1-s1 -- and a constructed id UPDATEs nothing and says it
+            # wrote the row anyway.
+            sid = roster.get((test, section))
+            if sid is None:
+                continue
             script = scripts_by_section.get((test, section), [])
             guessed = scripts_by_section.get(("guessed", test, section))
             flag = "" if sheets and key is not None else "   <- INCOMPLETE"
@@ -458,6 +536,16 @@ def main() -> int:
         "ORDER BY d.rel_path", (args.book,)).fetchall()
     if not docs:
         raise SystemExit(f"no documents for book {args.book}")
+
+    # What this book actually holds, rather than the four-tests-of-four every
+    # Cambridge edition happens to be. The Official Cambridge Guide prints
+    # eight practice tests in one volume.
+    roster = {(r["test_no"], r["section_no"]): r["id"] for r in conn.execute(
+        "SELECT id, test_no, section_no FROM section WHERE book_number = ? "
+        "ORDER BY test_no, section_no", (args.book,))}
+    if not roster:
+        raise SystemExit(f"no sections for book {args.book}")
+    in_book = sorted({test for test, _ in roster})
 
     found: list[dict] = []
     for doc_row in docs:
@@ -505,10 +593,21 @@ def main() -> int:
         with ThreadPoolExecutor(max_workers=WORKERS) as pool:
             for page, said in pool.map(
                     lambda p: read_one(p, SCRIPT_PROMPT, "script"), marked):
-                if said.get("starts_here") and said.get("part"):
-                    page["heading"] = f"PART {said['part']}"
-                    if said.get("test"):
-                        page["header"] = f"Test {said['test']}"
+                begins = [s for s in (said.get("starts") or []) if isinstance(s, dict)]
+                parts = [int(s["part"]) for s in begins
+                         if isinstance(s.get("part"), int) and 1 <= s["part"] <= 4]
+                if not parts:
+                    continue
+                # Both of them, where a page carries two. IELTS Trainer prints
+                # a test's four scripts on four pages and lets each run over
+                # the fold, so half its pages begin one section and end
+                # another -- and a reader that can only report one heading
+                # reported the second, leaving the first with no span at all.
+                page["script_parts"] = parts
+                page["heading"] = " ".join(f"PART {n}" for n in parts)
+                named = next((s["test"] for s in begins if s.get("test")), None)
+                if named:
+                    page["header"] = f"Test {named}"
         save_all(args.book, docs, found)
 
     if args.numbers:
@@ -575,7 +674,7 @@ def main() -> int:
         # means the first pass did not find them, not that the book has none,
         # and the narrow question is worth asking of more pages rather than of
         # the two it happened to label. Cambridge 20 labelled one.
-        wanted = len({p.get("doc_id") for p in found}) if len(docs) > 1 else 4
+        wanted = len({p.get("doc_id") for p in found}) if len(docs) > 1 else len(in_book)
         candidates = [p for p in found
                       if (p.get("kind") or "").endswith("answer_key")
                       or p.get("kind") == "answer_list"]
@@ -640,7 +739,7 @@ def main() -> int:
         # at all. Excluding them left `--recheck` with nothing to do on
         # exactly the books it was written for.
         edges: set[int] = set()
-        for test in range(1, 5):
+        for test in in_book:
             for section in range(1, 5):
                 if (test, section) in located:
                     continue
@@ -665,7 +764,7 @@ def main() -> int:
     # One universe per document where a document is a test, otherwise one for
     # the book. `by_test` comes from the sections themselves, which is the only
     # place that already knows which file holds which test.
-    universes = [(found, [1, 2, 3, 4])]
+    universes = [(found, in_book)]
     if len(docs) > 1:
         by_doc: dict[int, int] = {}
         for row in conn.execute(
@@ -677,7 +776,7 @@ def main() -> int:
 
     written, scripts, keys = 0, [], {}
     for pages, tests in universes:
-        wrote, its_scripts, its_keys = settle(pages, tests, conn, args.book)
+        wrote, its_scripts, its_keys = settle(pages, tests, conn, args.book, roster)
         written += wrote
         scripts = scripts or its_scripts
         keys.update(its_keys)
@@ -687,10 +786,10 @@ def main() -> int:
                      (scripts[0], args.book))
     conn.commit()
     conn.close()
-    print(f"\n{written}/16 sections located; audioscripts start at index "
+    print(f"\n{written}/{len(roster)} sections located; audioscripts start at index "
           f"{scripts[0] if scripts else '?'} ({len(scripts)} pages); answer keys at "
           f"{ {t: keys[t] for t in sorted(keys)} }")
-    return 0 if written == 16 else 1
+    return 0 if written == len(roster) else 1
 
 
 if __name__ == "__main__":
