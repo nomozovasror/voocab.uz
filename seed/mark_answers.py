@@ -199,10 +199,19 @@ def main() -> int:
         print(f"  checked against {len(checked)} answer(s) that name their own "
               f"turn: {len(checked) - len(astray)} within one turn")
     if astray and len(checked) >= 3 and len(astray) > len(checked) // 4:
+        # Nothing is written, and that is the whole of the consequence. This
+        # stage ADDS markers the book did not print; refusing to add them
+        # leaves the section exactly as the book left it, with a replay span
+        # for every question it marked and none for the rest -- which
+        # build_questions.py already handles and reports by name. Returning
+        # non-zero here instead failed the section outright and cost
+        # trn-t1-s4, whose eight printed markers were never in doubt.
         print(f"  REFUSED the whole reading: Q{', Q'.join(str(n) for n in astray)} "
               f"of {len(checked)} checkable were placed more than one turn from "
-              "where their own words are", file=sys.stderr)
-        return 1
+              f"where their own words are. Nothing written; Q"
+              f"{', Q'.join(str(n) for n in sorted(missing))} keep the book's "
+              "silence and get no replay span", file=sys.stderr)
+        return 0
 
     # Where the book's own markers already are. They bound a missing question
     # far better than a running floor does: Q39 sits between whatever turn

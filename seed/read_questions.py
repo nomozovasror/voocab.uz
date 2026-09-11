@@ -134,6 +134,19 @@ deposit ({{{{3}}}} payment is required)
      WRONG:     - Cost of Main Hall for Saturday evening: £{{{{2}}}}
                 + £250 deposit ({{{{3}}}} payment is required)
 
+3. A BLANK WITH NO NUMBER BESIDE IT IS NOT A GAP. Only a numbered blank is \
+one. IELTS Trainer prints "help is needed with 4 .......... and .........." -- \
+one number, two blanks, one answer worth one mark. The second blank is part of \
+the printed line, not question 5, and making it one shifts every gap after it \
+onto the wrong answer.
+
+     page:      help is needed with 4 .......... and ..........
+     correct:   - help is needed with {{{{4}}}} and ..........
+     WRONG:     - help is needed with {{{{4}}}} and {{{{5}}}}
+
+   The Example's answer line is a blank with no number too, and is not a gap \
+for the same reason.
+
 Never put a gap in a table's header row -- it will not be drawn.
 
 Transcribe the words exactly as printed. Ignore page headers, footers, page \
@@ -143,16 +156,56 @@ that is part of the task."""
 #: How many pages past the one the catalogue names a key may run.
 KEY_SPILL = 3
 
+MISSING_KEY_PROMPT = """\
+This image is the Listening answer key page of a Cambridge IELTS book.
+
+Find the answers to questions {numbers} on it, and nothing else.
+
+The page is TWO COLUMNS and these numbers are the ones a first reading could \
+not find, so look where it would not have: the top of the RIGHT column, \
+which continues from the bottom of the left one, and below any italic \
+"Distraction" paragraph. The last few answers of a Listening section often \
+sit in the corner of a page whose heading is about something else entirely, \
+because the section before them ended there.
+
+THE READING KEY IS ON THESE PAGES TOO, and it numbers its questions 1 to 40 \
+just as the Listening key does. Take a number ONLY from the list that is the \
+LISTENING key -- the one under a "LISTENING SECTION" heading, or running on \
+from one on the page before. A list under "READING PASSAGE" is the wrong \
+paper, however well its numbers match.
+
+Return ONE JSON object, no prose and no code fence:
+
+{{"answers": {{"<number>": "<the line EXACTLY as printed>"}}}}
+
+Copy each line character for character, keeping every slash and parenthesis. \
+Leave out any number you genuinely cannot see -- an invented answer is worse \
+than a missing one."""
+
 KEY_PROMPT = """\
 This image is the Listening answer key page of a Cambridge IELTS book. Read \
 ONLY the answers for {label}, questions {first} to {last}.
 
-The page may carry MORE THAN ONE numbered list. IELTS Trainer prints the \
+THE PAGE IS TWO COLUMNS. The left one runs top to bottom and the right one \
+continues from it, so a test's forty answers can start on the left and finish \
+on the right. Look down BOTH before deciding a number is not printed: missing \
+the last few answers of a section is what happens when only one column is \
+read.
+
+ANSWERS ARE THE BOLD LINES. Between them sit italic paragraphs beginning \
+"Distraction", explaining what the recording said to mislead the candidate. \
+Those are commentary. They are not answers and they do not carry numbers.
+
+The page may also carry MORE THAN ONE numbered list. IELTS Trainer prints the \
 answers to its teaching exercises down the left -- "Useful language: dates \
-1 21(st) September, 2 1(st) February 1986" -- and the exam questions on the \
-right under "Exam practice". Only the exam practice list is the answer key. \
-If no list on this page is the one asked for, return {{"answers": {{}}}} \
-rather than the nearest thing to it.
+1 21(st) September, 2 1(st) February 1986" -- and the exam questions under \
+"Exam practice". Only the exam practice list is the answer key. If no list on \
+this page is the one asked for, return {{"answers": {{}}}} rather than the \
+nearest thing to it.
+
+Return EVERY number from {first} to {last} that is printed. A number you \
+cannot find is better left out than guessed at, but do not leave one out \
+because its line looked like the paragraph above it.
 
 Return ONE JSON object, no prose and no code fence:
 
@@ -417,14 +470,19 @@ def main() -> int:
     if "groups" not in read and read.get("questions"):
         read = {"groups": [read]}
 
-    def read_key(index: int) -> dict:
+    def read_key(index: int, only: list[int] | None = None) -> dict:
         shot = vision.render(pdf, [index], work / "pages")
-        print(f"reading the answer key from page index {index}")
-        return key_answers(vision.ask_json(
-            KEY_PROMPT.format(
-                label=f"Test {row['test_no']}, Section {row['section_no']}",
-                first=first, last=last),
-            shot, model=args.model))
+        prompt = KEY_PROMPT.format(
+            label=f"Test {row['test_no']}, Section {row['section_no']}",
+            first=first, last=last)
+        if only:
+            print(f"asking page index {index} again for only "
+                  f"{', '.join(str(n) for n in only)}")
+            prompt = MISSING_KEY_PROMPT.format(
+                numbers=", ".join(str(n) for n in only))
+        else:
+            print(f"reading the answer key from page index {index}")
+        return key_answers(vision.ask_json(prompt, shot, model=args.model))
 
     printed = read_key(key_page)
     # Forty answers do not always fit on one sheet. Where the numbers this
@@ -433,13 +491,31 @@ def main() -> int:
     # question 10, and the sections after that would otherwise come back with
     # no answers at all and no explanation. Asked for only when short, so a
     # book whose key fits pays nothing for the possibility that it might not.
+    def short_of(n: int) -> bool:
+        """Is this number missing -- counting a pair line as covering both?"""
+        return n not in printed and not any(
+            PAIRED_KEY.match(str(k)) and
+            n in range(int(PAIRED_KEY.match(str(k)).group(1)),
+                       int(PAIRED_KEY.match(str(k)).group(2)) + 1)
+            for k in printed)
+
     def short() -> bool:
-        return any(n not in printed and
-                   not any(PAIRED_KEY.match(str(k)) and
-                           n in range(int(PAIRED_KEY.match(str(k)).group(1)),
-                                      int(PAIRED_KEY.match(str(k)).group(2)) + 1)
-                           for k in printed)
-                   for n in range(first, last + 1))
+        return any(short_of(n) for n in range(first, last + 1))
+
+    def absent() -> list[int]:
+        return [n for n in range(first, last + 1) if short_of(n)]
+
+    # The SAME page again, asked only for what is missing, before looking at
+    # the next one. These keys are two columns and a section's answers can
+    # start at the bottom of the left and finish at the top of the right --
+    # Test 6's questions 11 to 16 are on one side of the fold and 17 to 20 on
+    # the other -- and a reading that stops at the column break loses the tail
+    # of a section while looking complete. Telling the prompt about the
+    # columns helped and did not fix it; naming the four numbers does, which
+    # is the same lesson as everywhere else here: a narrow question gets a
+    # reliable answer.
+    if short():
+        printed = {**read_key(key_page, only=absent()), **printed}
 
     # Forward a page at a time while numbers are still missing. One page of
     # spill covers Cambridge, whose forty listening answers run over a fold at
@@ -451,7 +527,12 @@ def main() -> int:
     for ahead in range(1, KEY_SPILL + 1):
         if not short():
             break
-        spill = read_key(key_page + ahead)
+        # Narrow, like the re-ask above and for the same reason. A whole-page
+        # question asked of a spill page gets nothing: Test 5's questions 38
+        # to 40 sit in the top corner of a sheet headed "READING PASSAGE 1",
+        # and a reader told to find the Listening key for Section 4 on that
+        # page reasonably answers that there is none.
+        spill = read_key(key_page + ahead, only=absent())
         # The earlier page wins where both name a number: it is the one the
         # catalogue vouched for, and the later one may be another paper's.
         printed = {**spill, **printed}
@@ -462,6 +543,12 @@ def main() -> int:
     paired: dict[int, int] = {}          # second number -> first
     for label, value in printed.items():
         label = str(label)
+        # A key line copied with its own number in front of it: asked for
+        # question 20 on a page whose layout it had already been wrong about,
+        # a reader answered {"20": "20 B"}, and "20 B" is not a letter. The
+        # number is a label, not part of the answer, and it only ever appears
+        # here because it is printed immediately to the left of the answer.
+        value = re.sub(rf"^\s*{re.escape(label)}\s+", "", str(value))
         pair = PAIRED_KEY.match(label)
         if pair:
             # NOT `first, second` -- that shadowed the section's own first
