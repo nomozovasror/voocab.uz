@@ -1467,3 +1467,203 @@ Every stage now runs from the catalogue without a page number passed by hand.
 What has not been done is the other ten books, and the batch runner that would
 take a book from `locate_pages` through to `import_section` without a person
 between the steps.
+
+## Three books that are not "Cambridge N"
+
+Eleven numbered editions is not the whole shelf. `Materials/` also holds
+**IELTS Trainer** (six tests), **IELTS Trainer 2** (six) and **The Official
+Cambridge Guide to IELTS** (eight) — eighty more sections, ten more hours, a
+45% larger corpus — and a fourth folder, **Complete IELTS Bands 6.5–7.5**,
+which is not seedable at all and is recorded as a finding rather than a book:
+it is a coursebook whose answer key and audioscript both live in a Teacher's
+Book that did not arrive, 153 of its 189 pages carry no text, and only eight
+of its 55 tracks run long enough to be a section.
+
+### The filename says nothing, so duration does
+
+Every Cambridge file names its test and section somewhere — seven conventions,
+all parsed in `manifest.py`. These three name a CD track and nothing else:
+`Track No08.mp3`, `Cam43.mp3`, `TRACK 30.mp3`. No pattern reaches that.
+
+What does reach it is length. A listening section runs six to ten minutes and
+the exercise snippets scattered among them run under four, and across all
+three books there is **nothing in the gap between** — longest snippet 3.7
+minutes, shortest section 6.0. Take the long tracks in disc-and-track order
+and they are the tests in order.
+
+That is an inference, so it is checked twice. The count has to come out at
+exactly four a test — 24, 32, 24 — and the books say the mapping themselves in
+print: IELTS Trainer 2 heads Test 6 Listening Part 1 with track 30 and gets
+`TRACK 30`; the Guide heads Practice Test 2 Listening Section 1 with track 43
+and gets `Cam43`. Both land.
+
+### What the catalogue had to give up
+
+`section.test_no` was `CHECK (test_no BETWEEN 1 AND 4)`. The Guide prints
+eight practice tests in one volume. `book.kind` was `('cambridge',
+'retypeset')`; neither is a Trainer or a Guide.
+
+SQLite cannot ALTER a CHECK, and `CREATE TABLE IF NOT EXISTS` does nothing to
+a table that already exists — so `db.py init` rebuilds the catalogue in place
+when `schema.sql` has outgrown it. Every table, not only the two whose
+constraints moved: renaming one rewrites the references the others hold to it,
+and doing `section` alone left `stage` pointing at `section_old` one statement
+before `section_old` was dropped. 1,232 stage rows and twelve findings carried
+over.
+
+Two smaller couplings went with it. `locate_pages.py` built section ids as
+`f"cam{book}-t{test}-s{section}"`, which UPDATEd nothing for a book whose
+sections are called `trn-t1-s1` and reported the row as written; and
+`import_section.py` built the material title as `f"Cambridge IELTS {book}"`,
+which would have named the Trainer "Cambridge IELTS 101". Both take the string
+from the catalogue now. For the eleven numbered books the title is
+byte-identical to what it always built, which matters more than it reads:
+the title is the key the import dedups on, so a changed one seeds a second
+copy rather than updating the first. Book 20's catalogue title lost its
+"(Chinese re-typeset)" for exactly that reason.
+
+### The address is in the running line, not the heading
+
+`resolve()` reads the section number off the task heading. IELTS Trainer puts
+the whole address in the running line instead — "Test 2 Exam practice |
+Listening Section 3" — and leaves the heading to say "Questions 26–30". The
+first run located **2 sections of 24**.
+
+Reading the running line where the heading carries no section number fixes it,
+and costs the existing corpus nothing: not one of the 176 Cambridge sections
+has a section number in its running line, and re-running all eleven books
+against their cached page maps returns byte-identical rows. It needs one extra
+rule, though — where the section comes from the running line, *every* page of a
+section carries it, not just the first, so a repeated number is the rest of
+that section rather than the next test starting at it.
+
+The result agrees with the printed contents page: Test 3 Listening at 97, Test
+4 at 116, Test 5 at 135, Test 6 at 154.
+
+### A book that prints each test twice
+
+The Trainer's first two tests appear as "Test 1 Training", which teaches the
+task with worked examples, and again as "Test 1 Exam practice", which is the
+paper. Only the paper has a recording — the training exercises are the short
+tracks the manifest already leaves behind — so a training page swept into a
+section would put questions in front of a learner that nothing in their audio
+answers. Skipped by name. Cambridge 10 prints eighteen pages saying "General
+Training" and every one of them is Reading, so the rule excludes that phrase.
+
+### The transcripts are not one block
+
+Cambridge prints forty-odd audioscript pages in one run at the back. The
+Trainer interleaves: each test's key, then that test's four transcript pages,
+then the next test's key. A span from Test 1 Section 4 to Test 2 Section 1
+therefore covered thirteen pages of answer key that would have been read as if
+somebody had spoken them, and the rule that absorbs one stray page at the end
+of the block was swallowing a key page. Both now stop at the first page that
+is not an audioscript.
+
+A transcript page can also *begin two sections* — one ends partway down and
+the next starts below it — which the reader could only report one of. It
+reported the second, and four sections lost their span to a guess. It lists
+them now.
+
+### Two columns, read across
+
+This is the one that would have shipped quietly.
+
+`verify.py` put three of the four worst-aligned sections in the corpus in this
+book. A walk over the markers — a paper asks its questions in the order the
+recording answers them, so the numbers down a page run up — found the same
+three going backwards: `trn-t1-s3` came back marked **23, 24, 21, 22**. The
+pages are two columns and were being read across rather than down, so two
+parts of the recording minutes apart were interleaved, and every replay span
+built from those markers sent a learner to the wrong minute.
+
+Told to finish the left column before starting the right, all four came back
+in order and their median alignment went from 0.62 to 0.93. The backwards walk
+now runs after every reading and says so by name.
+
+The same fault, in the same shape, was losing answers on the key pages: Test
+6's questions 11–16 sit at the bottom of one column and 17–20 at the top of
+the other, and a reading that stopped at the fold lost the tail of a section
+while looking complete. Telling the prompt about the columns helped and did
+not fix it. What fixed it was asking the same page again naming the four
+numbers that were missing — the narrow question, which is the one thing that
+has worked every time here.
+
+### The marker is inline, and the words after it are spoken
+
+Cambridge prints `Q31` down the right margin. The Trainer prints `(31)` in the
+text, immediately before the underlined answer. Told to read either, it read
+both — and then, told that a printed number is not a spoken word, it dropped
+the underlined phrase along with the number. `trn-t6-s4` had **2 of its 10
+answer words anywhere in its transcript**, which is a section whose replay
+spans could not have been right and whose alignment score was 0.95. Saying
+explicitly that the number goes and the words after it stay took it to 10 of
+10.
+
+Inline markers are, incidentally, better than margin ones: they sit on the
+sentence rather than the turn.
+
+### What the key prints that is not the answer
+
+Three things, none of which Cambridge does.
+
+The Trainer writes editorial asides into the key line itself: `route
+[alterations = changes]` explains how the question paraphrased the recording,
+and `ballantyne (you can write this in small or capital letters)` is advice to
+the candidate. Expanded as notation, the first gives exactly one accepted
+answer — the whole line — so a learner writing "route" is marked **wrong**.
+Square brackets are dropped, and so is a parenthesis of more than four words;
+every real optional group in this corpus is one to three, and no line in the
+176 sections read before this book has either shape.
+
+It prints the answers to its teaching exercises on the same page, under
+"Useful language: dates" — a numbered list of ten that is not the key.
+
+And a section's answers can be three sheets past the page the catalogue names:
+Test 5's questions 38 to 40 sit in the corner of a page headed "READING
+PASSAGE 1", where a reader asked for Section 4's listening key answers, quite
+reasonably, that there is none. The spill walks forward up to three pages,
+asking only for the numbers still missing, and stops as soon as none are.
+
+### A blank with no number is not a gap
+
+"help is needed with **4** .......... and .........." is one number, two
+blanks and one mark. Read as two gaps it shifted every answer after it by one,
+and the build caught it as eleven gaps against ten questions. The Example's
+answer line is a blank with no number too, for the same reason.
+
+### A map is not a matching task
+
+A map task with a lettered box above it looks exactly like a matching task,
+and two of the Trainer's four came back named that way. The difference is that
+a matching task can be published and **a map task without its picture cannot
+be answered at all**.
+
+So a group whose instructions say "Label the map/plan/diagram below" is named
+by that, whatever the reader called it — and applying the rule to the 176
+sections already read found **two Cambridge 11 sections that had been in the
+database as letter-matching tasks with no map since the day they were seeded**.
+`publish_blockers()` had been saying so; nothing had asked it about them,
+because `seed_status.py` matched titles beginning "Cambridge IELTS &lt;number&gt;"
+and so could not see the Trainer either. It matches the tail now.
+
+Three things followed from getting the type right. A labelling group is
+answered *either* from blanks on the picture *or* from a box beside it and the
+server refuses one that offers both — so bare letters in `options` (`["A",
+"B", ... "I"]`, which is the alphabet, not a list to read) become
+`image_letters`, and words stay a box. A group read as matching carries its
+item names on the questions rather than in a template, and an empty template
+is refused, so the list is built from the names already there. And the gap
+checks do not apply to a labelling group answered with letters.
+
+### Where the Trainer stands
+
+24 sections, **234 of 234 replay spans**, nothing below 0.7 in `verify.py`, and
+all 24 in the database as private drafts. The corpus is **200 materials, 1,914
+of 1,914 replay spans, 200 of 200 content-complete**.
+
+Its `trim` stage failed on all 24 and was skipped: trimming transcribes the
+first two minutes through Groq's `whisper-large-v3`, and Groq blocked this
+account partway through the book on a spend-alert threshold. Nothing is lost
+by it here — these tracks are one section each and open with the test's own
+introduction, which belongs to the test.
