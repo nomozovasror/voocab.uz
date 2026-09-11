@@ -49,6 +49,49 @@ DEFAULT_CONFIG_KEYS = {"template", "options", "image_letters", "image", "image_a
 #: They carry no template, so the gap checks below do not apply to them and
 #: their answer key is a letter rather than a list of accepted phrasings.
 LETTERED = {"multiple_choice", "matching"}
+#: A map or diagram task is answered EITHER way, and the page decides which.
+#: Blanks drawn on the picture are written into, and take a template like any
+#: gap-fill; a box of lettered places beside it is picked from, and takes no
+#: template at all. Which one a group is shows in whether it has a box, so
+#: that is what is asked -- not the type, which is the same for both.
+LABELLING = {"map_labelling", "diagram_labelling"}
+
+
+def laid_out(group: dict) -> str:
+    """A template for a labelling group that came back without one.
+
+    The server stores a map task as a list of its items, each with a gap beside
+    it, and draws the letters over the picture -- "15 Scarecrow {{1}}", "16
+    Maze {{2}}". A group read as a matching task puts those item names on the
+    questions instead and leaves the template empty, and an empty template is
+    refused: "template must contain at least one gap token". The names are
+    there either way, so the list is built from them rather than the page
+    being read again. Where the picture carries the numbers itself and there
+    are no names to list -- Trainer's Test 6 map is numbered 11 to 15 with the
+    words in a box -- the gap is all there is, which is also what the page
+    shows.
+    """
+    lines = []
+    for number, question in enumerate(group.get("questions") or [], start=1):
+        said = (question.get("prompt") or "").strip()
+        lines.append(f"- {said} {{{{{number}}}}}" if said else f"- {{{{{number}}}}}")
+    return "\n".join(lines)
+
+
+def from_a_box(group: dict) -> list[str]:
+    """The list beside the picture, where there is one rather than letters on it.
+
+    "Label the map below. Choose FIVE answers from the box and write the
+    correct letter A-H" prints eight named places to pick from; "Label the
+    plan below. Write the correct letter A-G" prints those letters on the plan
+    and nothing else. Both come back with `options`, and in the second case
+    they are the bare letters -- which is not a list to read, it is the
+    alphabet.
+    """
+    options = [str(o).strip() for o in (group.get("options") or [])]
+    if not options or all(len(o) == 1 and o.isalpha() for o in options):
+        return []
+    return options
 #: A letter, as the key prints it. "17-18.AE" is handled where the group is
 #: built, not here: it is a statement about how two numbers share one question.
 #: A-K, not A-H. Eight is what a "choose the correct letter" offers and what
@@ -283,7 +326,9 @@ def build(section_id: str) -> int:
     recovered = 0
     out_groups = []
     for gi, group in enumerate(src["groups"]):
-        lettered = group["type"] in LETTERED
+        lettered = (group["type"] in LETTERED
+                    or (group["type"] in LABELLING and bool(from_a_box(group)
+                                                            or group.get("options"))))
         if not group.get("questions"):
             # An empty group is never what the page says. It reached the
             # database as a part carrying a group with nothing in it, which
@@ -423,8 +468,18 @@ def build(section_id: str) -> int:
                     print(f"note: group {gi}: the instructions do not say which letters "
                           f"are on the picture; using A-{chr(ord('A') + drawn - 1)} "
                           "from the answer key", file=sys.stderr)
-            config = {"template": group.get("template") or "", "options": [],
-                      "image_letters": drawn}
+            # A labelling task is answered from ONE of two things, and the
+            # server refuses a group that offers both. Which one it is shows
+            # in what the options say. Bare letters -- ["A", "B", ... "I"] --
+            # are the letters printed on the map itself, which "image_letters"
+            # already draws; carried as options as well they would show the
+            # learner a list reading "A, B, C". Words are a box beside the
+            # map, and then the letters are in the box rather than on the
+            # picture and the learner needs to read them.
+            box = from_a_box(group)
+            config = {"template": group.get("template") or laid_out(group),
+                      "options": box,
+                      "image_letters": 0 if box else drawn}
         allowed = CONFIG_KEYS.get(group["type"], DEFAULT_CONFIG_KEYS)
         unknown = set(config) - allowed
         if unknown:

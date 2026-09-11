@@ -31,15 +31,19 @@ from app.models.question import Question
 from app.models.question_group import QuestionGroup
 from app.services.publishing import publish_blockers
 
-#: Every seeded material is titled from its book, test and section.
-SEEDED = re.compile(r"^Cambridge IELTS \d+ ", re.I)
+#: Every seeded material is titled "<the book> - Test N, Part M", and it is
+#: the tail that identifies it rather than the head: the books are no longer
+#: all called "Cambridge IELTS <number>". Matching the head missed IELTS
+#: Trainer's twenty-four entirely, and reported a corpus of 176 as complete
+#: while 24 sections sat in the database unexamined.
+SEEDED = re.compile(r" — Test \d+, Part \d+$")
 
 
 async def report(show_blocked: bool) -> None:
     async with async_session_factory() as session:
         materials = [m for m in (await session.scalars(
             select(Material).order_by(Material.title))).all()
-            if SEEDED.match(m.title or "")]
+            if SEEDED.search(m.title or "")]
 
         # One query for every seeded question, not one per material: the join
         # from a question up to its material runs group -> part -> material,

@@ -93,8 +93,13 @@ items, each answered with a letter. Also NO template:
   "reuse": <true if it says a letter may be used more than once, else false>,
   "questions": [{{"number": 1, "paper_number": 21, "prompt": "<the item, without the number>"}}]
 
-map_labelling and diagram_labelling are answered on a picture. If you meet \
-one, still name the type, and use shape (A).
+map_labelling and diagram_labelling are answered on a PICTURE -- a map, a \
+plan or a labelled drawing. Their instructions say "Label the map below", \
+"Label the plan below" or "Label the diagram below". Name the type \
+map_labelling or diagram_labelling, NEVER "matching", even when the task \
+looks like one: a lettered box above a list of places is a map task if the \
+letters are on a map. Give it whichever shape its answers take -- a lettered \
+box is shape (C), blanks on the drawing are shape (A).
 
 THE LAYOUT GRAMMAR for "template". Every line is one of:
 
@@ -231,6 +236,23 @@ the note:
     {{"11&12": "A, C", "13": "health problems"}}
 
 Returning {{"11&12": "IN EITHER ORDER"}} loses the answer entirely."""
+
+
+#: "Label the map below", "Label the plan below", "Label the diagram below" --
+#: the one thing these tasks all say, and the one thing they all need. A map
+#: task with a lettered box above it looks exactly like a matching task, and
+#: two of IELTS Trainer's four came back named that way; the difference is
+#: that a matching task can be published and a map task without its picture
+#: cannot be answered at all.
+LABELLING = re.compile(r"\blabel\s+the\s+(map|plan|diagram)\b", re.I)
+
+
+def labelling(group: dict) -> str | None:
+    """The type a group's own instructions say it is, where they say so."""
+    said = LABELLING.search(group.get("instructions") or "")
+    if not said:
+        return None
+    return "diagram_labelling" if said.group(1).lower() == "diagram" else "map_labelling"
 
 
 def repair(template: str, questions: list[dict]) -> tuple[str, list[str]]:
@@ -648,7 +670,7 @@ def main() -> int:
         for note in notes:
             print(f"  repaired: {note}")
         out = {
-            "type": group.get("type"),
+            "type": labelling(group) or group.get("type"),
             "instructions": group.get("instructions", ""),
             "word_limit": group.get("word_limit"),
             "template": template,
