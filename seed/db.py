@@ -25,11 +25,22 @@ MATERIALS = REPO / "Materials"
 DB_PATH = SEED / "catalogue.db"
 MANIFEST = SEED / "manifest.json"
 
-#: What the files themselves cannot say. `kind` decides what the pipeline is
-#: allowed to attempt: only a 'cambridge' book prints an audioscript, and only
-#: an audioscript makes forced alignment possible.
+#: What the files themselves cannot say. `has_audioscript` decides what the
+#: pipeline is allowed to attempt -- only a printed audioscript makes forced
+#: alignment possible -- and `kind` says how that book's pages are laid out,
+#: which is a different question: the Trainer prints a transcript and marks the
+#: answer inline, the Guide prints one and does not number the answer at all.
 BOOK_FACTS: dict[int, tuple[str, str, int | None, str | None]] = {
     **{n: (f"Cambridge IELTS {n}", "cambridge", None, None) for n in range(10, 20)},
+    101: ("Cambridge IELTS Trainer", "trainer", 1,
+          "transcripts at printed page 173, interleaved with the key test by test; "
+          "the answer is marked inline as '(31)' and underlined, not in the margin"),
+    102: ("The Official Cambridge Guide to IELTS", "guide", 1,
+          "eight practice tests; recording scripts head each section with its track "
+          "number and underline the answers WITHOUT numbering them"),
+    103: ("Cambridge IELTS Trainer 2", "trainer", 0,
+          "questions and key are a clean text layer, but the audioscripts were never "
+          "printed -- the book sends you to esource.cambridge.org for them"),
     11: ("Cambridge IELTS 11", "cambridge", 1, "audioscripts confirmed from page 103"),
     17: ("Cambridge IELTS 17", "cambridge", 1,
          "has an OCR text layer, but a contaminated one -- read the pages visually instead"),
@@ -107,6 +118,31 @@ FINDINGS: list[tuple[str, str, str, str]] = [
     ("cam14-t2-s4", "resolved",
      "cam14-t2-s4 had the next test appended",
      "17.3 minutes against a library range of 5.9-9.6. Re-cut by hand to 8.0 minutes."),
+    ("103", "blocker",
+     "IELTS Trainer 2 prints no audioscripts",
+     "The back of the book runs questions, answer sheets, then KEY Test 1-6 with "
+     "explanations, and stops. Page 4 says why: 'use the audio files available to "
+     "download with the audioscripts from esource.cambridge.org'. Its 24 sections "
+     "take the Cambridge 20 route -- heard by ASR, markers placed by meaning."),
+    ("102", "warning",
+     "The Guide's recording scripts underline the answers but do not number them",
+     "Cambridge and the Trainer both name the question: 'Q31' in the margin, '(31)' "
+     "inline. The Guide only underlines the phrase. The numbering is recoverable -- "
+     "the nth underline in a section is question n -- but that rule breaks on a "
+     "'choose TWO letters', where one question takes two underlines, so it has to be "
+     "checked against the count the key expects rather than trusted."),
+    ("102", "info",
+     "The Guide holds eight practice tests, not four",
+     "Which is why section.test_no runs to 8. Its listening tracks are Cam39 to "
+     "Cam70, four to a test in order, and the recording scripts confirm the mapping "
+     "in print: Practice Test 2 Section 1 is headed track 43."),
+    ("corpus", "blocker",
+     "Complete IELTS Bands 6.5-7.5 cannot be seeded from what arrived",
+     "The Student's Book is a coursebook, not a test book: its 55 tracks are unit "
+     "exercises with only eight running long enough to be a section. 153 of its 189 "
+     "pages carry no extractable text, it prints no audioscript, and no answer key "
+     "was found in it -- both live in the Teacher's Book. Registered nowhere and "
+     "counted in nothing; it needs a different source file, not a pipeline change."),
 ]
 
 #: The stages a section passes through, in the order they block on each other.
@@ -135,6 +171,70 @@ def probe_pdf(path: pathlib.Path) -> tuple[int, int]:
         return len(doc), sum(1 for page in doc if len(page.get_text()) >= TEXT_PAGE_CHARS)
 
 
+def widen(conn: sqlite3.Connection) -> None:
+    """Rebuild the catalogue in place when schema.sql has outgrown it.
+
+    SQLite cannot ALTER a CHECK constraint, and `CREATE TABLE IF NOT EXISTS`
+    does nothing to a table that already exists -- so a catalogue built before
+    the Guide arrived would still refuse its test 5, and one built before the
+    Trainer would refuse kind='trainer'. Deleting the file and starting again
+    is not an option: `stage` and `finding` are the only things in here that no
+    rebuild could reproduce.
+
+    Every table is renamed aside, recreated from schema.sql, and refilled by
+    the columns the two definitions have in common -- all of them, not only
+    the two whose constraints moved, because renaming one table rewrites the
+    references to it held by the others. Doing it to a single table leaves
+    `stage` pointing at `section_old`, and `section_old` is about to be
+    dropped; that is not a hypothetical, it is what this did on its first
+    run.
+    """
+    marks = {  # what the OUTGROWN definition of each table still contains
+        "book": "CHECK (kind IN ('cambridge', 'retypeset'))",
+        "section": "CHECK (test_no    BETWEEN 1 AND 4)",
+    }
+    written = {r["name"]: r["sql"] or "" for r in conn.execute(
+        "SELECT name, sql FROM sqlite_master WHERE type = 'table'")}
+    if not any(mark in written.get(table, "") for table, mark in marks.items()):
+        return
+
+    tables = [t for t in written if not t.startswith("sqlite_")]
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    # The view names the tables it reads, so a rename would rewrite it and
+    # then CREATE VIEW IF NOT EXISTS would leave the rewrite in place.
+    conn.execute("DROP VIEW IF EXISTS work_remaining")
+    for table in tables:
+        conn.execute(f'ALTER TABLE "{table}" RENAME TO "{table}__old"')
+    conn.executescript((SEED / "schema.sql").read_text())
+    # schema.sql opens with `PRAGMA foreign_keys = ON`, and executescript
+    # commits first -- so running it turns the constraint back on midway
+    # through the one operation that needs it off. Off again, and checked
+    # rather than assumed, because the failure it causes lands eight
+    # statements later on a DROP with nothing to say about why.
+    conn.execute("PRAGMA foreign_keys = OFF")
+    if conn.execute("PRAGMA foreign_keys").fetchone()[0]:
+        raise SystemExit("PROBLEM  foreign keys would not turn off; "
+                         "the rebuild cannot proceed safely")
+    for table in tables:
+        fresh = {r["name"] for r in conn.execute(f'PRAGMA table_info("{table}")')}
+        kept = [r["name"] for r in conn.execute(f'PRAGMA table_info("{table}__old")')
+                if r["name"] in fresh]
+        columns = ", ".join(f'"{c}"' for c in kept)
+        conn.execute(f'INSERT INTO "{table}" ({columns}) '
+                     f'SELECT {columns} FROM "{table}__old"')
+        moved = conn.execute(f'SELECT COUNT(*) c FROM "{table}"').fetchone()["c"]
+        print(f"rebuilt {table}, {moved} row(s) carried over")
+    for table in tables:
+        conn.execute(f'DROP TABLE "{table}__old"')
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = ON")
+    dangling = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if dangling:
+        raise SystemExit(f"PROBLEM  the rebuild left {len(dangling)} dangling "
+                         f"reference(s); the catalogue is not safe to use")
+
+
 def connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -150,6 +250,7 @@ def cmd_init() -> int:
 
     conn = connect()
     conn.executescript((SEED / "schema.sql").read_text())
+    widen(conn)
 
     # CREATE TABLE IF NOT EXISTS does nothing to a table that already exists,
     # so a column added to schema.sql never reaches an existing catalogue.
@@ -181,7 +282,10 @@ def cmd_init() -> int:
     for rel in sorted({r["pdf"] for r in rows if r["pdf"]}):
         path = MATERIALS / rel
         pages, text_pages = probe_pdf(path)
-        book = int(rel.split("/")[0].removeprefix("Cambridge ").split()[0])
+        # From the manifest rather than from the folder name: three of the
+        # books are not called "Cambridge N" at all, and the row that names
+        # the PDF already knows which book it belongs to.
+        book = next(r["book"] for r in rows if r["pdf"] == rel)
         conn.execute(
             """INSERT INTO document (book_number, rel_path, sha256, pages,
                                      text_pages, has_text_layer)

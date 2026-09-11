@@ -12,13 +12,24 @@
 PRAGMA foreign_keys = ON;
 
 
--- One row per book that arrived. `kind` matters because it decides what the
--- pipeline can do: a 'cambridge' book prints an audioscript at the back and
--- can be force-aligned, a 'retypeset' one does not and cannot.
+-- One row per book that arrived. `kind` says which family the book belongs to
+-- and therefore how its pages are laid out; `has_audioscript` is the flag that
+-- actually decides what the pipeline may attempt, because only a printed
+-- audioscript makes forced alignment possible.
+--
+-- 'cambridge'  the numbered editions, audioscript at the back with Q numbers
+--              down the margin
+-- 'retypeset'  Cambridge 20, cleanly typeset questions and no script at all
+-- 'trainer'    IELTS Trainer 1 and 2. Six tests, and the transcript (where
+--              there is one) marks the answer inline as "(31)" rather than in
+--              the margin
+-- 'guide'      the Official Cambridge Guide. EIGHT tests, and its recording
+--              scripts underline the answer without numbering it
 CREATE TABLE IF NOT EXISTS book (
     number           INTEGER PRIMARY KEY,
     title            TEXT    NOT NULL,
-    kind             TEXT    NOT NULL CHECK (kind IN ('cambridge', 'retypeset')),
+    kind             TEXT    NOT NULL CHECK (kind IN ('cambridge', 'retypeset',
+                                                      'trainer', 'guide')),
     -- NULL until somebody has actually looked. Not a default of "yes":
     -- assuming an audioscript exists is how a batch run discovers at the end
     -- that a sixth of it was never alignable.
@@ -52,7 +63,9 @@ CREATE TABLE IF NOT EXISTS document (
 CREATE TABLE IF NOT EXISTS section (
     id            TEXT    PRIMARY KEY,          -- cam11-t1-s1
     book_number   INTEGER NOT NULL REFERENCES book(number),
-    test_no       INTEGER NOT NULL CHECK (test_no    BETWEEN 1 AND 4),
+    -- Up to eight because the Official Cambridge Guide prints eight practice
+    -- tests in one volume. Every other book here stops at four.
+    test_no       INTEGER NOT NULL CHECK (test_no    BETWEEN 1 AND 8),
     section_no    INTEGER NOT NULL CHECK (section_no BETWEEN 1 AND 4),
     document_id   INTEGER          REFERENCES document(id),
     rel_path      TEXT    NOT NULL UNIQUE,
