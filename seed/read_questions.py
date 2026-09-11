@@ -140,9 +140,19 @@ Transcribe the words exactly as printed. Ignore page headers, footers, page \
 numbers, and any watermark (iyuce.com, "Edit by:", Chinese text) -- none of \
 that is part of the task."""
 
+#: How many pages past the one the catalogue names a key may run.
+KEY_SPILL = 3
+
 KEY_PROMPT = """\
 This image is the Listening answer key page of a Cambridge IELTS book. Read \
 ONLY the answers for {label}, questions {first} to {last}.
+
+The page may carry MORE THAN ONE numbered list. IELTS Trainer prints the \
+answers to its teaching exercises down the left -- "Useful language: dates \
+1 21(st) September, 2 1(st) February 1986" -- and the exam questions on the \
+right under "Exam practice". Only the exam practice list is the answer key. \
+If no list on this page is the one asked for, return {{"answers": {{}}}} \
+rather than the nearest thing to it.
 
 Return ONE JSON object, no prose and no code fence:
 
@@ -431,10 +441,19 @@ def main() -> int:
                            for k in printed)
                    for n in range(first, last + 1))
 
-    if short():
-        spill = read_key(key_page + 1)
-        # The first page wins where both name a number: it is the one the
-        # catalogue vouched for.
+    # Forward a page at a time while numbers are still missing. One page of
+    # spill covers Cambridge, whose forty listening answers run over a fold at
+    # most; IELTS Trainer prints its key ten questions to a column and puts
+    # the Reading key, the Writing notes and the Speaking notes between one
+    # test's listening sections and the next, so Section 4's answers can be
+    # three sheets past the page the catalogue names. Bounded, and it stops as
+    # soon as nothing is missing -- a book whose key fits pays for none of it.
+    for ahead in range(1, KEY_SPILL + 1):
+        if not short():
+            break
+        spill = read_key(key_page + ahead)
+        # The earlier page wins where both name a number: it is the one the
+        # catalogue vouched for, and the later one may be another paper's.
         printed = {**spill, **printed}
 
     # A key line can be labelled for two numbers at once. int() on "11&12"

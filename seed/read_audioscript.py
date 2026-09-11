@@ -77,15 +77,35 @@ Return ONE JSON object, no prose and no code fence:
 {{"turns": [
   {{"speaker": "<the LABEL in the left column, verbatim, e.g. OFFICIAL, WOMAN, TUTOR>",
     "text": "<everything that speaker says, as one line>",
-    "marker": "<the Q number printed in the RIGHT MARGIN against this turn, like Q1, or Example, or null>",
+    "marker": "<the Q number printed against this turn -- see below for where -- like Q1 or 31, or Example, or null>",
     "answer": "<the words UNDERLINED in this turn, verbatim, or null>"}}
 ]}}
 
 Rules that matter:
 
+* **These pages are printed in TWO COLUMNS.** Read the whole of the LEFT
+  column first, top to bottom, and only then the whole of the RIGHT column.
+  The conversation runs down one column and continues at the top of the next.
+  Reading across the page instead interleaves two parts of the recording that
+  are minutes apart, and the numbers say so when it happens: IELTS Trainer's
+  Test 1 Section 3 came back marked 23, 24, 21, 22 because the right column
+  was read first.
 * One entry per speaker turn, in order. A turn that runs over several printed
   lines is ONE entry, unless a marker falls inside it.
-* **Start a NEW entry at every margin marker, even when the speaker has not
+* **The Q number is not always in the margin.** Cambridge prints it down the
+  right-hand side; IELTS Trainer prints it inline, in brackets immediately
+  before the underlined answer -- "(32) In the mid-fifteenth century, a man
+  called Nicholas Cusa ...". Both say the same thing: this is the line where
+  question 32 is answered. Put it in "marker" either way.
+* **A printed number is not a spoken word, but the words after it ARE.**
+  Nobody says "(32)", so leave the number and its brackets out of "text". The
+  UNDERLINED words that follow it are spoken, and they are the most important
+  words on the page -- they are the answer. Copy them into "text" like any
+  others, in their place. A turn that begins "(31) The green colour of some
+  cans was altered by the addition of yellow, so they were brighter" is
+  "The green colour of some cans was altered by the addition of yellow, so
+  they were brighter", NOT ", so they were brighter".
+* **Start a NEW entry at every marker, even when the speaker has not
   changed.** Sections 2 and 4 are usually one person talking without
   interruption, and putting the whole talk in a single entry makes it
   impossible to say where each answer falls. Break the text so that each
@@ -113,10 +133,18 @@ Rules that matter:
 #: markers instead did not move it. So the markers are asked for on their own,
 #: which is the one thing that has worked every time in this pipeline: a narrow
 #: question gets a reliable answer.
-MARKER_PROMPT = """These pages are the audioscript for {label} of a Cambridge IELTS book.
+MARKER_PROMPT = """These pages are the audioscript for {label} of a Cambridge IELTS book,
+printed in TWO COLUMNS -- the left one runs top to bottom and the right one
+continues from it, so the numbers go down the left column and then down the
+right.
 
-Down the RIGHT-HAND MARGIN it prints Q numbers, one against each line where an
-answer is spoken. List EVERY one you can see for questions {first} to {last}.
+It prints a Q number against each line where an answer is spoken. List EVERY
+one you can see for questions {first} to {last}.
+
+The number is in one of two places, depending on the book. Cambridge prints it
+down the RIGHT-HAND MARGIN. IELTS Trainer prints it INLINE, in brackets
+immediately before the underlined answer: "(32) In the mid-fifteenth century, a
+man called Nicholas Cusa ...". Read whichever this page uses.
 
 JSON only, no prose:
 
@@ -261,9 +289,21 @@ def main() -> int:
         # scope: a marker missed on page one is not on page three.
         placed = 0
         for shots in rendered:
-            marks = vision.ask_json(
-                MARKER_PROMPT.format(label=label, first=first, last=last),
-                shots, model=args.model, max_tokens=2000).get("markers", [])
+            try:
+                marks = vision.ask_json(
+                    MARKER_PROMPT.format(label=label, first=first, last=last),
+                    shots, model=args.model, max_tokens=2000).get("markers", [])
+            except SystemExit as why:
+                # This pass ADDS to a transcription that is already written and
+                # already sound. Letting it end the section threw away a good
+                # reading of trn-t1-s2 because the model left out one
+                # `"quote":` in the middle of a list of ten -- and the retry,
+                # which re-read both pages, produced the same slip. What is
+                # lost when this fails is some markers, which is what the line
+                # below already reports.
+                print(f"  the marker pass gave nothing back ({str(why)[:60]})",
+                      file=sys.stderr)
+                continue
             placed += attach_markers(turns, marks)
         if placed:
             print(f"  a second pass placed {placed} marker(s) the transcription missed")
@@ -275,6 +315,23 @@ def main() -> int:
     breaks = sum(1 for t in turns if t["speaker"] == "__BREAK__")
     print(f"  {len(spoken)} turns, {words} words, {breaks} break(s)")
     print(f"  markers: {markers}")
+
+    # A paper asks its questions in the order the recording answers them, so
+    # the markers down a page run up. Where they do not, the page was read out
+    # of order -- two columns taken across rather than down -- and every span
+    # that comes off those markers will send a learner to the wrong minute.
+    # Repeats are not that: the books print "Q21/22" against the line and
+    # again over the question, and 21, 22, 21, 22, 23 is what a pair looks
+    # like. Only a number lower than one already passed is a step back.
+    walked, backwards = -1, []
+    for n in [n for t in turns for n in nums(t)]:
+        if n < walked:
+            backwards.append(n)
+        walked = max(walked, n)
+    if backwards:
+        print(f"  MARKERS RUN BACKWARDS at Q{', Q'.join(str(n) for n in backwards)}"
+              f" -- the pages were read out of order, and these spans will be wrong",
+              file=sys.stderr)
 
     missing = [f"Q{n}" for n in range(first, last + 1) if n not in set(seen_numbers)]
     if missing:

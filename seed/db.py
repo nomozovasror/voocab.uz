@@ -44,8 +44,14 @@ BOOK_FACTS: dict[int, tuple[str, str, int | None, str | None]] = {
     11: ("Cambridge IELTS 11", "cambridge", 1, "audioscripts confirmed from page 103"),
     17: ("Cambridge IELTS 17", "cambridge", 1,
          "has an OCR text layer, but a contaminated one -- read the pages visually instead"),
-    20: ("Cambridge IELTS 20 Academic (Chinese re-typeset)", "retypeset", 0,
-         "questions are cleanly re-typeset; no audioscript anywhere in the four PDFs"),
+    # The title is what a material is called on the site, and it is the key
+    # import_section.py dedups on -- so it has to stay exactly what the old
+    # f"Cambridge IELTS {number}" produced, or re-importing book 20 would
+    # create sixteen second copies rather than update the first sixteen. What
+    # the edition actually is belongs in the note.
+    20: ("Cambridge IELTS 20", "retypeset", 0,
+         "the Academic paper, Chinese re-typeset: questions are cleanly set and "
+         "there is no audioscript anywhere in the four PDFs"),
 }
 
 #: Knowledge that survives a rebuild because no rebuild would rediscover it.

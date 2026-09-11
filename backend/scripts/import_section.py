@@ -85,7 +85,10 @@ def read_alignment(section_id: str, offset_ms: int = 0) -> tuple[dict, list[Tran
     """
     conn = sqlite3.connect(SEED / "catalogue.db")
     conn.row_factory = sqlite3.Row
-    row = conn.execute("SELECT * FROM section WHERE id = ?", (section_id,)).fetchone()
+    row = conn.execute(
+        "SELECT s.*, b.title AS book_title FROM section s "
+        "JOIN book b ON b.number = s.book_number WHERE s.id = ?",
+        (section_id,)).fetchone()
     conn.close()
     if row is None:
         raise SystemExit(f"{section_id} is not in the catalogue")
@@ -138,8 +141,16 @@ def read_alignment(section_id: str, offset_ms: int = 0) -> tuple[dict, list[Tran
                 f"disagree, which makes the line change as the audio reaches "
                 f"it.\n  text:  {segment.text!r}\n  words: {rebuilt!r}")
 
-    book, test, section = row["book_number"], row["test_no"], row["section_no"]
-    title = f"Cambridge IELTS {book} — Test {test}, Part {section}"
+    test, section = row["test_no"], row["section_no"]
+    # The book's own title, not one built from its number. "Cambridge IELTS
+    # {number}" is right for the eleven numbered editions and gives book 101
+    # -- IELTS Trainer -- the name "Cambridge IELTS 101". The catalogue holds
+    # what each book is actually called, and for the numbered ones it holds
+    # exactly the string this used to build, so no existing material's title
+    # moves. That matters beyond tidiness: the title is the key this script
+    # dedups on, and a changed one seeds a second copy instead of updating
+    # the first.
+    title = f"{row['book_title']} — Test {test}, Part {section}"
     return dict(row), segments, title
 
 

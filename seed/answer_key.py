@@ -94,14 +94,49 @@ def expand_word_alternatives(phrase: str) -> list[str]:
     return [" ".join(combination) for combination in itertools.product(*choices)]
 
 
+#: Editorial asides, which are not notation and must not become answers.
+#: IELTS Trainer writes them into the key line itself: "route [alterations =
+#: changes]" explains how the question paraphrased the recording, and
+#: "ballantyne (you can write this in small or capital letters)" is advice to
+#: the candidate. Left in, the first marks a learner who writes "route" WRONG,
+#: because the only accepted string would be the whole line.
+#:
+#: Square brackets are unambiguous -- Cambridge notation has no use for them,
+#: and no line in the 176 sections read before this book contains one.
+NOTE_BRACKETED = re.compile(r"\s*\[[^\]]*\]")
+#: A parenthesis is not, because parentheses ARE notation: "(£)115", "(and)",
+#: "(swimming) pool". What separates a note from an optional word is length --
+#: every optional group in this corpus is one to three words, and an aside is
+#: a sentence. Four is the line, and it is drawn above the longest real group
+#: seen rather than at the shortest aside, because marking a right answer
+#: wrong is the worse failure of the two.
+#: `[^()]*` so a group cannot run from one parenthesis to the NEXT one's
+#: closer: "(£)115 / a hundred (and) fifteen" spans five words between its
+#: first "(" and its last ")", and a pattern that allowed that ate the answer.
+NOTE_PARENTHESISED = re.compile(r"\s*\(([^()]*)\)")
+#: Above the longest real optional group in the corpus, below the shortest
+#: aside.
+NOTE_WORDS = 4
+
+
+def strip_notes(text: str) -> str:
+    """The key line without the editor talking to the reader."""
+    plain = NOTE_BRACKETED.sub("", text)
+    plain = NOTE_PARENTHESISED.sub(
+        lambda group: "" if len(group.group(1).split()) > NOTE_WORDS else group.group(0),
+        plain)
+    return plain.strip()
+
+
 def parse_answer(text: str) -> list[str]:
     """One printed key line -> every accepted answer, de-duplicated.
 
     Three expansions, applied outside in: phrase alternatives, then word
-    alternatives within each phrase, then the optional groups within those.
+    alternatives within each phrase, then the optional groups within those --
+    after any editorial note is taken out of the line.
     """
     out: list[str] = []
-    for phrase in PHRASE_ALT.split(text.strip()):
+    for phrase in PHRASE_ALT.split(strip_notes(text)):
         for worded in expand_word_alternatives(phrase):
             for variant in expand_optional(worded):
                 if variant and variant not in out:
@@ -121,6 +156,12 @@ CASES = [
     ("30|thirty", ["30", "thirty"]),                      # Cambridge 20's mark
     ("urban centres/centers", ["urban centres", "urban centers"]),
     ("(stacked) trays", ["trays", "stacked trays"]),
+    # IELTS Trainer's asides. The first is why this exists: without stripping,
+    # the one accepted answer is the whole line and "route" is marked wrong.
+    ("route [alterations = changes]", ["route"]),
+    ("ballantyne (you can write this in small or capital letters)", ["ballantyne"]),
+    # And the notation it must not mistake for one.
+    ("(no more than) two", ["two", "no more than two"]),
 ]
 
 if __name__ == "__main__":
