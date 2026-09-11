@@ -159,6 +159,34 @@ Do not invent a marker you cannot see, and do not skip one because its line
 looks like the paragraph above it."""
 
 
+#: The Official Cambridge Guide underlines the answer to every question and
+#: prints no number anywhere near it. Nothing on the page says which question
+#: an underline belongs to -- but the order does: a paper asks its questions in
+#: the order the recording answers them, so the nth underline in a section is
+#: question n. That is a rule, not a reading, and it holds only while the count
+#: comes out exactly right, which is why the count is checked before anything
+#: is written.
+UNDERLINE_PROMPT = """These pages are the audioscript for {label} of an IELTS book,
+printed in TWO COLUMNS -- read the left one to its end before starting the
+right.
+
+This book UNDERLINES the words that answer each question and prints NO
+question number anywhere. List the underlined phrases, in the order they
+appear on the page, for this section only.
+
+JSON only, no prose:
+
+{{"underlined": ["<the underlined words, copied exactly>", ...]}}
+
+Only text that is actually underlined, and every phrase that is. Copy each one
+word for word and long enough to find again -- eight words of the sentence it
+sits in, where the underline is shorter than that. Do not include the
+narrator's lines, the section heading or the track number.
+
+There should be {wanted} of them. If you can see a different number, list what
+you can see rather than padding or trimming to fit."""
+
+
 def attach_markers(turns: list[dict], found: list[dict]) -> int:
     """Put each marker on the turn whose text carries its quoted line."""
     def key(text: str) -> str:
@@ -307,6 +335,40 @@ def main() -> int:
             placed += attach_markers(turns, marks)
         if placed:
             print(f"  a second pass placed {placed} marker(s) the transcription missed")
+
+    # Nothing numbered at all, which is what a book that underlines its
+    # answers and numbers none of them looks like. Then the order is the only
+    # evidence there is, and it is good evidence -- but only if every answer
+    # is accounted for. A "choose TWO letters" is two underlines against one
+    # question, and one of those in a section puts every number after it out
+    # by one. So the count has to be exactly right or nothing is written, and
+    # the section falls back to the answer-word search like any other.
+    if not any(nums(t) for t in turns):
+        wanted = last - first + 1
+        seen: list[str] = []
+        for shots in rendered:
+            try:
+                seen += [str(u) for u in vision.ask_json(
+                    UNDERLINE_PROMPT.format(label=label, wanted=wanted),
+                    shots, model=args.model, max_tokens=2000
+                ).get("underlined", []) if u]
+            except SystemExit as why:
+                print(f"  the underline pass gave nothing back ({str(why)[:60]})",
+                      file=sys.stderr)
+        # De-duplicated in order, because a span read in overlapping windows
+        # shows the same phrase twice.
+        ordered = list(dict.fromkeys(seen))
+        if len(ordered) == wanted:
+            placed = attach_markers(turns, [
+                {"q": first + i, "quote": quote} for i, quote in enumerate(ordered)])
+            print(f"  no numbers printed; placed {placed} marker(s) by the order "
+                  f"of the {wanted} underlined answers")
+            (work / "turns.json").write_text(
+                json.dumps(turns, indent=2, ensure_ascii=False))
+        elif ordered:
+            print(f"  {len(ordered)} underlined phrase(s) for {wanted} questions "
+                  "-- the order cannot number them, so nothing was marked",
+                  file=sys.stderr)
 
     spoken = [t for t in turns if t["speaker"] != "__BREAK__"]
     words = sum(len(t["text"].split()) for t in spoken)

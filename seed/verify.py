@@ -28,7 +28,18 @@ and neither is a labelling group's -- so those are skipped rather than counted
 as misses. This is the check that caught an entire test answered from the
 reading paper's key.
 
-Neither is proof. A low score is a section to look at, and looking is cheap:
+**Markers that run backwards.** A paper asks its questions in the order the
+recording answers them, so the Q numbers down an audioscript page run up. A
+number lower than one already passed means the page was read out of order --
+two columns taken across rather than down -- and every replay span built from
+those markers sends a learner to the wrong minute. This found the same three
+sections of IELTS Trainer that the alignment score did, from a completely
+different direction: `trn-t1-s3` came back marked 23, 24, 21, 22. Repeats are
+not that; the books print "Q21/22" against the line and again over the
+question, so 21, 22, 21, 22, 23 is what a pair looks like.
+
+None of the three is proof. A low score is a section to look at, and looking
+is cheap:
 re-read the audioscript, re-align, and see whether the number moves.
 """
 
@@ -39,6 +50,8 @@ import re
 import sqlite3
 import statistics
 import sys
+
+import markers as marker_syntax
 
 SEED = pathlib.Path(__file__).resolve().parent
 WORK = SEED / "work"
@@ -85,6 +98,28 @@ def heard(section: pathlib.Path) -> tuple[int, int] | None:
     return (found, total) if total else None
 
 
+def backwards(section: pathlib.Path) -> list[int]:
+    """The markers that are lower than one earlier in the transcript."""
+    path = section / "turns.json"
+    if not path.exists():
+        return []
+    walked, seen, back = -1, set(), []
+    for turn in json.loads(path.read_text()):
+        if not turn.get("marker") or marker_syntax.is_example(turn["marker"]):
+            continue
+        for number in marker_syntax.numbers(turn["marker"]):
+            # `not in seen`, because a number coming round AGAIN is a pair
+            # printed twice -- "Q21/22" against the line answering both, and
+            # again over the question -- which is how the books write it and
+            # is not a page read out of order. A number that has never been
+            # passed arriving below one that has is.
+            if number < walked and number not in seen:
+                back.append(number)
+            seen.add(number)
+            walked = max(walked, number)
+    return back
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -102,16 +137,17 @@ def main() -> int:
         if fit is None:
             continue
         answers = heard(section)
-        rows.append((fit, section.name, answers))
+        rows.append((fit, section.name, answers, backwards(section)))
 
     if not rows:
         print("nothing aligned yet", file=sys.stderr)
         return 1
 
     flagged = [r for r in rows if r[0] < args.below
-               or (r[2] and r[2][1] >= 5 and r[2][0] / r[2][1] < FOUND)]
+               or (r[2] and r[2][1] >= 5 and r[2][0] / r[2][1] < FOUND)
+               or r[3]]
     if args.ids:
-        print(" ".join(name for _, name, _ in sorted(flagged, key=lambda r: r[0])))
+        print(" ".join(name for _, name, _, _ in sorted(flagged, key=lambda r: r[0])))
         return 0
 
     conn = sqlite3.connect(SEED / "catalogue.db")
@@ -119,7 +155,7 @@ def main() -> int:
         "SELECT id, question_source FROM section "
         "WHERE question_source IS NOT NULL ORDER BY id").fetchall()
 
-    middle = statistics.median(fit for fit, _, _ in rows)
+    middle = statistics.median(fit for fit, _, _, _ in rows)
     print(f"{len(rows)} aligned sections, median word score {middle:.3f}")
     if elsewhere:
         # Said every time rather than kept in a column nobody opens. The book
@@ -147,9 +183,12 @@ def main() -> int:
     conn.close()
 
     print(f"{'section':<14}{'align':>7}  answers heard")
-    for fit, name, answers in sorted(flagged, key=lambda r: r[0]):
+    for fit, name, answers, back in sorted(flagged, key=lambda r: r[0]):
         told = f"{answers[0]}/{answers[1]}" if answers else "-"
         print(f"{name:<14}{fit:>7.3f}  {told}")
+        if back:
+            print(f"{'':<14}         markers run backwards at "
+                  f"Q{', Q'.join(str(n) for n in back)}")
         note = notes.get(name, "")
         if note and not note.startswith("trimmed:"):
             print(f"{'':<14}         {note[:96]}")
