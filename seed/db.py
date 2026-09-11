@@ -143,6 +143,24 @@ FINDINGS: list[tuple[str, str, str, str]] = [
      "Cam70, four to a test in order, and the recording scripts confirm the mapping "
      "in print: Practice Test 2 Section 1 is headed track 43."),
     ("corpus", "blocker",
+     "Both providers stopped mid-book, for two different reasons",
+     "Groq returned 'Organization has blocked API access because a spend alert "
+     "threshold was met' -- an alert set on the account, not an empty balance, "
+     "and clearing it in the console brings it back. Gemini's free tier is 500 "
+     "requests a DAY for gemini-flash-lite ('limit: 500, model: gemini-flash-"
+     "lite'), which one 398-page book uses most of; it recovers on its own at "
+     "the daily reset. Reading the Guide's remaining 106 pages, then both it "
+     "and Trainer 2 through the pipeline, is roughly 800 more requests -- two "
+     "days of free-tier Gemini, or a few minutes of Groq at about $0.0006 a "
+     "page."),
+    ("102", "warning",
+     "A quarter of the Guide came back unread, and said so",
+     "The first pass ran out of Gemini quota at index 286 and recorded pages 286 "
+     "to 397 as unread rather than as 'other' -- which is exactly why classify() "
+     "was changed to do that after Cambridge 20 lost 34 pages to the opposite. "
+     "`locate_pages.py 102 --unread` re-reads only those and keeps the 292 pages "
+     "that were read."),
+    ("corpus", "blocker",
      "Complete IELTS Bands 6.5-7.5 cannot be seeded from what arrived",
      "The Student's Book is a coursebook, not a test book: its 55 tracks are unit "
      "exercises with only eight running long enough to be a section. 153 of its 189 "

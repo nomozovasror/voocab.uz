@@ -524,6 +524,9 @@ def main() -> int:
     ap.add_argument("--keys", action="store_true",
                     help="re-read only the answer key pages, asking directly "
                          "whether each is the listening key or the reading one")
+    ap.add_argument("--unread", action="store_true",
+                    help="re-read only the pages the last pass could not read at "
+                         "all, keeping every page it could")
     ap.add_argument("--recheck", action="store_true",
                     help="re-read, at higher resolution, only the pages around a "
                          "section that came out empty")
@@ -586,6 +589,35 @@ def main() -> int:
             return page, {}
         finally:
             shot.unlink(missing_ok=True)
+
+    if args.unread:
+        # A page that came back 429 is not a page that has been read. The
+        # first pass over the Guide's 398 sheets ran out of quota at index 286
+        # and recorded the remaining 106 as unread, which is the whole point
+        # of recording them that way rather than as "other" -- the alternative
+        # is re-reading a book to recover a quarter of it. Nothing else in the
+        # map is touched.
+        stuck = [p for p in found if p.get("kind") is None]
+        if not stuck:
+            print("every page was read")
+        else:
+            print(f"re-reading {len(stuck)} page(s) that came back unread")
+            by_doc = {}
+            for page in stuck:
+                by_doc.setdefault(page["doc_id"], []).append(page)
+            for doc_id, pages in by_doc.items():
+                pdf = sheet_of(docs, pages[0])
+                with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+                    for fresh in pool.map(lambda p: classify(pdf, p["index"]), pages):
+                        page = next(p for p in stuck if p["index"] == fresh["index"]
+                                    and p["doc_id"] == doc_id)
+                        page.update(fresh)
+            still = sum(1 for p in found if p.get("kind") is None)
+            print(f"  {len(stuck) - still} read this time, {still} still unread")
+            found = resolve(found)
+            for page in found:
+                page.setdefault("doc_id", docs[0]["id"])
+            save_all(args.book, docs, found)
 
     if args.scripts:
         marked = [p for p in found if p.get("kind") == "audioscript"]
