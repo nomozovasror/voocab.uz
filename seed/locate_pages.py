@@ -161,6 +161,93 @@ NUMBER_PROMPT = """One page of an IELTS practice test. Two things about it.
 Reply with only {"paper": "listening|reading|other", "numbers": [...]}"""
 
 
+#: What a page announces itself as, in the words IELTS books use. Only ever
+#: applied to a text layer that has been looked at first -- see `--text`.
+AS_TEXT = (
+    (re.compile(r"\bKEY\s+Test\s*(\d)", re.I),            "listening_answer_key"),
+    (re.compile(r"\bAnswer\s*key\b", re.I),                "listening_answer_key"),
+    (re.compile(r"\bAudioscript|\bRecording script|\bTranscript\b", re.I), "audioscript"),
+    (re.compile(r"\bListening\s+Part\s*[1-4]\b", re.I),   "listening_questions"),
+    (re.compile(r"\bReading\s+Passage\b", re.I),           "reading"),
+    (re.compile(r"\bWriting\s+Task\b", re.I),              "writing"),
+    (re.compile(r"\bSpeaking\s+Part\b", re.I),             "speaking"),
+    (re.compile(r"\bContents\b", re.I),                     "contents"),
+)
+#: The running line of an IELTS Trainer page carries the whole address, but
+#: extraction returns its two halves in either order and sometimes only one:
+#: page 10 ends "Training Test 1 -" and page 11 ends "Listening Part 1". So
+#: they are read separately and put back together.
+WHICH_TEST = re.compile(r"((?:Training|Exam\s+Practice)\s+Test\s*\d)", re.I)
+WHICH_PART = re.compile(r"(Listening\s+Part\s*[1-4])", re.I)
+
+
+def from_text(pdf: pathlib.Path, index: int) -> dict:
+    """What one page is, read off its own text layer instead of asked.
+
+    A page read this way costs nothing and takes no quota, which on a free
+    tier of 500 requests a day is the difference between finishing a book and
+    waiting until tomorrow: IELTS Trainer 2 is 232 sheets, and 229 of them
+    carry real text.
+
+    NOT the default, and not switched on by `document.has_text_layer` either.
+    Cambridge 17 has a text layer and it is poisoned -- 3,864 Cyrillic
+    homoglyphs sitting inside English words -- so "there is text" and "the
+    text says what the page says" are different claims, and only a person who
+    has looked can make the second. Hence a flag.
+    """
+    with pymupdf.open(pdf) as doc:
+        text = " ".join(doc[index].get_text().split())
+    if not text:
+        return {"kind": "blank", "header": None, "heading": None,
+                "answer_key_test": None, "index": index}
+    kind = next((name for pattern, name in AS_TEXT if pattern.search(text)), "other")
+    which, part = WHICH_TEST.search(text), WHICH_PART.search(text)
+    # The LAST "KEY Test n" on the page, not the first. Trainer 2 prints a
+    # rotated tab down the edge of every key page and extraction flattens it
+    # into the text ahead of the heading -- "KEY Test 1 st 1 Te Tes T KEY Test
+    # 4 LiSTEning PART 1" is page 214, which is test 4's key and came back as
+    # test 1's.
+    key_test = None
+    for key_test in re.finditer(r"\bKEY\s+Test\s*(\d)", text, re.I):
+        pass
+    # The heading is what a task page prints over its questions. Taken only
+    # from the first part of the page, so the NEXT task's heading further down
+    # does not become this page's.
+    heading = re.search(r"(?:Listening\s+)?Part\s*[1-4]\s*(?:Questions\s*\d+\s*[-–]\s*\d+)?",
+                        text[:400], re.I)
+    return {"kind": kind,
+            # The two halves, kept apart so the missing one can be filled in
+            # from the page before by `carry_address` -- a book's running line
+            # does not change in the middle of a spread.
+            "which_test": which.group(1) if which else None,
+            "which_part": part.group(1) if part else None,
+            "header": " ".join(x.group(1) for x in (which, part) if x) or None,
+            "heading": heading.group(0) if heading and kind == "listening_questions" else None,
+            "answer_key_test": int(key_test.group(1)) if key_test else None,
+            "index": index}
+
+
+def carry_address(pages: list[dict]) -> list[dict]:
+    """Fill in the half of the running line a page's text layer dropped.
+
+    Extraction returns the two halves of "Training Test 1 | Listening Part 1"
+    in either order and often only one, so seven of Trainer 2's first thirteen
+    listening pages came back with no test at all -- and a page with no test
+    on it is a page `teaching()` cannot tell from the exam paper, which is how
+    three of its Training sheets became Test 1.
+
+    Carried FORWARD only. A page before the first address has nothing to
+    inherit and keeps none."""
+    said = None
+    for page in sorted(pages, key=lambda p: p["index"]):
+        if page.get("which_test"):
+            said = page["which_test"]
+        elif said and page.get("which_part"):
+            page["which_test"] = said
+            page["header"] = f"{said} {page['which_part']}"
+    return pages
+
+
 def classify(pdf: pathlib.Path, index: int, dpi: int = DPI) -> dict:
     """What one page is. Never raises: a page nobody could read is 'other',
     which shows up as a gap in the report rather than killing a book."""
@@ -589,6 +676,10 @@ def main() -> int:
     ap.add_argument("--keys", action="store_true",
                     help="re-read only the answer key pages, asking directly "
                          "whether each is the listening key or the reading one")
+    ap.add_argument("--text", action="store_true",
+                    help="read each page off its own text layer instead of asking "
+                         "a model -- free, and only for a book whose text has been "
+                         "looked at (NOT Cambridge 17, whose layer is poisoned)")
     ap.add_argument("--unread", action="store_true",
                     help="re-read only the pages the last pass could not read at "
                          "all, keeping every page it could")
@@ -625,9 +716,13 @@ def main() -> int:
         else:
             with pymupdf.open(pdf) as doc:
                 count = len(doc)
-            print(f"{doc_row['rel_path']}: reading {count} pages ...")
-            with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-                pages = list(pool.map(lambda i: classify(pdf, i), range(count)))
+            how = "off the text layer" if args.text else "..."
+            print(f"{doc_row['rel_path']}: reading {count} pages {how}")
+            if args.text:
+                pages = carry_address([from_text(pdf, i) for i in range(count)])
+            else:
+                with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+                    pages = list(pool.map(lambda i: classify(pdf, i), range(count)))
             cache.write_text(json.dumps(pages, indent=2))
         for page in resolve(pages):
             page["doc_id"] = doc_row["id"]
