@@ -289,7 +289,8 @@ def main() -> int:
     conn = sqlite3.connect(SEED / "catalogue.db")
     conn.row_factory = sqlite3.Row
     row = conn.execute(
-        "SELECT s.*, d.rel_path pdf FROM section s JOIN document d ON d.id = s.document_id "
+        "SELECT s.*, d.rel_path pdf, b.kind FROM section s "
+        "JOIN document d ON d.id = s.document_id JOIN book b ON b.number = s.book_number "
         "WHERE s.id = ?", (args.section_id,)).fetchone()
     conn.close()
     if row is None:
@@ -369,6 +370,20 @@ def main() -> int:
     if ahead is not None:
         print(f"  dropped {len(turns) - ahead} turn(s) belonging to the next section")
         turns = turns[:ahead]
+    # A book that prints no question numbers cannot have reported one. The
+    # Official Cambridge Guide underlines its answers and numbers none of
+    # them, and the transcription pass returns Q1 to Q10 anyway -- numbers it
+    # has worked out for itself from the underlines, which is exactly the job
+    # the underline pass does properly and checks the count of. Kept, they
+    # also block the sentence split below, because that only touches a turn no
+    # marker names: gd-t6-s4 stayed at six turns for eight minutes of speech
+    # and two of its questions could not be placed at all.
+    if row["kind"] == "guide" and any(t.get("marker") for t in turns):
+        print("  this book numbers no answers; dropping the numbers the "
+              "transcription supplied, for the underline pass to do properly")
+        for turn in turns:
+            turn["marker"] = None
+
     turns, split = split_long(turns)
     if split:
         print(f"  broke {split} over-long turn(s) at their sentences, so a span "

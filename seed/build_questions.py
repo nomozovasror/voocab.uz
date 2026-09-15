@@ -55,6 +55,10 @@ LETTERED = {"multiple_choice", "matching"}
 #: template at all. Which one a group is shows in whether it has a box, so
 #: that is what is asked -- not the type, which is the same for both.
 LABELLING = {"map_labelling", "diagram_labelling"}
+#: A span past which "hear it again" stops being that. The corpus median is
+#: fourteen seconds; a minute is four times that and is what a Part 4
+#: paragraph runs to.
+LONG_SPAN = 60_000
 
 
 def laid_out(group: dict) -> str:
@@ -361,7 +365,7 @@ def build(section_id: str) -> int:
 
     problems: list[str] = []
     warnings: list[str] = []
-    recovered = moved = 0
+    recovered = moved = tightened = 0
     out_groups = []
     for gi, group in enumerate(src["groups"]):
         lettered = (group["type"] in LETTERED
@@ -452,6 +456,18 @@ def build(section_id: str) -> int:
                 if said and (said[1] < span[0] or said[0] > span[1]):
                     span = said
                     moved += 1
+                elif span[1] - span[0] > LONG_SPAN:
+                    # The marker is right and the turn it names is enormous.
+                    # A Part 4 paragraph runs a minute or more, and "hear it
+                    # again" that plays a minute is not hearing it again --
+                    # the corpus median is fourteen seconds. Searching INSIDE
+                    # the turn is also where the search is most likely to
+                    # come back unambiguous, which is the only kind of answer
+                    # locate() will give.
+                    tighter = locate(answers, span)
+                    if tighter:
+                        span = tighter
+                        tightened += 1
             if span is None and not lettered:
                 # Unbracketed first, because a phrase said once in the whole
                 # recording needs no help. The window is what rescues the
@@ -565,6 +581,9 @@ def build(section_id: str) -> int:
         print(f"note: {moved} replay span(s) moved off their marker onto the answer's "
               "own words, which were said outside the turn the marker names",
               file=sys.stderr)
+    if tightened:
+        print(f"note: {tightened} replay span(s) longer than {LONG_SPAN // 1000}s "
+              "narrowed to the answer's own words inside the turn", file=sys.stderr)
     for w in warnings:
         print(f"note: {w}", file=sys.stderr)
     if problems:

@@ -1883,3 +1883,69 @@ in books that mark by paragraph.
 Fourteen books: Cambridge 10–20, IELTS Trainer, IELTS Trainer 2, and the
 Official Cambridge Guide. Total measured spend, every pass over every page
 since the first: **$2.71**.
+
+## Closing the last of it
+
+Three things stood between 254 of 256 and 255, and each was a different kind
+of wrong.
+
+### A book that numbers nothing still reports numbers
+
+The Guide underlines its answers and prints no question number anywhere, and
+the transcription pass returned `Q1` to `Q10` anyway — numbers it had worked
+out for itself from the underlines. That is precisely the job the underline
+pass does properly, in order, having first checked that the count comes out
+right. Worse, those invented markers **blocked the sentence split**, because
+the split only touches a turn no marker names: `gd-t6-s4` stayed at six turns
+for eight minutes of speech and two of its questions could not be placed at
+all.
+
+Dropping them where the book's kind says it numbers nothing took that section
+from 6 turns to 16, and the Guide's spans over a minute from 13 to **none**.
+
+### A span that is right and too long
+
+The marker names a turn, and a Part 4 turn is a paragraph. Where the answer's
+own words fall *inside* the span and the span runs over a minute, the span is
+narrowed to them — which is also where `locate()` is most likely to come back
+unambiguous, since it is searching one paragraph rather than eight minutes.
+
+| | before | after |
+|---|---|---|
+| spans over 60s | 52 (2.1%) | **21 (0.9%)** |
+| longest | 367s | 118s |
+
+### `3000/3,000/three thousand`
+
+The module docstring predicted this one and asked for a real line before
+guessing at a rule. Fifteen turned up. An unspaced `/` alternates a single
+word — `urban centres/centers` — and these are not that: they alternate the
+whole phrase, and expanded word by word they produced answers nobody would
+write. `13th May/13 May/thirteenth May/May 13/May 13th/May thirteenth` became
+sixteen strings beginning "13th May May May". `3000/3,000/three thousand`
+became "3000 thousand", so the one thing a candidate actually writes was
+marked **wrong**.
+
+Two rules tell them apart, and both had to be right or a working key would
+break:
+
+* **Several branches are more than one word.** Six ways of writing a date are
+  six phrases. `5/five km/kilometres/kilometers` is *not* that — only one of
+  its four branches has a space, and its two alternations really are
+  independent.
+* **Two branches of one token are the same number.** 3000 and 3,000 are one
+  amount written twice, so the trailing word belongs to the third branch
+  alone. 7 and 7th are not, so `7/7th April` stays two answers.
+
+Ten keys changed and every one was nonsense before. `answer_key.py` carries
+all four shapes as cases.
+
+### Where it ends
+
+**256 materials. 2,456 of 2,457 replay spans. 255 of 256 content-complete.**
+
+The one question without a span is `gd-t3-s1` Q4, whose answer is *swimming*
+and whose recording says "swimming" twice, 23 seconds apart, with no marker to
+say which. `locate()` refuses an ambiguous match on purpose: a replay at the
+wrong moment teaches a learner they misheard something they never heard. One
+question of 2,457 is the right price for that rule.

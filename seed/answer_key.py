@@ -51,6 +51,8 @@ PHRASE_ALT = re.compile(r"\s+[/|]\s+|\s*;\s*")
 #: the first version of this -- silently dropped the "urban".
 WORD_ALT = re.compile(r"[/|]")
 OPTIONAL = re.compile(r"\(([^)]*)\)")
+#: A branch that is only digits, with the separators a number is written with.
+NUMERIC = re.compile(r"^[\d.,]+$")
 WHITESPACE = re.compile(r"\s+")
 
 
@@ -83,6 +85,38 @@ def expand_optional(text: str) -> list[str]:
     return out
 
 
+def alternates_whole(phrase: str, tokens: list[str]) -> bool:
+    """Is an unspaced separator alternating the PHRASE rather than a word?
+
+    This is the limit the module docstring predicted, and it turned up in
+    fifteen keys. Two shapes, both of which expand to nonsense word by word.
+
+    **Several branches are more than one word.** "13th May/13 May/thirteenth
+    May/May 13/May 13th/May thirteenth" is six ways of writing one date;
+    split token by token it produced sixteen strings beginning "13th May May
+    May". "5/five km/kilometres/kilometers" is NOT that -- only one of its
+    four branches has a space, and the two alternations in it really are
+    independent: five km, 5 kilometres, and so on.
+
+    **Two branches of one token are the same number.** "3000/3,000/three
+    thousand" is one amount written three ways, and the trailing "thousand"
+    belongs to the third alone; word by word it gave "3000 thousand", so the
+    one thing a candidate would write -- 3,000 -- was marked WRONG. Telling it
+    from "7/7th April", where the trailing word belongs to both, cannot be
+    done by counting: it is done by noticing that 3000 and 3,000 are the same
+    number and 7 and 7th are not.
+    """
+    branches = [part.strip() for part in WORD_ALT.split(phrase) if part.strip()]
+    if sum(1 for branch in branches if " " in branch) >= 2:
+        return True
+    for token in tokens:
+        numbers = [branch.replace(",", "") for branch in WORD_ALT.split(token)
+                   if NUMERIC.match(branch)]
+        if len(numbers) != len(set(numbers)):
+            return True
+    return False
+
+
 def expand_word_alternatives(phrase: str) -> list[str]:
     """Every combination of the word-level alternations in one phrase.
 
@@ -92,6 +126,8 @@ def expand_word_alternatives(phrase: str) -> list[str]:
     tokens = phrase.split()
     if not any(WORD_ALT.search(token) for token in tokens):
         return [phrase]
+    if alternates_whole(phrase, tokens):
+        return [part.strip() for part in WORD_ALT.split(phrase) if part.strip()]
     choices = [WORD_ALT.split(token) if WORD_ALT.search(token) else [token]
                for token in tokens]
     return [" ".join(combination) for combination in itertools.product(*choices)]
@@ -160,6 +196,15 @@ CASES = [
     ("urban centres/centers", ["urban centres", "urban centers"]),
     ("(stacked) trays", ["trays", "stacked trays"]),
     ("ships; horses", ["ships", "horses"]),           # the Guide's pair notation
+    # A number against a word alternates the whole phrase: "3000 thousand" is
+    # not an answer anybody would write, and leaving it in marked "3,000" wrong.
+    ("3000/3,000/three thousand", ["3000", "3,000", "three thousand"]),
+    # And the shapes it must NOT mistake for that.
+    ("5/five km/kilometres/kilometers",
+     ["5 km", "5 kilometres", "5 kilometers",
+      "five km", "five kilometres", "five kilometers"]),
+    ("7/7th April", ["7 April", "7th April"]),
+    ("13th May/13 May/May 13", ["13th May", "13 May", "May 13"]),
     # IELTS Trainer's asides. The first is why this exists: without stripping,
     # the one accepted answer is the whole line and "route" is marked wrong.
     ("route [alterations = changes]", ["route"]),
