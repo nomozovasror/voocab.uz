@@ -42,6 +42,7 @@ import soundfile as sf
 import torch
 import torchaudio
 
+import read_audioscript
 import vision
 
 SEED = pathlib.Path(__file__).resolve().parent
@@ -140,6 +141,15 @@ def main() -> int:
     turns = [t for t in turns if t["text"] or t["speaker"] == "__BREAK__"]
     if not turns:
         raise SystemExit(f"{args.section_id}: nothing came back")
+
+    # A heard section has no markers at all, so nothing here breaks a
+    # monologue -- and a Part 4 came back as ONE turn, which gave all eight of
+    # its questions the same 367-second span. That is not a replay button. The
+    # same sentence split the page reader uses, and safe for the same reason:
+    # it only ever touches a turn no marker names, and here no turn does.
+    turns, split = read_audioscript.split_long(turns)
+    if split:
+        print(f"  broke {split} over-long turn(s) at their sentences")
 
     (work / "turns.json").write_text(json.dumps(turns, indent=2, ensure_ascii=False))
     spoken = [t for t in turns if t["speaker"] != "__BREAK__"]

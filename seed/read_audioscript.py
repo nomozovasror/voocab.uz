@@ -193,6 +193,61 @@ There should be {wanted} of them. If you can see a different number, list what
 you can see rather than padding or trimming to fit."""
 
 
+#: A turn longer than this is not a turn a replay span can be built from. Sixty
+#: words is about twenty-five seconds of speech; the corpus median span is
+#: fifteen. Chosen above the longest ordinary turn rather than at the average,
+#: so an ordinary conversation is never touched.
+LONG_TURN = 70
+#: What a long turn is broken into. Small enough that a span is a replay and
+#: large enough that a sentence is not cut in half -- the split only ever
+#: happens at a sentence end.
+CHUNK = 40
+SENTENCE = re.compile(r"(?<=[.!?])\s+")
+
+
+def split_long(turns: list[dict]) -> tuple[list[dict], int]:
+    """Break an over-long UNMARKED turn at its sentences.
+
+    A book that prints no question numbers gives the reader nothing to break a
+    monologue at -- no speaker change and no marker -- so three of the Guide's
+    Part 2 sections came back as THREE turns for eight minutes of speech. Every
+    span built from one of them plays two minutes, and the model asked to say
+    which turn answers question 18 is choosing between three options that are
+    all "most of the recording".
+
+    Only UNMARKED turns, because a marker names a line inside the turn and
+    nothing here knows which line. So every book that numbers its answers --
+    Cambridge in the margin, the Trainer inline -- is untouched by this, and
+    the books it helps are exactly the ones with nothing to lose.
+    """
+    out, split = [], 0
+    for turn in turns:
+        words = turn.get("text", "").split()
+        if turn.get("marker") or len(words) <= LONG_TURN:
+            out.append(turn)
+            continue
+        piece: list[str] = []
+        pieces: list[str] = []
+        for sentence in SENTENCE.split(turn["text"]):
+            piece.append(sentence)
+            if len(" ".join(piece).split()) >= CHUNK:
+                pieces.append(" ".join(piece))
+                piece = []
+        if piece:
+            # A tail too short to stand alone belongs to the piece before it.
+            if pieces and len(" ".join(piece).split()) < CHUNK // 2:
+                pieces[-1] += " " + " ".join(piece)
+            else:
+                pieces.append(" ".join(piece))
+        if len(pieces) < 2:
+            out.append(turn)
+            continue
+        split += len(pieces) - 1
+        for text in pieces:
+            out.append({**turn, "text": text, "marker": None, "answer": None})
+    return out, split
+
+
 def attach_markers(turns: list[dict], found: list[dict]) -> int:
     """Put each marker on the turn whose text carries its quoted line."""
     def key(text: str) -> str:
@@ -314,6 +369,10 @@ def main() -> int:
     if ahead is not None:
         print(f"  dropped {len(turns) - ahead} turn(s) belonging to the next section")
         turns = turns[:ahead]
+    turns, split = split_long(turns)
+    if split:
+        print(f"  broke {split} over-long turn(s) at their sentences, so a span "
+              "can be shorter than the paragraph it is in")
     (work / "turns.json").write_text(json.dumps(turns, indent=2, ensure_ascii=False))
 
     # A second, narrow pass for anything the transcription did not mark.

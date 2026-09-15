@@ -169,6 +169,11 @@ PAIR_OF_LETTERS = re.compile(r"^[A-K](?:\s*[,/&;]\s*[A-K])*$", re.I)
 
 #: How many pages past the one the catalogue names a key may run.
 KEY_SPILL = 3
+#: The most a key may run when it is read as text, where a page costs nothing
+#: and the real bound is the next test's key.
+KEY_PAGES = 12
+#: Where one test's key ends: the next one's heading.
+NEXT_TEST_KEY = re.compile(r"\bKEY\s+Test\s*(\d)", re.I)
 
 KEY_TEXT_PROMPT = """\
 Below is the extracted TEXT of the answer-key pages of an IELTS book -- the \
@@ -557,16 +562,71 @@ def main() -> int:
         different part, and four separate askings walked past it. The text has
         no columns to lose and no heading to be misled by.
         """
+        # Up to where the NEXT test's key begins, not a fixed number of pages.
+        # A test's key is as long as it is: Trainer 2 gives test 2 five pages
+        # and the fixed three stopped one short of the page carrying its Part
+        # 4 answers, so the model answered from another part's list -- ten
+        # words about a forest against a recording about a 19th-century
+        # engineer. Bounded anyway, because a missing boundary should cost a
+        # few pages of text and not the rest of the book.
+        def whose(text: str) -> int | None:
+            """Which test's key this page is, by the LAST marker on it.
+
+            Not the first, and not merely the presence of one: Trainer 2
+            prints a rotated tab down the edge of every key page and
+            extraction flattens it into the text, so "KEY Test 1 st 1 Te Tes T
+            KEY Test 4" is page 214 -- test 4's. A boundary that fired on any
+            "KEY Test" at all stopped after a single page.
+            """
+            found = None
+            for found in NEXT_TEST_KEY.finditer(text):
+                pass
+            return int(found.group(1)) if found else None
+
         with pymupdf.open(pdf) as doc:
-            pages = [" ".join(doc[i].get_text().split())
-                     for i in range(key_page, min(key_page + 1 + KEY_SPILL, doc.page_count))]
+            pages, mine = [], None
+            for index in range(key_page, min(key_page + KEY_PAGES, doc.page_count)):
+                text = " ".join(doc[index].get_text().split())
+                named = whose(text)
+                if index == key_page:
+                    mine = named
+                elif mine is not None and named is not None and named != mine:
+                    break
+                pages.append(text)
+        whole = "\n\n".join(pages)
+        # Aimed at this section's own range rather than truncated from the
+        # start. Twelve pages of key is more text than a request should carry,
+        # and cutting the first 12,000 characters of it cut Test 2's
+        # "Questions 31-40" out entirely -- it begins at 14,540. Asked for
+        # answers it had not been shown, the model invented ten: a list of
+        # words about a forest, against a recording about a 19th-century
+        # engineer, none of them anywhere in the book.
+        window = re.search(rf"Questions\s*{first}\s*[-–—]\s*{last}", whole)
+        text = (whole[max(0, window.start() - 200):window.start() + 8000]
+                if window else whole[:12000])
         print(f"reading the answer key from the text of pages "
-              f"{key_page}-{key_page + len(pages) - 1}")
-        return key_answers(vision.ask_json(
+              f"{key_page}-{key_page + len(pages) - 1}"
+              f"{', aimed at Questions %d-%d' % (first, last) if window else ''}")
+        said = key_answers(vision.ask_json(
             KEY_TEXT_PROMPT.format(
                 label=f"Test {row['test_no']}, Section {row['section_no']}",
-                first=first, last=last, text="\n\n".join(pages)[:12000]),
+                first=first, last=last, text=text),
             [], model=args.model))
+        # An answer that is not in the text it was read from was not read.
+        # This is the one route where that can be checked -- the source is
+        # right here -- and it is worth checking, because the failure it
+        # catches is silent: ten plausible words, correctly formatted, for a
+        # recording that never says any of them.
+        flat = re.sub(r"[^a-z0-9 ]", " ", text.lower())
+        invented = {label: value for label, value in said.items()
+                    if not any(w in flat for w in
+                               re.findall(r"[a-z]{4,}", str(value).lower()))
+                    and re.search(r"[a-z]{4,}", str(value).lower())}
+        for label in invented:
+            print(f"  key {label} = {invented[label]!r} is not on the page it was "
+                  "read from; dropped", file=sys.stderr)
+            said.pop(label)
+        return said
 
     def read_key(index: int, only: list[int] | None = None) -> dict:
         shot = vision.render(pdf, [index], work / "pages")

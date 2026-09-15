@@ -1822,3 +1822,64 @@ through on the day this was measured, for **$0.35**. The whole Cambridge corpus
 Trainer 2 is the Cambridge 20 shape: no audioscript printed anywhere, so its
 24 sections are heard rather than read, and their markers placed by meaning.
 Its page map cost nothing, because 229 of its 232 sheets carry real text.
+
+## Ten answers the book never printed
+
+The worst thing found in this corpus, and it was found by a rule rather than
+by reading.
+
+`trn2-t2-s4` came back with a clean, correctly formatted answer key: *forest,
+soil, roots, insects, fungi, light, temperature, wind, water, nutrients*. Ten
+plausible one-word answers for a Part 4. The recording is a student's
+presentation about Sarah Guppy, a 19th-century engineer, and the real answers
+are *academic, doctors, floods, models, investor, ships, erosion, breakfast,
+gym, graduated*. **Not one of the ten words appears anywhere in the book.**
+
+The cause was a truncation. Reading a key from the page's text sends the pages
+of that test; a test's key can run to twelve pages, so the text was cut at
+12,000 characters — and Test 2's "Questions 31–40" begins at 14,540. Asked for
+answers it had not been shown, the model produced ten anyway.
+
+Two things changed. The window is **aimed** at the section's own range rather
+than cut from the start: find `Questions 31–40` in the text and send from
+there. And, because this is the one route where it can be checked, **an answer
+that does not appear in the text it was read from is dropped** — the source is
+right there. Re-reading all 24 of Trainer 2's keys afterwards changed nothing
+else, so this was the only section it happened to.
+
+It is worth being clear about what nearly shipped. Every stage exited zero.
+The alignment was 0.92. The template matched the questions. `publish_blockers`
+was satisfied. The only visible symptom was that the ten answers had no replay
+span — because `locate()` could not find *forest* in the recording, which is
+exactly right and was the only thing objecting.
+
+## Breaking a monologue that nothing else breaks
+
+A book that prints no question numbers gives the reader nothing to break a
+monologue at — no speaker change and no marker — so three of the Guide's Part 2
+sections came back as **three turns for eight minutes of speech**, and a
+section heard rather than read came back as one. Every span built from such a
+turn plays two minutes, and a model asked which turn answers question 18 is
+choosing between three options that are all "most of the recording".
+
+So an over-long turn that **no marker names** is broken at its sentences.
+Only unmarked turns, because a marker names a line inside the turn and nothing
+here knows which line — which leaves every book that numbers its answers
+untouched and helps exactly the books with nothing to lose.
+
+| | before | after |
+|---|---|---|
+| Trainer 2 spans over 60s | 42% | **0%** |
+| unlinked questions | 22 | **2** |
+| corpus median span | 14s | 14s |
+
+## Where the corpus stands
+
+**256 materials. 2,455 of 2,457 replay spans. 255 of 256 content-complete.**
+Median alignment 0.916; 1,214 of 1,302 word answers fall inside the span their
+own question replays; 2% of spans run over a minute, all of them Part 4 turns
+in books that mark by paragraph.
+
+Fourteen books: Cambridge 10–20, IELTS Trainer, IELTS Trainer 2, and the
+Official Cambridge Guide. Total measured spend, every pass over every page
+since the first: **$2.71**.
