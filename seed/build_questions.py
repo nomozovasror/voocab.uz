@@ -321,9 +321,24 @@ def build(section_id: str) -> int:
                 return aligned[start]["start_ms"], aligned[at + len(wanted) - 1]["end_ms"]
         return None
 
+    # What the PICTURE stage put on the last build, kept by group index. A
+    # rebuild is free and gets run often -- every time a span rule changes --
+    # and it writes questions.json from questions.src.json, which has never
+    # heard of the picture. Rebuilding all 200 sections after one such change
+    # silently detached eighteen maps, and the only thing that noticed was
+    # publish_blockers(): 200 content-complete became 182. The cut file is
+    # still on disk and still right, so it is carried forward rather than
+    # being re-cut.
+    drawn: dict[int, dict] = {}
+    built = work / "questions.json"
+    if built.exists():
+        for index, group in enumerate(json.loads(built.read_text()).get("groups", [])):
+            if group.get("picture"):
+                drawn[index] = group["picture"]
+
     problems: list[str] = []
     warnings: list[str] = []
-    recovered = 0
+    recovered = moved = 0
     out_groups = []
     for gi, group in enumerate(src["groups"]):
         lettered = (group["type"] in LETTERED
@@ -393,6 +408,25 @@ def build(section_id: str) -> int:
             if not answers:
                 problems.append(f"group {gi} q{q['number']}: key {q['key']!r} expands to nothing")
             span = spans.get(q.get("paper_number"))
+            if span is not None and not lettered:
+                # Two independent claims about the same moment: the marker,
+                # which is where a printed symbol sits beside a line, and the
+                # answer's own words in the aligned recording. They agree for
+                # about nine answers in ten. Where they do not overlap AT ALL,
+                # the words win -- they are evidence and the marker is a
+                # reading of a page.
+                #
+                # It is not a rare correction and it is not random. Thirteen
+                # Part 4 sections across seven books had every marker landing
+                # on the paragraph AFTER the one that answers the question,
+                # by a median of 7 to 64 seconds: cam17-t1-s4 says "logic" at
+                # 149s and sent the learner to 171-209s. A replay that starts
+                # after the answer is worse than no replay, because it teaches
+                # them they misheard something they never heard.
+                said = locate(answers)
+                if said and (said[1] < span[0] or said[0] > span[1]):
+                    span = said
+                    moved += 1
             if span is None and not lettered:
                 # Unbracketed first, because a phrase said once in the whole
                 # recording needs no help. The window is what rescues the
@@ -488,6 +522,7 @@ def build(section_id: str) -> int:
                 f"{group['type']} group takes ({sorted(allowed)}) -- the server would "
                 "drop them without a word")
         out_groups.append({
+            **({"picture": drawn[gi]} if gi in drawn else {}),
             "type": group["type"],
             "instructions": group["instructions"],
             # Never on a lettered group: how long an answer may be is not a
@@ -500,6 +535,10 @@ def build(section_id: str) -> int:
     if recovered:
         print(f"note: {recovered} replay span(s) found by searching the alignment for "
               "the answer's own words, the book having marked no margin number",
+              file=sys.stderr)
+    if moved:
+        print(f"note: {moved} replay span(s) moved off their marker onto the answer's "
+              "own words, which were said outside the turn the marker names",
               file=sys.stderr)
     for w in warnings:
         print(f"note: {w}", file=sys.stderr)

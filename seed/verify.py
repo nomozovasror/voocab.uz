@@ -28,6 +28,15 @@ and neither is a labelling group's -- so those are skipped rather than counted
 as misses. This is the check that caught an entire test answered from the
 reading paper's key.
 
+**Answers inside the span they replay.** A replay span is a promise -- press
+this and hear the answer again -- and the words between `replay_start_ms` and
+`replay_end_ms` are exactly what gets played. Whether the answer is among them
+is a sharper question than whether it is anywhere in the transcript, and it is
+the only check that reaches a book printing no question numbers at all: the
+Official Cambridge Guide underlines its answers and numbers none of them, so
+which question a marker belongs to is an inference, and this measures that
+inference against a key that came off a different page.
+
 **Markers that run backwards.** A paper asks its questions in the order the
 recording answers them, so the Q numbers down an audioscript page run up. A
 number lower than one already passed means the page was read out of order --
@@ -61,6 +70,9 @@ FLOOR = 0.70
 #: Below this fraction of a section's word answers appearing in its own
 #: transcript, something is being read off the wrong page.
 FOUND = 0.5
+#: Below this fraction of a section's word answers falling inside the span
+#: their own question replays, the markers are on the wrong turns.
+ON_SPAN = 0.6
 
 
 def norm(text: str) -> str:
@@ -96,6 +108,39 @@ def heard(section: pathlib.Path) -> tuple[int, int] | None:
             total += 1
             found += any(w in script for w in words)
     return (found, total) if total else None
+
+
+def on_the_span(section: pathlib.Path) -> tuple[int, int] | None:
+    """How many word answers are inside the span the learner is given.
+
+    A sharper question than whether the answer is somewhere in the transcript.
+    A replay span is a promise -- press this and hear the answer again -- and
+    the words between `replay_start_ms` and `replay_end_ms` are exactly what
+    is played. If the answer is not among them the promise is broken, whatever
+    the alignment score says.
+
+    It is also the only check that reaches a book which prints no question
+    numbers. The Official Cambridge Guide underlines its answers and numbers
+    none of them, so which question a marker belongs to is an inference; this
+    measures the inference against the key, which came off a different page.
+    """
+    questions, aligned = section / "questions.json", section / "aligned.json"
+    if not (questions.exists() and aligned.exists()):
+        return None
+    words = json.loads(aligned.read_text())
+    inside = total = 0
+    for group in json.loads(questions.read_text())["groups"]:
+        for question in group["questions"]:
+            start, end = question.get("replay_start_ms"), question.get("replay_end_ms")
+            wanted = [w for answer in (question.get("correct_answers") or [])
+                      for w in norm(answer).split() if len(w) > 3]
+            if not wanted or start is None or end is None:
+                continue
+            said = " " + " ".join(norm(w["word"]) for w in words
+                                  if start <= w["start_ms"] <= end) + " "
+            total += 1
+            inside += any(f" {w} " in said or w in said for w in wanted)
+    return (inside, total) if total else None
 
 
 def backwards(section: pathlib.Path) -> list[int]:
@@ -137,7 +182,8 @@ def main() -> int:
         if fit is None:
             continue
         answers = heard(section)
-        rows.append((fit, section.name, answers, backwards(section)))
+        rows.append((fit, section.name, answers, backwards(section),
+                     on_the_span(section)))
 
     if not rows:
         print("nothing aligned yet", file=sys.stderr)
@@ -145,9 +191,10 @@ def main() -> int:
 
     flagged = [r for r in rows if r[0] < args.below
                or (r[2] and r[2][1] >= 5 and r[2][0] / r[2][1] < FOUND)
-               or r[3]]
+               or r[3]
+               or (r[4] and r[4][1] >= 5 and r[4][0] / r[4][1] < ON_SPAN)]
     if args.ids:
-        print(" ".join(name for _, name, _, _ in sorted(flagged, key=lambda r: r[0])))
+        print(" ".join(name for _, name, *_ in sorted(flagged, key=lambda r: r[0])))
         return 0
 
     conn = sqlite3.connect(SEED / "catalogue.db")
@@ -155,7 +202,11 @@ def main() -> int:
         "SELECT id, question_source FROM section "
         "WHERE question_source IS NOT NULL ORDER BY id").fetchall()
 
-    middle = statistics.median(fit for fit, _, _, _ in rows)
+    middle = statistics.median(fit for fit, *_ in rows)
+    landed = [r[4] for r in rows if r[4]]
+    if landed:
+        print(f"{sum(a for a, _ in landed)}/{sum(b for _, b in landed)} word answers "
+              f"fall inside the span their question replays")
     print(f"{len(rows)} aligned sections, median word score {middle:.3f}")
     if elsewhere:
         # Said every time rather than kept in a column nobody opens. The book
@@ -182,10 +233,11 @@ def main() -> int:
     notes = dict(conn.execute("SELECT id, note FROM section WHERE note IS NOT NULL"))
     conn.close()
 
-    print(f"{'section':<14}{'align':>7}  answers heard")
-    for fit, name, answers, back in sorted(flagged, key=lambda r: r[0]):
+    print(f"{'section':<14}{'align':>7}  answers heard   on their span")
+    for fit, name, answers, back, landed in sorted(flagged, key=lambda r: r[0]):
         told = f"{answers[0]}/{answers[1]}" if answers else "-"
-        print(f"{name:<14}{fit:>7.3f}  {told}")
+        span = f"{landed[0]}/{landed[1]}" if landed else "-"
+        print(f"{name:<14}{fit:>7.3f}  {told:<15} {span}")
         if back:
             print(f"{'':<14}         markers run backwards at "
                   f"Q{', Q'.join(str(n) for n in back)}")
