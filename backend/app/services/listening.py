@@ -662,6 +662,13 @@ async def get_take_tree(session: AsyncSession, material_id: uuid.UUID) -> list[d
                 "title": part.title,
                 "audio_start_ms": part.audio_start_ms,
                 "audio_end_ms": part.audio_end_ms,
+                # Where this part's numbering starts on its own paper. Built
+                # field by field here, so a column added to the model reaches
+                # the client only by being named: `first_number` was on the
+                # row, on the schema and honoured by both walks in the client,
+                # and Part 4 still read "Questions 1-10" because this dict did
+                # not mention it.
+                "first_number": part.first_number,
                 "question_groups": groups,
             }
         )
@@ -732,6 +739,11 @@ async def get_author_tree(
                 "title": part.title,
                 "audio_start_ms": part.audio_start_ms,
                 "audio_end_ms": part.audio_end_ms,
+                # The author's tree needs it for the same reason the
+                # student's does: the studio prints the numbers beside the
+                # questions, and two trees that disagree about question 27
+                # are worse than either being wrong on its own.
+                "first_number": part.first_number,
                 "question_groups": groups,
             }
         )

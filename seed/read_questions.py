@@ -300,11 +300,20 @@ Returning {{"11&12": "IN EITHER ORDER"}} loses the answer entirely."""
 #: that a matching task can be published and a map task without its picture
 #: cannot be answered at all.
 LABELLING = re.compile(r"\blabel\s+the\s+(map|plan|diagram)\b", re.I)
+#: "Complete the flow-chart below." A flow-chart with a lettered box above it
+#: looks exactly like a matching task too, and four of the corpus's came back
+#: named that way -- which loses the chart: its boxes and arrows live in the
+#: template, and a matching group has none, so the learner is shown a bare
+#: list of sentences with "{{1}}" still printed in them.
+FLOW_CHART = re.compile(r"\bcomplete\s+the\s+flow[\s-]?chart\b", re.I)
 
 
 def labelling(group: dict) -> str | None:
     """The type a group's own instructions say it is, where they say so."""
-    said = LABELLING.search(group.get("instructions") or "")
+    instructions = group.get("instructions") or ""
+    if FLOW_CHART.search(instructions):
+        return "flow_chart_completion"
+    said = LABELLING.search(instructions)
     if not said:
         return None
     return "diagram_labelling" if said.group(1).lower() == "diagram" else "map_labelling"

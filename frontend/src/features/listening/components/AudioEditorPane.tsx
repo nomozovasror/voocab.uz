@@ -249,6 +249,53 @@ function stripWord(word: string): string {
   return word.toLowerCase().replace(/[^a-z0-9']/g, "");
 }
 
+/**
+ * Which tokens of a line are the answer, by position.
+ *
+ * `marks` is one list per QUESTION marked over the line, each holding that
+ * question's accepted phrasings -- "5 km", "five kilometres", and so on. At
+ * most one of them is in the line, so the first that is gets the underline
+ * and the rest are not looked for.
+ *
+ * Matched as a phrase and only where it occurs ONCE. The set of words was
+ * what this used to be, and on a line whose answer was "the plan" it
+ * underlined every "the" in the segment; on "a book", every "a". Twice in one
+ * line is left unmarked for the reason the review page gives: nothing here
+ * knows which of the two the question is about, and two underlines are two
+ * chances to point at the wrong one.
+ */
+function answerPositions(tokens: string[], marks?: string[][]): Set<number> {
+  const found = new Set<number>();
+  if (!marks?.length) return found;
+  const at: number[] = [];
+  const words: string[] = [];
+  tokens.forEach((token, i) => {
+    const word = stripWord(token);
+    if (word) {
+      at.push(i);
+      words.push(word);
+    }
+  });
+  for (const answers of marks) {
+    for (const answer of [...answers].sort((a, b) => b.length - a.length)) {
+      const wanted = answer
+        .toLowerCase()
+        .split(/\s+/)
+        .map(stripWord)
+        .filter(Boolean);
+      if (!wanted.length) continue;
+      const hits: number[] = [];
+      for (let i = 0; i + wanted.length <= words.length; i++) {
+        if (wanted.every((w, k) => words[i + k] === w)) hits.push(i);
+      }
+      if (hits.length !== 1) continue;
+      for (let k = 0; k < wanted.length; k++) found.add(at[hits[0] + k]);
+      break;
+    }
+  }
+  return found;
+}
+
 export interface MarkRange {
   startMs: number;
   endMs: number;
@@ -1077,13 +1124,19 @@ export const AudioEditorPane = forwardRef<
   // line and blinked the back button off between chunks.
   /** Segment order index -> the answers marked over it. Memoised because the
    *  rows are, and a fresh array per render would defeat that. */
+  // One entry per MARK, not one flat list of words. A question's accepted
+  // phrasings are several ways of writing ONE answer -- "5 km", "five
+  // kilometres" -- so at most one of them is in the line, and flattening them
+  // together loses which belongs to which. Two different questions can
+  // overlap one segment, and both should be picked out.
   const marksBySegment = useMemo(() => {
-    const map = new Map<number, string[]>();
+    const map = new Map<number, string[][]>();
     if (!marks || marks.length === 0) return map;
     for (const segment of segments) {
       const answers = marks
         .filter((m) => segment.start_ms < m.endMs && segment.end_ms > m.startMs)
-        .flatMap((m) => m.answers);
+        .map((m) => m.answers)
+        .filter((a) => a.length > 0);
       if (answers.length > 0) map.set(segment.order_index, answers);
     }
     return map;
@@ -2256,7 +2309,9 @@ const TranscriptSegment = memo(function TranscriptSegment({
   /** Inside the range being picked right now. */
   marked: boolean;
   /** Answers marked over this line, picked out within its text. */
-  markedAnswers?: string[];
+  /** One list per question marked over this line, each the accepted
+   *  phrasings of that one answer. See `answerPositions`. */
+  markedAnswers?: string[][];
   /** Being corrected right now. */
   editing: boolean;
   onEdit: () => void;
@@ -2274,14 +2329,16 @@ const TranscriptSegment = memo(function TranscriptSegment({
   // being searched: the two highlights mean different things and would fight
   // over the same text. Falls back to the plain line whenever the ASR gave us
   // no word timings for it.
-  // The words of every answer marked over this line, so they can be picked
-  // out wherever they fall in it. Matching the text is the whole trick: the
-  // author marks the seconds, never the word.
-  const answerWords = new Set(
-    (markedAnswers ?? []).flatMap((a) =>
-      a.toLowerCase().split(/\s+/).map(stripWord).filter(Boolean),
-    ),
-  );
+  // WHICH words of this line are the answer, by position -- not which words
+  // the answer is made of. Every word of every answer, matched anywhere, is
+  // what this used to do, and on a line whose answer was "the plan" it
+  // underlined every "the" in the segment. The author marks the seconds,
+  // never the word, so the text still has to be matched; what changed is that
+  // it is matched as a PHRASE, once, and not at all when the phrase is said
+  // twice and nothing can say which time was meant.
+  const spoken = segment.words.map((w) => w.word);
+  const answerWords = answerPositions(spoken, markedAnswers);
+  const answerTokens = answerPositions(text.split(/(\s+)/), markedAnswers);
 
   // Word-by-word is dropped on a corrected line: the timings are still the
   // ASR's and no longer match the words that are there.
@@ -2293,7 +2350,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
             key={i}
             className={cn(
               "transition-colors duration-150",
-              answerWords.has(stripWord(w.word)) &&
+              answerWords.has(i) &&
                 "font-semibold text-primary underline decoration-primary/50 underline-offset-4",
               i === activeWordIndex
                 ? "text-primary"
@@ -2310,11 +2367,11 @@ const TranscriptSegment = memo(function TranscriptSegment({
         ))}
       </span>
     );
-  } else if (!q && answerWords.size > 0) {
+  } else if (!q && answerTokens.size > 0) {
     content = (
       <span className="whitespace-pre-wrap">
         {text.split(/(\s+)/).map((token, i) =>
-          answerWords.has(stripWord(token)) ? (
+          answerTokens.has(i) ? (
             <span
               key={i}
               className="font-semibold text-primary underline decoration-primary/50 underline-offset-4"

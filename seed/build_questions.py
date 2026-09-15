@@ -54,11 +54,31 @@ LETTERED = {"multiple_choice", "matching"}
 #: gap-fill; a box of lettered places beside it is picked from, and takes no
 #: template at all. Which one a group is shows in whether it has a box, so
 #: that is what is asked -- not the type, which is the same for both.
-LABELLING = {"map_labelling", "diagram_labelling"}
+LABELLING = {"map_labelling", "diagram_labelling", "flow_chart_completion"}
 #: A span past which "hear it again" stops being that. The corpus median is
 #: fourteen seconds; a minute is four times that and is what a Part 4
 #: paragraph runs to.
 LONG_SPAN = 60_000
+
+
+#: An option printed with the letter it is picked by: "A written records".
+#: The app draws its own letters beside the box, so the letter left in the
+#: text comes out twice -- "A. A written records".
+OWN_LETTER = re.compile(r"^([A-K])[\s.):-]\s*(\S.*)$")
+
+
+def unlettered(options: list[str]) -> list[str]:
+    """The box without each option's own letter, where every option has one.
+
+    All of them, in order from A, or none: one option beginning with a capital
+    letter and a space is a sentence, and stripping its first word would be
+    reading the box wrong rather than tidying it.
+    """
+    said = [OWN_LETTER.match(str(o).strip()) for o in options]
+    if not all(said) or [m.group(1).upper() for m in said] != [
+            chr(ord("A") + i) for i in range(len(said))]:
+        return list(options)
+    return [m.group(2).strip() for m in said]
 
 
 def laid_out(group: dict) -> str:
@@ -75,10 +95,19 @@ def laid_out(group: dict) -> str:
     words in a box -- the gap is all there is, which is also what the page
     shows.
     """
+    # A flow chart is drawn from ">" steps and a map's items from bullets.
+    mark = ">" if group["type"] == "flow_chart_completion" else "-"
     lines = []
     for number, question in enumerate(group.get("questions") or [], start=1):
         said = (question.get("prompt") or "").strip()
-        lines.append(f"- {said} {{{{{number}}}}}" if said else f"- {{{{{number}}}}}")
+        if GAP.search(said):
+            # The step already carries its gap, which is where the reader put
+            # it when it called this a matching task: "Give staff examples of
+            # {{1}} that will be helpful every day."
+            lines.append(f"{mark} {said}")
+        else:
+            lines.append(f"{mark} {said} {{{{{number}}}}}".strip()
+                         if said else f"{mark} {{{{{number}}}}}")
     return "\n".join(lines)
 
 
@@ -525,7 +554,7 @@ def build(section_id: str) -> int:
             # refused it with a message about neither.
             config = {"answers_per_question": picked}
         elif group["type"] == "matching":
-            config = {"options": group.get("options") or [],
+            config = {"options": unlettered(group.get("options") or []),
                       "allow_reuse": bool(group.get("reuse"))}
         else:
             drawn = 0
@@ -551,7 +580,7 @@ def build(section_id: str) -> int:
             # learner a list reading "A, B, C". Words are a box beside the
             # map, and then the letters are in the box rather than on the
             # picture and the learner needs to read them.
-            box = from_a_box(group)
+            box = unlettered(from_a_box(group))
             config = {"template": group.get("template") or laid_out(group),
                       "options": box,
                       "image_letters": 0 if box else drawn}
