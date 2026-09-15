@@ -47,6 +47,18 @@ import time
 SEED = pathlib.Path(__file__).resolve().parent
 REPO = SEED.parent
 PYTHON = SEED / ".venv" / "bin" / "python"
+#: Books whose PDF text has been read by a person and found to say what the
+#: page says. Not the same as having a text layer -- see the comment where
+#: this is used.
+TEXT_IS_SOUND = {103}
+
+
+def book_of(section_id: str) -> int | None:
+    conn = sqlite3.connect(SEED / "catalogue.db")
+    row = conn.execute("SELECT book_number FROM section WHERE id = ?",
+                       (section_id,)).fetchone()
+    conn.close()
+    return row[0] if row else None
 BACKEND = REPO / "backend"
 
 #: Stages whose failure is a loss of quality rather than of content. An
@@ -84,11 +96,21 @@ def commands(stage: str, section_id: str, owner: str, heard: bool = False
         return [[str(PYTHON), str(SEED / "hear_audio.py"), section_id]]
     if stage == "questions":
         steps = []
+        # Where the book's own text has been looked at and is sound, the key
+        # is read from it rather than from a picture of it. Named here rather
+        # than inferred from `document.has_text_layer`, because that is a fact
+        # about the file and this is a judgement about the text: Cambridge 17
+        # has a text layer and it is poisoned. Only Trainer 2 qualifies so
+        # far, and on it the picture route lost a section's last two answers
+        # every time -- they sit at the top of the page after the one the key
+        # starts on, above a heading for a different part.
+        key_text = ["--key-text"] if book_of(section_id) in TEXT_IS_SOUND else []
         # Reading the pages again costs money and cannot improve on a reading
         # that is already on disk. Rebuilding from it is free, and is what a
         # re-run after a corrected transcript actually needs.
         if not (SEED / "work" / section_id / "questions.src.json").exists():
-            steps.append([str(PYTHON), str(SEED / "read_questions.py"), section_id])
+            steps.append([str(PYTHON), str(SEED / "read_questions.py"), section_id]
+                         + key_text)
         # Between reading the page and building from it, because it needs the
         # answer key the first produces and the second turns markers into
         # spans. Does nothing when every question already carries a marker,

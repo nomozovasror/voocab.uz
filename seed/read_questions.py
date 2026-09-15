@@ -26,11 +26,15 @@ import re
 import sqlite3
 import sys
 
+import pymupdf
+
 #: "11&12", "11-12", "11 and 12" -- how the key prints a question that takes
 #: two of the paper's numbers. A "Choose TWO letters" is ONE question worth two
 #: marks (see question_marks() in the backend), so the pair is not two entries
 #: with one letter each; it is one entry with both.
-PAIRED_KEY = re.compile(r"^\s*(\d+)\s*(?:&|and|[-–—])\s*(\d+)\s*$")
+#: "11&12", "11 and 12", "11-12" -- and "11/12", which is how IELTS Trainer 2
+#: prints every pair it has.
+PAIRED_KEY = re.compile(r"^\s*(\d+)\s*(?:&|and|[-–—/])\s*(\d+)\s*$")
 
 import vision
 
@@ -165,6 +169,37 @@ PAIR_OF_LETTERS = re.compile(r"^[A-K](?:\s*[,/&;]\s*[A-K])*$", re.I)
 
 #: How many pages past the one the catalogue names a key may run.
 KEY_SPILL = 3
+
+KEY_TEXT_PROMPT = """\
+Below is the extracted TEXT of the answer-key pages of an IELTS book -- the \
+page the key for {label} starts on and the two after it, run together.
+
+Find the answers to Listening questions {first} to {last} of that test, and \
+nothing else.
+
+Return ONE JSON object, no prose and no code fence:
+
+{{"answers": {{"<number, or a pair like 11/12>": "<the answer EXACTLY as printed>"}}}}
+
+Four things about these pages.
+
+A PAIR is printed "11/12 A/B (in any order)". Return it under the pair, as \
+"11/12", not under either number alone.
+
+THE BOOK EXPLAINS EACH ANSWER on the same line as it -- "21 A Oliver suggests \
+the introduction includes ...", "1 15(th) May / May 15(th) The woman explains \
+that ...". The answer is only the part a candidate would write. Stop at it.
+
+ITALIC PARAGRAPHS beginning "Distraction" are commentary between the answers, \
+and the teaching exercises have their own numbered answers under headings like \
+"Useful language: dates". Neither is the exam key.
+
+A SECTION'S LAST FEW ANSWERS can be stranded at the top of the next page, \
+above a heading about something else: "19 E 20 D Listening PART 3 Training ..." \
+is questions 19 and 20 of PART 2.
+
+TEXT
+{text}"""
 
 MISSING_KEY_PROMPT = """\
 This image is the Listening answer key page of a Cambridge IELTS book.
@@ -449,6 +484,10 @@ def main() -> int:
                     help="ZERO-BASED pdf page index of the listening answer key; "
                          "defaults to the catalogue")
     ap.add_argument("--model", default=vision.DEFAULT_MODEL)
+    ap.add_argument("--key-text", action="store_true",
+                    help="read the answer key off the page's text layer rather "
+                         "than its picture -- for a book whose text has been "
+                         "looked at (NOT Cambridge 17, whose layer is poisoned)")
     ap.add_argument("--web", metavar="URL",
                     help="read the questions from this page's text instead of "
                          "the PDF's images; the answer key still comes from the "
@@ -507,6 +546,28 @@ def main() -> int:
     if "groups" not in read and read.get("questions"):
         read = {"groups": [read]}
 
+    def read_key_text() -> dict:
+        """The key, off the page's own text layer rather than its picture.
+
+        For a book whose text has been looked at this is both cheaper and
+        better. Trainer 2's key pages are dense two-column prose with the
+        answers threaded through it, and read as pictures they lost a
+        section's last two answers every time -- "19 E 20 D" sits at the top
+        of the page AFTER the one the key starts on, above a heading for a
+        different part, and four separate askings walked past it. The text has
+        no columns to lose and no heading to be misled by.
+        """
+        with pymupdf.open(pdf) as doc:
+            pages = [" ".join(doc[i].get_text().split())
+                     for i in range(key_page, min(key_page + 1 + KEY_SPILL, doc.page_count))]
+        print(f"reading the answer key from the text of pages "
+              f"{key_page}-{key_page + len(pages) - 1}")
+        return key_answers(vision.ask_json(
+            KEY_TEXT_PROMPT.format(
+                label=f"Test {row['test_no']}, Section {row['section_no']}",
+                first=first, last=last, text="\n\n".join(pages)[:12000]),
+            [], model=args.model))
+
     def read_key(index: int, only: list[int] | None = None) -> dict:
         shot = vision.render(pdf, [index], work / "pages")
         prompt = KEY_PROMPT.format(
@@ -521,7 +582,7 @@ def main() -> int:
             print(f"reading the answer key from page index {index}")
         return key_answers(vision.ask_json(prompt, shot, model=args.model))
 
-    printed = read_key(key_page)
+    printed = read_key_text() if args.key_text else read_key(key_page)
     # Forty answers do not always fit on one sheet. Where the numbers this
     # section needs are not all on the page the catalogue names, the key ran
     # over onto the next one -- Cambridge 20 splits its listening key at

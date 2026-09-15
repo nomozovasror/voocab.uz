@@ -375,27 +375,46 @@ def _post(body: dict) -> dict:
         raise SystemExit(f"not JSON from the API: {out.stdout[:300]}")
 
 
+#: How many times to ask again when the reply is not JSON. A rate limit is
+#: already retried; a malformed reply is the same kind of accident and was
+#: not. What it looks like is not truncation -- trn2-t5-s3's transcript came
+#: back whole, with one speaker label replaced mid-object by `"box_2d": [`,
+#: which is a vision model's furniture appearing where it has no business --
+#: and it cost the section, twice, because the failure reads as "this
+#: recording cannot be transcribed".
+JSON_TRIES = 3
+
+
 def ask_json(prompt: str, images: list[pathlib.Path],
              recording: pathlib.Path | None = None, **kwargs) -> dict:
     """`ask` -- or `listen`, given a recording -- with the reply parsed as JSON.
 
     Strips a reasoning block and a code fence before parsing, because both
-    arrive whatever the prompt says and neither is worth a retry."""
-    reply = (listen(prompt, recording, **kwargs) if recording is not None
-             else ask(prompt, images, **kwargs))
-    text = FENCE.sub("", THINK.sub("", reply).strip()).strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        # The model wrote prose around the object often enough to be worth one
-        # rescue attempt before giving up on the page.
-        start, end = text.find("{"), text.rfind("}")
-        if start >= 0 and end > start:
-            try:
-                return json.loads(text[start:end + 1])
-            except json.JSONDecodeError:
-                pass
-        raise SystemExit(f"reply was not JSON ({exc}):\n{text[:600]}")
+    arrive whatever the prompt says and neither is worth a retry. A reply that
+    is still not JSON IS worth one: it is a slip rather than a refusal, and
+    asking again is cheaper than losing the page.
+    """
+    last = ""
+    for attempt in range(JSON_TRIES):
+        reply = (listen(prompt, recording, **kwargs) if recording is not None
+                 else ask(prompt, images, **kwargs))
+        text = FENCE.sub("", THINK.sub("", reply).strip()).strip()
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            # The model wrote prose around the object often enough to be worth
+            # one rescue attempt before asking again.
+            start, end = text.find("{"), text.rfind("}")
+            if start >= 0 and end > start:
+                try:
+                    return json.loads(text[start:end + 1])
+                except json.JSONDecodeError:
+                    pass
+            last = f"{exc}"
+            if attempt + 1 < JSON_TRIES:
+                print(f"  reply was not JSON ({exc}); asking again "
+                      f"({attempt + 2}/{JSON_TRIES})", file=sys.stderr)
+    raise SystemExit(f"reply was not JSON after {JSON_TRIES} tries ({last})")
 
 
 #: How many images one request may carry. A COUNT, not a size limit.

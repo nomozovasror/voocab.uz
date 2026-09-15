@@ -120,7 +120,12 @@ def main() -> int:
             spoken = [{"speaker": "SPEAKER", "text": (seg.get("text") or "").strip()}
                       for seg in vision.transcribe(small)]
         else:
-            spoken = vision.ask_json(PROMPT, [], recording=small,
+            # A verbatim transcript of eight minutes of speech runs to about
+            # 1,300 words, and JSON with a speaker label on every turn costs
+            # more tokens than that. The default cut trn2-t5-s3 off mid-word
+            # at 6,922 characters and the reply was not JSON at all -- which
+            # reads as a transcription failure and is a budget.
+            spoken = vision.ask_json(PROMPT, [], recording=small, max_tokens=16000,
                                      model=args.model).get("turns", [])
 
     turns = [
