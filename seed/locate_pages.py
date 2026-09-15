@@ -84,11 +84,17 @@ SCRIPT_PROMPT = """This page is from the audioscripts at the back of an IELTS bo
 JSON only, no prose:
 
 {"starts": [{"part": <the section or part number, 1-4>,
-             "test": <the test number printed above it, or null>}]}
+             "test": <the PRACTICE TEST number printed above it, or null>}]}
 
 List EVERY section whose audioscript begins on this page, in the order they
 appear. One begins where the page prints a heading like "SECTION 3", "PART 3"
-or "LISTENING SECTION 3", usually under a "TEST 2" line.
+or "LISTENING SECTION 3", usually under a "TEST 2" or "Practice Test 2" line.
+
+"test" is that practice test's number. Null where the heading belongs to
+something that is not a practice test: the Official Cambridge Guide prints the
+recording scripts for its teaching units in the same run of pages, under
+headings like "Listening skills" and "3 Using notes to follow a talk", and
+those are not part of any test.
 
 Usually there is one. There can be two: a section's script ends partway down
 the page and the next one starts below it. There can be none, where the page
@@ -195,22 +201,44 @@ def script_runs(pages: list[dict]) -> dict[tuple[int, int], list[int]]:
     for page in sorted(pages, key=lambda p: p["index"]):
         if page.get("kind") != "audioscript":
             continue
+        named = page.get("script_test")
         for part in page.get("script_parts") or []:
-            starts.append((page["index"], int(part)))
+            starts.append((page["index"], int(part), named))
         if page.get("script_parts"):
             continue
         heading = SECTION_HEADING.search(page.get("heading") or "")
         if heading:
-            starts.append((page["index"], int(heading.group(1))))
+            starts.append((page["index"], int(heading.group(1)), named))
     if not starts:
         return {}
 
-    test, previous, runs = 0, 99, []
-    for index, section in starts:
-        if section <= previous:
-            test += 1
-        previous = section
-        runs.append((index, test, section))
+    # Counting runs of 1,2,3,4 numbers the tests only if the block holds
+    # nothing else. The Official Cambridge Guide prints the recording scripts
+    # for its teaching units in the same run of pages, ahead of the practice
+    # tests, and counting through those put Practice Test 2 Section 1 --
+    # printed plainly as such, with its track number -- into test 4. Where the
+    # pages say which test they belong to, that is used and the unnumbered
+    # headings are dropped as not being part of a test at all.
+    if any(named for _, _, named in starts):
+        # The test is printed once, over its Section 1; Sections 2, 3 and 4
+        # carry the section heading alone. So a named start sets which test
+        # the pages after it belong to, and an unnamed one belongs to the last
+        # test named -- which is also what drops the unit material, since
+        # nothing before the first named start belongs to a test at all.
+        runs, current = [], None
+        for index, section, named in starts:
+            if named:
+                current = named
+            if current is None:
+                continue
+            runs.append((index, current, section))
+    else:
+        test, previous, runs = 0, 99, []
+        for index, section, _ in starts:
+            if section <= previous:
+                test += 1
+            previous = section
+            runs.append((index, test, section))
 
     held = {p["index"] for p in pages if p.get("kind") == "audioscript"}
     last = max(held)
@@ -429,6 +457,43 @@ def settle(pages: list[dict], tests: list[int], conn, book: int,
     # as test 1's, so tests 2 to 4 looked up their own number and found
     # nothing.
     keys = dict(zip(tests, in_order))
+    if len(keys) < len(tests):
+        # Order could not cover the book, so it is not evidence here. It fails
+        # on the Guide for two reasons at once: its eight keys are one test to
+        # a page and CONSECUTIVE, so the run rule above -- consecutive pages
+        # are one test's key spilling over -- merges seven of them into one;
+        # and two other listening keys sit in the same back matter, one for the
+        # coursebook units and one for the General Training test, which order
+        # cannot tell from a practice test's.
+        #
+        # What the Guide does print is the test number, on seven of its eight.
+        # That is used only in this case -- where order has already come back
+        # short -- so a book order CAN settle is untouched, which is every
+        # Cambridge edition including the two the order rule was written for.
+        named: dict[int, int] = {}
+        for page in sorted(pages, key=lambda p: p["index"]):
+            number = page.get("answer_key_test")
+            if page["index"] in listening and number in tests and number not in named:
+                named[number] = page["index"]
+        if named:
+            # A test the book numbered nowhere takes the last unclaimed key
+            # page that falls before the next test's -- which is where its own
+            # key has to be, the keys running in order. The Guide prints no
+            # number on test 1's, and test 1's is the sheet immediately before
+            # test 2's.
+            spare = [i for i in listening if i not in named.values()]
+            for test in tests:
+                if test in named:
+                    continue
+                below = max((named[t] for t in named if t < test), default=-1)
+                above = min((named[t] for t in named if t > test), default=1 << 62)
+                fits = [i for i in spare if below < i < above]
+                if fits:
+                    named[test] = fits[-1]
+                    spare.remove(fits[-1])
+            print(f"  {len(dict(zip(tests, in_order)))} key page(s) by order for "
+                  f"{len(tests)} tests; using the printed test numbers instead")
+            keys = named
     # The START OF THE LONGEST RUN, not the first page anywhere that looks like
     # one. The audioscripts are forty consecutive pages at the back; a single
     # page misread as one in the middle of the book would otherwise become the
@@ -640,6 +705,7 @@ def main() -> int:
                 named = next((s["test"] for s in begins if s.get("test")), None)
                 if named:
                     page["header"] = f"Test {named}"
+                    page["script_test"] = int(named)
         save_all(args.book, docs, found)
 
     if args.numbers:
