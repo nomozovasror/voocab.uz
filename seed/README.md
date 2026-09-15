@@ -1667,3 +1667,90 @@ first two minutes through Groq's `whisper-large-v3`, and Groq blocked this
 account partway through the book on a spend-alert threshold. Nothing is lost
 by it here — these tracks are one section each and open with the test's own
 introduction, which belongs to the test.
+
+## A span that does not contain its answer
+
+`verify.py` asked two questions of every section: does the transcript fit the
+recording, and does each answer appear in that transcript. Both were passing
+everywhere. Neither asks the question a learner actually cares about.
+
+**Is the answer inside the span its own question replays?** Not somewhere in
+the transcript — in the seconds that get played when they press the button.
+The answer was **766 of 987**. One replay span in five was a button that did
+not do what it said.
+
+And it was not random. Thirteen Part 4 sections across seven books had *every*
+marker landing on the paragraph **after** the one that answers the question, by
+a median of 7 to 64 seconds:
+
+```
+Q32  logic          span    171-   209s   word spoken at    149s
+Q34  meditation     span    252-   282s   word spoken at    204s
+Q36  coins          span    316-   365s   word spoken at    239s
+Q39  paper          span    393-   395s   word spoken at    343s
+```
+
+That is `cam17-t1-s4`: nine of its ten answers outside their own span, in a
+section that aligns at 0.95 with every marker present and in order. Nothing
+else in this pipeline could see it, because every other check was satisfied.
+
+The fix is the same cross-check used everywhere else here. A marker is a
+reading of where a printed symbol sits beside a line; the answer's own words in
+the aligned recording are evidence. Where the two do not overlap **at all**,
+the words win. Where they agree — about nine times in ten — nothing moves.
+**922 of 987**, and the median section is now at 100%.
+
+### And rebuilding all of them detached eighteen maps
+
+Applying that meant rebuilding every section's `questions.json` from its
+`questions.src.json`, which is free and is meant to be. But the source file has
+never heard of the picture: `extract_image.py` writes the cut map into
+`questions.json` *after* the build, so a rebuild dropped it, and eighteen map
+groups quietly lost the image they are answered on. 200 content-complete became
+182, and `publish_blockers()` was the only thing that noticed.
+
+The cut file was still on disk and still right. The build carries it forward
+now, so a rebuild is what it claims to be.
+
+## The Guide: eight tests, and a coursebook in front of them
+
+Three assumptions that held for eleven Cambridge editions fail here at once.
+
+**Its answer keys are consecutive.** One test to a page, 383 and 385–391 — so
+the rule that consecutive key pages are one test's spilling over merged seven
+of eight into a single run. Worse, two other listening keys sit in the same
+back matter, one for the teaching units and one for the General Training test,
+which order cannot tell from a practice test's. Order came back with four pages
+for eight tests, and the four were wrong.
+
+The Guide prints the test number on seven of its eight. That is used only where
+order has already come back short, so every Cambridge book — including the two
+the order rule was written for — is untouched, which re-running all twelve
+against their cached page maps confirms byte for byte. The eighth, which the
+book numbers nowhere, is the sheet immediately before test 2's.
+
+**Its recording scripts open with the coursebook's.** Counting runs of 1, 2, 3,
+4 through the block put Practice Test 2 Section 1 — printed plainly as such,
+with its track number 43 — into test 4. The page says which practice test it
+is, once, over Section 1; Sections 2 to 4 carry the section heading alone. So a
+named start sets the test and the unnamed ones after it follow, which also
+drops the unit material: it is the only thing before the first named start.
+
+**It numbers no answers at all.** Cambridge prints `Q31` in the margin and the
+Trainer prints `(31)` inline. The Guide underlines the answer and prints
+nothing beside it. The order is still evidence — the nth underline in a section
+is question n — and `read_audioscript.py` will use it, but only while the count
+comes out exactly right, because a "choose TWO letters" is two underlines
+against one question and one of those puts every number after it out by one.
+
+Which makes the on-span check above not a nicety but the only thing that can
+audit this book: the numbering is an inference, and the key it is measured
+against came off a different page.
+
+### A quarter of it had never been read
+
+The first pass over its 398 sheets ran out of Gemini's free tier — 500 requests
+a day — at index 286 and recorded the remaining 106 as **unread**. That is
+exactly why `classify()` was changed to say `unread` rather than `other` after
+Cambridge 20 lost 34 pages to the opposite; `locate_pages.py 102 --unread`
+recovered them without paying for the 292 that were fine.
