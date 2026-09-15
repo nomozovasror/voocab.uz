@@ -357,17 +357,25 @@ def cmd_init() -> int:
              r["path"], r["sha256"], round(r["secs"] * 1000), r["format"],
              r["sample_rate"], r["channels"], r["convention"]))
 
-    # A section of a book with no audioscript can never be aligned, so it starts
-    # blocked rather than pending. A batch run that ignores the difference
-    # spends an hour discovering it.
+    # A book with no printed audioscript is HEARD rather than read -- that is
+    # what hear_audio.py is -- so its sections start pending like any other.
+    # They used to start 'blocked', which was true before there was a way to
+    # hear one and is a lie now: it stopped IELTS Trainer 2 dead, and
+    # run_pipeline's --force cannot override a blocked stage by design.
+    # Existing rows are corrected, because 'blocked' is a judgement the
+    # catalogue made and judgements go stale.
     for r in rows:
-        blocked = BOOK_FACTS.get(r["book"], (None, None, None, None))[2] == 0
         for stage in STAGES:
-            status = "blocked" if blocked and stage in ("audioscript", "align") else "pending"
             conn.execute(
-                """INSERT INTO stage (section_id, name, status) VALUES (?, ?, ?)
+                """INSERT INTO stage (section_id, name, status) VALUES (?, ?, 'pending')
                    ON CONFLICT(section_id, name) DO NOTHING""",
-                (r["id"], stage, status))
+                (r["id"], stage))
+    freed = conn.execute(
+        """UPDATE stage SET status = 'pending', updated_at = datetime('now')
+           WHERE status = 'blocked' AND name IN ('audioscript', 'align')""").rowcount
+    if freed:
+        print(f"unblocked {freed} stage(s): a book with no audioscript is heard, "
+              "not stuck")
 
     for subject, severity, summary, detail in FINDINGS:
         conn.execute(
