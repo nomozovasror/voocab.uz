@@ -1754,3 +1754,30 @@ a day — at index 286 and recorded the remaining 106 as **unread**. That is
 exactly why `classify()` was changed to say `unread` rather than `other` after
 Cambridge 20 lost 34 pages to the opposite; `locate_pages.py 102 --unread`
 recovered them without paying for the 292 that were fine.
+
+### Does numbering by order actually work?
+
+It is a rule applied to a book that prints no numbers, so the only honest
+answer is a measurement. The on-span check is the measurement, and it is
+independent of the rule: the spans come from the underlines' order in the
+recording scripts, and the answers they are checked against come off the
+answer key, which is a different page read by a different pass.
+
+On the eighteen sections built so far: **121 of 137 word answers fall inside
+the span their own question replays**, and the median section is at 100%. One
+section is below 60%.
+
+That is the same figure the Cambridge corpus reaches with printed margin
+numbers. The order is enough.
+
+### The free tier is the wall, not the money
+
+Gemini's free tier allows **500 requests a day** for `gemini-flash-lite`. The
+whole Cambridge corpus — eleven books, 176 sections, every page of every PDF —
+cost **$0.57**. Money has never been the constraint. A day's quota is: the
+Guide alone spends 398 of it on page location before a single section is read,
+and the book has been stopped twice by the daily cap with ten sections left.
+
+Groq has no such cap and is cheaper per token, which is why it was the default.
+It is blocked on this account by a spend-alert threshold, which is a setting,
+not a balance.
