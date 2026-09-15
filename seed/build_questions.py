@@ -329,12 +329,17 @@ def build(section_id: str) -> int:
     # publish_blockers(): 200 content-complete became 182. The cut file is
     # still on disk and still right, so it is carried forward rather than
     # being re-cut.
-    drawn: dict[int, dict] = {}
+    # NOT `drawn`: that name is already the count of letters printed on a
+    # labelling picture, thirty lines down, and shadowing it made every build
+    # in the corpus raise TypeError on `gi in drawn`. Which would have been
+    # obvious, except the rebuild loop was run with its output discarded, so
+    # 200 sections "rebuilt" and not one file changed.
+    pictures: dict[int, dict] = {}
     built = work / "questions.json"
     if built.exists():
         for index, group in enumerate(json.loads(built.read_text()).get("groups", [])):
             if group.get("picture"):
-                drawn[index] = group["picture"]
+                pictures[index] = group["picture"]
 
     problems: list[str] = []
     warnings: list[str] = []
@@ -522,7 +527,7 @@ def build(section_id: str) -> int:
                 f"{group['type']} group takes ({sorted(allowed)}) -- the server would "
                 "drop them without a word")
         out_groups.append({
-            **({"picture": drawn[gi]} if gi in drawn else {}),
+            **({"picture": pictures[gi]} if gi in pictures else {}),
             "type": group["type"],
             "instructions": group["instructions"],
             # Never on a lettered group: how long an answer may be is not a
