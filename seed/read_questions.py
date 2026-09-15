@@ -158,6 +158,11 @@ Transcribe the words exactly as printed. Ignore page headers, footers, page \
 numbers, and any watermark (iyuce.com, "Edit by:", Chinese text) -- none of \
 that is part of the task."""
 
+#: A pair answered with letters -- "A, C" or "B/E" -- against one answered
+#: with words. The label above them is the same "17&18 IN EITHER ORDER", and
+#: they mean different things: one question worth two marks, or two questions.
+PAIR_OF_LETTERS = re.compile(r"^[A-K](?:\s*[,/&;]\s*[A-K])*$", re.I)
+
 #: How many pages past the one the catalogue names a key may run.
 KEY_SPILL = 3
 
@@ -572,6 +577,20 @@ def main() -> int:
         # here because it is printed immediately to the left of the answer.
         value = re.sub(rf"^\s*{re.escape(label)}\s+", "", str(value))
         pair = PAIRED_KEY.match(label)
+        if pair and not PAIR_OF_LETTERS.match(value.strip()):
+            # A pair of WORDS is two blanks on the paper -- "37&38 IN EITHER
+            # ORDER ships; horses" is a short-answer question the candidate
+            # writes a word into twice, and either word is right in either
+            # blank. Folding it the way a "choose TWO letters" is folded loses
+            # question 38 entirely, which the build says out loud: "after
+            # dropping, questions [38, 40] are missing".
+            #
+            # Told apart by the ANSWER, not by the group: a pick-two is
+            # answered with letters and this is answered with words, and the
+            # label looks identical either way.
+            head, tail = int(pair.group(1)), int(pair.group(2))
+            answers[head] = answers[tail] = value
+            continue
         if pair:
             # NOT `first, second` -- that shadowed the section's own first
             # paper number and made the coverage check expect "29-30" for a

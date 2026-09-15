@@ -41,7 +41,10 @@ import re
 
 #: A separator with space around it alternates whole PHRASES:
 #: "(£)115 / a hundred (and) fifteen" is two ways of saying the amount.
-PHRASE_ALT = re.compile(r"\s+[/|]\s+")
+#: A semicolon does the same without needing spaces around it, and is how the
+#: Official Cambridge Guide prints the two answers of a pair: "37&38 IN EITHER
+#: ORDER ships; horses". No other book in this corpus uses one anywhere.
+PHRASE_ALT = re.compile(r"\s+[/|]\s+|\s*;\s*")
 #: One with no space alternates a single WORD inside the phrase:
 #: "urban centres/centers" is "urban centres" or "urban centers", never
 #: "centers" on its own. Splitting on the separator regardless of spacing --
@@ -156,6 +159,7 @@ CASES = [
     ("30|thirty", ["30", "thirty"]),                      # Cambridge 20's mark
     ("urban centres/centers", ["urban centres", "urban centers"]),
     ("(stacked) trays", ["trays", "stacked trays"]),
+    ("ships; horses", ["ships", "horses"]),           # the Guide's pair notation
     # IELTS Trainer's asides. The first is why this exists: without stripping,
     # the one accepted answer is the whole line and "route" is marked wrong.
     ("route [alterations = changes]", ["route"]),
