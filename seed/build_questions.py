@@ -81,6 +81,42 @@ def unlettered(options: list[str]) -> list[str]:
     return [m.group(2).strip() for m in said]
 
 
+#: A printed question number at the head of a labelling line. The app draws
+#: its own, so "15 Scarecrow" would come out "15. 15 Scarecrow".
+PRINTED_NUMBER = re.compile(r"^\s*\d{1,2}[.)]?\s+")
+
+
+def as_rows(template: str) -> str:
+    """A labelling sheet written the way the page prints it: name, then blank.
+
+    "Write the correct letter, A-I, next to Questions 15-20" prints a list
+    where every line is one place and one answer, and `newLabelRow` in the
+    form grammar is that line: a ROW, with the thing being named on one side
+    of a bar and the blank on the other. Written as one run of text -- "-
+    Conference centre {{1}}" -- the name lands in the blank's own column and
+    the studio draws six rows of "Name it" with nothing in them.
+
+    Twenty-three of the corpus's twenty-five labelling groups were written
+    that way, because it is what a reader hands back when it is asked for a
+    template and not for a shape.
+
+    Only a line with exactly ONE gap is turned: a sentence with two is not a
+    labelling row, and a line with none is a fixed label on the figure --
+    "Door", "Water-wheel" -- which belongs where it is. Headings and blank
+    lines are left alone.
+    """
+    out = []
+    for line in template.split("\n"):
+        body = re.sub(r"^\s*[-*>]\s*", "", line)
+        gaps = GAP.findall(body)
+        if line.lstrip().startswith("#") or "|" in line or len(gaps) != 1:
+            out.append(line)
+            continue
+        label = PRINTED_NUMBER.sub("", GAP.sub("", body)).strip(" .·…")
+        out.append(f"{label} | {{{{{gaps[0]}}}}}" if label else line)
+    return "\n".join(out)
+
+
 def laid_out(group: dict) -> str:
     """A template for a labelling group that came back without one.
 
@@ -95,7 +131,8 @@ def laid_out(group: dict) -> str:
     words in a box -- the gap is all there is, which is also what the page
     shows.
     """
-    # A flow chart is drawn from ">" steps and a map's items from bullets.
+    # A flow chart is drawn from ">" steps; a map's items are rows, which
+    # `as_rows` below puts in their proper shape.
     mark = ">" if group["type"] == "flow_chart_completion" else "-"
     lines = []
     for number, question in enumerate(group.get("questions") or [], start=1):
@@ -581,7 +618,9 @@ def build(section_id: str) -> int:
             # map, and then the letters are in the box rather than on the
             # picture and the learner needs to read them.
             box = unlettered(from_a_box(group))
-            config = {"template": group.get("template") or laid_out(group),
+            drawn_on = group["type"] in ("map_labelling", "diagram_labelling")
+            written = group.get("template") or laid_out(group)
+            config = {"template": as_rows(written) if drawn_on else written,
                       "options": box,
                       "image_letters": 0 if box else drawn}
         allowed = CONFIG_KEYS.get(group["type"], DEFAULT_CONFIG_KEYS)

@@ -131,6 +131,64 @@ def ink(page: pymupdf.Page) -> np.ndarray:
     return grey < paper - INK_LEVEL * (paper - darkest)
 
 
+#: An image covering this much of the sheet IS the sheet. Every scan in this
+#: corpus is one such image; a figure placed on top of one is smaller.
+WHOLE_PAGE = 0.9
+
+
+def overlaid(page: pymupdf.Page) -> tuple[float, float, float, float] | None:
+    """The union of the images placed ON the page, or None if there are none.
+
+    A scanned sheet is a single full-page image, and the ink rules below are
+    the only way to find anything on it. Some pages are a scan with FIGURES
+    laid over it -- IELTS Trainer 2's plan is three such images -- and where
+    the typesetter placed one, its rectangle says where the figure is far
+    better than any measurement of dark pixels.
+    """
+    boxes = []
+    for image in page.get_images(full=True):
+        for rect in page.get_image_rects(image[0]):
+            area = (rect.width * rect.height) / (page.rect.width * page.rect.height)
+            if 0 < area < WHOLE_PAGE:
+                boxes.append((rect.x0 / page.rect.width, rect.y0 / page.rect.height,
+                              rect.x1 / page.rect.width, rect.y1 / page.rect.height))
+    if not boxes:
+        return None
+    return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+            max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
+def trim_to_picture(page: pymupdf.Page,
+                    box: tuple[float, float, float, float],
+                    ) -> tuple[float, float, float, float]:
+    """The part of the ink box that a placed figure agrees with.
+
+    The ink rule finds the tallest unbroken mass of dark rows, which is the
+    whole answer on a page laid out one column wide -- every Cambridge sheet.
+    IELTS Trainer 2 sets two columns and puts an Action plan, two tip boxes
+    and the list of questions in the same band as the plan, so the mass is the
+    page: the cut for its Test 1 Part 2 was 88% of the sheet with the map
+    about half way across it.
+
+    Where the page carries placed images, the INTERSECTION of the two is the
+    picture. Neither alone is enough -- one page's overlays cover the whole
+    sheet and another's run off the edge of it, and on both the ink box is the
+    better answer -- but the part they agree on has never been wrong.
+    """
+    placed = overlaid(page)
+    if placed is None:
+        return box
+    together = (max(box[0], placed[0]), max(box[1], placed[1]),
+                min(box[2], placed[2]), min(box[3], placed[3]))
+    if together[2] - together[0] <= 0 or together[3] - together[1] <= 0:
+        return box
+    # A sliver is two pieces of evidence disagreeing, not agreeing.
+    if ((together[2] - together[0]) < (box[2] - box[0]) / 5
+            or (together[3] - together[1]) < (box[3] - box[1]) / 5):
+        return box
+    return together
+
+
 def find_block(page: pymupdf.Page) -> tuple[float, float, float, float] | None:
     """The biggest mass of ink on the page, for figures printed without a box."""
     dark = ink(page)
@@ -222,6 +280,12 @@ def main() -> int:
 
         page_index, box, how = hit
         page = doc[page_index]
+        narrowed = trim_to_picture(page, box)
+        if narrowed != box:
+            print(f"  group {group_index}: narrowed to the figure the page places "
+                  f"-> {narrowed[0]:.2f},{narrowed[1]:.2f}-"
+                  f"{narrowed[2]:.2f},{narrowed[3]:.2f}")
+            box = narrowed
         rect = pymupdf.Rect(box[0] * page.rect.width, box[1] * page.rect.height,
                             box[2] * page.rect.width, box[3] * page.rect.height)
         # The border is part of the picture and is kept; a borderless figure is
