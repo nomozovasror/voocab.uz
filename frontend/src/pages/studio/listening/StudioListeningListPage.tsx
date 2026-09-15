@@ -15,6 +15,25 @@ import type { StudioListeningItem } from "@/features/studio/types";
 
 const DASH = "—"; // "no data yet" marker — never a fabricated 0
 
+/**
+ * Whether a row answers what was typed.
+ *
+ * Every whitespace-separated term has to appear somewhere in the title, and
+ * anywhere in a word rather than at its start. That is what makes a library
+ * of two hundred and sixty papers reachable by typing "14 part 3" — the
+ * titles are "Cambridge IELTS 14 — Test 2, Part 3", so a search that wanted
+ * one contiguous string would need the em dash and the comma typed exactly.
+ *
+ * Client-side, and deliberately. The learner's catalogue searches in SQL
+ * because it is unbounded — everybody's public material — and an author's own
+ * list is bounded by what they wrote, is already entirely in the browser, and
+ * gets filtered here without a round trip per keystroke.
+ */
+function matches(title: string, terms: string[]): boolean {
+  const hay = title.toLowerCase();
+  return terms.every((term) => hay.includes(term));
+}
+
 // ── Small building blocks ────────────────────────────────────────────────
 
 function Kbd({ children }: { children: React.ReactNode }) {
@@ -28,6 +47,9 @@ function Kbd({ children }: { children: React.ReactNode }) {
 function KeyboardHints() {
   return (
     <div className="mt-6 flex flex-wrap gap-5 text-xs text-muted-foreground">
+      <span className="flex items-center gap-1.5">
+        <Kbd>/</Kbd> search
+      </span>
       <span className="flex items-center gap-1.5">
         <Kbd>n</Kbd> new material
       </span>
@@ -247,8 +269,26 @@ export default function StudioListeningListPage() {
     });
   };
 
-  const items = useMemo(() => data?.items ?? [], [data]);
-  const totalTiles = 1 + items.length; // create tile + rows
+  const all = useMemo(() => data?.items ?? [], [data]);
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const terms = useMemo(
+    () => query.toLowerCase().split(/\s+/).filter(Boolean),
+    [query],
+  );
+  const searching = terms.length > 0;
+  const items = useMemo(
+    () => (searching ? all.filter((item) => matches(item.title, terms)) : all),
+    [all, searching, terms],
+  );
+
+  // The create tile leads the list, except while a search is running: what is
+  // on screen then is an answer to a question, and "make a new one" is not
+  // one of the answers. One constant rather than a branch per use, because
+  // the roving index is arithmetic over this list and two of them would
+  // disagree the first time either moved.
+  const offset = searching ? 0 : 1;
+  const totalTiles = offset + items.length;
   const isEmpty = !isLoading && !isError && (data?.total ?? 0) === 0;
 
   // Roving selection across [create tile, ...rows]. `null` = nothing selected
@@ -259,8 +299,11 @@ export default function StudioListeningListPage() {
   const tileRefs = useRef<Array<HTMLAnchorElement | null>>([]);
 
   const hrefAt = useCallback(
-    (i: number) => (i === 0 ? "/studio/listening/new" : `/studio/listening/${items[i - 1].id}`),
-    [items],
+    (i: number) =>
+      offset === 1 && i === 0
+        ? "/studio/listening/new"
+        : `/studio/listening/${items[i - offset].id}`,
+    [items, offset],
   );
 
   const focusTile = (i: number) => tileRefs.current[i]?.focus();
@@ -277,6 +320,17 @@ export default function StudioListeningListPage() {
       // would open whichever row was highlighted behind it.
       if (pendingDelete) return;
 
+      if (e.key === "/") {
+        // The one shortcut that reaches INTO a field rather than acting on
+        // the list. It is still behind the guard above, so a slash typed
+        // INSIDE the box is a slash: the shortcut only exists for somebody
+        // whose hands are on the keyboard and whose focus is not there yet.
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+        return;
+      }
+
       if (e.key === "n" || e.key === "N") {
         e.preventDefault();
         navigate("/studio/listening/new");
@@ -292,8 +346,8 @@ export default function StudioListeningListPage() {
         // read from the closure rather than out of a state updater: an
         // updater has to be pure, and this one would be opening a dialog
         // from inside it.
-        if (selectedIndex !== null && selectedIndex > 0) {
-          setPendingDelete(items[selectedIndex - 1]);
+        if (selectedIndex !== null && selectedIndex >= offset) {
+          setPendingDelete(items[selectedIndex - offset]);
         }
         return;
       }
@@ -324,7 +378,8 @@ export default function StudioListeningListPage() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isLoading, isError, totalTiles, navigate, hrefAt, pendingDelete, items, selectedIndex]);
+  }, [isLoading, isError, totalTiles, navigate, hrefAt, pendingDelete, items,
+      selectedIndex, offset]);
 
   // The panel, and only the panel: the title and the tab bar above it belong
   // to the layout route and stay put across the navigation, so the entrance
@@ -332,6 +387,47 @@ export default function StudioListeningListPage() {
   return (
     <>
       <div className="studio-panel">
+        {!isEmpty && !isError && (
+          <div className="mb-3.5 flex items-baseline gap-3">
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                // The old highlight pointed into a list that no longer
+                // exists; leaving it there would arrow off a row the author
+                // cannot see.
+                setSelectedIndex(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  if (query) setQuery("");
+                  else e.currentTarget.blur();
+                } else if (e.key === "ArrowDown" || e.key === "Enter") {
+                  // Type, then walk into the results without reaching for the
+                  // mouse. The window listener cannot do this -- it returns
+                  // early for anything typed into a field, which is what
+                  // keeps "n" from creating a material mid-word.
+                  if (totalTiles === 0) return;
+                  e.preventDefault();
+                  setSelectedIndex(0);
+                  tileRefs.current[0]?.focus();
+                }
+              }}
+              placeholder="Search your materials"
+              aria-label="Search your listening materials"
+              className="h-9 min-w-0 flex-1 rounded-lg border border-transparent bg-card px-3 font-mono text-xs text-foreground placeholder:text-muted-foreground focus-visible:border-border-strong focus-visible:outline-none"
+            />
+            {/* Only while it means something. "262 of 262" beside a box
+                nobody has typed in is a number to read and nothing to know. */}
+            {searching && (
+              <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
+                {items.length} of {all.length}
+              </span>
+            )}
+          </div>
+        )}
         {isError ? (
           <div className="rounded-lg border border-dashed border-border px-5 py-10 text-center">
             <p className="text-sm text-muted-foreground">
@@ -373,21 +469,31 @@ export default function StudioListeningListPage() {
           </div>
         ) : (
           <div className="space-y-2.5">
-            <CreateTile
-              selected={selectedIndex === 0}
-              innerRef={(el) => (tileRefs.current[0] = el)}
-              onFocus={() => setSelectedIndex(0)}
-            />
-            {items.map((item, i) => (
-              <ListeningRow
-                key={item.id}
-                item={item}
-                selected={selectedIndex === i + 1}
-                innerRef={(el) => (tileRefs.current[i + 1] = el)}
-                onFocus={() => setSelectedIndex(i + 1)}
-                onDelete={() => setPendingDelete(item)}
-              />
-            ))}
+            {searching && items.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-border px-5 py-10 text-center text-sm text-muted-foreground">
+                nothing matches “{query}”.
+              </p>
+            ) : (
+              <>
+                {offset === 1 && (
+                  <CreateTile
+                    selected={selectedIndex === 0}
+                    innerRef={(el) => (tileRefs.current[0] = el)}
+                    onFocus={() => setSelectedIndex(0)}
+                  />
+                )}
+                {items.map((item, i) => (
+                  <ListeningRow
+                    key={item.id}
+                    item={item}
+                    selected={selectedIndex === i + offset}
+                    innerRef={(el) => (tileRefs.current[i + offset] = el)}
+                    onFocus={() => setSelectedIndex(i + offset)}
+                    onDelete={() => setPendingDelete(item)}
+                  />
+                ))}
+              </>
+            )}
           </div>
         )}
 
