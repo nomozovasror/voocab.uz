@@ -78,6 +78,24 @@ def laid_out(group: dict) -> str:
     return "\n".join(lines)
 
 
+#: A letter, or a few, with the book's explanation running on after it:
+#: "C The speaker says there'll be a huge turnout ...". IELTS Trainer 2 prints
+#: its reasoning on the same line as every answer, and told to stop at the
+#: answer the reader mostly does not.
+LETTERS_THEN_PROSE = re.compile(r"^([A-K](?:\s*[,/&]\s*[A-K])*)\s+\S", re.I)
+
+
+def just_the_letters(value: str) -> str:
+    """The answer, where the key line carries the answer AND why it is right.
+
+    Only ever applied where the group is already known to be answered with
+    letters, so there is nothing to lose: a value that is not letters is not
+    an answer this group can take, and the build refuses it either way. What
+    changes is that it refuses a lot less often."""
+    said = LETTERS_THEN_PROSE.match(value.strip())
+    return said.group(1) if said else value
+
+
 def from_a_box(group: dict) -> list[str]:
     """The list beside the picture, where there is one rather than letters on it.
 
@@ -391,6 +409,8 @@ def build(section_id: str) -> int:
         questions = []
         for q in group["questions"]:
             printed = KEY_NOTE.sub("", q["key"]).strip(" ,;")
+            if lettered:
+                printed = just_the_letters(printed)
             if lettered and not printed:
                 # The key line was the note and nothing else, which means the
                 # letters printed under it were not read. Better to say so than

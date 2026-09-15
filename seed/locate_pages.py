@@ -210,11 +210,13 @@ def from_text(pdf: pathlib.Path, index: int) -> dict:
     key_test = None
     for key_test in re.finditer(r"\bKEY\s+Test\s*(\d)", text, re.I):
         pass
-    # The heading is what a task page prints over its questions. Taken only
-    # from the first part of the page, so the NEXT task's heading further down
-    # does not become this page's.
-    heading = re.search(r"(?:Listening\s+)?Part\s*[1-4]\s*(?:Questions\s*\d+\s*[-–]\s*\d+)?",
-                        text[:400], re.I)
+    # No heading, deliberately. Extraction flattens the running line into the
+    # body, so "Listening Part 2" turns up in the text of a page that prints
+    # no heading at all -- and resolve() stops a section's run at the next
+    # page carrying a section heading, which threw away every continuation
+    # sheet in the book: Test 5's questions 15 to 20 are on page 144 and the
+    # section came back as page 143 alone. The running line is already in
+    # `header`, which is where this book keeps the address anyway.
     return {"kind": kind,
             # The two halves, kept apart so the missing one can be filled in
             # from the page before by `carry_address` -- a book's running line
@@ -222,7 +224,7 @@ def from_text(pdf: pathlib.Path, index: int) -> dict:
             "which_test": which.group(1) if which else None,
             "which_part": part.group(1) if part else None,
             "header": " ".join(x.group(1) for x in (which, part) if x) or None,
-            "heading": heading.group(0) if heading and kind == "listening_questions" else None,
+            "heading": None,
             "answer_key_test": int(key_test.group(1)) if key_test else None,
             "index": index}
 

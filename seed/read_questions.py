@@ -206,6 +206,16 @@ ANSWERS ARE THE BOLD LINES. Between them sit italic paragraphs beginning \
 "Distraction", explaining what the recording said to mislead the candidate. \
 Those are commentary. They are not answers and they do not carry numbers.
 
+SOME BOOKS EXPLAIN THE ANSWER ON THE SAME LINE AS IT. IELTS Trainer 2 prints
+
+    21 A Oliver suggests the introduction includes something on which ...
+    1 15(th) May / May 15(th) The woman explains that the film must be ...
+
+The answer is only the part a candidate would write -- "A", and \
+"15(th) May / May 15(th)". Everything after it is the book talking to the \
+reader. Stop at it. Returning the whole line gives a question whose only \
+accepted answer is a paragraph of English prose.
+
 The page may also carry MORE THAN ONE numbered list. IELTS Trainer prints the \
 answers to its teaching exercises down the left -- "Useful language: dates \
 1 21(st) September, 2 1(st) February 1986" -- and the exam questions under \
@@ -576,6 +586,15 @@ def main() -> int:
         # number is a label, not part of the answer, and it only ever appears
         # here because it is printed immediately to the left of the answer.
         value = re.sub(rf"^\s*{re.escape(label)}\s+", "", str(value))
+        # A value that opens with its OWN pair label: {"13": "13/14 B/C (in
+        # any order)"} is the line "13/14 B/C", read with only the first
+        # number as the label. The pair is printed right there in the value,
+        # so it is taken from it rather than guessed at -- and without it the
+        # group asks one question where the paper asks two.
+        moved = re.match(r"\s*(\d+)\s*[/&–-]\s*(\d+)\s+(\S.*)$", str(value))
+        if moved and moved.group(1) == label.strip():
+            label = f"{moved.group(1)}&{moved.group(2)}"
+            value = moved.group(3)
         pair = PAIRED_KEY.match(label)
         if pair and not PAIR_OF_LETTERS.match(value.strip()):
             # A pair of WORDS is two blanks on the paper -- "37&38 IN EITHER
