@@ -11,8 +11,10 @@ URLs, chosen with `SEED_VISION=groq|gemini|nvidia`:
   that reads a page, and measured against the hand transcription before it was
   adopted: 41 turns, 11 of 11 margin markers on the same turns, at a cent a
   section. `SEED_VISION_MODEL` overrides it, and `gemini-flash-lite-latest` is
-  an alias Google keeps pointed at the current one. NOTE that `PRICES` below
-  is written for THIS model; a bigger one makes the ledger read low.
+  an alias Google keeps pointed at the current one. The free tier's 500
+  requests a day are counted PER MODEL, so `SEED_VISION_MODEL=gemini-flash-
+  latest` is a second day's work on a day flash-lite is spent -- at four times
+  the price, which `BY_MODEL` below knows so the ledger stays honest.
 * **nvidia** -- build.nvidia.com's catalogue, free through the developer
   programme and rate-limited near 40 requests a minute instead. Measured twice
   and not adopted either time; see the README. Kept because a free tier is
@@ -85,6 +87,17 @@ PRICES = {
     "groq":   {"in": 0.29, "out": 0.59},
     "gemini": {"in": 0.25, "out": 1.50, "audio": 0.50},   # 3.1-flash-lite
     "nvidia": {"in": 0.00, "out": 0.00},
+}
+#: Gemini's free tier counts its 500 requests a day PER MODEL, so a day that
+#: has spent flash-lite's still has flash's. That makes the second model a
+#: real fallback rather than a preference -- but it is four times the price,
+#: and a ledger that says otherwise is worse than no ledger, because the whole
+#: reason this file keeps one is that the console cannot say which stage spent
+#: what. Matched on the model name rather than the provider, so the rate
+#: follows whatever `SEED_VISION_MODEL` is actually set to.
+BY_MODEL = {
+    "gemini-flash-latest":  {"in": 1.00, "out": 6.00, "audio": 2.00},
+    "gemini-3.1-flash":     {"in": 1.00, "out": 6.00, "audio": 2.00},
 }
 #: Every request's token counts, appended as one JSON object per line. This is
 #: the only record of what a pass over the corpus costs: the provider's console
@@ -272,7 +285,7 @@ def record(usage: dict, model: str, images: int, *, audio: bool = False) -> None
     Never raises -- a ledger that can stop a batch is worse than no ledger."""
     if not usage:
         return
-    price = PRICES.get(PROVIDER, {"in": 0.0, "out": 0.0})
+    price = BY_MODEL.get(model) or PRICES.get(PROVIDER, {"in": 0.0, "out": 0.0})
     rate_in = price.get("audio", price["in"]) if audio else price["in"]
     got, made = usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
     try:
