@@ -42,10 +42,17 @@ import unicodedata
 
 #: A separator with space around it alternates whole PHRASES:
 #: "(£)115 / a hundred (and) fifteen" is two ways of saying the amount.
-#: A semicolon does the same without needing spaces around it, and is how the
+#: A separator with space around it alternates whole PHRASES -- and space on
+#: ONE side is the same thing typed or scanned imperfectly. "285/ two hundred
+#: and eighty-five" is two ways of writing one number; read as a word-level
+#: alternation it came out as the single answer "285 two hundred and eighty-
+#: five", which is not a thing anybody would write. Nobody puts a space after
+#: the slash in an intra-word alternation, so the asymmetry is the tell.
+#:
+#: A semicolon does the same without needing any space, and is how the
 #: Official Cambridge Guide prints the two answers of a pair: "37&38 IN EITHER
 #: ORDER ships; horses". No other book in this corpus uses one anywhere.
-PHRASE_ALT = re.compile(r"\s+[/|]\s+|\s*;\s*")
+PHRASE_ALT = re.compile(r"\s*[/|]\s+|\s+[/|]\s*|\s*;\s*")
 #: One with no space alternates a single WORD inside the phrase:
 #: "urban centres/centers" is "urban centres" or "urban centers", never
 #: "centers" on its own. Splitting on the separator regardless of spacing --
@@ -54,6 +61,13 @@ WORD_ALT = re.compile(r"[/|]")
 OPTIONAL = re.compile(r"\(([^)]*)\)")
 #: A branch that is only digits, with the separators a number is written with.
 NUMERIC = re.compile(r"^[\d.,]+$")
+#: A number said rather than written. Enough of them to recognise an amount;
+#: this is a test for "is the other side of the slash this same number", not a
+#: parser.
+NUMBER_WORD = re.compile(
+    r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"thir|four|fif|six|seven|eigh|nine)(?:teen|ty)?\b|\b(?:hundred|thousand|"
+    r"million|dozen)\b", re.I)
 WHITESPACE = re.compile(r"\s+")
 
 
@@ -124,6 +138,16 @@ def alternates_whole(phrase: str, tokens: list[str]) -> bool:
         numbers = [branch.replace(",", "") for branch in WORD_ALT.split(token)
                    if NUMERIC.match(branch)]
         if len(numbers) != len(set(numbers)):
+            return True
+    # **One separator, a number on one side and the same number in words on
+    # the other.** "125|one hundred and twenty-five" is one amount written
+    # twice, and the trailing words belong to the second alone -- word by word
+    # it gave "125 hundred and twenty-five". The count of separators is what
+    # keeps this off "5/five km/kilometres/kilometers", where there are three
+    # and the two alternations really are independent: five km, 5 kilometres.
+    if sum(len(WORD_ALT.split(token)) - 1 for token in tokens) == 1:
+        if (any(NUMERIC.match(branch) for branch in branches)
+                and any(NUMBER_WORD.search(branch) for branch in branches)):
             return True
     return False
 
@@ -224,6 +248,42 @@ def plain(text: str) -> str | None:
     return bare if bare != text else None
 
 
+#: A hyphen between two words, which is a keystroke a candidate may or may not
+#: make. "self-employed", "twenty-five", "bar-code".
+JOINED = re.compile(r"(?<=[A-Za-z0-9])-(?=[A-Za-z0-9])")
+#: A number read out in groups -- a phone number, a reference. "021 785 6361".
+IN_GROUPS = re.compile(r"^\d+(?:\s+\d+)+$")
+
+
+def unhyphenated(text: str) -> str | None:
+    """The same answer with its hyphens typed as spaces, if it has any.
+
+    "two hundred and eighty-five" is how the book prints it and "eighty five"
+    is how half the people who hear it will type it. A space rather than
+    nothing, because the other way round breaks the words that are genuinely
+    two: "self-employed" is "self employed", never "selfemployed". Where a
+    book means the joined-up form it says so in its own notation --
+    "bar(-)code" -- and that already expands to both.
+    """
+    # Not a name the book spells out: "M-A-U-G-H-A-N" is already accepted as
+    # the word it spells, and the hyphens there join letters rather than
+    # words -- which is what this rule is about.
+    if spelled(text):
+        return None
+    bare = JOINED.sub(" ", text)
+    return bare if bare != text else None
+
+
+def ungrouped(text: str) -> str | None:
+    """A number written in groups, with the groups closed up.
+
+    A phone number is dictated "oh two one, seven eight five, six three six
+    one" and the book prints "021 785 6361"; a candidate writes it either way
+    and neither is a different number.
+    """
+    return text.replace(" ", "") if IN_GROUPS.match(text.strip()) else None
+
+
 def parse_answer(text: str) -> list[str]:
     """One printed key line -> every accepted answer, de-duplicated.
 
@@ -241,10 +301,13 @@ def parse_answer(text: str) -> list[str]:
                 for form in ([spelled(variant)] if spelled(variant) else []) + [variant]:
                     if form and form not in out:
                         out.append(form)
+    # The forms nobody printed but somebody will type, appended after every
+    # form that IS printed so the review page still shows the book's own
+    # wording first.
     for variant in list(out):
-        bare = plain(variant)
-        if bare and bare not in out:
-            out.append(bare)
+        for also in (plain(variant), unhyphenated(variant), ungrouped(variant)):
+            if also and also not in out:
+                out.append(also)
     return out
 
 
@@ -276,6 +339,19 @@ CASES = [
     ("M-A-U-G-H-A-N", ["MAUGHAN", "M-A-U-G-H-A-N"]),
     # A letter the learner's keyboard does not have.
     ("café", ["café", "cafe"]),
+    # A separator with space on one side only, which is the same separator.
+    ("285/ two hundred and eighty-five",
+     ["285", "two hundred and eighty-five", "two hundred and eighty five"]),
+    # A hyphen is a keystroke a candidate may not make.
+    ("self-employed", ["self-employed", "self employed"]),
+    # A number dictated in groups, typed either way.
+    ("021 785 6361", ["021 785 6361", "0217856361"]),
+    # One separator, a number on one side and the same number in words on the
+    # other -- which word by word gave "125 hundred and twenty-five".
+    ("125|one hundred and twenty-five",
+     ["125", "one hundred and twenty-five", "one hundred and twenty five"]),
+    ("23.50/twenty-three fifty",
+     ["23.50", "twenty-three fifty", "twenty three fifty"]),
     # Cambridge 19 really does print this among the answers to a time, and
     # decomposition alone turns it into a fraction slash nobody can type.
     # The typeable forms are appended after the printed ones, which is why
