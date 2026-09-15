@@ -153,6 +153,19 @@ FINDINGS: list[tuple[str, str, str, str]] = [
      "and Trainer 2 through the pipeline, is roughly 800 more requests -- two "
      "days of free-tier Gemini, or a few minutes of Groq at about $0.0006 a "
      "page."),
+    ("corpus", "warning",
+     "A Google AI Pro subscription does not raise the API's limits, and may lower them",
+     "Measured, because it was asked. Before: the 429 named the metric "
+     "'generate_content_free_tier_requests, limit: 500' -- the free tier, 500 a "
+     "day, counted separately PER MODEL, so gemini-flash-latest was a second "
+     "day's work on a day gemini-3.1-flash-lite was spent. After the subscription "
+     "was bought, BOTH models answer 'Your prepayment credits are depleted. Please "
+     "go to AI Studio at https://ai.studio/projects to manage your project and "
+     "billing' -- the project has left the free tier for a prepaid one with no "
+     "balance, which for this work is worse than the free tier it replaced. AI Pro "
+     "is a consumer subscription for the Gemini app; the API key's tier follows the "
+     "Cloud project behind it. What is needed is credit on that project, and the "
+     "amount is small: 499 requests went through today for a measured $0.35."),
     ("102", "warning",
      "A quarter of the Guide came back unread, and said so",
      "The first pass ran out of Gemini quota at index 286 and recorded pages 286 "

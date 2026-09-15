@@ -119,6 +119,15 @@ def sample(conn) -> list[tuple[str, str]]:
         "WHERE b.has_audioscript = 0")}
     web = {r["id"] for r in conn.execute(
         "SELECT id FROM section WHERE question_source IS NOT NULL")}
+    # A book can print an audioscript and still number nothing in it. The
+    # Official Cambridge Guide underlines the answer and prints no Q number
+    # anywhere, so which question a marker belongs to came from the ORDER of
+    # the underlines -- a rule, not a reading. It measures well (121 of 137
+    # answers inside their own span) and it is still the one class of section
+    # here whose numbering nothing on the page confirms.
+    unnumbered = {r["id"] for r in conn.execute(
+        "SELECT s.id FROM section s JOIN book b ON b.number = s.book_number "
+        "WHERE b.kind = 'guide'")}
     # A book can have an audioscript and one section still not: cam13-t3-s2's
     # sheet is missing from the scan, so it was heard like Cambridge 20's are
     # while its fifteen neighbours were read. The note is where that was
@@ -140,6 +149,8 @@ def sample(conn) -> list[tuple[str, str]]:
             why.append("heard, not read")
         if sid in web:
             why.append("questions from the web")
+        if sid in unnumbered:
+            why.append("the book numbers no answers; markers placed by their order")
         if not markers:
             why.append("no margin markers at all")
         if sid in noted:

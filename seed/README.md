@@ -1781,3 +1781,44 @@ and the book has been stopped twice by the daily cap with ten sections left.
 Groq has no such cap and is cheaper per token, which is why it was the default.
 It is blocked on this account by a spend-alert threshold, which is a setting,
 not a balance.
+
+## What the provider limits actually are
+
+Worth stating plainly, because it has now stopped the work three times and
+never once for the reason it looks like.
+
+**Groq** is blocked on this account by a *spend alert threshold* — a setting,
+not a balance. Clearing it in the console brings it back. It has no daily cap
+and is the cheapest per token, which is why it is the default.
+
+**Gemini's free tier** is 500 requests a day, counted **per model**. So
+`SEED_VISION_MODEL=gemini-flash-latest` is a second day's work on a day
+`gemini-3.1-flash-lite` is spent — at four times the price, which `BY_MODEL` in
+`vision.py` knows so the ledger stays honest.
+
+**A Google AI Pro subscription does not raise either.** Measured, because it
+was asked. Before: `generate_content_free_tier_requests, limit: 500`. After:
+both models answer `Your prepayment credits are depleted. Please go to AI
+Studio at https://ai.studio/projects to manage your project and billing`. The
+project has left the free tier for a prepaid one with no balance, which for
+this work is *worse* than the free tier it replaced. AI Pro is a consumer
+subscription for the Gemini app; an API key's tier follows the Cloud project
+behind it.
+
+The amount of money involved has never been the issue. 499 requests went
+through on the day this was measured, for **$0.35**. The whole Cambridge corpus
+— eleven books, 176 sections, every page of every PDF — cost **$0.57**.
+
+## Where the three books stand
+
+| | sections | in the database | what is left |
+|---|---|---|---|
+| IELTS Trainer | 24 | **24** | — |
+| Official Cambridge Guide | 32 | **22** | ten sections' questions; seventeen answers unlinked in six more |
+| IELTS Trainer 2 | 24 | 0 | pages located free from the text layer; every section still to be heard |
+
+**222 materials, 2,114 of 2,131 replay spans, 216 of 222 content-complete.**
+
+Trainer 2 is the Cambridge 20 shape: no audioscript printed anywhere, so its
+24 sections are heard rather than read, and their markers placed by meaning.
+Its page map cost nothing, because 229 of its 232 sheets carry real text.
