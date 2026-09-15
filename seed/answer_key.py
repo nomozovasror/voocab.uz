@@ -194,17 +194,33 @@ def spelled(text: str) -> str | None:
     return re.sub(r"[\s-]", "", text) if SPELLED_OUT.match(text.strip()) else None
 
 
-def plain(text: str) -> str | None:
-    """The same answer with its accents taken off, if it has any.
+#: What decomposition leaves behind that a keyboard still does not have.
+#: "½" decomposes to "1", U+2044 FRACTION SLASH, "2" -- three characters,
+#: every one of them printable, and the middle one no more typeable than the
+#: fraction was. Every character in this table has turned up in a printed key
+#: or in the decomposition of one.
+TYPEABLE = str.maketrans({"\u2044": "/", "\u2019": "'", "\u2018": "'",
+                          "\u201c": '"', "\u201d": '"',
+                          "\u2013": "-", "\u2014": "-", "\u00a0": " "})
 
-    A learner types on the keyboard they have. "café" is the answer the book
+
+def plain(text: str) -> str | None:
+    """The same answer written with characters a keyboard has.
+
+    A learner types on the keyboard in front of them. "café" is what the book
     prints and "cafe" is what gets typed, and `normalize_answer` in the
     backend is deliberately dumb -- trim, collapse, lowercase -- so the two do
     not compare equal. Every accepted phrasing has to be in the list, and this
     is one.
+
+    Decomposing is not enough on its own. Cambridge 19 prints "½" among the
+    accepted answers for a time, and NFKD turns that into "1", a FRACTION
+    SLASH and "2" -- which reads as "1/2" and is not: the slash is U+2044 and
+    a learner typing 1/2 still gets it wrong. Whatever survives the
+    decomposition is translated to the character it looks like.
     """
     bare = "".join(c for c in unicodedata.normalize("NFKD", text)
-                   if not unicodedata.combining(c))
+                   if not unicodedata.combining(c)).translate(TYPEABLE)
     return bare if bare != text else None
 
 
@@ -260,6 +276,12 @@ CASES = [
     ("M-A-U-G-H-A-N", ["MAUGHAN", "M-A-U-G-H-A-N"]),
     # A letter the learner's keyboard does not have.
     ("café", ["café", "cafe"]),
+    # Cambridge 19 really does print this among the answers to a time, and
+    # decomposition alone turns it into a fraction slash nobody can type.
+    # The typeable forms are appended after the printed ones, which is why
+    # "1/2" comes last rather than beside the "½" it stands in for.
+    ("3.30 / three thirty / ½ / half 3", ["3.30", "three thirty", "½",
+                                          "half 3", "1/2"]),
     ("(the) Fauré Room", ["Fauré Room", "the Fauré Room",
                           "Faure Room", "the Faure Room"]),
     # IELTS Trainer's asides. The first is why this exists: without stripping,

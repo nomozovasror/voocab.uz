@@ -97,6 +97,13 @@ CREATE TABLE IF NOT EXISTS section (
     -- whatever this says -- but where a question's wording came from is not
     -- something to have to work out later from a commit message.
     question_source TEXT,
+    -- NULL means "whatever the book does". 0 means THIS section must be heard
+    -- however the rest of its book is read: cam13-t3-s2's audioscript page is
+    -- missing from the scan, so the pages the catalogue names for it carry
+    -- somebody else's words. Without it, a book-level flag is the only thing
+    -- the runner looks at, and a re-run silently replaced a good heard
+    -- transcript with a reading of the wrong pages.
+    has_audioscript INTEGER CHECK (has_audioscript IN (0, 1)),
     note          TEXT,
     UNIQUE (book_number, test_no, section_no)
 );

@@ -213,6 +213,24 @@ def main() -> int:
         name.strip() for name in (args.force or "").split(",") if name.strip()}
     if unknown := forced - set(STAGES):
         raise SystemExit(f"--force names no such stage: {', '.join(sorted(unknown))}")
+    # Redoing a stage redoes what reads it. The stages are listed in the order
+    # they depend on each other, and each one's output is the next one's
+    # input: align reads turns.json, questions reads aligned.json, import
+    # reads questions.json. `--force audioscript` alone rewrote a transcript
+    # and left an alignment pointing at turns that no longer existed, which
+    # the import met as `IndexError: list index out of range` -- a section
+    # lost, and nothing anywhere saying what had actually happened.
+    #
+    # It only ever ADDS work that was going to be wrong otherwise, and the two
+    # stages that cost money are the first two, so forcing a late one still
+    # pays for nothing.
+    if forced:
+        after = min(STAGES.index(name) for name in forced)
+        widened = set(STAGES[after:])
+        if widened - forced:
+            print(f"also redoing {', '.join(sorted(widened - forced))}: "
+                  "they read what is being rewritten")
+        forced = widened
     started = time.perf_counter()
     finished, stalled = 0, []
 
@@ -220,11 +238,17 @@ def main() -> int:
     # book, and asking per section would be sixteen identical questions.
     heard_books = {r["number"] for r in conn.execute(
         "SELECT number FROM book WHERE has_audioscript = 0")}
+    # And the sections that must be heard whatever their book does. One so
+    # far, and it cost a good transcript to learn: cam13-t3-s2's audioscript
+    # page is missing from the scan, so re-running it as a "readable" book
+    # read the wrong pages over the top of a heard reading that was right.
+    heard_sections = {r["id"] for r in conn.execute(
+        "SELECT id FROM section WHERE has_audioscript = 0")}
 
     for section_id in ids:
-        heard = conn.execute(
-            "SELECT book_number FROM section WHERE id = ?",
-            (section_id,)).fetchone()["book_number"] in heard_books
+        row = conn.execute(
+            "SELECT book_number FROM section WHERE id = ?", (section_id,)).fetchone()
+        heard = row["book_number"] in heard_books or section_id in heard_sections
         done = {r["name"] for r in conn.execute(
             "SELECT name FROM stage WHERE section_id = ? AND status = 'done'",
             (section_id,))}

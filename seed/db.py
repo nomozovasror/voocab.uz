@@ -182,6 +182,12 @@ FINDINGS: list[tuple[str, str, str, str]] = [
      "counted in nothing; it needs a different source file, not a pipeline change."),
 ]
 
+#: Sections that must be HEARD whatever their book does. A book-level flag
+#: cannot say this: Cambridge 13 prints audioscripts, and printed page 108 --
+#: the one carrying test 3 section 2 -- is missing from the scan, so the pages
+#: the catalogue names for it hold the wrong section's words.
+HEARD_SECTIONS = ("cam13-t3-s2",)
+
 #: The stages a section passes through, in the order they block on each other.
 STAGES = ("audioscript", "questions", "answer_key", "align", "picture", "trim", "import")
 
@@ -295,6 +301,7 @@ def cmd_init() -> int:
     # catalogue up to date, without dropping the stage progress to do it.
     for table, column, decl in (
         ("section", "question_pages", "TEXT"),
+        ("section", "has_audioscript", "INTEGER"),
         ("section", "key_page", "INTEGER"),
         ("section", "script_pages", "TEXT"),
         ("document", "audioscript_page", "INTEGER"),
@@ -376,6 +383,13 @@ def cmd_init() -> int:
     if freed:
         print(f"unblocked {freed} stage(s): a book with no audioscript is heard, "
               "not stuck")
+
+    # The one section whose own pages cannot be read, in a book whose others
+    # can. Set here rather than left to a person to remember, because
+    # forgetting it is silent: the pages exist, they are just somebody else's.
+    for section_id in HEARD_SECTIONS:
+        conn.execute("UPDATE section SET has_audioscript = 0 WHERE id = ?",
+                     (section_id,))
 
     for subject, severity, summary, detail in FINDINGS:
         conn.execute(
