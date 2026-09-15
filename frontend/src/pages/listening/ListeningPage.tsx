@@ -96,8 +96,7 @@ const BOTTOM_GAP = 16;
  *
  * The row used to answer "how long is it and did I do it". It now answers
  * "and is it hard" — measured over everybody's answers rather than declared
- * by whoever wrote it (app/services/difficulty.py). That number is the whole
- * reason the page can be browsed rather than scrolled.
+ * by whoever wrote it (app/services/difficulty.py). That number is the whole reason the page can be browsed rather than scrolled.
  *
  * Nothing here fabricates a figure. A material nobody has answered enough of
  * is `New` and not "50%", a part the reader has barely touched draws a dash
@@ -244,9 +243,9 @@ export default function ListeningPage() {
   const listNarrowed =
     mode === "courses"
       ? filters.query.trim() !== "" ||
-        status !== "all" ||
-        covers !== "all" ||
-        length !== "all"
+      status !== "all" ||
+      covers !== "all" ||
+      length !== "all"
       : narrowed;
 
   // --- The field's journey to the header -----------------------------------
@@ -767,10 +766,10 @@ export default function ListeningPage() {
                   onBlur={
                     followList
                       ? (e) => {
-                          if (!e.currentTarget.contains(e.relatedTarget)) {
-                            releasePreview();
-                          }
+                        if (!e.currentTarget.contains(e.relatedTarget)) {
+                          releasePreview();
                         }
+                      }
                       : undefined
                   }
                 >
@@ -844,12 +843,12 @@ export default function ListeningPage() {
           style={
             beside
               ? {
-                  top: asideTop,
-                  // svh, not vh: on a phone the address bar makes vh a
-                  // promise the viewport doesn't keep — and this is a floor
-                  // the last card sits on.
-                  maxHeight: `calc(100svh - ${asideTop + BOTTOM_GAP}px)`,
-                }
+                top: asideTop,
+                // svh, not vh: on a phone the address bar makes vh a
+                // promise the viewport doesn't keep — and this is a floor
+                // the last card sits on.
+                maxHeight: `calc(100svh - ${asideTop + BOTTOM_GAP}px)`,
+              }
               : undefined
           }
           className="scrollbar-quiet lg:sticky lg:-mr-3 lg:overflow-y-auto lg:pr-3"

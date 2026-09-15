@@ -1,4 +1,9 @@
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
+import {
+  PLAYER_DOCK_H,
+  PLAYER_H,
+} from "@/features/listening/components/TakeAudio";
 
 /**
  * The shapes a listening page holds open while its data is in flight.
@@ -9,21 +14,67 @@ import { Skeleton } from "@/components/ui/skeleton";
  * built out of the same box. Heights match by construction, not by luck.
  */
 
-/** The recording's control box — see TakeAudio's outer div. */
-export function AudioSkeleton() {
-  return (
-    <div className="rounded-lg border border-border bg-card px-4 py-3">
-      <div className="flex items-center gap-3">
-        <Skeleton className="size-9 shrink-0 rounded-full" />
-        <Skeleton className="h-3 w-24" />
-        <Skeleton className="ml-auto h-3 w-20" />
+/**
+ * The recording's control box.
+ *
+ * Built from the player's own numbers rather than from measurements of it:
+ * `PLAYER_H` is imported, and every row repeats the class the real one lays
+ * out with — 72 of waveform, 4, 20 of part labels, 10, then a 50px control
+ * row. Change the player and this either follows or fails to compile, which
+ * is the only arrangement in which the paper below starts at the same y
+ * before and after the material lands.
+ */
+export function PlayerSkeleton({
+  settled,
+  className,
+}: {
+  /** The review screen's player, which is small where it is and never grows
+   *  — so the shape held open is the one row, not the tall card. */
+  settled?: boolean;
+  className?: string;
+}) {
+  if (settled) {
+    return (
+      <div
+        style={{ height: PLAYER_DOCK_H }}
+        // The docked row's own gutter and gaps: 12 of padding, the transport
+        // cluster, the waveform in what is left, then the clock.
+        className={cn(
+          "flex items-center gap-2.5 rounded-xl border border-border bg-card px-3",
+          className,
+        )}
+      >
+        <Skeleton className="size-6 shrink-0 rounded-full" />
+        <Skeleton className="h-8 w-8 shrink-0 rounded-md" />
+        <Skeleton className="h-8 w-8 shrink-0 rounded-md" />
+        <Skeleton className="h-1 min-w-0 flex-1 rounded-full" />
+        <Skeleton className="h-8 w-8 shrink-0 rounded-md" />
+        <Skeleton className="h-[0.9em] w-24 shrink-0" />
       </div>
-      {/* 24px, not 4px. The real track is an `inline-block` range input
-          sitting on a text baseline, so its wrapper is a line box — measured
-          at 24px inside a 98px control. A bare 4px bar here left the paper
-          below starting 22px too high. */}
-      <div className="mt-3 flex h-6 items-center">
+    );
+  }
+  return (
+    <div
+      style={{ height: PLAYER_H }}
+      className={cn(
+        "rounded-xl border border-border bg-card px-3 pt-3",
+        className,
+      )}
+    >
+      {/* The waveform, drawn as one flat line — which is what the real one
+          shows before its peaks have arrived anyway. */}
+      <div className="flex h-18 items-center">
         <Skeleton className="h-1 w-full rounded-full" />
+      </div>
+      <div className="mt-1 flex h-5 items-center justify-center">
+        <Skeleton className="h-[0.9em] w-16" />
+      </div>
+      {/* Play in the middle, the clock on the left, the switches on the
+          right — the real row's three columns. */}
+      <div className="mt-2.5 grid h-12 grid-cols-[1fr_auto_1fr] items-center">
+        <Skeleton className="h-3.5 w-28" />
+        <Skeleton className="size-12 rounded-full" />
+        <Skeleton className="h-7 w-28 justify-self-end" />
       </div>
     </div>
   );
@@ -43,8 +94,11 @@ export function PaperSkeleton({ parts = 2 }: { parts?: number }) {
     <div className="space-y-10">
       {Array.from({ length: parts }, (_, i) => (
         <section key={i}>
-          <h2 className="mb-4 border-b border-border pb-2 text-xs tracking-caps uppercase">
-            <Skeleton className="inline-block h-[0.9em] w-16" />
+          {/* The rule is above the heading, like the real one — a part is a
+              break in a continuous paper, not a box around it. */}
+          <h2 className="mb-4 flex items-baseline gap-3 border-t border-border pt-4 text-sm">
+            <Skeleton className="inline-block h-[0.85em] w-14" />
+            <Skeleton className="inline-block h-[0.75em] w-24" />
           </h2>
           <div className="space-y-3">
             <Skeleton className="h-4 w-2/5" />

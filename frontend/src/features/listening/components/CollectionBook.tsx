@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { COVER_INK, coverFor } from "@/features/listening/cover";
+import { COVER_INK, coverFor, coverKeyOf } from "@/features/listening/cover";
 import type { PatternName } from "@/features/listening/cover";
 import type { Collection } from "@/features/listening/types";
 
@@ -42,7 +42,7 @@ import type { Collection } from "@/features/listening/types";
  * patterns is twenty-four figures, and there are still only eight ways for
  * one to look wrong.
  */
-function Pattern({
+export function Pattern({
   name,
   ink,
   variant,
@@ -186,17 +186,25 @@ function Pattern({
  * eight pixels to its right.
  */
 export function CollectionCover({
-  id,
+  coverKey,
   title,
   showTitle = true,
+  compact,
   className,
 }: {
-  id: string;
+  /** The string the cover is generated from — `coverKeyOf(collection)`,
+   *  never a bare id: a collection the author has re-covered generates from
+   *  its seed, and anywhere still passing the id draws the old book. */
+  coverKey: string;
   title: string;
   showTitle?: boolean;
+  /** The studio editor's 104px cut, beside the title being typed. Only the
+   *  title's size and insets change — the art scales from its own viewBox —
+   *  because the shelf's type at that width is four words that do not fit. */
+  compact?: boolean;
   className?: string;
 }) {
-  const cover = coverFor(id);
+  const cover = coverFor(coverKey);
   return (
     <div
       className={cn(
@@ -224,16 +232,27 @@ export function CollectionCover({
       />
 
       {showTitle ? (
-        <div className="absolute inset-x-5 top-8 pr-1">
+        <div
+          className={cn(
+            "absolute pr-1",
+            compact ? "inset-x-4 top-3.5" : "inset-x-5 top-8",
+          )}
+        >
           <p
-            className="line-clamp-4 text-sm leading-snug font-medium"
+            className={cn(
+              "line-clamp-4 leading-snug font-medium",
+              compact ? "text-[0.65rem]" : "text-sm",
+            )}
             style={{ color: COVER_INK.title }}
           >
             {title}
           </p>
           <span
             aria-hidden
-            className="mt-2.5 block h-0.5 w-8"
+            className={cn(
+              "block",
+              compact ? "mt-2 h-px w-5" : "mt-2.5 h-0.5 w-8",
+            )}
             style={{ backgroundColor: COVER_INK.rule }}
           />
         </div>
@@ -273,7 +292,10 @@ export function CollectionBook({ collection }: { collection: Collection }) {
           "group-focus-visible/book:-translate-y-1",
         )}
       >
-        <CollectionCover id={collection.id} title={collection.title} />
+        <CollectionCover
+          coverKey={coverKeyOf(collection)}
+          title={collection.title}
+        />
 
         {/* Both lines in the title's own white — see COVER_INK.byline for
             why a dimmed one could not survive the pattern behind it. */}

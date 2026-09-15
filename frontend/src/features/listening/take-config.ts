@@ -28,6 +28,14 @@ export interface TakeConfig {
    *  and the one most obviously not an exam's: nobody gets to slow down the
    *  invigilator. */
   allowSpeed: boolean;
+  /** What the button that ends the attempt is called.
+   *
+   *  A rule like the others, and one that changes what the page MEANS.
+   *  Practice is somewhere you check your answers and then go back and work
+   *  on them, so "Check answers" is the truth; "Submit" and "Finish" both
+   *  promise a door closing behind you, which is the exam's promise and not
+   *  this page's. */
+  submitLabel: string;
   /** Is a countdown shown? Separate from whether one is RUNNING: practice
    *  measures how long everything took and simply doesn't say so, because a
    *  clock on the wall changes how people work. */
@@ -43,4 +51,5 @@ export const PRACTICE: TakeConfig = {
   allowReplay: true,
   allowSpeed: true,
   showTimer: false,
+  submitLabel: "Check answers",
 };

@@ -494,6 +494,60 @@
   .magic-particle { display: none; }
 }
 
+/* ── Shine ────────────────────────────────────────────────────────────────
+   Two states of one offer, on the take page's skip-silence switch.
+
+   `.shine` is the ASKING: a gloss that crosses the control a few seconds
+   before dead air arrives, because nobody would think to reach for it
+   otherwise. A sweep rather than a pulse — a pulse says "warning" and this is
+   an offer — and slow, because a fast sweep on a control nobody has looked at
+   yet reads as an error state.
+
+   The gloss crosses TWICE and then stops — once in the run-up and once as the
+   quiet lands. A sweep that kept going for thirty seconds would stop being an
+   offer and start being a thing on the screen that moves. What stays for the
+   whole silence is the accent on the type, which is what says the control is
+   live; the sweep only has to get it looked at once.
+
+   `forwards` is load-bearing: without it the gloss snaps back to its
+   un-animated position, which is the middle of the button, and sits there.
+
+   It goes on an element that can clip, which every control here already
+   does.
+   ──────────────────────────────────────────────────────────────────────── */
+.shine {
+  position: relative;
+}
+.shine::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    transparent 32%,
+    color-mix(in srgb, var(--primary) 40%, transparent) 50%,
+    transparent 68%
+  );
+  animation: shine-sweep 3.2s var(--ease-in-out) 2 forwards;
+}
+
+@keyframes shine-sweep {
+  0% { transform: translateX(-110%); }
+  45%, 100% { transform: translateX(110%); }
+}
+
+
+@media (prefers-reduced-motion: reduce) {
+  /* Still lit, just not moving — the point is that the control is worth
+     looking at, and that survives without the sweep. */
+  .shine::after {
+    animation: none;
+    transform: none;
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+  }
+}
+
 /* ── Logo animation ───────────────────────────────────────────────────────
    `loading` runs one sequence per cycle: the mark wipes in left-to-right, a
    gloss band crosses it, then it wipes out the same way — so the reveal and
@@ -883,4 +937,60 @@
   .setup-settled {
     animation: none;
   }
+}
+
+/* ── The studio's two tabs ────────────────────────────────────────────────
+   Materials and Collections are two routes, and crossing between them used
+   to be a cut: one page's content vanished and the next one's was simply
+   there, on the same header, which reads as the page having been replaced
+   rather than switched.
+
+   Only the PANEL animates — everything above it (the title and the tab bar)
+   is the same element on both routes and must not be touched, because the
+   lit pill is mid-slide while this plays and an entrance on its container
+   would drag the pill along with it.
+
+   Entrance only, no exit. The outgoing panel is gone the instant React swaps
+   the route, so there is nothing left to animate out; a fade-out would need
+   the old tree kept alive, which is a lot of machinery for a frame nobody
+   would see. Six pixels and a fifth of a second: enough to read as the same
+   page turning over, short enough that a second click never has to wait. */
+@keyframes studio-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.studio-panel {
+  animation: studio-panel-in var(--duration-base) var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-panel {
+    animation: none;
+  }
+}
+
+/* ── Fields printed on a collection's cover ───────────────────────────────
+   The editor's banner IS the cover, so the name and the summary are typed
+   directly onto it. A field that looks like a field puts a box around the
+   title of the page you are on; a field that looks like a title has to say
+   somewhere that it can be typed in, and a line that arrives under it on
+   approach is that. White, because the stock beneath is dark in every theme
+   — which is also why these are here rather than in a token. */
+.cover-field {
+  border-bottom: 2px solid transparent;
+}
+.cover-field:hover {
+  border-bottom-color: rgba(255, 255, 255, 0.32);
+}
+.cover-field:focus {
+  border-bottom-color: rgba(255, 255, 255, 0.78);
+}
+.cover-field-sub {
+  border-bottom-width: 1px;
 }

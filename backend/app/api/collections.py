@@ -198,6 +198,7 @@ async def update_collection(
         title=data.title,
         summary=data.summary,
         visibility=data.visibility,
+        cover_seed=data.cover_seed,
     )
     return await _author_row(session, collection)
 

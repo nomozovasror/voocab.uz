@@ -17,6 +17,7 @@ import {
 } from "@/features/listening/practice";
 import { AuthorAvatar } from "@/features/listening/components/AuthorTag";
 import { CollectionCover } from "@/features/listening/components/CollectionBook";
+import { coverKeyOf } from "@/features/listening/cover";
 import {
   LessonList,
   LessonListSkeleton,
@@ -165,7 +166,7 @@ function Header({ collection }: { collection: CollectionDetail }) {
     <header className="flex gap-6">
       <div className="w-26 shrink-0">
         <CollectionCover
-          id={collection.id}
+          coverKey={coverKeyOf(collection)}
           title={collection.title}
           className="shadow-[0_6px_14px_rgba(0,0,0,0.36)]"
         />

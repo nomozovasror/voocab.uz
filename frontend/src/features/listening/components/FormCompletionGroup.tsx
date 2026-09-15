@@ -1,6 +1,8 @@
 import { useMemo } from "react";
 import { Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { FlagQuestion } from "@/features/listening/components/FlagQuestion";
+import { Q_ANCHOR } from "@/features/listening/take-focus";
 import { FormLayout } from "@/features/listening/components/FormLayout";
 import { TaskPicture } from "@/features/listening/components/TaskPicture";
 import { parseTemplateLayout } from "@/features/listening/form-syntax";
@@ -21,6 +23,9 @@ interface FormCompletionGroupProps {
    *  the timings aren't in the take payload until then. */
   onReplay?: (startMs: number | null, endMs: number | null) => void;
   disabled?: boolean;
+  /** Only while the paper is being sat — see QuestionPaper. */
+  flagged?: Set<string>;
+  onFlag?: (questionId: string) => void;
 }
 
 export function FormCompletionGroup({
@@ -31,6 +36,8 @@ export function FormCompletionGroup({
   results,
   onReplay,
   disabled,
+  flagged,
+  onFlag,
 }: FormCompletionGroupProps) {
   const rubric = rubricSentence(group.config.answer_rubric, group.word_limit);
   // "Complete the summary using the list of words, A–H." With a box there is
@@ -61,7 +68,7 @@ export function FormCompletionGroup({
       <p className="text-sm text-foreground">{group.instructions}</p>
       {rubric && <p className="text-xs text-muted-foreground">{rubric}</p>}
 
-      <div className="rounded-lg border border-border bg-background p-4">
+      <div className="rounded-xl border border-border bg-card p-5">
         {/* Above the labels, where the paper prints it. Its size is known
             before the bytes arrive, so nothing under it moves as it lands. */}
         {group.config.image_url &&
@@ -96,14 +103,27 @@ export function FormCompletionGroup({
             const shown = startNumber + n - 1;
             const result = results?.[question.id];
             const graded = result !== undefined;
-            const fieldTone = cn(
-              graded &&
-                (result.is_correct
-                  ? "border-success text-success"
-                  : "border-destructive text-destructive"),
-            );
+            const filled = (answers[question.id] ?? "").trim().length > 0;
+            // The gap is the one control on this page a candidate spends
+            // their whole time in, and it is drawn the way the editor draws
+            // it: a rule under a piece of writing, not a box on a form. Take
+            // and author have to look like the same object or the author is
+            // laying out something they never see.
+            const fieldTone = graded
+              ? result.is_correct
+                ? "border-correct text-correct"
+                : "border-incorrect text-incorrect"
+              : filled
+                ? // A filled gap's rule is brighter, so a form with three
+                  // left in it can be read as a shape rather than by
+                  // checking each line.
+                  "border-border-strong"
+                : "border-border";
             return (
-              <span className="mx-1 inline-flex items-baseline gap-1 align-baseline">
+              <span
+                {...{ [Q_ANCHOR]: question.id }}
+                className="mx-1 inline-flex items-baseline gap-1 align-baseline"
+              >
                 {numbered && (
                   <span
                     aria-hidden
@@ -119,7 +139,7 @@ export function FormCompletionGroup({
                   <select
                     data-question={question.id}
                     className={cn(
-                      "rounded-md border border-border bg-background px-2 py-0.5 text-sm text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                      "rounded-md border bg-transparent px-2 py-0.5 font-mono text-base text-foreground transition-colors duration-fast focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
                       fieldTone,
                     )}
                     value={answers[question.id] ?? ""}
@@ -143,8 +163,14 @@ export function FormCompletionGroup({
                   // attribute here beats threading onFocus/onBlur through
                   // every group component and the layout between them.
                   data-question={question.id}
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck={false}
                   className={cn(
-                    "w-32 rounded-md border border-border bg-background px-2 py-0.5 text-sm text-foreground placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                    // No ring: the underline IS the focus state, and a ring
+                    // around a borderless field draws a box the design spent
+                    // the rest of this rule removing.
+                    "w-36 border-0 border-b-2 bg-transparent px-1 pb-0.5 font-mono text-base text-foreground transition-colors duration-fast placeholder:text-muted-foreground focus-visible:border-primary focus-visible:outline-none",
                     fieldTone,
                   )}
                   value={answers[question.id] ?? ""}
@@ -164,6 +190,13 @@ export function FormCompletionGroup({
                       : `accepted: ${result.correct_answers.join(", ")}`}
                     )
                   </span>
+                )}
+                {onFlag && (
+                  <FlagQuestion
+                    number={String(shown)}
+                    flagged={flagged?.has(question.id) ?? false}
+                    onToggle={() => onFlag(question.id)}
+                  />
                 )}
                 {/* Only where the author marked it — a review that offered
                     replay on every gap and played the wrong moment on half of

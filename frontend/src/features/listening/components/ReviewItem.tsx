@@ -1,0 +1,171 @@
+import { Play } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { fmtClock } from "@/lib/time";
+import { MISTAKE_LABEL } from "@/features/listening/practice";
+import { markAnswer, sayAnswer, type ReviewRow } from "@/features/listening/review";
+import { questionNumbersShort } from "@/features/listening/numbering";
+
+/**
+ * One question, after it has been marked.
+ *
+ * Three rows, and the order is the argument: where you were, what you put,
+ * and what was actually said. Anything that breaks that order breaks the
+ * page — the version this replaced threaded `(accepted: Preston, preston)`
+ * into the middle of the form's own sentence, which left "junction of Mill
+ * Street and 3 test (accepted: Preston, preston) Avenue" on screen and no
+ * way to read either the question or the answer out of it.
+ *
+ * So the form is not redrawn. It is quoted, in one line, with the gap written
+ * `___` — enough to be recognised and never enough to take the layout apart.
+ *
+ * ## The transcript is the reason this page exists
+ *
+ * Knowing you were wrong is worth very little. *Hearing why you missed it* is
+ * the whole value of a review, and it is the one thing a score cannot give
+ * anybody. A candidate who wrote "windscreen" where the answer was "wing
+ * mirror" did not mishear a word — they were pulled by a distractor, and the
+ * only thing on any screen that shows them so is the sentence: *"The
+ * windscreen was fine, luckily — but the wing mirror is broken."*
+ *
+ * The answer is marked inside it, and the play button seeks to exactly that
+ * stretch. Both are conditional and quietly absent when they can't be had:
+ * listening transcripts are optional (the ASR may have failed, the author may
+ * have removed it), and a row with no transcript prints the answer and stops.
+ * No empty box, no "no transcript available" — a message about a missing
+ * feature is a row of the page spent saying nothing.
+ */
+export function ReviewItem({
+  row,
+  onPlay,
+  anchor,
+}: {
+  row: ReviewRow;
+  /** Seeks to the moment and plays only it. Absent when the recording failed
+   *  to load — the text still stands, so the row is drawn either way. */
+  onPlay?: (startMs: number | null, endMs: number | null) => void;
+  anchor: Record<string, string>;
+}) {
+  const { result } = row;
+  const right = result.is_correct;
+  const given = sayAnswer(result.given_answer, row.byLetter, row.options).trim();
+  const key = row.byLetter
+    ? sayAnswer(result.correct_answers.join(","), true, row.options)
+    : result.correct_answers.join(" / ");
+  const canPlay = onPlay && row.startMs != null;
+
+  return (
+    <article
+      {...anchor}
+      aria-label={`Question ${questionNumbersShort(row.number, row.span)}`}
+      className="scroll-mt-24 border-t border-border py-4"
+    >
+      {/* Where you were: the number, the line it sat in, and — for a wrong
+          answer — what kind of wrong. */}
+      <header className="flex items-baseline gap-3">
+        <span
+          className={cn(
+            "w-6 shrink-0 text-right text-sm font-semibold tabular-nums",
+            right ? "text-correct" : "text-incorrect",
+          )}
+        >
+          {questionNumbersShort(row.number, row.span)}
+        </span>
+        <p className="min-w-0 flex-1 text-sm text-muted-foreground">
+          {row.context?.label && (
+            <span className="text-foreground/80">{row.context.label}</span>
+          )}
+          {row.context?.label && row.context.line && " — "}
+          {row.context?.line}
+        </p>
+        {result.mistake && (
+          // A tag rather than a sentence: it is a filing label, and the panel
+          // above is where it is explained. Two tones only — the kinds that
+          // mean "you didn't hear it" are red, the ones that mean "you heard
+          // it and wrote it wrong" are amber, because those are two different
+          // evenings' work and the colour should say which.
+          <span
+            className={cn(
+              "shrink-0 rounded-full px-2 py-0.5 text-xs",
+              result.mistake === "missed" || result.mistake === "wrong"
+                ? "bg-incorrect/10 text-incorrect"
+                : "bg-attention/10 text-attention",
+            )}
+          >
+            {MISTAKE_LABEL[result.mistake]}
+          </span>
+        )}
+      </header>
+
+      {/* What you put, and what it should have been — on their OWN line, side
+          by side, never inside the question's text. */}
+      <div className="mt-2 ml-9 flex flex-wrap items-baseline gap-x-6 gap-y-1 text-base">
+        <span className="flex items-baseline gap-2">
+          <span className="text-xs text-muted-foreground">You</span>
+          <span
+            className={cn(
+              "border-b-2 pb-px font-mono",
+              !given
+                ? "border-line-subtle text-skipped italic"
+                : right
+                  ? "border-correct/40 text-correct"
+                  : "border-incorrect/40 text-incorrect",
+            )}
+          >
+            {given || "left blank"}
+          </span>
+        </span>
+        {/* Only where it adds something. Beside a right answer it is the same
+            word twice, which reads as the page not knowing they got it. */}
+        {!right && key && (
+          <span className="flex items-baseline gap-2">
+            <span className="text-xs text-muted-foreground">Answer</span>
+            <span className="font-mono text-correct">{key}</span>
+          </span>
+        )}
+      </div>
+
+      {row.transcript && (
+        <div className="mt-2.5 ml-9 flex items-start gap-3 rounded-lg bg-surface-sunken px-3 py-2.5">
+          <button
+            type="button"
+            disabled={!canPlay}
+            onClick={() => onPlay?.(row.startMs, row.endMs)}
+            aria-label={`Hear where the answer to question ${row.number} is said`}
+            title="Hear this"
+            className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-foreground/10 text-primary transition-colors hover:bg-foreground/20 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40"
+          >
+            <Play className="size-3" fill="currentColor" aria-hidden />
+          </button>
+          <div className="min-w-0 flex-1">
+            {row.startMs != null && (
+              <p className="text-xs tabular-nums text-muted-foreground">
+                {fmtClock(row.startMs)}
+                {row.endMs != null && ` — ${fmtClock(row.endMs)}`}
+              </p>
+            )}
+            <p className="text-base leading-relaxed text-foreground/80">
+              {markAnswer(row.transcript, result.correct_answers).map(
+                (run, i) =>
+                  run.hit ? (
+                    // The one place yellow appears in a review row, and it
+                    // means what it means everywhere else here: this is the
+                    // thing. <mark> rather than a span, because it is
+                    // literally what the element is for and screen readers
+                    // announce it.
+                    <mark
+                      key={i}
+                      className="rounded-sm bg-primary/20 px-1 text-primary"
+                    >
+                      {run.text}
+                    </mark>
+                  ) : (
+                    <span key={i}>{run.text}</span>
+                  ),
+              )}
+            </p>
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}

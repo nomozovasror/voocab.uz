@@ -1,5 +1,7 @@
 import { Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { FlagQuestion } from "@/features/listening/components/FlagQuestion";
+import { Q_ANCHOR } from "@/features/listening/take-focus";
 import { optionLetter } from "@/features/listening/mcq";
 import { questionNumbers } from "@/features/listening/numbering";
 import type {
@@ -38,6 +40,9 @@ interface ChoiceGroupProps {
    *  marked. Only where the author marked one — see below. */
   onReplay?: (startMs: number | null, endMs: number | null) => void;
   disabled?: boolean;
+  /** Only while the paper is being sat — see QuestionPaper. */
+  flagged?: Set<string>;
+  onFlag?: (questionId: string) => void;
 }
 
 function chosenLetters(value: string | undefined): Set<string> {
@@ -57,6 +62,8 @@ export function ChoiceGroup({
   results,
   onReplay,
   disabled,
+  flagged,
+  onFlag,
 }: ChoiceGroupProps) {
   return (
     <div className="space-y-4">
@@ -80,6 +87,8 @@ export function ChoiceGroup({
             result={results?.[question.id]}
             onReplay={onReplay}
             disabled={disabled}
+            flagged={flagged?.has(question.id) ?? false}
+            onFlag={onFlag ? () => onFlag(question.id) : undefined}
           />
         ))}
     </div>
@@ -94,6 +103,8 @@ function ChoiceQuestion({
   result,
   onReplay,
   disabled,
+  flagged,
+  onFlag,
 }: {
   question: TakeQuestion;
   number: number;
@@ -102,6 +113,8 @@ function ChoiceQuestion({
   result?: QuestionResult;
   onReplay?: (startMs: number | null, endMs: number | null) => void;
   disabled?: boolean;
+  flagged?: boolean;
+  onFlag?: () => void;
 }) {
   const options = question.options ?? [];
   const selectCount = question.select_count ?? 1;
@@ -132,14 +145,24 @@ function ChoiceQuestion({
 
   return (
     <fieldset
+      // What the navigator scrolls to, and what the page reads to know which
+      // question is being worked on.
+      {...{ [Q_ANCHOR]: question.id }}
       className="space-y-1.5"
       aria-invalid={graded && !result.is_correct}
     >
-      <legend className="mb-1 text-sm text-foreground">
-        <span className="mr-2 font-semibold tabular-nums text-muted-foreground">
+      <legend className="mb-1 flex w-full items-baseline gap-2 text-base text-foreground">
+        <span className="shrink-0 font-semibold tabular-nums text-muted-foreground">
           {questionNumbers(number, selectCount)}
         </span>
-        {question.prompt}
+        <span className="min-w-0 flex-1">{question.prompt}</span>
+        {onFlag && (
+          <FlagQuestion
+            number={questionNumbers(number, selectCount)}
+            flagged={!!flagged}
+            onToggle={onFlag}
+          />
+        )}
       </legend>
 
       {several && (
@@ -161,7 +184,7 @@ function ChoiceQuestion({
           <label
             key={letter}
             className={cn(
-              "flex cursor-pointer items-baseline gap-2 rounded-md border px-2.5 py-1.5 text-sm transition-colors",
+              "flex w-full cursor-pointer items-baseline gap-3 rounded-md border px-3 py-2 text-base transition-colors duration-fast",
               // The real input is sr-only, so the focus ring has to be put on
               // what is actually visible. `has-[:focus-visible]` and not
               // `peer-focus-visible`: the input is a CHILD of this label, not
@@ -207,7 +230,10 @@ function ChoiceQuestion({
                   : graded && picked
                     ? "border-destructive"
                     : picked
-                      ? "border-primary"
+                      ? // The letter takes the accent too. Selected is one
+                        // state and it should read as one thing, not as a
+                        // coloured box with a grey letter inside it.
+                        "border-primary text-primary"
                       : "border-border",
               )}
             >

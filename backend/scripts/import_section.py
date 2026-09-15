@@ -154,6 +154,17 @@ def read_alignment(section_id: str, offset_ms: int = 0) -> tuple[dict, list[Tran
     return dict(row), segments, title
 
 
+def paper_first(section_no: int) -> int:
+    """The number this part's first question carries on the whole paper.
+
+    A Listening paper runs 1 to 40 straight through, ten to a part, and says
+    so out loud: "now turn to questions thirty-one to forty". A seeded
+    material is one part of such a paper, so Part 4 has to start at 31 or the
+    page and the recording disagree in front of the learner.
+    """
+    return (section_no - 1) * 10 + 1
+
+
 async def import_questions(session, part_id: uuid.UUID, section_id: str,
                            offset_ms: int = 0) -> int:
     """Replace this part's question groups with what the seed built.
@@ -335,6 +346,7 @@ async def import_section(section_id: str, owner_id: uuid.UUID) -> None:
                 # NULL/NULL: this part IS the whole recording, because the book's
                 # audio was already published one section per file.
                 audio_start_ms=None, audio_end_ms=None,
+                first_number=paper_first(row["section_no"]),
             )
             session.add(part)
             await session.flush()
@@ -352,6 +364,13 @@ async def import_section(section_id: str, owner_id: uuid.UUID) -> None:
         # the bounds are cleared on EVERY import, not only when the part is
         # created: a stray end mark left in the editor bounds playback to it,
         # and one at 6.1s is indistinguishable from "the audio is broken".
+        # Set on every import, like the bounds below and for the same reason:
+        # it is a fact about which part of a paper this is, not an editorial
+        # choice somebody might have made in the studio since.
+        if part.first_number != paper_first(row["section_no"]):
+            part.first_number = paper_first(row["section_no"])
+            session.add(part)
+
         if part.audio_start_ms is not None or part.audio_end_ms is not None:
             logger.info("clearing part bounds %s-%s: the part is the whole recording",
                         part.audio_start_ms, part.audio_end_ms)

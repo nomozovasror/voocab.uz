@@ -578,6 +578,53 @@ export const MISTAKE_MEANING: Record<MistakeKind, string> = {
   wrong: "A different answer entirely — the ones to listen for again.",
 };
 
+/**
+ * The same six kinds as a NOUN PHRASE, and what to do about each.
+ *
+ * For the sentence a review writes when every mark it lost went the same way:
+ * "All three marks went to *answers you heard but got wrong* — worth
+ * listening again to where the answer is given." A breakdown of one category
+ * is a chart with one bar in it, which says nothing a sentence doesn't say
+ * better — and the sentence can say what to do about it, which the bar
+ * cannot.
+ *
+ * Only the TAIL is written down, because the same sentence has to come out in
+ * both numbers ("an answer you heard but got wrong" for a paper with one
+ * mistake on it) and two lists of six would drift the first time one of them
+ * was reworded.
+ */
+const MISTAKE_TAIL: Record<MistakeKind, string> = {
+  spelling: "you heard but spelled wrong",
+  missed: "that went past you entirely",
+  plural: "where only the singular or plural was wrong",
+  word_limit: "longer than the rubric allows",
+  format: "written a way the marker doesn't accept",
+  wrong: "you heard but got wrong",
+};
+
+export function mistakePhrase(kind: MistakeKind, many: boolean): string {
+  return `${many ? "answers" : "an answer"} ${MISTAKE_TAIL[kind]}`;
+}
+
+/**
+ * What to do about each kind — and it is per kind for a reason.
+ *
+ * "Listen to those moments again" is right for an answer that went past
+ * somebody and exactly wrong for one they heard and misspelled, who needs to
+ * read their sheet back rather than play the recording a fourth time. Every
+ * line is written to work for one mistake or twelve, so the sentence around
+ * it only has to choose a number in one place.
+ */
+export const MISTAKE_ADVICE: Record<MistakeKind, string> = {
+  spelling:
+    "worth reading your sheet back before you submit, rather than listening again",
+  missed: "worth going back to where the answer was said and listening for it",
+  plural: "worth listening for the article and the verb around the word",
+  word_limit: "worth re-reading the rubric before you write",
+  format: "worth writing numbers and dates the way the question does",
+  wrong: "worth listening again to where the answer is given",
+};
+
 /** "1st", "2nd", "3rd", "4th" — for "83% on your 2nd try", where the ordinal
  *  is doing as much work as the percentage. */
 export function ordinal(n: number): string {

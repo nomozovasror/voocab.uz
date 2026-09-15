@@ -25,7 +25,7 @@ answered by letter are excluded before anything here runs.
 import re
 from typing import Literal
 
-from app.services.grading import normalize_answer
+from app.services.answers import normalize_answer
 
 #: The kinds, in the order a tie between two of them is broken. The order is
 #: from most specific to least: a blank answer is only ever "missed", a

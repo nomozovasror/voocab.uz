@@ -13,7 +13,6 @@ for a "choose two", and one right letter plus one wrong one is not half an
 answer.
 """
 
-import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -27,18 +26,20 @@ from app.models.question import Question
 from app.models.question_group import QuestionGroup
 from app.models.question_attempt import QuestionAttempt
 from app.schemas.listening import AttemptSubmit, ListenedSpanIn
+from app.services import answers as answers_service
 from app.services import audio as audio_service
+from app.services import collections as collections_service
+from app.services import difficulty as difficulty_service
 from app.services import listening as listening_service
+from app.services import mistakes as mistakes_service
 from app.services import storage
+from app.services.learner_stats import score_pct
 
-_WHITESPACE_RE = re.compile(r"\s+")
-
-
-def normalize_answer(text: str) -> str:
-    """§3.5: trim leading/trailing whitespace, collapse internal whitespace
-    runs to a single space, lowercase. Applied identically to the given
-    answer and every accepted answer before comparison."""
-    return _WHITESPACE_RE.sub(" ", text.strip()).lower()
+#: The comparison rule, which now lives in app/services/answers.py — see the
+#: note there. Re-exported because it reads as grading's own: "what counts as
+#: the same answer" is a grading question, and the module split is about who
+#: is allowed to import whom.
+normalize_answer = answers_service.normalize_answer
 
 
 def grade_answer(given_answer: str, correct_answers: list[str]) -> bool:
@@ -217,6 +218,38 @@ def transcript_across(lines: list[dict], ranges: list[tuple[int, int]]) -> list[
     ]
 
 
+async def last_submitted_attempt(
+    session: AsyncSession, user_id: uuid.UUID, material_id: uuid.UUID
+) -> Attempt | None:
+    """The caller's most recent finished sitting of this paper, if any.
+
+    What lets somebody go back and READ a paper they have already done
+    instead of sitting it again to find out how it went. Without it the only
+    route to a review was through a fresh attempt, which is the one thing a
+    learner coming back to analyse their mistakes does not want: it would
+    write a second attempt, and every ability figure on the platform counts
+    first attempts (see app/services/learner_stats.py). Analysing a paper
+    would have quietly cost them the measurement.
+
+    Most recent rather than best or first: the question a page asks when
+    somebody opens a material they have done is "what happened last time",
+    and every other reading of "your result" is a different question with a
+    different page behind it.
+    """
+    return (
+        await session.exec(
+            select(Attempt)
+            .where(
+                Attempt.user_id == user_id,
+                Attempt.material_id == material_id,
+                Attempt.status == AttemptStatus.SUBMITTED,
+                Attempt.submitted_at.is_not(None),  # type: ignore[attr-defined]
+            )
+            .order_by(Attempt.submitted_at.desc())  # type: ignore[attr-defined]
+        )
+    ).first()
+
+
 async def _find_in_progress_attempt(
     session: AsyncSession, user_id: uuid.UUID, material_id: uuid.UUID
 ) -> Attempt | None:
@@ -388,19 +421,35 @@ async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
         row = given_rows.get(question.id)
         ranges = question_ranges(question)
         marks = listening_service.question_marks(group)
+        by_letter = listening_service.answers_are_letters(group)
+        correct = bool(row.is_correct) if row else False
         results.append(
             {
                 "question_id": question.id,
                 "number": printed,
                 "marks": marks,
-                "answered_by": (
-                    "letters"
-                    if listening_service.answers_are_letters(group)
-                    else "words"
-                ),
+                "answered_by": "letters" if by_letter else "words",
                 "given_answer": row.given_answer if row else "",
-                "is_correct": bool(row.is_correct) if row else False,
+                "is_correct": correct,
                 "correct_answers": question.correct_answers,
+                # What KIND of wrong this was, classified here rather than in
+                # the browser so the review screen and the practice page's
+                # "Where you lose marks" cannot disagree about what counts as
+                # a spelling slip — the same call, over the same rules, in
+                # app/services/mistakes.py.
+                #
+                # ``None`` twice over: a right answer has no kind, and neither
+                # has a letter, because there is no spelling in "b" and which
+                # distractor pulled somebody is a different analysis.
+                "mistake": (
+                    None
+                    if correct or by_letter
+                    else mistakes_service.classify(
+                        row.given_answer if row else "",
+                        question.correct_answers,
+                        group.word_limit,
+                    )
+                ),
                 "replay_start_ms": question.replay_start_ms,
                 "replay_end_ms": question.replay_end_ms,
                 "option_replay": {
@@ -420,5 +469,58 @@ async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
         "score": int(attempt.score or 0),
         "total_questions": attempt.total_questions or 0,
         "submitted_at": attempt.submitted_at,
+        "time_spent_ms": attempt.time_spent_ms,
+        **(await _standing(session, attempt)),
         "results": results,
+    }
+
+
+async def _standing(session: AsyncSession, attempt: Attempt) -> dict:
+    """The three things that turn a score into a sentence.
+
+    ``43%`` on its own says nothing anybody can act on. "Your 2nd try — the
+    first was 14%" is somebody getting better at a paper; "the average here
+    is 61%" is somebody finding out where they stand on it. The number is the
+    same in all three; only one of them is worth reading.
+
+    Each is withheld rather than faked when it cannot be had. There is no
+    first-try figure on a first try — the same number under a second name is
+    a panel padding itself out — and no platform average until the paper has
+    been answered enough times for one to mean anything, which is
+    :data:`app.services.difficulty.MIN_ANSWERS`' judgement and not a second
+    threshold invented here.
+    """
+    run = list(
+        (
+            await session.exec(
+                select(Attempt)
+                .where(
+                    Attempt.user_id == attempt.user_id,
+                    Attempt.material_id == attempt.material_id,
+                    Attempt.status == AttemptStatus.SUBMITTED,
+                    Attempt.submitted_at.is_not(None),  # type: ignore[attr-defined]
+                )
+                .order_by(Attempt.submitted_at)  # type: ignore[arg-type]
+            )
+        ).all()
+    )
+    ids = [a.id for a in run]
+    # 1 rather than 0 for an attempt not in the run: this is only reachable
+    # from an unsubmitted one, and "your 0th try" is worse than a guess.
+    attempt_no = ids.index(attempt.id) + 1 if attempt.id in ids else 1
+
+    # Everybody's answers on this paper, from the projection the catalogue
+    # already reads — a primary-key lookup, not a scan, and ``None`` below the
+    # threshold, which is the guard doing its job rather than a missing value.
+    band = (
+        await difficulty_service.material_difficulty(session, [attempt.material_id])
+    ).get(attempt.material_id) or difficulty_service.unknown()
+
+    return {
+        "attempt_no": attempt_no,
+        "first_try_pct": score_pct(run[0]) if attempt_no > 1 and run else None,
+        "material_avg_pct": band["correct_pct"],
+        "course": await collections_service.next_after(
+            session, attempt.user_id, attempt.material_id
+        ),
     }

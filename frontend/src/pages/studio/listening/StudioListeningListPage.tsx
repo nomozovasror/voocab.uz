@@ -7,7 +7,7 @@ import { useStudioCrumbs } from "@/components/studio/breadcrumbs";
 import { cn } from "@/lib/utils";
 import { getErrorMessage } from "@/lib/api";
 import { toast } from "@/lib/toast";
-import { formatClock, formatHours, formatQuestionType } from "@/features/studio/format";
+import { formatClock, formatQuestionType } from "@/features/studio/format";
 import { DeleteMaterialDialog } from "@/components/studio/DeleteMaterialDialog";
 import { useStudioListening } from "@/features/studio/queries";
 import { useDeleteListeningMaterial } from "@/features/listening/queries";
@@ -326,97 +326,73 @@ export default function StudioListeningListPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [isLoading, isError, totalTiles, navigate, hrefAt, pendingDelete, items, selectedIndex]);
 
+  // The panel, and only the panel: the title and the tab bar above it belong
+  // to the layout route and stay put across the navigation, so the entrance
+  // animation here can never drag the sliding pill along with it.
   return (
-    <div className="mx-auto w-full max-w-[56.25rem] font-mono">
-      {/* The trail lives in the layout header; the title takes its place here. */}
-      {!isEmpty && (
-        <div className="mb-1 flex items-baseline justify-between gap-4">
-          <h1 className="text-2xl font-medium tracking-wide text-foreground">listening</h1>
-          {data && !isError && (
-            <span className="text-xs tabular-nums text-muted-foreground">
-              {data.total} material{data.total === 1 ? "" : "s"} · {formatHours(data.duration_ms)} hours
-            </span>
-          )}
-        </div>
-      )}
-      {isEmpty && <h1 className="mb-1 text-2xl font-medium tracking-wide text-foreground">listening</h1>}
-
-      {!isEmpty && (
-        <p className="mb-7 text-xs text-muted-foreground">
-          your listening materials ·{" "}
-          {/* The way through to the other half of authoring. A collection is
-              made OF these, so this is where somebody goes looking for it —
-              and the studio's chrome is breadcrumbs rather than a nav, so a
-              page with no link into it is a page nobody finds. */}
-          <Link
-            to="/studio/collections"
-            className="text-primary transition-colors hover:underline"
-          >
-            collections
-          </Link>
-        </p>
-      )}
-
-      {isError ? (
-        <div className="rounded-lg border border-dashed border-border px-5 py-10 text-center">
-          <p className="text-sm text-muted-foreground">
-            {getErrorMessage(error) || "couldn't load your listening materials."}
-          </p>
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-4 font-mono lowercase"
-            onClick={() => void refetch()}
-          >
-            try again
-          </Button>
-        </div>
-      ) : isEmpty ? (
-        <div className="flex flex-col items-center gap-4 py-10 text-center">
-          <p className="text-sm text-muted-foreground">
-            no listening materials yet — create your first one to get started.
-          </p>
-          <div className="w-full max-w-md">
+    <>
+      <div className="studio-panel">
+        {isError ? (
+          <div className="rounded-lg border border-dashed border-border px-5 py-10 text-center">
+            <p className="text-sm text-muted-foreground">
+              {getErrorMessage(error) || "couldn't load your listening materials."}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-4 font-mono lowercase"
+              onClick={() => void refetch()}
+            >
+              try again
+            </Button>
+          </div>
+        ) : isEmpty ? (
+          <div className="flex flex-col items-center gap-4 py-10 text-center">
+            <p className="text-sm text-muted-foreground">
+              no listening materials yet — create your first one to get started.
+            </p>
+            <div className="w-full max-w-md">
+              <CreateTile
+                big
+                selected={selectedIndex === 0}
+                innerRef={(el) => (tileRefs.current[0] = el)}
+                onFocus={() => setSelectedIndex(0)}
+              />
+            </div>
+          </div>
+        ) : isLoading ? (
+          <div className="space-y-2.5">
             <CreateTile
-              big
+              selected={false}
+              innerRef={() => {}}
+              onFocus={() => {}}
+            />
+            <RowSkeleton />
+            <RowSkeleton />
+            <RowSkeleton />
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            <CreateTile
               selected={selectedIndex === 0}
               innerRef={(el) => (tileRefs.current[0] = el)}
               onFocus={() => setSelectedIndex(0)}
             />
+            {items.map((item, i) => (
+              <ListeningRow
+                key={item.id}
+                item={item}
+                selected={selectedIndex === i + 1}
+                innerRef={(el) => (tileRefs.current[i + 1] = el)}
+                onFocus={() => setSelectedIndex(i + 1)}
+                onDelete={() => setPendingDelete(item)}
+              />
+            ))}
           </div>
-        </div>
-      ) : isLoading ? (
-        <div className="space-y-2.5">
-          <CreateTile
-            selected={false}
-            innerRef={() => {}}
-            onFocus={() => {}}
-          />
-          <RowSkeleton />
-          <RowSkeleton />
-          <RowSkeleton />
-        </div>
-      ) : (
-        <div className="space-y-2.5">
-          <CreateTile
-            selected={selectedIndex === 0}
-            innerRef={(el) => (tileRefs.current[0] = el)}
-            onFocus={() => setSelectedIndex(0)}
-          />
-          {items.map((item, i) => (
-            <ListeningRow
-              key={item.id}
-              item={item}
-              selected={selectedIndex === i + 1}
-              innerRef={(el) => (tileRefs.current[i + 1] = el)}
-              onFocus={() => setSelectedIndex(i + 1)}
-              onDelete={() => setPendingDelete(item)}
-            />
-          ))}
-        </div>
-      )}
+        )}
 
-      <KeyboardHints />
+        <KeyboardHints />
+      </div>
 
       <DeleteMaterialDialog
         material={
@@ -431,6 +407,6 @@ export default function StudioListeningListPage() {
         onConfirm={confirmDelete}
         deleting={deleteMaterial.isPending}
       />
-    </div>
+    </>
   );
 }

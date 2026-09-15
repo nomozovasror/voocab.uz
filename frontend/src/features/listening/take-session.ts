@@ -40,6 +40,14 @@ export interface TakeSession {
   timing: Record<string, AnswerTiming>;
   listened: ListenedSpan[];
   seeksBack: number;
+  /** Question ids the candidate marked to come back to.
+   *
+   *  Part of the draft rather than a piece of page state, for the same reason
+   *  the answers are: somebody who reloads mid-paper has not asked to lose
+   *  the note they made about question 12. Never submitted — it is a note to
+   *  themselves about a paper in progress, and after grading there is nothing
+   *  left to come back to. */
+  flagged: string[];
 }
 
 export function newSession(): TakeSession {
@@ -49,6 +57,7 @@ export function newSession(): TakeSession {
     timing: {},
     listened: [],
     seeksBack: 0,
+    flagged: [],
   };
 }
 
@@ -74,6 +83,7 @@ export function loadSession(materialId: string): TakeSession | null {
       timing: parsed.timing ?? {},
       listened: parsed.listened ?? [],
       seeksBack: parsed.seeksBack ?? 0,
+      flagged: parsed.flagged ?? [],
     };
   } catch {
     return null;

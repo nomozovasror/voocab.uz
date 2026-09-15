@@ -13,6 +13,7 @@ import {
 } from "@/features/listening/practice";
 import type { Scope } from "@/features/listening/practice";
 import { CollectionCover } from "@/features/listening/components/CollectionBook";
+import { coverKeyOf } from "@/features/listening/cover";
 import type {
   NextUp as NextUpData,
   PracticeMaterial,
@@ -147,7 +148,7 @@ function CourseHead({
         className="w-14 shrink-0 self-start"
       >
         <CollectionCover
-          id={collection.id}
+          coverKey={coverKeyOf(collection)}
           title={collection.title}
           showTitle={false}
           className="shadow-[0_3px_8px_rgba(0,0,0,0.34)]"

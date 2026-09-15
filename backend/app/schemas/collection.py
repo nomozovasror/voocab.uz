@@ -44,6 +44,11 @@ class CollectionUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     summary: str | None = Field(default=None, max_length=300)
     visibility: str | None = Field(default=None, pattern="^(private|public)$")
+    #: A new string to generate the cover from — the author asking for a
+    #: different book. Opaque and hex-shaped: nothing reads it except the
+    #: hash, so there is nothing to interpret, and a pattern keeps a field
+    #: nobody displays from becoming somewhere to put text.
+    cover_seed: str | None = Field(default=None, pattern="^[0-9a-f]{4,32}$")
 
     @field_validator("title", "summary")
     @classmethod
@@ -83,6 +88,10 @@ class CollectionOut(BaseModel):
     title: str
     summary: str = ""
     visibility: str
+    #: What the cover is generated from, when it is not the id. Sent to the
+    #: learner as well as the author: a re-rolled cover that only the studio
+    #: could see would be two different books with one name.
+    cover_seed: str | None = None
     created_at: datetime | None = None
     author: CatalogueAuthorOut | None = None
     progress: CollectionProgressOut
@@ -150,6 +159,7 @@ class AuthorCollectionOut(BaseModel):
     title: str
     summary: str = ""
     visibility: str
+    cover_seed: str | None = None
     created_at: datetime | None = None
     author: CatalogueAuthorOut | None = None
     item_count: int

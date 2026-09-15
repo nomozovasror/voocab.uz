@@ -35,6 +35,15 @@ class Collection(SQLModel, table=True):
     #: needs before opening one is what it is for, and that fits on a line.
     summary: str = Field(default="")
     visibility: str = Field(default="private")  # "private" | "public"
+    #: The string the cover is generated from, or null to use the id.
+    #:
+    #: A cover is a pure function of one string (stock, pattern and cut all
+    #: fall out of one hash), and the id was that string — which made the
+    #: cover permanent and also made it the one thing about a collection its
+    #: author could not change. This is how they change it: a new seed is a
+    #: new book. Null rather than backfilled, so every collection that
+    #: existed before keeps the cover it has always had.
+    cover_seed: str | None = Field(default=None, max_length=32)
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False),

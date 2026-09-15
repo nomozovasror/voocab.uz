@@ -32,6 +32,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.services.mistakes import MistakeKind
+
 #: The tasks answered by filling in what's missing. One payload shape, nine
 #: names, because that is how the paper prints them and how an author thinks
 #: about them — see :data:`app.models.question_group.COMPLETION_TYPES`.
@@ -137,6 +139,7 @@ class PartOut(BaseModel):
     title: str
     audio_start_ms: int | None
     audio_end_ms: int | None
+    first_number: int | None = None
     created_at: datetime
 
 
@@ -735,7 +738,24 @@ class TakePartOut(BaseModel):
     title: str
     audio_start_ms: int | None
     audio_end_ms: int | None
+    #: Where this part's numbering starts on the paper it came from. NULL
+    #: means from 1. See Part.first_number.
+    first_number: int | None = None
     question_groups: list[TakeQuestionGroupOut]
+
+
+class LastAttemptOut(BaseModel):
+    """The caller's most recent finished sitting of this paper.
+
+    Enough to say what happened and to link to the review, and nothing more:
+    the whole record is one fetch away at ``/api/attempts/{id}``, and putting
+    it here would mean the take payload carrying the answer key.
+    """
+
+    attempt_id: uuid.UUID
+    score: int
+    total_questions: int
+    submitted_at: datetime
 
 
 class MaterialTakeOut(BaseModel):
@@ -744,6 +764,11 @@ class MaterialTakeOut(BaseModel):
     audio_url: str | None
     duration_ms: int | None
     parts: list[TakePartOut]
+    #: Absent where the caller has never finished this paper. What lets them
+    #: go and READ a sitting they have already done rather than sit it again
+    #: to find out how it went — which would write a second attempt, and
+    #: every ability figure on the platform counts first attempts.
+    last_attempt: LastAttemptOut | None = None
 
 
 class CatalogueAuthorOut(BaseModel):
@@ -1174,6 +1199,35 @@ class QuestionResultOut(BaseModel):
     #: range, or when the recording has no transcript yet (practice doesn't
     #: wait for one; the review just has less to show).
     transcript: list[TranscriptLineOut] = Field(default_factory=list)
+    #: What kind of wrong this answer was — ``spelling``, ``missed``,
+    #: ``plural``, ``word_limit``, ``format``, ``wrong``. See
+    #: app/services/mistakes.py, which is also what the practice page's
+    #: "Where you lose marks" is counted from: one classifier, so the review
+    #: of one paper and the pattern across many cannot name the same slip two
+    #: different things.
+    #:
+    #: ``None`` for a right answer, and for any answer given as a letter.
+    mistake: MistakeKind | None = None
+
+
+class CourseNextOut(BaseModel):
+    """Where this paper sits in a course, and what to do next in it.
+
+    Absent when the material is in no published collection, and absent once
+    the course is finished — there is then no next lesson, and a page that
+    offers one anyway is offering a door that opens onto what they just did.
+    """
+
+    collection_id: uuid.UUID
+    collection_title: str
+    #: The first material in the course they have NOT sat, in the course's own
+    #: order — which is not necessarily the one after this. See
+    #: app/services/collections.py.
+    next_material_id: uuid.UUID
+    #: 1-based, so it reads as a lesson number rather than an index.
+    next_position: int
+    done: int
+    total: int
 
 
 class AttemptResultOut(BaseModel):
@@ -1193,4 +1247,22 @@ class AttemptResultOut(BaseModel):
     score: int
     total_questions: int
     submitted_at: datetime | None = None
+    #: How long the paper took, where the page reported it.
+    time_spent_ms: int | None = None
+
+    # --- what turns the score into a sentence -------------------------------
+    #: Which try this is, counting only submitted attempts at this material by
+    #: this learner. 1 on a first sitting.
+    attempt_no: int = 1
+    #: What the FIRST try came to, so a retake can be read as progress rather
+    #: than as a number on its own. ``None`` on a first try, where it would be
+    #: the same number under a second name.
+    first_try_pct: int | None = None
+    #: How everybody else does on this paper — the difficulty projection's own
+    #: figure, so the review and the catalogue's band agree. ``None`` until
+    #: the paper has been answered enough times for an average to mean
+    #: anything.
+    material_avg_pct: int | None = None
+    course: CourseNextOut | None = None
+
     results: list[QuestionResultOut]

@@ -230,6 +230,7 @@ export function useUpdateCollection() {
       title?: string;
       summary?: string;
       visibility?: string;
+      cover_seed?: string;
     }) => {
       const { id, ...body } = args;
       return listeningApi.collections.update(id, body);

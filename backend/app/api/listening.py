@@ -28,6 +28,7 @@ from app.models.part import Part
 from app.models.question_group import QuestionGroup
 from app.schemas.listening import (
     AttemptResultOut,
+    LastAttemptOut,
     AttemptSubmit,
     ListeningStatsOut,
     MaterialTakeOut,
@@ -376,12 +377,27 @@ async def take_material(
     material = await _load_owned_or_public(session, material_id, user.id)
     parts = await listening_service.get_take_tree(session, material.id)
     audio = await _resolve_audio(session, material)
+    # What the caller already did with this paper, so the page can offer the
+    # review instead of making them sit it a second time to reach one.
+    done = await grading_service.last_submitted_attempt(
+        session, user.id, material.id
+    )
     return MaterialTakeOut(
         id=material.id,
         title=material.title,
         audio_url=audio["audio_url"],
         duration_ms=audio["duration_ms"],
         parts=parts,
+        last_attempt=(
+            LastAttemptOut(
+                attempt_id=done.id,
+                score=int(done.score or 0),
+                total_questions=done.total_questions or 0,
+                submitted_at=done.submitted_at,
+            )
+            if done is not None and done.submitted_at is not None
+            else None
+        ),
     )
 
 

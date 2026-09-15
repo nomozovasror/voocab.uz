@@ -1,0 +1,187 @@
+# Listening services — invariants
+
+Rules here are load-bearing: each records a decision that was got wrong once.
+Keep the rule and the reason together when editing.
+
+## The catalogue is a query, not a list
+
+`GET /api/listening/practice` returns **one page**, filtered, ordered and
+counted in SQL (`listening.py`). Nothing about the list is decided in the
+browser: at a thousand materials, sending the library so the page can hide
+most of it is half a megabyte of JSON to show somebody thirty titles.
+
+- **Add a filter in two places or not at all.** `catalogueParams`
+  (`frontend/src/features/listening/practice.ts`) turns control state into
+  query params; `_catalogue_where` turns them into SQL. One without the other
+  narrows the page but not the count.
+- **Facets are counted over the whole library**, never the page and never
+  what the other filters left. An option that appears and vanishes as you
+  filter is one nobody can aim at.
+- **`done` defaults to false** — sat materials are put away — and the
+  endpoint reports how many that hid (`done_hidden`). Never hide rows without
+  saying so.
+- Anything a row prints that is a fact about the LIBRARY rather than the
+  material must come from the server. The byline's "4 materials here" was
+  counted in the browser and became a lie the day the browser stopped having
+  the library.
+- Paging is offset-based on purpose. Keyset survives six figures; at four,
+  filters narrow before depth does, and one order per sort key beats a cursor
+  that has to encode which key it is on.
+
+## A recommendation has to say why
+
+`GET /api/listening/next` returns three materials and a `reason`
+(`recommend.py`). The reason is the contract, not decoration: a
+recommendation that cannot justify itself is a shuffle with a confident label
+on it.
+
+- **Silent until three materials are done** (`MIN_MATERIALS`). A
+  recommendation off one paper is a guess in a confident voice.
+- **One slot, three shapes** — carrying on, just finished, suggested — at
+  about the same height, so changing state does not make the page jump.
+- **`finished_course` lasts exactly as long as it is true**: the most recent
+  submitted attempt must be the FIRST attempt at a material that completed a
+  course. A retake is not a completion, and a month-old "well done" is a page
+  that has stopped paying attention.
+- **The two columns have different jobs.** Left is what to do (carry on,
+  suggested, the list); right is how it is going (last result, mistakes,
+  trend, totals) — which is why the sidebar opens with "Your last result",
+  not "Pick up where you left off". Two invitations to continue on one screen
+  leave the reader guessing. The sidebar also steps back from whatever course
+  the block above is carrying on, so one material is never named in both
+  columns.
+- **A course in progress outranks everything else.** Somebody four papers
+  into a six-paper course was being handed three unrelated ones. They chose
+  the course, and its order is a person's judgement; band-fit over a
+  first-try average is a guess, and a guess does not overrule a judgement.
+- The course carried on with is the one holding their **most recent**
+  attempt, not the one they are furthest through — furthest-through keeps
+  pointing at a course abandoned in March.
+- A loose suggestion **never jumps a course queue**
+  (`sequenced_material_ids`). Offering lesson five to somebody on lesson
+  three denies the one thing a collection claims.
+- **`weak_part` is guarded, and stays guarded.** Naming the lowest-scoring
+  part outright did not survive being looked at — 62% against 66% over a few
+  dozen answers is noise. A part is named only when it is scored at all,
+  below `WEAK_CEILING`, and clear of the next-weakest by `DECISIVE_GAP`.
+  Otherwise fall through to `level`. Loosening those constants means making a
+  claim about somebody's ability on evidence that doesn't carry it.
+- **The ladder never opens with `hard`** — except for `steady`, the one
+  reader for whom it is right rather than a discouragement. `new` is always
+  last: "might be anything" is not a recommendation.
+- **`steady` is the exact inverse of `_weak_part`, over the same two
+  constants**, so the block can never tell somebody both that they have a
+  weak part and that they haven't.
+- Never recommend a material with no questions, or one already sat.
+- Shown only over an **unnarrowed** list. A filter is the reader saying what
+  they want; suggesting past it is the page talking over them.
+
+## Collections are references, and progress is derived
+
+A collection (`collections.py`) is an ordered list of material ids. It owns
+nothing, so deleting one cannot lose a material.
+
+- **There is no enrolment.** Progress is counted from attempts already made,
+  so opening a collection commits nobody to anything and no state can rot.
+  Cheap enough (ten materials, not a library) to compute per request.
+- **`next_material_id` is the first UNSAT one in order**, not the nearest.
+  The sequence is somebody's judgement; nearest would make a collection a
+  filter with a progress bar.
+- **The item list is written whole** (`PUT .../items`), never patched a row
+  at a time. Reordering through a unique index on `(collection_id,
+  order_index)` one row at a time is a sequence of temporary states that all
+  have to be legal; replacing the list has no intermediate state to get wrong.
+- An author may include their own drafts; a learner sees only published ones.
+  Both counts go to the author (`item_count` vs `public_item_count`) rather
+  than the difference being hidden.
+- **Emptying a published collection withdraws it** rather than the save being
+  refused. The author's work is never rejected to protect a flag — but a
+  published course with nothing in it is a promise onto a blank page.
+- The rows a learner sees are the catalogue's own (`_catalogue_rows`). A
+  collection is a different route to the same thing, not a different thing.
+
+## Layering: `answers.py` is below both graders
+
+`normalize_answer` lives in `answers.py` and nowhere else. Grading owns what
+makes an answer right; `mistakes` owns what kind of wrong a wrong one was;
+both must compare the same two strings the same way or the second contradicts
+the first. While the rule sat in `grading`, `mistakes` had to import
+`grading` — putting the two lowest modules in a cycle with everything above
+them, which is why `attempt_result` could not classify anything. `grading`
+re-exports the name; the split is about who may import whom.
+
+## Difficulty is measured, never stored
+
+A material's `Easy`/`Medium`/`Hard`/`New` band is a function of
+`QuestionAttempt` rows (`difficulty.py`), never anything an author declares.
+**Do not add a `difficulty` column to `materials`.** Stage 1 is a classic
+proportion correct; stage 2 is a Rasch/1PL estimate correcting for *who* sat
+the paper. As long as difficulty stays a function, that swap touches one
+module — an authored column would make it a migration, a backfill and a
+re-education of everyone who set one.
+
+**The projection is not that column.** The tally lives in a
+`material_difficulty` table that `difficulty.recompute()` refills, because
+the aggregate scans every answer on the platform. The line: nothing authored
+ever reaches that table, every column in it is derived, and dropping the
+whole thing costs one `recompute()`. Stage 2 changes the computation and the
+table refills — still no migration.
+
+- The worker refreshes it every `DIFFICULTY_REFRESH_INTERVAL_S` (default
+  900), beside transcription (`worker.py`). A failed refresh is logged and
+  swallowed: nobody waits on a band, and people wait on audio.
+- **A band is only as fresh as the last refresh**, with one exception: the
+  first crossing of `MIN_ANSWERS` happens on the submit that causes it
+  (`refresh_if_unrated`, from the attempts endpoint). A paper a class has
+  just worked through, still saying nobody has answered it, is the catalogue
+  contradicting itself. Anything writing attempts outside a request — the
+  seed script — calls `recompute()` itself.
+- **A skipped question is still an answer.** Grading writes a row for every
+  question on the paper, so an untouched one counts toward the evidence and
+  counts as wrong. That is what makes "missed entirely" classifiable at all.
+- The read path derives the band from the stored *tally*, not the stored
+  `band` column. Move a threshold and the API is right immediately while the
+  column catches up; the column exists so a paginated catalogue can filter
+  and sort by difficulty in SQL.
+
+Two constants guard against inventing numbers, and are separate on purpose —
+"is this paper hard" and "is this person weak here" are different questions,
+so one moving must not drag the other:
+
+- `difficulty.MIN_ANSWERS` — below it, a material is `New` with no percentage.
+- `learner_stats.MIN_ANSWERS` — below it, a distribution row reports
+  `accuracy_pct: null` and the UI draws a dash with no bar. **Never
+  substitute 0** — over four answers a zero is a false claim.
+
+## First attempts are the measurement
+
+Every sidebar figure describing *ability* — average, mistake breakdown,
+trend, part split — counts each material's **first** submitted attempt and
+nothing else (`learner_stats.py`). Somebody who sits a paper three times and
+finishes on 95% has learned that paper, not listening.
+
+- `first_try_avg_pct` is the headline; `best_avg_pct` sits under it and is
+  **absent entirely** until something has been sat twice, because with no
+  retries it is the same number under a second name.
+- "Materials done" counts materials with at least one *submitted* attempt.
+  Started-and-abandoned doesn't count.
+- Percentages round half **up** (`_pct`), not Python's half-to-even — two
+  figures on one panel disagreeing by one is a bug nobody reports and
+  everybody notices.
+
+## Mistakes are classified, not counted
+
+`mistakes.py` turns a wrong answer into a *kind* — spelling, missed entirely,
+singular/plural, over word limit, number/date format, wrong answer — by
+comparing raw `given_answer` against the accepted ones. Only possible because
+grading normalises for the comparison and never writes the normalised form
+back: **keep storing `given_answer` exactly as typed.**
+
+The distinction the sidebar rests on is *spelling* against *missed
+entirely*: one is a proof-reading problem, the other a listening problem, and
+"you got 62%" tells a candidate neither. The rules lean towards **not**
+claiming spelling — see the threshold notes in that module.
+
+Letter-answered groups (multiple choice, matching, boxed summaries) are
+excluded: there is no spelling in "b". Distractor analysis is the equivalent
+question there, and belongs on the full statistics page.

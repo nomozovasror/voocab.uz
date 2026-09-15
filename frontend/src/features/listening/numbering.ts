@@ -83,6 +83,7 @@ export function sorted<T extends { order_index: number }>(items: T[]): T[] {
 export function groupNumbering(material: {
   parts: {
     order_index: number;
+    first_number?: number | null;
     question_groups: {
       id: string;
       order_index: number;
@@ -94,6 +95,12 @@ export function groupNumbering(material: {
   const startAt = new Map<string, number>();
   let seen = 0;
   for (const part of sorted(material.parts)) {
+    // A part that came out of a real paper knows where its numbering starts.
+    // A Listening paper runs 1 to 40 straight through and says so aloud, so a
+    // material that IS Part 4 has to read "Questions 31–40" or the page and
+    // the recording disagree in front of the learner. Anything an author
+    // wrote here says nothing, and carries on from where the walk had got to.
+    if (part.first_number != null) seen = part.first_number - 1;
     for (const group of sorted(part.question_groups)) {
       startAt.set(group.id, seen + 1);
       seen +=

@@ -8,11 +8,20 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ThemeSubmenu } from "@/theme/ThemeSwitcher";
 import { UserAvatar } from "@/auth/UserAvatar";
 import { useAuthActions } from "@/auth/useAuthActions";
 import type { User } from "@/auth/types";
 
-/** Header account control: avatar + name, with a sign-out menu. */
+/**
+ * Header account control: avatar + name, with a menu behind it.
+ *
+ * It also carries the theme (see ThemeSwitcher). The header's right island
+ * used to hold two controls, and between them they took enough of the bar
+ * that the middle — where pages dock a player or a search field — had nowhere
+ * left to go. One trigger on each side leaves the middle to the thing that is
+ * actually used while working.
+ */
 export function UserMenu({ user }: { user: User }) {
   const { logout } = useAuthActions();
   const navigate = useNavigate();
@@ -25,7 +34,10 @@ export function UserMenu({ user }: { user: User }) {
           aria-label="Account menu"
         >
           <UserAvatar user={user} className="size-7 text-xs" />
-          <span className="hidden max-w-32 truncate text-sm font-medium text-foreground sm:inline">
+          {/* The name waits for a wide window. Below that the avatar says
+              whose account this is on its own, and the room it would take is
+              room the docked control in the middle needs more. */}
+          <span className="hidden max-w-32 truncate text-sm font-medium text-foreground lg:inline">
             {user.display_name}
           </span>
         </button>
@@ -55,6 +67,9 @@ export function UserMenu({ user }: { user: User }) {
           <Mic className="size-4" />
           Studio
         </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <ThemeSubmenu />
+        <DropdownMenuSeparator />
         <DropdownMenuItem
           onSelect={() => void logout()}
           className="gap-2 text-destructive focus:text-destructive"

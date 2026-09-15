@@ -1106,3 +1106,70 @@ async def test_a_collection_reports_how_the_caller_has_done_in_it() -> None:
             assert row["best_score"] == 10
     finally:
         await _cleanup([m.id for m in made], email)
+
+
+@pytest.mark.asyncio
+async def test_a_re_covered_collection_keeps_its_new_book_everywhere() -> None:
+    """The cover is a function of one string, and the id used to BE that
+    string — which made it the one thing about a collection its author could
+    not change. ``cover_seed`` is how they change it.
+
+    Both reads carry it, and that is the point of the test: a re-roll only
+    the studio could see would be two different books with one name, and the
+    learner would be looking at the cover the author rejected.
+    """
+    email = f"coll-cover-{uuid.uuid4().hex[:8]}@example.com"
+    author = await _user(email)
+    token = create_access_token(str(author.id))
+    material = await _material(author.id, f"Covered {uuid.uuid4()}", "public")
+
+    try:
+        async with _client() as client:
+            collection_id = await _make(client, token, "A course with a cover")
+            await client.put(
+                f"/api/collections/{collection_id}/items",
+                json={"material_ids": [str(material.id)]},
+                cookies={"access_token": token},
+            )
+
+            # Nothing until it is asked for: every collection that existed
+            # before this field keeps the cover it has always had.
+            r = await client.get(
+                "/api/studio/collections", cookies={"access_token": token}
+            )
+            assert r.status_code == 200, r.text
+            row = next(c for c in r.json() if c["id"] == collection_id)
+            assert row["cover_seed"] is None
+
+            r = await client.patch(
+                f"/api/collections/{collection_id}",
+                json={"cover_seed": "9f2c1a7b"},
+                cookies={"access_token": token},
+            )
+            assert r.status_code == 200, r.text
+            assert r.json()["cover_seed"] == "9f2c1a7b"
+
+            # The learner's read of the same collection, which is the one
+            # that decides what everybody else sees on the shelf.
+            await client.patch(
+                f"/api/collections/{collection_id}",
+                json={"visibility": "public"},
+                cookies={"access_token": token},
+            )
+            r = await client.get(
+                f"/api/collections/{collection_id}",
+                cookies={"access_token": token},
+            )
+            assert r.status_code == 200, r.text
+            assert r.json()["cover_seed"] == "9f2c1a7b"
+
+            # Opaque, and shaped: nothing reads it except the hash, so a
+            # field nobody displays must not become somewhere text ends up.
+            r = await client.patch(
+                f"/api/collections/{collection_id}",
+                json={"cover_seed": "not a seed"},
+                cookies={"access_token": token},
+            )
+            assert r.status_code == 422, r.text
+    finally:
+        await _cleanup([material.id], email)

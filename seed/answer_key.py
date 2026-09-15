@@ -38,6 +38,7 @@ case here with the real line when one appears.
 
 import itertools
 import re
+import unicodedata
 
 #: A separator with space around it alternates whole PHRASES:
 #: "(£)115 / a hundred (and) fifteen" is two ways of saying the amount.
@@ -109,6 +110,16 @@ def alternates_whole(phrase: str, tokens: list[str]) -> bool:
     branches = [part.strip() for part in WORD_ALT.split(phrase) if part.strip()]
     if sum(1 for branch in branches if " " in branch) >= 2:
         return True
+    # A word-level expansion that puts a word next to a word containing it is
+    # nonsense: "website/web site" is two spellings of one thing, and token by
+    # token it gave "website site". Only one of its branches has a space, so
+    # the rule above cannot see it; what gives it away is the result.
+    for combination in _word_level(tokens):
+        words = combination.split()
+        if any(len(a) > 2 and len(b) > 2 and (a.lower() in b.lower()
+                                              or b.lower() in a.lower())
+               for a, b in zip(words, words[1:])):
+            return True
     for token in tokens:
         numbers = [branch.replace(",", "") for branch in WORD_ALT.split(token)
                    if NUMERIC.match(branch)]
@@ -128,6 +139,11 @@ def expand_word_alternatives(phrase: str) -> list[str]:
         return [phrase]
     if alternates_whole(phrase, tokens):
         return [part.strip() for part in WORD_ALT.split(phrase) if part.strip()]
+    return _word_level(tokens)
+
+
+def _word_level(tokens: list[str]) -> list[str]:
+    """Every combination, treating each separator as alternating one word."""
     choices = [WORD_ALT.split(token) if WORD_ALT.search(token) else [token]
                for token in tokens]
     return [" ".join(combination) for combination in itertools.product(*choices)]
@@ -167,6 +183,31 @@ def strip_notes(text: str) -> str:
     return plain.strip()
 
 
+#: A name the recording spells out and the key prints the same way:
+#: "M-A-U-G-H-A-N". The candidate writes MAUGHAN. Left as it is, the only
+#: accepted answer is a string with six hyphens in it, which nobody types.
+SPELLED_OUT = re.compile(r"^[A-Za-z](?:\s*-\s*[A-Za-z]){2,}$")
+
+
+def spelled(text: str) -> str | None:
+    """The word a spelled-out answer spells, if that is what it is."""
+    return re.sub(r"[\s-]", "", text) if SPELLED_OUT.match(text.strip()) else None
+
+
+def plain(text: str) -> str | None:
+    """The same answer with its accents taken off, if it has any.
+
+    A learner types on the keyboard they have. "café" is the answer the book
+    prints and "cafe" is what gets typed, and `normalize_answer` in the
+    backend is deliberately dumb -- trim, collapse, lowercase -- so the two do
+    not compare equal. Every accepted phrasing has to be in the list, and this
+    is one.
+    """
+    bare = "".join(c for c in unicodedata.normalize("NFKD", text)
+                   if not unicodedata.combining(c))
+    return bare if bare != text else None
+
+
 def parse_answer(text: str) -> list[str]:
     """One printed key line -> every accepted answer, de-duplicated.
 
@@ -178,8 +219,16 @@ def parse_answer(text: str) -> list[str]:
     for phrase in PHRASE_ALT.split(strip_notes(text)):
         for worded in expand_word_alternatives(phrase):
             for variant in expand_optional(worded):
-                if variant and variant not in out:
-                    out.append(variant)
+                # The word a spelled-out name spells comes FIRST, because it
+                # is both the answer a candidate writes and the one the review
+                # page shows them afterwards.
+                for form in ([spelled(variant)] if spelled(variant) else []) + [variant]:
+                    if form and form not in out:
+                        out.append(form)
+    for variant in list(out):
+        bare = plain(variant)
+        if bare and bare not in out:
+            out.append(bare)
     return out
 
 
@@ -205,6 +254,14 @@ CASES = [
       "five km", "five kilometres", "five kilometers"]),
     ("7/7th April", ["7 April", "7th April"]),
     ("13th May/13 May/May 13", ["13th May", "13 May", "May 13"]),
+    # Two spellings of one thing, which token by token gave "website site".
+    ("website/web site", ["website", "web site"]),
+    # A name the recording spells out. The candidate writes the word.
+    ("M-A-U-G-H-A-N", ["MAUGHAN", "M-A-U-G-H-A-N"]),
+    # A letter the learner's keyboard does not have.
+    ("café", ["café", "cafe"]),
+    ("(the) Fauré Room", ["Fauré Room", "the Fauré Room",
+                          "Faure Room", "the Faure Room"]),
     # IELTS Trainer's asides. The first is why this exists: without stripping,
     # the one accepted answer is the whole line and "route" is marked wrong.
     ("route [alterations = changes]", ["route"]),

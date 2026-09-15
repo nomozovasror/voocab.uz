@@ -1,25 +1,37 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, ArrowRight } from "lucide-react";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 import { toast } from "@/lib/toast";
+import { cn } from "@/lib/utils";
+import { fmtClock, timeAgo } from "@/lib/time";
 import { getErrorMessage } from "@/lib/api";
+import { useMediaQuery } from "@/hooks/use-media-query";
+import { PREFERENCES, usePreference } from "@/lib/preferences";
+import { useClaimHeaderCentre } from "@/components/layout/header-center";
+import { HeaderGround } from "@/components/layout/HeaderGround";
 import { mediaUrl } from "@/features/listening/api";
 import { useSubmitAttempt, useTakeMaterial } from "@/features/listening/queries";
+import { QuestionPaper } from "@/features/listening/components/QuestionPaper";
 import {
-  PartChips,
-  QuestionPaper,
-} from "@/features/listening/components/QuestionPaper";
-import {
-  AudioSkeleton,
   PaperSkeleton,
+  PlayerSkeleton,
 } from "@/features/listening/components/PaperSkeleton";
 import {
-  TakeAudio,
-  type TakeAudioHandle,
+  TakePlayer,
+  useDockOpening,
 } from "@/features/listening/components/TakeAudio";
-import { questionSpan, sorted } from "@/features/listening/numbering";
-import { usePartSpy } from "@/features/listening/use-part-spy";
+import { QuestionNav } from "@/features/listening/components/QuestionNav";
+import type { WavePart } from "@/features/listening/components/Waveform";
+import {
+  answeredIn,
+  paperParts,
+  paperRows,
+  paperTotal,
+} from "@/features/listening/take-paper";
+import { goToQuestion, useQuestionSpy, Q_ANCHOR } from "@/features/listening/take-focus";
+import { useAudioEngine, NUDGE_MS } from "@/features/listening/use-audio-engine";
+import { useWaveform } from "@/features/listening/use-waveform";
 import { PRACTICE } from "@/features/listening/take-config";
 import {
   MAX_SPANS,
@@ -39,9 +51,17 @@ import {
  * There is no mode switch here and there shouldn't be. Opening a material is
  * practice; the exam is somewhere a candidate goes on purpose, and choosing to
  * be there IS the consent to its rules. What that page will reuse is
- * everything below — the audio control, the groups, the submit — handed a
- * different TakeConfig. Which is why no rule is written into this file: the
- * one place practice differs from an exam is the constant it passes in.
+ * everything below — the audio engine, the player, the groups, the
+ * navigator — handed a different TakeConfig. Which is why no rule is written
+ * into this file: the one place practice differs from an exam is the constant
+ * it passes in.
+ *
+ * The paper is ONE SCROLL. Real computer-delivered IELTS has no tabs per
+ * part — the parts are separated by pauses in the recording, not by screens —
+ * and in practice a tab is worse than useless: the whole point of practising
+ * is going back over what you missed, and a tab makes that a navigation.
+ * Parts are section headings, and the strip along the bottom is how you get
+ * anywhere quickly.
  *
  * The page also watches itself being used, quietly. None of it is shown (a
  * clock on the wall changes how people work) and none of it can change a
@@ -56,8 +76,6 @@ export default function ListeningTakePage() {
   const submitMut = useSubmitAttempt(id ?? "");
   const config = PRACTICE;
 
-  const audio = useRef<TakeAudioHandle>(null);
-
   // Answers are state because they are on the screen. Everything else the
   // session accumulates — timings, played spans, backward seeks — is a ref:
   // it arrives several times a second while the audio runs, and none of it
@@ -66,67 +84,35 @@ export default function ListeningTakePage() {
   const [answers, setAnswers] = useState<Record<string, string>>(
     () => restored.current?.answers ?? {},
   );
+  const [flagged, setFlagged] = useState<Set<string>>(
+    () => new Set(restored.current?.flagged ?? []),
+  );
   const session = useRef<TakeSession>(restored.current ?? newSession());
   const [resumed, setResumed] = useState(() => restored.current !== null);
   const [confirming, setConfirming] = useState(false);
 
-  const parts = useMemo(() => (material ? sorted(material.parts) : []), [material]);
-  const activePart = usePartSpy(parts);
+  const parts = useMemo(
+    () => (material ? paperParts(material) : []),
+    [material],
+  );
+  const rows = useMemo(() => paperRows(parts), [parts]);
+  const questionIds = useMemo(() => rows.map((row) => row.id), [rows]);
 
-  /** Every question on the paper, with how many of the paper's NUMBERS it
-   *  takes. Not just a list of ids, because "3 of 25 answered" over a test
-   *  the server marks out of 26 is two different tests — a "choose TWO
-   *  letters" is one row and two numbers, and the count in the header has to
-   *  be the count the score is out of. */
-  const paper = useMemo(() => {
-    const rows: { id: string; partId: string; span: number }[] = [];
-    for (const part of parts) {
-      for (const group of sorted(part.question_groups)) {
-        const span = questionSpan(group.config.answers_per_question);
-        for (const q of group.questions) {
-          rows.push({ id: q.id, partId: part.id, span });
-        }
-      }
-    }
-    return rows;
-  }, [parts]);
-
-  const allQuestionIds = useMemo(() => paper.map((r) => r.id), [paper]);
-
-  // A "choose TWO" with one letter picked is half answered, and says so. It
-  // is also the one case where a candidate can leave a number blank without
-  // leaving a field empty, which is exactly what the warning is for.
-  const answeredIn = (row: (typeof paper)[number]) => {
-    const value = (answers[row.id] ?? "").trim();
-    if (!value) return 0;
-    if (row.span === 1) return 1;
-    return Math.min(row.span, value.split(",").filter(Boolean).length);
-  };
-
-  const total = paper.reduce((n, row) => n + row.span, 0);
-  const answered = paper.reduce((n, row) => n + answeredIn(row), 0);
+  const total = paperTotal(rows);
+  const answered = rows.reduce(
+    (n, row) => n + answeredIn(row, answers[row.id]),
+    0,
+  );
   const blank = total - answered;
 
-  const byPart = useMemo(() => {
-    const map = new Map<string, { answered: number; total: number }>();
-    for (const row of paper) {
-      const at = map.get(row.partId) ?? { answered: 0, total: 0 };
-      at.total += row.span;
-      at.answered += answeredIn(row);
-      map.set(row.partId, at);
-    }
-    return map;
-    // Recomputed as answers change — that is the point of it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paper, answers]);
+  const current = useQuestionSpy(questionIds);
 
   // --- Keeping the draft ----------------------------------------------------
 
   const persist = useCallback(
-    (next: Record<string, string>) => {
-      if (!id) return;
-      session.current = { ...session.current, answers: next };
-      saveSession(id, session.current);
+    (next: Partial<TakeSession>) => {
+      session.current = { ...session.current, ...next };
+      if (id) saveSession(id, session.current);
     },
     [id],
   );
@@ -135,18 +121,30 @@ export default function ListeningTakePage() {
 
   const onAnswer = useCallback(
     (questionId: string, value: string) => {
-      session.current = {
-        ...session.current,
-        timing: recordTouch(
-          session.current.timing,
-          questionId,
-          value,
-          sinceStart(),
-        ),
-      };
       setAnswers((prev) => {
         const next = { ...prev, [questionId]: value };
-        persist(next);
+        persist({
+          answers: next,
+          timing: recordTouch(
+            session.current.timing,
+            questionId,
+            value,
+            sinceStart(),
+          ),
+        });
+        return next;
+      });
+    },
+    [persist],
+  );
+
+  const onFlag = useCallback(
+    (questionId: string) => {
+      setFlagged((prev) => {
+        const next = new Set(prev);
+        if (next.has(questionId)) next.delete(questionId);
+        else next.add(questionId);
+        persist({ flagged: [...next] });
         return next;
       });
     },
@@ -190,38 +188,184 @@ export default function ListeningTakePage() {
       // refuse. Five hundred separate plays have already said what they had
       // to say.
       if (spans.length >= MAX_SPANS) return;
-      session.current = { ...session.current, listened: [...spans, span] };
-      if (id) saveSession(id, session.current);
+      persist({ listened: [...spans, span] });
     },
-    [id],
+    [persist],
   );
 
   const onSeekBack = useCallback(() => {
-    session.current = {
-      ...session.current,
-      seeksBack: session.current.seeksBack + 1,
-    };
-    // Persisted here and not left to the next save. A seek backwards while
-    // the audio is paused emits no span, so nothing else was going to write,
-    // and a reload would drop the count back to what it was.
-    if (id) saveSession(id, session.current);
-  }, [id]);
+    // Persisted on the spot and not left to the next save. A seek backwards
+    // while the audio is paused emits no span, so nothing else was going to
+    // write, and a reload would drop the count back to what it was.
+    persist({ seeksBack: session.current.seeksBack + 1 });
+  }, [persist]);
 
-  // Space plays and pauses — unless something that uses the space bar itself
-  // has focus, in which case it is theirs.
+  const src = material?.audio_url ? mediaUrl(material.audio_url) : null;
+  const shape = useWaveform(src);
+
+  /**
+   * The parts as the waveform shows them: where each one starts.
+   *
+   * Nothing at all for a single-part material. "Part 1" written under a
+   * recording that is entirely part 1 is a caption saying what the reader is
+   * looking at — it divides nothing, and the strip exists to divide.
+   *
+   * And nothing unless the author marked EVERY boundary: three parts with two
+   * marks would draw two lines and name the wrong stretches, and a name over
+   * the wrong stretch is worse than none, because a learner uses it to decide
+   * where to listen.
+   */
+  const wave = useMemo<WavePart[]>(() => {
+    if (parts.length < 2) return [];
+    if (!parts.every((p, i) => i === 0 || p.audioStartMs != null)) return [];
+    return parts.map((p, i) => ({
+      id: p.id,
+      label: `Part ${i + 1}`,
+      startMs: i === 0 ? (p.audioStartMs ?? 0) : (p.audioStartMs as number),
+    }));
+  }, [parts]);
+
+  // Off unless the reader has said otherwise, in which case every silence is
+  // stepped over and the button in the player has nothing left to offer.
+  const [autoSkip] = usePreference(PREFERENCES.skipSilence);
+
+  const engine = useAudioEngine({
+    src,
+    durationMs: material?.duration_ms ?? null,
+    config,
+    silences: shape.silences,
+    autoSkip,
+    onSpan,
+    onSeekBack,
+  });
+
+  // --- The player's journey to the header -----------------------------------
+  //
+  // The full player sits at the top of the paper and scrolls away with it;
+  // the strip takes over in the header's middle. The mechanism is the
+  // catalogue's, down to the sentinel: a zero-height mark above the player,
+  // and once that has gone under the header's top edge there is no player
+  // left on screen to reach for.
+  const landingMark = useRef<HTMLDivElement | null>(null);
+  const [docked, setDocked] = useState(false);
+  // Only where there is a middle to land in. Below `md` the nav is hidden and
+  // the two remaining pills leave no room between them — so down there the
+  // player is not sticky at all and simply scrolls away with the page.
+  const hasIsland = useMediaQuery("(min-width: 48rem)");
+  const inHeader = docked && hasIsland && !!src;
+
+  useEffect(() => {
+    const mark = landingMark.current;
+    if (!mark || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      ([entry]) => setDocked(!entry.isIntersecting),
+      // The mark sits exactly on the player's top edge and the player pins at
+      // 12px, so this fires at the moment it has nowhere further to climb —
+      // the collapse and the last of the travel are one movement rather than
+      // two events.
+      { threshold: 0, rootMargin: "-12px 0px 0px 0px" },
+    );
+    observer.observe(mark);
+    return () => observer.disconnect();
+  }, [src]);
+
+  useClaimHeaderCentre(inHeader);
+
+  // The ground stops short behind the docked pane, so the paper is genuinely
+  // moving under it — see HeaderGround.
+  const opening = useDockOpening(inHeader);
+
+  // --- The keyboard ---------------------------------------------------------
+
+  const inField = (el: EventTarget | null) =>
+    !!(el as HTMLElement | null)?.closest?.(
+      "input, select, textarea, [contenteditable]",
+    );
+
+  // The engine is a fresh object every render — it carries the playhead, and
+  // the playhead moves four times a second. Read through a ref so the window
+  // listener is attached once instead of being torn down and rebuilt on every
+  // tick of the audio.
+  const latest = useRef({ engine, current, onFlag });
+  latest.current = { engine, current, onFlag };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.code !== "Space" && e.key !== " ") return;
-      const target = e.target as HTMLElement | null;
-      if (target?.closest("input, select, textarea, button, [contenteditable]")) {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const { engine, current, onFlag } = latest.current;
+      const typing = inField(e.target);
+
+      if (e.code === "Space" || e.key === " ") {
+        // A button under the pointer wants its own space bar, and so does a
+        // field. Everywhere else it is the recording's.
+        if (typing || (e.target as HTMLElement)?.closest?.("button")) return;
+        e.preventDefault();
+        engine.toggle();
         return;
       }
-      e.preventDefault();
-      audio.current?.toggle();
+
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        // In a field the arrows are the caret's, and in a radio group they
+        // are the selection's. Taking them would be taking something that
+        // already has a job.
+        if (typing) return;
+        e.preventDefault();
+        engine.nudge(e.key === "ArrowLeft" ? -NUDGE_MS : NUDGE_MS);
+        return;
+      }
+
+      if ((e.key === "f" || e.key === "F") && !typing && current) {
+        e.preventDefault();
+        onFlag(current);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  /**
+   * Tab moves between QUESTIONS, not between fields.
+   *
+   * That is how the real computer-delivered test behaves and candidates use
+   * it hard. Left to the browser, Tab lands on every option of a
+   * multiple-choice question and every letter of a matching row, so getting
+   * from question 7 to question 8 is eight presses.
+   *
+   * It is intercepted only in the middle of the paper. From the last question
+   * Tab is let through, and from the first Shift+Tab is — otherwise the paper
+   * would be a trap with the navigator and the header on the outside of it.
+   */
+  const onPaperKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Tab") return;
+    const anchor = (e.target as HTMLElement).closest?.(`[${Q_ANCHOR}]`);
+    const from = anchor?.getAttribute(Q_ANCHOR);
+    if (!from) return;
+    const at = questionIds.indexOf(from);
+    if (at === -1) return;
+    const to = at + (e.shiftKey ? -1 : 1);
+    if (to < 0 || to >= questionIds.length) return;
+    e.preventDefault();
+    goToQuestion(questionIds[to]);
+  };
+
+  // --- Room for the strip along the bottom -----------------------------------
+  //
+  // Measured rather than written down: the navigator wraps to a second row on
+  // a forty-question paper and to one on a six-question one, and a number
+  // typed in here would bury the last question on exactly one of them.
+  const navRef = useRef<HTMLDivElement | null>(null);
+  const [navH, setNavH] = useState(0);
+
+  useEffect(() => {
+    const el = navRef.current;
+    if (!el) return;
+    const measure = () => setNavH(el.getBoundingClientRect().height);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [material]);
 
   // --- Submitting -----------------------------------------------------------
 
@@ -229,7 +373,7 @@ export default function ListeningTakePage() {
     if (!id) return;
     closeFocus();
     setConfirming(false);
-    submitMut.mutate(toSubmit(session.current, allQuestionIds), {
+    submitMut.mutate(toSubmit(session.current, questionIds), {
       onSuccess: (result) => {
         clearSession(id);
         // The result travels with the navigation so the review paints
@@ -257,93 +401,166 @@ export default function ListeningTakePage() {
     return (
       <div className="mx-auto max-w-3xl space-y-4 py-10">
         <p className="text-sm text-destructive">
-          couldn&apos;t load this listening material.
+          This listening material couldn&apos;t be loaded.
         </p>
         <Link
           to="/listening"
-          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
           <ArrowLeft className="size-4" />
-          back to listening
+          Back to listening
         </Link>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-3xl pb-24">
-      {/* Header. Deliberately thin: the candidate's attention belongs to the
-          audio and the questions, and everything here is a way out or a
-          count. */}
-      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 pt-2 pb-4">
+    <div className="mx-auto max-w-3xl" style={{ paddingBottom: navH + 24 }}>
+      <HeaderGround opening={opening} />
+
+      {/*
+        The title, the way out, and nothing else — in the flow, and it scrolls
+        away.
+
+        It used to be pinned to the top, and it could not stay there. That
+        48px band is contested by four things already: the brand island, the
+        account island, the app's own nav, and now the player, which lands in
+        the middle of it. On a 1024px window that leaves about 680px between
+        the two islands and the player takes 448 of it — so a page column
+        pinned across the same band runs its title under the brand pill and
+        its counter under the account menu, which is exactly what it did.
+
+        Nothing here needs to stay. The title is orientation on arrival, and
+        after that the paper IS the material. The way out is a rare action —
+        scrolling back up brings both it and the header's own Listening link
+        back. The one thing that is needed the whole way down is how much is
+        answered, and that has moved to the strip along the bottom, where it
+        is a summary of the very squares it sits beside.
+      */}
+      <div className="pt-1">
         <Link
           to="/listening"
-          className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          className="inline-flex items-center gap-1.5 rounded-md text-xs text-muted-foreground transition-colors duration-fast hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
-          <ArrowLeft className="size-3.5" />
-          listening
+          <ArrowLeft className="size-3.5" aria-hidden />
+          Listening
         </Link>
-        <h1 className="min-w-0 flex-1 truncate text-lg font-semibold text-foreground">
-          {material.title}
-        </h1>
-        <span className="font-mono text-xs tabular-nums text-muted-foreground">
-          {answered} of {total} answered
-        </span>
+        {/* The title and what the paper IS, on one line and on one baseline.
+            Everything up here used to stack down the left edge — four rows of
+            different lengths against an empty right half, which reads as a
+            pile rather than as a heading. The facts were worth printing
+            anyway: how long the recording is and how many marks are on the
+            paper is what somebody decides to start with. */}
+        <div className="mt-1.5 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+          <h1 className="text-2xl font-semibold text-foreground">
+            {material.title}
+          </h1>
+          <p className="shrink-0 text-xs tabular-nums text-muted-foreground">
+            {[
+              `${parts.length} ${parts.length === 1 ? "part" : "parts"}`,
+              `${total} ${total === 1 ? "question" : "questions"}`,
+              material.duration_ms != null
+                ? fmtClock(material.duration_ms)
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        </div>
       </div>
 
-      {/* The sticky band is flush with the bottom of the app header — 12px of
-          padding plus a 48px pill — so the strip of paper still visible above
-          it is exactly the header's own strip. Left even a few pixels lower,
-          the band cuts a line of the form in half, and half a table row
-          scrolling past reads as a rendering fault rather than as the
-          floating header it is. */}
-      {material.audio_url && (
-        <div className="sticky top-[3.75rem] z-20 -mx-1 bg-background/90 px-1 py-2 backdrop-blur-md">
-          <TakeAudio
-            ref={audio}
-            src={mediaUrl(material.audio_url)}
-            durationMs={material.duration_ms}
-            config={config}
-            onSpan={onSpan}
-            onSeekBack={onSeekBack}
-            markers={parts
-              .map((p) => p.audio_start_ms)
-              .filter((ms): ms is number => ms != null)}
-          />
-          <PartChips parts={parts} active={activePart} progress={byPart} />
+      {/* The way back to a sitting they have already finished.
+      
+          Without it the only route to a review was to sit the paper again,
+          which is exactly what somebody coming back to analyse their mistakes
+          does not want: it writes a SECOND attempt, and every ability figure
+          on the platform counts first attempts. Going back to study what you
+          got wrong would quietly cost you the measurement of it.
+
+          The whole row is the link. Two targets — a line of facts and a
+          "review" beside it — is two things to aim at where there is only one
+          thing to do. */}
+      {material.last_attempt && (
+        <Link
+          to={`/listening/attempts/${material.last_attempt.attempt_id}`}
+          className="mt-4 flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-lg border border-border bg-card px-4 py-2.5 transition-colors duration-fast hover:border-border-strong focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          <span className="text-sm text-foreground">You have sat this</span>
+          <span className="text-sm tabular-nums text-muted-foreground">
+            {material.last_attempt.score} / {material.last_attempt.total_questions}
+            {" · "}
+            {timeAgo(material.last_attempt.submitted_at)}
+          </span>
+          {/* The offer, and it names the thing rather than the page: nobody
+              comes back to a finished paper to see a score again — they come
+              back to find out what they got wrong. */}
+          <span className="ml-auto inline-flex items-center gap-1 text-sm text-primary">
+            See what you got wrong
+            <ArrowRight className="size-3.5" aria-hidden />
+          </span>
+        </Link>
+      )}
+
+      {/* The other two-ended row: what the keyboard does on the left, and the
+          notice about this being a resumed draft on the right. Neither is
+          always there, so the row holds a spacer for whichever is missing and
+          the one that is left stays on its own side. */}
+      {(src || resumed) && (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+          {src ? <KeyHints /> : <span />}
+          {resumed && (
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              Picked up where you left off.
+              <button
+                type="button"
+                onClick={() => {
+                  clearSession(id);
+                  session.current = newSession();
+                  setAnswers({});
+                  setFlagged(new Set());
+                  setResumed(false);
+                }}
+                className="rounded-md px-1.5 py-0.5 text-primary transition-colors duration-fast hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                Start over
+              </button>
+            </p>
+          )}
         </div>
       )}
 
-      {resumed && (
-        <p className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          picked up where you left off.
-          <button
-            type="button"
-            onClick={() => {
-              clearSession(id);
-              session.current = newSession();
-              setAnswers({});
-              setResumed(false);
-            }}
-            className="rounded-md px-1.5 py-0.5 text-primary transition-colors hover:bg-primary/10"
-          >
-            start over
-          </button>
-        </p>
+      {src && (
+        <>
+          {/* Zero-height, sitting on the player's top edge: the whole of the
+              docking detection. */}
+          <div ref={landingMark} aria-hidden className="mt-2 h-0" />
+          <TakePlayer
+            engine={engine}
+            shape={shape}
+            parts={wave}
+            docked={inHeader}
+            // Sticky only where it has somewhere to go. Below `md` a player
+            // that pinned would sit on the paper at full height forever,
+            // because there is no header island for it to shrink into.
+            className="z-sticky md:sticky md:top-3"
+          />
+        </>
       )}
 
       {/* One focus listener for the whole paper. React's onFocus/onBlur are
           focusin/focusout, so they bubble up from the inputs inside. */}
-      <div className="mt-6">
+      <div className="mt-8" onKeyDown={onPaperKeyDown}>
         <QuestionPaper
           material={material}
           answers={answers}
           onChange={onAnswer}
+          flagged={flagged}
+          onFlag={onFlag}
           // Only where the rules let the playhead move. In an exam the
           // recording plays through and part 3 arrives when it arrives.
           onPlayPart={
-            material.audio_url && config.allowSeek
-              ? (start, end) => audio.current?.playRange(start, end)
+            src && config.allowSeek
+              ? (start, end) => engine.playRange(start, end)
               : undefined
           }
           disabled={submitMut.isPending}
@@ -363,83 +580,108 @@ export default function ListeningTakePage() {
         />
       </div>
 
-      <div className="mt-12 border-t border-border pt-6">
-        {confirming && (
-          <p className="mb-3 text-sm text-warning">
-            {blank} {blank === 1 ? "question is" : "questions are"} blank.
-            submit anyway?
-          </p>
-        )}
-        <div className="flex items-center justify-end gap-2">
-          {confirming && (
-            <button
-              type="button"
-              onClick={() => setConfirming(false)}
-              className="rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-foreground"
-            >
-              keep working
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={onSubmit}
-            disabled={submitMut.isPending}
-            className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
-          >
-            {submitMut.isPending && (
-              <Loader2 className="size-4 animate-spin" aria-hidden />
-            )}
-            {confirming ? "submit anyway" : "submit"}
-          </button>
-        </div>
-        {submitMut.isError && (
-          <p className="mt-3 text-right text-xs text-destructive">
-            {getErrorMessage(submitMut.error)} — your answers are still here.
-          </p>
-        )}
-      </div>
+      {submitMut.isError && (
+        <p className="mt-6 text-right text-xs text-destructive">
+          {getErrorMessage(submitMut.error)} — your answers are still here.
+        </p>
+      )}
+
+      <QuestionNav
+        ref={navRef}
+        parts={parts}
+        answers={answers}
+        flagged={flagged}
+        current={current}
+        onGo={goToQuestion}
+        onSubmit={onSubmit}
+        submitLabel={config.submitLabel}
+        answered={answered}
+        total={total}
+        submitting={submitMut.isPending}
+        blank={blank}
+        confirming={confirming}
+        onKeepWorking={() => setConfirming(false)}
+      />
     </div>
+  );
+}
+
+/**
+ * What the keyboard does, said once, above the controls it is talking about.
+ *
+ * Not a tooltip and not a help panel: these are three keys a candidate will
+ * use every twenty seconds, and the cost of printing them is one quiet line.
+ */
+function KeyHints({ className }: { className?: string }) {
+  return (
+    <p
+      className={cn(
+        "flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground",
+        className,
+      )}
+    >
+      <span className="flex items-center gap-1.5">
+        <Key>space</Key> play / pause
+      </span>
+      <span className="flex items-center gap-1.5">
+        <Key>←</Key>
+        <Key>→</Key> {NUDGE_MS / 1000} seconds
+      </span>
+      <span className="flex items-center gap-1.5">
+        <Key>tab</Key> next question
+      </span>
+    </p>
+  );
+}
+
+function Key({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd className="rounded-sm bg-surface-sunken px-1.5 py-0.5 font-mono text-xs text-foreground">
+      {children}
+    </kbd>
   );
 }
 
 /**
  * The paper's shape, held open while it loads.
  *
- * The container, the spacing and the back link are the real ones — only what
+ * The container, the band and the back link are the real ones — only what
  * depends on the material is a bar. That is what stops the page jumping: the
- * header sits at the same y before and after, and so does the audio box.
+ * title sits at the same y before and after, and so does the player.
  */
 function TakeSkeleton() {
   return (
-    <SkeletonBlock label="Loading material" className="mx-auto max-w-3xl pb-24">
-      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 pt-2 pb-4">
+    <SkeletonBlock label="Loading material" className="mx-auto max-w-3xl pb-32">
+      <HeaderGround />
+
+      <div className="pt-1">
         {/* A real link, not a bar. A page that hasn't loaded is exactly when
             somebody wants to leave it. */}
         <Link
           to="/listening"
           className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
-          <ArrowLeft className="size-3.5" />
-          listening
+          <ArrowLeft className="size-3.5" aria-hidden />
+          Listening
         </Link>
         {/* The bars sit INSIDE the real elements, so those elements' own
-            line-heights set the row height and the baseline row measures the
-            same before and after the words arrive. */}
-        <h1 className="min-w-0 flex-1 truncate text-lg font-semibold">
-          <Skeleton className="inline-block h-[0.85em] w-64 max-w-full" />
-        </h1>
-        <span className="font-mono text-xs">
-          <Skeleton className="inline-block h-[0.9em] w-28" />
-        </span>
+            line-heights set the rows and the player below starts at the same
+            y before and after the words arrive. */}
+        <div className="mt-1.5 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+          <h1 className="text-2xl font-semibold">
+            <Skeleton className="inline-block h-[0.8em] w-80 max-w-full" />
+          </h1>
+          <p className="shrink-0 text-xs">
+            <Skeleton className="inline-block h-[0.9em] w-40" />
+          </p>
+        </div>
       </div>
 
-      {/* Same sticky wrapper as the real one, so the paper below starts at
-          the same y rather than jumping when the audio box lands. */}
-      <div className="sticky top-[3.75rem] z-20 -mx-1 bg-background/90 px-1 py-2 backdrop-blur-md">
-        <AudioSkeleton />
-      </div>
+      {/* The keyboard row, held open — it is the same height loaded or not. */}
+      <div className="mt-4 h-5" />
+      <PlayerSkeleton className="mt-2" />
 
-      <div className="mt-6">
+      <div className="mt-8">
         <PaperSkeleton />
       </div>
     </SkeletonBlock>

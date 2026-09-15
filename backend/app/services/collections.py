@@ -72,6 +72,7 @@ async def update(
     title: str | None = None,
     summary: str | None = None,
     visibility: str | None = None,
+    cover_seed: str | None = None,
 ) -> Collection:
     """Rename, re-describe, publish or withdraw.
 
@@ -85,6 +86,8 @@ async def update(
         collection.summary = summary
     if visibility is not None:
         collection.visibility = visibility
+    if cover_seed is not None:
+        collection.cover_seed = cover_seed
     collection.updated_at = datetime.now(timezone.utc)
     session.add(collection)
     await session.commit()
@@ -489,6 +492,7 @@ def _summarise(collection: Collection, author: User | None) -> dict:
         "title": collection.title,
         "summary": collection.summary,
         "visibility": collection.visibility,
+        "cover_seed": collection.cover_seed,
         "created_at": collection.created_at,
         "author": (
             {
@@ -894,7 +898,7 @@ async def stats_for(
             repeated = True
         else:
             first[attempt.material_id] = attempt
-        pct = learner_stats._score_pct(attempt)
+        pct = learner_stats.score_pct(attempt)
         if pct is not None:
             best[attempt.material_id] = max(
                 best.get(attempt.material_id, pct), pct
@@ -903,7 +907,7 @@ async def stats_for(
     first_scores = [
         pct
         for attempt in first.values()
-        if (pct := learner_stats._score_pct(attempt)) is not None
+        if (pct := learner_stats.score_pct(attempt)) is not None
     ]
     return {
         "first_try_avg_pct": learner_stats._mean(first_scores),
@@ -973,3 +977,64 @@ async def for_author(
             }
         )
     return rows
+
+
+async def next_after(
+    session: AsyncSession, user_id: uuid.UUID, material_id: uuid.UUID
+) -> dict | None:
+    """The course this material sits in, and what to do next in it.
+
+    What a review screen needs to be able to say ``Next lesson`` — and the
+    reason it can say it at all is that a collection is an ordered list of
+    references with progress counted from attempts, so "next" is a question
+    that can be asked about somebody who never enrolled in anything.
+
+    "Next" is :func:`progress`'s next and not "the one after this", which is
+    the same distinction the rest of this module keeps: the sequence is
+    somebody's judgement about what to do when, so a learner who skipped
+    lesson two is sent back to lesson two rather than forward past it. It
+    also means finishing the last lesson of a course returns ``None``, which
+    is correct — there is no next lesson, and the page should not invent one.
+
+    A material can appear in several published courses. The one returned is
+    the one they are furthest through, because that is the course they are
+    actually working: a paper that also happens to sit in a collection they
+    opened once should not redirect somebody halfway through a syllabus.
+    """
+    holders = list(
+        (
+            await session.exec(
+                select(Collection)
+                .select_from(CollectionItem)
+                .join(Collection, Collection.id == CollectionItem.collection_id)  # type: ignore[arg-type]
+                .where(
+                    CollectionItem.material_id == material_id,
+                    Collection.visibility == "public",
+                )
+            )
+        ).all()
+    )
+    if not holders:
+        return None
+
+    best: tuple[int, dict] | None = None
+    for collection in holders:
+        ids = await _item_ids(session, collection.id, public_only=True)
+        if material_id not in ids:
+            continue  # in the course, but as a draft the learner cannot see
+        made = await progress(session, user_id, ids)
+        if made["next_material_id"] is None:
+            continue  # finished — there is nothing to point at
+        found = {
+            "collection_id": collection.id,
+            "collection_title": collection.title,
+            "next_material_id": made["next_material_id"],
+            # 1-based, so it reads as a lesson number rather than an index.
+            "next_position": ids.index(made["next_material_id"]) + 1,
+            "done": made["done"],
+            "total": made["total"],
+        }
+        if best is None or made["done"] > best[0]:
+            best = (made["done"], found)
+
+    return best[1] if best else None

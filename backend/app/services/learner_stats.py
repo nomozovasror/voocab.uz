@@ -64,7 +64,7 @@ def _pct(value: float) -> int:
     return math.floor(value + 0.5)
 
 
-def _score_pct(attempt: Attempt) -> int | None:
+def score_pct(attempt: Attempt) -> int | None:
     """One attempt as a percentage, or nothing where it can't be one."""
     if not attempt.total_questions:
         return None
@@ -112,7 +112,7 @@ def _first_and_best(
             repeated = True
         else:
             first[attempt.material_id] = attempt
-        pct = _score_pct(attempt)
+        pct = score_pct(attempt)
         if pct is not None:
             best[attempt.material_id] = max(
                 best.get(attempt.material_id, pct), pct
@@ -153,7 +153,7 @@ async def _resume(
         "title": material.title,
         "attempt_id": last.id,
         "submitted_at": last.submitted_at,
-        "score_pct": _score_pct(last),
+        "score_pct": score_pct(last),
         "attempt_number": sum(
             1 for a in attempts if a.material_id == last.material_id
         ),
@@ -171,7 +171,7 @@ def _trend(first_attempts: list[Attempt]) -> dict | None:
     scored = [
         (a.submitted_at, pct)
         for a in first_attempts
-        if (pct := _score_pct(a)) is not None
+        if (pct := score_pct(a)) is not None
     ]
     if len(scored) < TREND_WINDOW:
         return None
@@ -369,7 +369,7 @@ async def first_attempt_profile(
     scores = [
         pct
         for a in first_by_material.values()
-        if (pct := _score_pct(a)) is not None
+        if (pct := score_pct(a)) is not None
     ]
     return {
         "sat_anything": True,
@@ -410,7 +410,7 @@ async def first_try_average_for(
         )
     ).all():
         first.setdefault(attempt.material_id, attempt)
-    return _mean([pct for a in first.values() if (pct := _score_pct(a)) is not None])
+    return _mean([pct for a in first.values() if (pct := score_pct(a)) is not None])
 
 
 async def _carried_on_ids(
@@ -450,7 +450,7 @@ async def listening_stats(session: AsyncSession, user_id: uuid.UUID) -> dict:
     first_ids = [a.id for a in first_attempts]
 
     first_scores = [
-        pct for a in first_attempts if (pct := _score_pct(a)) is not None
+        pct for a in first_attempts if (pct := score_pct(a)) is not None
     ]
 
     return {

@@ -29,8 +29,13 @@ export function Layout() {
 
   // Each group is its own floating island — transparent at the top, frosted
   // glass once scrolled. A shared height keeps the three islands aligned.
+  //
+  // `pointer-events-auto` puts back what the header gives up — see the note
+  // on <header> below. It is on the pill rather than on each island because
+  // the islands ARE the pills, and a fourth one added later would otherwise
+  // be silently unclickable.
   const pill = cn(
-    "flex h-12 items-center rounded-2xl border px-4 transition-[background-color,border-color,box-shadow,backdrop-filter] duration-300",
+    "pointer-events-auto flex h-12 items-center rounded-2xl border px-4 transition-[background-color,border-color,box-shadow,backdrop-filter] duration-300",
     scrolled
       ? "border-border bg-background/70 shadow-sm backdrop-blur-md supports-[backdrop-filter]:bg-background/60"
       : "border-transparent bg-transparent",
@@ -40,7 +45,19 @@ export function Layout() {
     <HeaderCentreProvider value={centre.value}>
     <div className="flex min-h-svh flex-col">
       <RouteProgress />
-      <header className="sticky top-0 z-30 w-full px-4 pt-3 sm:px-6 lg:px-8">
+      {/*
+        `pointer-events-none`, and this is load-bearing.
+
+        The header is a full-width box sixty pixels tall sitting above the
+        page at `z-header`, and a transparent box is still a hit target: every
+        click between the islands was landing on the header and going nowhere.
+        That is invisible until a page docks a control into the middle of the
+        band — the practice player, the catalogue's search field — at which
+        point none of its buttons can be pressed.
+
+        The islands take their clicks back through `pill` above.
+      */}
+      <header className="pointer-events-none sticky top-0 z-30 w-full px-4 pt-3 sm:px-6 lg:px-8">
         {/* Three islands on one rail. The rail is wider than the content at the
             top and snaps to the container width once scrolled. */}
         <div
@@ -102,9 +119,15 @@ export function Layout() {
             ))}
           </nav>
 
-          {/* Actions */}
+          {/* Actions.
+
+              One trigger, not two. The theme used to sit out here beside the
+              account and the pair of them made this island wide enough to
+              crowd the middle of the bar — which is where pages dock the
+              control they are actually working with. It has moved inside the
+              account menu; a visitor with no account menu still gets it, as
+              an icon. */}
           <div className={cn(pill, "gap-2 justify-self-end")}>
-            <ThemeSwitcher />
             {/* Reflect session: signed-in users get an account menu, everyone
                 else a Sign in button. `isLoading` avoids a flash of the wrong
                 one on first paint. */}
@@ -113,12 +136,15 @@ export function Layout() {
             ) : user ? (
               <UserMenu user={user} />
             ) : (
+              <>
+              <ThemeSwitcher />
               <NavLink
                 to="/login"
                 className="rounded-full bg-linear-to-b from-primary to-primary/80 px-4 py-1.5 text-sm font-medium text-primary-foreground shadow-[0_0_24px_-6px_var(--primary)] transition-shadow hover:shadow-[0_0_28px_-4px_var(--primary)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
               >
                 Sign in
               </NavLink>
+              </>
             )}
           </div>
         </div>

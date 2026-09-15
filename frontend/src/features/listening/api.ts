@@ -180,7 +180,16 @@ export const listeningApi = {
       api.post<AuthorCollection>("/api/collections", { json: body }),
     update: (
       id: string,
-      body: { title?: string; summary?: string; visibility?: string },
+      body: {
+        title?: string;
+        summary?: string;
+        visibility?: string;
+        /** A new string to generate the cover from. Hex, 4–32 characters —
+         *  the server validates the shape, because nothing reads this
+         *  except the hash and a free-text field nobody displays is
+         *  somewhere text ends up. */
+        cover_seed?: string;
+      },
     ) => api.patch<AuthorCollection>(`/api/collections/${id}`, { json: body }),
     /** The whole ordered list, every time — see the endpoint's own note on
      *  why there is no add/remove/move. */

@@ -130,6 +130,28 @@ function hash(id: string): number {
  * than from the same end, so they do not move together — 13 × 8 × 3 really is
  * 312 covers and not thirteen with decoration.
  */
+/**
+ * The string a collection's cover is generated from.
+ *
+ * The id, unless the author has asked for a different book — `cover_seed` is
+ * how they ask. Everything that draws a collection reads it through here, so
+ * a re-covered course is the same new book on the shelf, in the editor and
+ * on the learner's page. Anything reading `collection.id` directly would be
+ * the one place still showing the old one.
+ */
+export function coverKeyOf(collection: {
+  id: string;
+  cover_seed?: string | null;
+}): string {
+  return collection.cover_seed || collection.id;
+}
+
+/** A seed for a cover nobody has to like. Hex and short, because the server
+ *  validates the shape and nothing reads it except the hash. */
+export function newCoverSeed(): string {
+  return crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+}
+
 export function coverFor(id: string): Cover {
   const value = hash(id);
   const stock = STOCKS[value % STOCKS.length];
@@ -170,4 +192,49 @@ export const COVER_INK = {
    *  "tile". */
   spine: "rgba(0,0,0,.28)",
   spineEdge: "rgba(255,255,255,.07)",
+
+  /**
+   * A plate printed on the cover — the studio's status pill.
+   *
+   * Half-transparent black rather than a colour of its own, and that is the
+   * whole trick: the stock underneath is one of thirteen hues, and a pill
+   * with a fixed background would have to be chosen against each of them.
+   * Darkening whatever is already there reads on all thirteen and cannot be
+   * got wrong by adding a fourteenth.
+   *
+   * Fixed values for the same reason the ink is fixed: this prints ON the
+   * cover, which is dark in every theme, so a themed foreground would go
+   * invisible on a background that had not changed. `plateWarn` is amber
+   * rather than the accent token for exactly that — the accent is purple in
+   * Dracula, and "draft" would stop being the colour that means "your move".
+   */
+  plate: "rgba(0,0,0,.34)",
+  plateText: "rgba(255,255,255,.85)",
+  plateWarn: "#f0c33c",
+
+  /**
+   * Controls printed on a cover — the editor's banner.
+   *
+   * Same trick as the plate, and for the same reason: thirteen stocks, and a
+   * button with a colour of its own would have to be chosen against each of
+   * them. Darkening what is already there works on all thirteen.
+   *
+   * `accent` is the live Publish, and it is a fixed amber rather than the
+   * theme's `--primary` because that is purple under Dracula — and a button
+   * sitting on a cover that never changes with the theme cannot be the one
+   * thing on it that does.
+   */
+  action: "rgba(0,0,0,.3)",
+  actionHover: "rgba(0,0,0,.42)",
+  actionText: "rgba(255,255,255,.9)",
+  actionMuted: "rgba(255,255,255,.45)",
+  accent: "#e2b714",
+  accentText: "#2a2b1c",
+  /** The muted white the banner's foot is set in. Under the title in
+   *  weight, not in legibility: it carries the runtime and the save state,
+   *  which are read at a glance or not at all. */
+  faint: "rgba(255,255,255,.72)",
+  /** The field's underline: invisible, then approached, then focused. */
+  fieldHover: "rgba(255,255,255,.32)",
+  fieldFocus: "rgba(255,255,255,.78)",
 } as const;

@@ -33,6 +33,22 @@ export const PREFERENCES = {
    * statistics — and the list is a list.
    */
   hoverPreview: "voocab-hover-preview",
+
+  /**
+   * Step over the dead air in a recording without being asked each time.
+   *
+   * Off by default, and the button in the player is the reason it can be. A
+   * listening paper is largely quiet — the twenty and thirty second stretches
+   * where a candidate reads ahead — and the switch on the player skips ONE of
+   * them, the one that is happening. That is the right default: a jump the
+   * reader asked for, when they asked for it.
+   *
+   * Turned on, every silence is stepped over automatically. That is a
+   * different thing to want — it belongs to somebody who has decided how they
+   * work, not to somebody meeting the feature — so it is a setting rather than
+   * a second control on a player that is already full.
+   */
+  skipSilence: "voocab-skip-silence",
 } as const;
 
 export type PreferenceKey = (typeof PREFERENCES)[keyof typeof PREFERENCES];

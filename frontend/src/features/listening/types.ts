@@ -75,6 +75,9 @@ export interface ListeningPart {
   title: string;
   audio_start_ms: number | null;
   audio_end_ms: number | null;
+  /** Where this part's numbering starts on the paper it came from, or null
+   *  to carry on from the part before. See `groupNumbering`. */
+  first_number?: number | null;
   question_groups: ListeningQuestionGroup[];
 }
 
@@ -329,7 +332,21 @@ export interface TakePart {
   title: string;
   audio_start_ms: number | null;
   audio_end_ms: number | null;
+  /** Where this part's numbering starts on the paper it came from, or null
+   *  to carry on from the part before. See `groupNumbering`. */
+  first_number?: number | null;
   question_groups: TakeQuestionGroup[];
+}
+
+/** The caller's most recent finished sitting of a paper. Enough to say what
+ *  happened and to link to the review, and nothing more — the whole record is
+ *  one fetch away, and putting it here would mean the take payload carrying
+ *  the answer key. */
+export interface LastAttempt {
+  attempt_id: string;
+  score: number;
+  total_questions: number;
+  submitted_at: string;
 }
 
 export interface MaterialTake {
@@ -338,6 +355,11 @@ export interface MaterialTake {
   audio_url: string | null;
   duration_ms: number | null;
   parts: TakePart[];
+  /** Absent where the caller has never finished this paper. What lets them go
+   *  and READ a sitting they already did rather than sit it again to find out
+   *  how it went — which would write a second attempt, and every ability
+   *  figure on the platform counts first attempts. */
+  last_attempt?: LastAttempt | null;
 }
 
 /** One row of the learner's catalogue. Deliberately not `ListeningMaterial`:
@@ -509,6 +531,10 @@ export interface Collection {
   title: string;
   summary: string;
   visibility: string;
+  /** What the cover is generated from, when it is not the id — sent to the
+   *  learner too, or an author's re-covered course would be two different
+   *  books with one name. */
+  cover_seed: string | null;
   created_at: string | null;
   author: CatalogueAuthor | null;
   progress: CollectionProgress;
@@ -558,6 +584,9 @@ export interface AuthorCollection {
   title: string;
   summary: string;
   visibility: string;
+  /** What the cover is generated from, when it is not the id. See
+   *  `coverKeyOf` — null means the collection has never been re-covered. */
+  cover_seed: string | null;
   created_at: string | null;
   author: CatalogueAuthor | null;
   item_count: number;
@@ -737,6 +766,29 @@ export interface QuestionResult {
    *  Empty when the author marked no range, or when the recording has no
    *  transcript yet — practice doesn't wait for one. */
   transcript?: TranscriptLine[];
+  /** What KIND of wrong this answer was — the same classification the
+   *  practice page's "Where you lose marks" is counted from, so a review of
+   *  one paper and a pattern across many cannot name the same slip two
+   *  different things. Classified on the server
+   *  (`backend/app/services/mistakes.py`) for exactly that reason.
+   *
+   *  Null twice over: a right answer has no kind, and neither has one given
+   *  as a letter — there is no spelling in "b". */
+  mistake?: MistakeKind | null;
+}
+
+/** Where this paper sits in a course, and what to do next in it. Absent when
+ *  the material is in no published collection, and absent once the course is
+ *  finished — there is then no next lesson to offer. */
+export interface CourseNext {
+  collection_id: string;
+  collection_title: string;
+  /** The first material in the course they have NOT sat, in the course's own
+   *  order — which is not necessarily the one after this. */
+  next_material_id: string;
+  next_position: number;
+  done: number;
+  total: number;
 }
 
 export interface AttemptResult {
@@ -750,6 +802,22 @@ export interface AttemptResult {
   score: number;
   total_questions: number;
   submitted_at: string | null;
+  /** How long the paper took, where the page reported it. */
+  time_spent_ms?: number | null;
+
+  // --- what turns the score into a sentence --------------------------------
+  /** Which try this is, counting submitted attempts at this material only. */
+  attempt_no?: number;
+  /** What the FIRST try came to, so a retake reads as progress rather than as
+   *  a number on its own. Absent on a first try, where it would be the same
+   *  number under a second name. */
+  first_try_pct?: number | null;
+  /** How everybody else does on this paper — the difficulty projection's own
+   *  figure. Absent until enough people have answered it for an average to
+   *  mean anything. */
+  material_avg_pct?: number | null;
+  course?: CourseNext | null;
+
   results: QuestionResult[];
 }
 

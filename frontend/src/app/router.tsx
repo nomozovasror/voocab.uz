@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import { Navigate, createBrowserRouter, redirect } from "react-router-dom";
 import { Layout } from "@/components/layout/Layout";
 import { StudioLayout } from "@/components/studio/StudioLayout";
+import { StudioListeningTabsLayout } from "@/components/studio/ListeningTabs";
 import { RequireAuth } from "@/auth/RequireAuth";
 import { PageLoader } from "@/components/ui/spinner";
 
@@ -157,9 +158,26 @@ export const router = createBrowserRouter([
             // pending `lazy` does, so this route blanks on a cold load too.
             HydrateFallback: PageLoader,
           },
+          // The two halves of the listening studio, under one header. A
+          // pathless layout route rather than a component each page renders,
+          // so the tab bar is the SAME element on both — see
+          // StudioListeningTabsLayout for why that is load-bearing.
           {
-            path: "listening",
-            ...page(() => import("@/pages/studio/listening/StudioListeningListPage")),
+            element: <StudioListeningTabsLayout />,
+            children: [
+              {
+                path: "listening",
+                ...page(
+                  () => import("@/pages/studio/listening/StudioListeningListPage"),
+                ),
+              },
+              {
+                path: "collections",
+                ...page(
+                  () => import("@/pages/studio/collections/StudioCollectionsPage"),
+                ),
+              },
+            ],
           },
           {
             path: "listening/new",
@@ -168,12 +186,6 @@ export const router = createBrowserRouter([
           {
             path: "listening/:id",
             ...page(() => import("@/pages/studio/listening/StudioListeningEditorPage")),
-          },
-          {
-            path: "collections",
-            ...page(
-              () => import("@/pages/studio/collections/StudioCollectionsPage"),
-            ),
           },
           {
             path: "collections/:id",

@@ -1,5 +1,7 @@
 import { Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { FlagQuestion } from "@/features/listening/components/FlagQuestion";
+import { Q_ANCHOR } from "@/features/listening/take-focus";
 import { matchLetter } from "@/features/listening/matching";
 import type {
   QuestionResult,
@@ -39,6 +41,9 @@ interface MatchingGroupProps {
    *  marked. Only where the author marked one. */
   onReplay?: (startMs: number | null, endMs: number | null) => void;
   disabled?: boolean;
+  /** Only while the paper is being sat — see QuestionPaper. */
+  flagged?: Set<string>;
+  onFlag?: (questionId: string) => void;
 }
 
 export function MatchingGroup({
@@ -49,6 +54,8 @@ export function MatchingGroup({
   results,
   onReplay,
   disabled,
+  flagged,
+  onFlag,
 }: MatchingGroupProps) {
   const options = group.config.options ?? [];
 
@@ -95,6 +102,8 @@ export function MatchingGroup({
               result={results?.[question.id]}
               onReplay={onReplay}
               disabled={disabled}
+              flagged={flagged?.has(question.id) ?? false}
+              onFlag={onFlag ? () => onFlag(question.id) : undefined}
             />
           ))}
       </div>
@@ -111,6 +120,8 @@ function MatchingItem({
   result,
   onReplay,
   disabled,
+  flagged,
+  onFlag,
 }: {
   question: TakeQuestion;
   number: number;
@@ -120,6 +131,8 @@ function MatchingItem({
   result?: QuestionResult;
   onReplay?: (startMs: number | null, endMs: number | null) => void;
   disabled?: boolean;
+  flagged?: boolean;
+  onFlag?: () => void;
 }) {
   const graded = result !== undefined;
   // The answer, once it is allowed to exist here — never before grading.
@@ -127,6 +140,9 @@ function MatchingItem({
 
   return (
     <fieldset
+      // What the navigator scrolls to, and what the page reads to know which
+      // question is being worked on.
+      {...{ [Q_ANCHOR]: question.id }}
       className="flex flex-wrap items-center gap-x-2 gap-y-1 py-0.5"
       aria-invalid={graded && !result.is_correct}
     >
@@ -137,9 +153,16 @@ function MatchingItem({
       >
         {number}
       </span>
-      <span className="min-w-0 flex-1 text-sm text-foreground">
+      <span className="min-w-0 flex-1 text-base text-foreground">
         {question.prompt}
       </span>
+      {onFlag && (
+        <FlagQuestion
+          number={String(number)}
+          flagged={!!flagged}
+          onToggle={onFlag}
+        />
+      )}
 
       <div className="flex shrink-0 flex-wrap items-center gap-1">
         {options.map((_text, index) => {
@@ -166,8 +189,8 @@ function MatchingItem({
                   : graded && picked
                     ? "border-destructive bg-destructive/10 text-destructive"
                     : picked
-                      ? "border-primary bg-primary/10 text-foreground"
-                      : "border-border text-muted-foreground hover:border-foreground/30",
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border text-muted-foreground hover:border-border-strong",
                 disabled && "cursor-default",
               )}
             >
