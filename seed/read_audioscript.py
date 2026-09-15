@@ -105,6 +105,12 @@ Rules that matter:
   cans was altered by the addition of yellow, so they were brighter" is
   "The green colour of some cans was altered by the addition of yellow, so
   they were brighter", NOT ", so they were brighter".
+* **An UNDERLINE is a marker for this purpose.** Some books mark the answer by
+  underlining it and print no number anywhere -- the Official Cambridge Guide
+  is one. Break the text at every underlined phrase there, exactly as you
+  would at a number. A monologue with no numbers and no speaker changes came
+  back as FOUR entries for a whole section, which makes it impossible to say
+  where any answer falls.
 * **Start a NEW entry at every marker, even when the speaker has not
   changed.** Sections 2 and 4 are usually one person talking without
   interruption, and putting the whole talk in a single entry makes it
