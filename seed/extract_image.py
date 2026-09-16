@@ -158,6 +158,51 @@ def overlaid(page: pymupdf.Page) -> tuple[float, float, float, float] | None:
             max(b[2] for b in boxes), max(b[3] for b in boxes))
 
 
+#: A text block of this many words or more is prose somebody reads, not a
+#: label printed on a figure. "Main entrance", "Ellerslie Rd" and "Car Park"
+#: are two; the shortest instruction on these pages is eight.
+LABEL_WORDS = 6
+#: How far outside the box a label may sit and still belong to it, as a
+#: fraction of the page. A hair over a line of type: the map's own labels
+#: touch its edge, and the prose around it is a paragraph away.
+NEAR = 0.02
+
+
+def grown_to_labels(page: pymupdf.Page,
+                    box: tuple[float, float, float, float],
+                    ) -> tuple[float, float, float, float]:
+    """The box, opened out to hold the figure's own labels.
+
+    A placed image is the drawing; the words printed over and around it are
+    the page's text, and they are part of the picture as much as the lines
+    are. IELTS Trainer 2's plan is captioned "Main entrance" along its top
+    edge, just above where the image begins, and the intersection cut the
+    caption in half.
+
+    Only SHORT blocks, and only ones already touching the box or within a
+    line of it -- which is every label a figure carries and none of the prose
+    around it, since prose is both long and a paragraph away. Never shrinks:
+    a label outside the box widens it, and a box with no labels near it comes
+    back as it went in.
+    """
+    width, height = page.rect.width, page.rect.height
+    x0, y0, x1, y1 = box
+    for block in page.get_text("blocks"):
+        if len(str(block[4]).split()) >= LABEL_WORDS:
+            continue
+        bx0, by0 = block[0] / width, block[1] / height
+        bx1, by1 = block[2] / width, block[3] / height
+        # Touching the box, or a line away from one of its edges, and lined
+        # up with it on the other axis.
+        across = bx0 < x1 + NEAR and bx1 > x0 - NEAR
+        down = by0 < y1 + NEAR and by1 > y0 - NEAR
+        if not (across and down):
+            continue
+        x0, y0 = min(x0, max(0.0, bx0)), min(y0, max(0.0, by0))
+        x1, y1 = max(x1, min(1.0, bx1)), max(y1, min(1.0, by1))
+    return (x0, y0, x1, y1)
+
+
 def trim_to_picture(page: pymupdf.Page,
                     box: tuple[float, float, float, float],
                     ) -> tuple[float, float, float, float]:
@@ -186,7 +231,11 @@ def trim_to_picture(page: pymupdf.Page,
     if ((together[2] - together[0]) < (box[2] - box[0]) / 5
             or (together[3] - together[1]) < (box[3] - box[1]) / 5):
         return box
-    return together
+    # Opened back out to the figure's own captions, but never past the ink
+    # box: that is the outer bound both pieces of evidence already agreed on.
+    grown = grown_to_labels(page, together)
+    return (max(box[0], grown[0]), max(box[1], grown[1]),
+            min(box[2], grown[2]), min(box[3], grown[3]))
 
 
 def find_block(page: pymupdf.Page) -> tuple[float, float, float, float] | None:
