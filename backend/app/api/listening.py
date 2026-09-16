@@ -28,6 +28,9 @@ from app.models.part import Part
 from app.models.question_group import QuestionGroup
 from app.schemas.listening import (
     AttemptResultOut,
+    DrillListOut,
+    DrillTakeOut,
+    DrillTypesOut,
     LastAttemptOut,
     AttemptSubmit,
     ListeningStatsOut,
@@ -44,6 +47,7 @@ from app.schemas.listening import (
     QuestionOut,
 )
 from app.services import difficulty as difficulty_service
+from app.services import drills as drills_service
 from app.services import grading as grading_service
 from app.services import learner_stats as learner_stats_service
 from app.services import recommend as recommend_service
@@ -398,6 +402,139 @@ async def take_material(
             if done is not None and done.submitted_at is not None
             else None
         ),
+    )
+
+
+@router.get("/listening/drills/types", response_model=DrillTypesOut)
+async def drill_types(user: CurrentUser, session: SessionDep) -> DrillTypesOut:
+    """The Drills tab's cards: every question type, and what there is of it.
+
+    Counted over the whole public library, never over a page — the catalogue's
+    rule, for the catalogue's reason. Eleven rows, so it is not paged.
+    """
+    return DrillTypesOut(items=await drills_service.type_summary(session, user.id))
+
+
+@router.get("/listening/drills", response_model=DrillListOut)
+async def list_drills(
+    user: CurrentUser,
+    session: SessionDep,
+    type: Annotated[str, Query(max_length=64)],
+    q: Annotated[str | None, Query(max_length=200)] = None,
+    done: Annotated[bool, Query()] = False,
+    limit: Annotated[int, Query(ge=1, le=100)] = drills_service.DRILL_PAGE,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> DrillListOut:
+    """One page of drills of a given type.
+
+    ``type`` is an open string for the same reason the catalogue's is: the
+    question types grow without a migration, and one we do not recognise
+    simply matches nothing.
+    """
+    return DrillListOut(
+        **await drills_service.list_drills(
+            session,
+            user.id,
+            group_type=type,
+            query=q,
+            done=done,
+            limit=limit,
+            offset=offset,
+        )
+    )
+
+
+async def _load_drillable_group(
+    session: SessionDep, group_id: uuid.UUID, user_id: uuid.UUID
+) -> tuple[QuestionGroup, Part, Material]:
+    """A group the caller may drill, with the part and material behind it.
+
+    Same visibility rule as ``/take`` — anyone who may take the material may
+    drill a group of it — plus the group actually being drillable. A group
+    whose questions are not all marked has no clip that contains all its
+    answers, and a drill that cannot be answered is a 404, not a partial.
+    """
+    group = await session.get(QuestionGroup, group_id)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Question group not found")
+    part = await session.get(Part, group.part_id)
+    if part is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Question group not found")
+    material = await _load_owned_or_public(session, part.material_id, user_id)
+    if await listening_service.group_clip(session, group) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "This group cannot be drilled")
+    return group, part, material
+
+
+@router.get("/listening/drills/{group_id}", response_model=DrillTakeOut)
+async def take_drill(
+    group_id: uuid.UUID, user: CurrentUser, session: SessionDep
+) -> DrillTakeOut:
+    """One drill's render payload.
+
+    The same guarantee ``/take`` carries, by the same two independent means:
+    built from ``get_drill_tree`` (which never reads
+    ``Question.correct_answers``) and validated against a schema whose nested
+    question type has no such field at all.
+    """
+    group, part, material = await _load_drillable_group(session, group_id, user.id)
+    audio = await _resolve_audio(session, material)
+    clip = await listening_service.group_clip(
+        session, group, duration_ms=audio["duration_ms"]
+    )
+    parts = await listening_service.get_drill_tree(session, group)
+    done = await grading_service.last_submitted_attempt(
+        session, user.id, material.id, group_id=group.id
+    )
+    return DrillTakeOut(
+        id=group.id,
+        title=material.title,
+        audio_url=audio["audio_url"],
+        duration_ms=audio["duration_ms"],
+        parts=parts,
+        clip_start_ms=clip["start_ms"],
+        clip_end_ms=clip["end_ms"],
+        drill=await drills_service.drill_row(
+            session, user.id, group, material, part
+        ),
+        last_attempt=(
+            LastAttemptOut(
+                attempt_id=done.id,
+                score=int(done.score or 0),
+                total_questions=done.total_questions or 0,
+                submitted_at=done.submitted_at,
+            )
+            if done is not None and done.submitted_at is not None
+            else None
+        ),
+    )
+
+
+@router.post("/listening/drills/{group_id}/attempts", response_model=AttemptResultOut)
+async def submit_drill(
+    group_id: uuid.UUID,
+    data: AttemptSubmit,
+    user: CurrentUser,
+    session: SessionDep,
+) -> AttemptResultOut:
+    """Submit + grade one drill.
+
+    No ``refresh_if_unrated`` here, and that is deliberate rather than an
+    omission: a drill does not feed the material difficulty tally
+    (``difficulty._tally`` excludes it), so refreshing the band after one
+    would be a write that recomputes the same number. This line gets copied,
+    so it says why it is missing.
+    """
+    group, part, material = await _load_drillable_group(session, group_id, user.id)
+    attempt = await grading_service.submit_drill(
+        session,
+        user_id=user.id,
+        group=group,
+        material_id=material.id,
+        data=data,
+    )
+    return AttemptResultOut.model_validate(
+        await grading_service.attempt_result(session, attempt)
     )
 
 

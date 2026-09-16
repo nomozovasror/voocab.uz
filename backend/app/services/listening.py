@@ -159,6 +159,46 @@ async def _remove_questions(
         await session.delete(question)
 
 
+async def _remove_group_attempts(session: AsyncSession, group_id: uuid.UUID) -> None:
+    """Delete the DRILL attempts pointing at a group that is going away.
+
+    ``attempts.group_id`` is a plain FK with no ON DELETE, so once anyone has
+    drilled a group the group cannot simply be dropped — exactly the failure
+    :func:`_remove_questions` already records one level down ("a single test
+    attempt used to make every subsequent save fail"), and reached the same
+    way: the editor autosaves the whole group.
+
+    Not ``ON DELETE SET NULL``. A drill attempt whose ``group_id`` was nulled
+    would become, by the definition in :class:`AttemptStatus`, a whole sitting
+    — a six-mark attempt at a forty-mark paper, feeding every ability figure
+    on the platform. Losing the drill is right; silently promoting it is the
+    corruption the column exists to prevent.
+
+    Only drills are touched. An attempt at the whole MATERIAL has
+    ``group_id IS NULL`` and outlives any one group, the same way it outlives
+    the questions :func:`_remove_questions` takes with it.
+    """
+    attempts = (
+        await session.exec(select(Attempt).where(Attempt.group_id == group_id))
+    ).all()
+    if not attempts:
+        return
+    ids = [attempt.id for attempt in attempts]
+    # The per-question rows first: ``question_attempts.attempt_id`` is a plain
+    # FK too. Loaded and deleted one by one for the same reason as above —
+    # a bulk DELETE leaves stale copies in the session's identity map.
+    for row in (
+        await session.exec(
+            select(QuestionAttempt).where(QuestionAttempt.attempt_id.in_(ids))  # type: ignore[attr-defined]
+        )
+    ).all():
+        await session.delete(row)
+    await session.flush()
+    for attempt in attempts:
+        await session.delete(attempt)
+    await session.flush()
+
+
 async def _remove_part(session: AsyncSession, part: Part) -> None:
     """A part, its groups and their questions — without committing, so this
     can be one step of a larger transaction (deleting the whole material is
@@ -170,6 +210,7 @@ async def _remove_part(session: AsyncSession, part: Part) -> None:
     constraint (same pattern as the audio/dictation delete paths)."""
     groups = await get_question_groups(session, part.id)
     for group in groups:
+        await _remove_group_attempts(session, group.id)
         await _remove_questions(session, await get_questions(session, group.id))
     await session.flush()
     for group in groups:
@@ -415,10 +456,42 @@ async def reorder_question_groups(
 
 
 async def delete_question_group(session: AsyncSession, group: QuestionGroup) -> None:
+    await _remove_group_attempts(session, group.id)
     await _remove_questions(session, await get_questions(session, group.id))
     await session.flush()
     await session.delete(group)
     await session.commit()
+
+
+async def first_printed_number(
+    session: AsyncSession, material_id: uuid.UUID
+) -> int:
+    """The number the FIRST question of a material carries on its paper.
+
+    Its first part's ``first_number`` where there is one, and 1 otherwise —
+    which is what every author-written material means and what every part
+    written before the column existed means.
+    """
+    parts = await get_parts(session, material_id)
+    if parts and parts[0].first_number is not None:
+        return parts[0].first_number
+    return 1
+
+
+async def get_group_questions(
+    session: AsyncSession, group: QuestionGroup
+) -> list[tuple[Question, QuestionGroup]]:
+    """One group's questions, in the same shape
+    :func:`get_material_questions` returns.
+
+    The same shape on purpose: it is what lets a drill and a whole sitting run
+    the identical grading arithmetic (``grading._grade_into``) over different
+    selections, rather than growing a second loop that has to agree with the
+    first about what a mark is.
+    """
+    return [
+        (question, group) for question in await get_questions(session, group.id)
+    ]
 
 
 async def get_material_questions(
@@ -673,6 +746,215 @@ async def get_take_tree(session: AsyncSession, material_id: uuid.UUID) -> list[d
             }
         )
     return tree
+
+
+# --- Drills: one question group, worked on its own -------------------------
+#
+# A drill is one group cut out of its material: the map from Part 2 without the
+# four multiple-choice questions printed beside it. It exists because a map
+# group is never alone — all 23 in the corpus sit beside another task — so
+# "practise only maps" cannot be answered by choosing better materials.
+
+#: The floor on how much recording comes before the group's first answer. The
+#: spoken lead-in ("Now look at the plan of the garden centre...") is what tells
+#: a learner what they are looking at, and it sits in the gap between the
+#: previous group's last answer and this group's first. Measured over the
+#: corpus that gap is 0s at its narrowest, so without a floor a drill can open
+#: on its own first answer.
+DRILL_LEAD_MIN_MS = 8_000
+#: And the ceiling on it. The same gap runs to 103s at its widest, most of
+#: which is "You now have thirty seconds to check your answers" and dead air
+#: rather than lead-in. Because the lead-in sits at the END of the gap, capping
+#: from the front takes the last 45 seconds of it — which is the part that is
+#: actually lead-in.
+DRILL_LEAD_MAX_MS = 45_000
+#: One sentence past the last answer, so the clip does not stop on the word.
+DRILL_TAIL_MS = 5_000
+
+
+def _answer_spans(question: Question) -> list[tuple[int, int]]:
+    """Every stretch of recording this question is answered in.
+
+    Both sources, because a multiple-choice question keeps its per-option
+    spans in ``config["option_replay"]`` rather than in the columns. In this
+    corpus the columns happen to bound the options exactly, for all 520 of
+    them — but that is a fact about how the seed pipeline writes them, not a
+    rule the editor enforces, and a clip computed from the columns alone would
+    be silently short the day one of them is edited on its own.
+    """
+    spans: list[tuple[int, int]] = []
+    if question.replay_start_ms is not None and question.replay_end_ms is not None:
+        spans.append((question.replay_start_ms, question.replay_end_ms))
+    spans.extend(question.option_replay.values())
+    return spans
+
+
+async def _group_spans(
+    session: AsyncSession, group: QuestionGroup
+) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    for question in await get_questions(session, group.id):
+        spans.extend(_answer_spans(question))
+    return spans
+
+
+async def group_clip(
+    session: AsyncSession, group: QuestionGroup, duration_ms: int | None = None
+) -> dict | None:
+    """The stretch of recording a drill of this group plays, or ``None`` where
+    the group is not drillable.
+
+    Derived rather than stored: ``parts.audio_start_ms``/``audio_end_ms`` are
+    NULL throughout, and a group has no span column at all. What it is derived
+    FROM is the per-question replay marks — which is why this runs on the
+    server and only the envelope crosses the wire. Those marks are withheld
+    from the take tree on purpose (``app/models/question.py``: "knowing where
+    to listen is most of the question"), and that rule is not relaxed here: the
+    envelope bounds a couple of minutes the learner is about to hear in full,
+    and says nothing about where inside it any one answer falls. It is the same
+    thing the printed paper says by heading the task "Questions 15-20".
+
+    The start is the PREVIOUS group's last answer, not this group's first. The
+    lead-in lives in between, and a learner who does not hear it is looking at
+    a map with no idea what it is of. Clamped at both ends by
+    :data:`DRILL_LEAD_MIN_MS` and :data:`DRILL_LEAD_MAX_MS`.
+
+    ``None`` when any question in the group has no mark at all. Not "clip to
+    what we have": a clip that stops before question 4 is a drill that cannot
+    be answered, and a silent partial is worse than an absence — the learner
+    would use it to decide what they missed.
+    """
+    questions = await get_questions(session, group.id)
+    if not questions:
+        return None
+    spans: list[tuple[int, int]] = []
+    for question in questions:
+        own = _answer_spans(question)
+        if not own:
+            return None
+        spans.extend(own)
+
+    first = min(start for start, _ in spans)
+    last = max(end for _, end in spans)
+
+    # The previous group in the same part, if there is one. A group that opens
+    # its part has nothing before it to run into, so ``prev_end`` stays 0 and
+    # the MAX cap decides — the clip opens 45s before the first answer rather
+    # than at the top of the file. That is deliberate: the head of a Listening
+    # recording is exam preamble ("You will hear a man talking about...
+    # First you have some time to look at questions 11 to 16"), which is
+    # boilerplate a drill does not need. Only 3 of 470 clips reach 0.
+    previous = [
+        other
+        for other in await get_question_groups(session, group.part_id)
+        if other.order_index < group.order_index
+    ]
+    prev_end = 0
+    if previous:
+        earlier = await _group_spans(session, previous[-1])
+        prev_end = max((end for _, end in earlier), default=0)
+
+    start = max(0, min(max(prev_end, first - DRILL_LEAD_MAX_MS), first - DRILL_LEAD_MIN_MS))
+    end = last + DRILL_TAIL_MS
+    if duration_ms is not None:
+        # A stop armed past the end of the file is a stop the clock never
+        # reaches, so the clip would run to the end of the recording.
+        end = min(end, duration_ms)
+    return {"start_ms": start, "end_ms": end}
+
+
+def part_number(part: Part | None) -> int:
+    """Which of the paper's four parts this is.
+
+    From ``first_number`` where there is one, because that is the only field
+    that carries the truth for a seeded material: the importer writes one part
+    per material at ``order_index`` 0 whatever part it really is, so a Part 2
+    and a Part 4 are both index 0. ``first_number`` 11 is Part 2, 31 is Part 4
+    — ten numbers per part, which is what the paper does.
+
+    Falls back to the index for an author-written part, where the editor's
+    ``Part {order_index + 1}`` titling does make the index carry the number.
+    """
+    if part is None:
+        return 1
+    if part.first_number is not None:
+        return (part.first_number - 1) // 10 + 1
+    return part.order_index + 1
+
+
+async def group_first_number(
+    session: AsyncSession, group: QuestionGroup
+) -> int:
+    """The number this group's first question carries on the printed paper.
+
+    Its part's starting number plus the marks of every group before it — so
+    the map that follows four multiple-choice questions in a Part 2 numbered
+    from 11 begins at 15. Marks, not rows: a "Choose TWO letters" before it
+    took two of the numbers.
+
+    One definition, because two things need the answer and they must agree —
+    the drill tree (so the paper reads 15-20) and the drill card (so the list
+    says "Questions 15-20" about the same drill).
+    """
+    part = await session.get(Part, group.part_id)
+    first = part.first_number if part and part.first_number is not None else 1
+    for other in await get_question_groups(session, group.part_id):
+        if other.order_index >= group.order_index:
+            break
+        first += len(await get_questions(session, other.id)) * question_marks(other)
+    return first
+
+
+async def get_drill_tree(session: AsyncSession, group: QuestionGroup) -> list[dict]:
+    """The student-facing render tree for ONE group.
+
+    A third sibling to :func:`get_take_tree` and :func:`get_author_tree`, and
+    separate from both for the reason the first one gives: it never reads
+    ``Question.correct_answers``, so there is no code path here — no flag, no
+    branch — that could leak it. It reuses ``_take_question`` and
+    ``group_config_out``, the two helpers that already never touch the answer
+    key and already resolve ``config["image"]`` into a URL, which is what makes
+    a map drill draw its own picture with no new code.
+
+    One synthetic part, carrying the number the GROUP starts at on the paper
+    rather than the part's. The map in Part 2 is Questions 15-20, and the
+    recording says so aloud — the same bug ``parts.first_number`` was added to
+    fix, one level down. Working it out here means the client's existing walk
+    (``numbering.ts``) prints 15-20 with no change to it at all.
+
+    ``audio_start_ms``/``audio_end_ms`` stay NULL. They mean "this part is a
+    stretch of a longer recording", which draws a part strip and a per-part
+    play button; a drill's bound on the recording is its clip, which is a
+    different thing and travels separately.
+    """
+    part = await session.get(Part, group.part_id)
+    first_number = await group_first_number(session, group)
+
+    questions = [
+        _take_question(question, group)
+        for question in await get_questions(session, group.id)
+    ]
+    return [
+        {
+            "id": part.id if part else group.part_id,
+            "order_index": part.order_index if part else 0,
+            "title": part.title if part else "",
+            "audio_start_ms": None,
+            "audio_end_ms": None,
+            "first_number": first_number,
+            "question_groups": [
+                {
+                    "id": group.id,
+                    "order_index": 0,
+                    "type": group.type,
+                    "instructions": group.instructions,
+                    "word_limit": group.word_limit,
+                    "config": await group_config_out(session, group),
+                    "questions": questions,
+                }
+            ],
+        }
+    ]
 
 
 # --- Author read tree ------------------------------------------------------

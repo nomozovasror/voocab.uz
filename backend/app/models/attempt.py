@@ -14,6 +14,23 @@ class AttemptStatus(enum.StrEnum):
 
     IN_PROGRESS = "in_progress"
     SUBMITTED = "submitted"
+    #: A finished DRILL: one question group worked on its own, not a sitting of
+    #: the material it was cut from.
+    #:
+    #: A separate status rather than a flag beside ``SUBMITTED``, and that is
+    #: load-bearing. Twenty queries across five services ask "has this learner
+    #: sat this material" as ``status == SUBMITTED`` — the catalogue's ``done``
+    #: clause, the recommender, collection progress, every ability figure, the
+    #: author's studio counts. A drill is none of those things: somebody who
+    #: worked the map out of Part 2 has not sat Part 2, and counting it as a
+    #: sitting would mark the paper done, withdraw it from recommendation and
+    #: become the FIRST attempt that every ability figure is measured from.
+    #:
+    #: Adding a third value excludes drills from all twenty at once, because
+    #: every one of them compares for equality. A boolean column would have
+    #: needed twenty edits and would have been wrong the first time somebody
+    #: wrote the twenty-first.
+    DRILLED = "drilled"
 
 
 class Attempt(SQLModel, table=True):
@@ -33,6 +50,14 @@ class Attempt(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="users.id", index=True)
     material_id: uuid.UUID = Field(foreign_key="materials.id", index=True)
+    #: The one question group this attempt worked, for a drill; NULL for a
+    #: sitting of the whole material, which is every row written before drills
+    #: existed. What makes an attempt a drill is its STATUS (see
+    #: :class:`AttemptStatus`); this says WHICH group, so the drill list can
+    #: mark one done and the review can find the next.
+    group_id: uuid.UUID | None = Field(
+        default=None, foreign_key="question_groups.id", index=True
+    )
     status: str = Field(default=AttemptStatus.IN_PROGRESS)
     score: float | None = Field(default=None)
     total_questions: int | None = Field(default=None)

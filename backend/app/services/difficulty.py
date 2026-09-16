@@ -51,6 +51,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select
 
 from app.core.database import AsyncSession
+from app.models.attempt import Attempt, AttemptStatus
 from app.models.material import Material
 from app.models.material_difficulty import MaterialDifficulty
 from app.models.part import Part
@@ -115,6 +116,20 @@ async def _tally(
     One grouped aggregate for every material at once rather than a query per
     row. Materials with nothing against them are simply absent from the
     result — the callers fill that in, each in the way that suits them.
+
+    **Drills are excluded**, and this is the one aggregate that has to say so
+    out loud. Everywhere else a drill is invisible for free, because every
+    other reader compares ``status == SUBMITTED`` and a drill is ``DRILLED``.
+    This one never joins :class:`Attempt` at all — it counts answer rows —
+    so without the join below it would sweep in answers from people who never
+    sat the paper. A map drill answers six of Part 2's ten questions and
+    skips the four multiple-choice ones entirely; folding that into "how hard
+    is this material" would rate the paper on a sample chosen by which task
+    people happened to be practising.
+
+    The QUESTION-level aggregate below (:func:`question_difficulty`)
+    deliberately does the opposite and keeps no such filter: a drill answer is
+    a genuine answer to that question, and that is where the evidence belongs.
     """
     if not material_ids:
         return {}
@@ -128,10 +143,14 @@ async def _tally(
                     func.count(QuestionAttempt.id).filter(QuestionAttempt.is_correct),
                 )
                 .select_from(QuestionAttempt)
+                .join(Attempt, Attempt.id == QuestionAttempt.attempt_id)  # type: ignore[arg-type]
                 .join(Question, Question.id == QuestionAttempt.question_id)  # type: ignore[arg-type]
                 .join(QuestionGroup, QuestionGroup.id == Question.group_id)  # type: ignore[arg-type]
                 .join(Part, Part.id == QuestionGroup.part_id)  # type: ignore[arg-type]
-                .where(Part.material_id.in_(material_ids))  # type: ignore[attr-defined]
+                .where(
+                    Part.material_id.in_(material_ids),  # type: ignore[attr-defined]
+                    Attempt.status == AttemptStatus.SUBMITTED,
+                )
                 .group_by(Part.material_id)  # type: ignore[arg-type]
             )
         ).all()

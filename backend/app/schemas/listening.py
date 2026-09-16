@@ -1230,6 +1230,89 @@ class CourseNextOut(BaseModel):
     total: int
 
 
+class DrillDoneOut(BaseModel):
+    """What the review of a finished drill needs to offer the next one."""
+
+    group_id: uuid.UUID
+    #: The question type, so the button can read "Next map" rather than
+    #: "Next drill" — the name of the thing is what makes it an invitation.
+    type: str
+    #: The next undone drill of the same type, from a different material.
+    #: ``None`` when the learner has done every one of them.
+    next_group_id: uuid.UUID | None = None
+
+
+class DrillOut(BaseModel):
+    """One drill, as a card in the list shows it."""
+
+    group_id: uuid.UUID
+    type: str
+    material_id: uuid.UUID
+    material_title: str
+    #: Which of the paper's four parts it was cut from.
+    part_number: int
+    #: The numbers it carries on the printed paper — "Questions 15-20". Not
+    #: 1..N: the recording says these numbers aloud.
+    first_number: int
+    last_number: int
+    #: Numbers, not rows. A "Choose TWO letters" is two of both.
+    question_count: int
+    #: How long the clip runs. This is the promise the card makes ("6
+    #: questions, 2:14"), so it is the clip's length and not the recording's.
+    clip_ms: int | None = None
+    attempts: int = 0
+    best_score: int | None = None
+    last_attempt_id: uuid.UUID | None = None
+    last_attempt_at: datetime | None = None
+
+
+class DrillListOut(BaseModel):
+    items: list[DrillOut]
+    total: int
+    #: How many finished drills the default "done are put away" is holding
+    #: back. Never hide rows without saying so.
+    done_hidden: int = 0
+
+
+class DrillTypeOut(BaseModel):
+    """One card on the Drills tab: a question type, and what there is of it."""
+
+    value: str
+    #: How many drills of this type the library holds.
+    exercises: int
+    #: How many numbers they cover in total.
+    questions: int
+    #: How many the caller has finished.
+    done: int = 0
+
+
+class DrillTypesOut(BaseModel):
+    items: list[DrillTypeOut]
+
+
+class DrillTakeOut(BaseModel):
+    """The render payload for one drill.
+
+    ``MaterialTakeOut``'s shape plus the two things a drill adds, so the take
+    screen can render either. Like that one, its nested question schema has no
+    ``correct_answers`` field at all.
+    """
+
+    id: uuid.UUID
+    title: str
+    audio_url: str | None
+    duration_ms: int | None
+    parts: list[TakePartOut]
+    last_attempt: LastAttemptOut | None = None
+    #: The stretch of the recording this drill plays. Derived on the server
+    #: from the replay marks, which themselves never cross the wire before a
+    #: submit — the envelope bounds a couple of minutes about to be heard in
+    #: full, and says nothing about where inside it any one answer falls.
+    clip_start_ms: int
+    clip_end_ms: int
+    drill: DrillOut
+
+
 class AttemptResultOut(BaseModel):
     """The whole result of one attempt, and the same object whether it was
     just submitted or fetched back later by id. One shape, one serializer:
@@ -1264,5 +1347,10 @@ class AttemptResultOut(BaseModel):
     #: anything.
     material_avg_pct: int | None = None
     course: CourseNextOut | None = None
+    #: Present only when this attempt was a DRILL — one question group worked
+    #: on its own. Carries what the review needs to offer another of the same
+    #: kind. Never present alongside ``course``: a drill is not a lesson in
+    #: anybody's sequence, so ``_standing`` returns one or the other.
+    drill: DrillDoneOut | None = None
 
     results: list[QuestionResultOut]

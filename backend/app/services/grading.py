@@ -29,6 +29,7 @@ from app.schemas.listening import AttemptSubmit, ListenedSpanIn
 from app.services import answers as answers_service
 from app.services import audio as audio_service
 from app.services import collections as collections_service
+from app.services import drills as drills_service
 from app.services import difficulty as difficulty_service
 from app.services import listening as listening_service
 from app.services import mistakes as mistakes_service
@@ -219,9 +220,17 @@ def transcript_across(lines: list[dict], ranges: list[tuple[int, int]]) -> list[
 
 
 async def last_submitted_attempt(
-    session: AsyncSession, user_id: uuid.UUID, material_id: uuid.UUID
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    material_id: uuid.UUID,
+    group_id: uuid.UUID | None = None,
 ) -> Attempt | None:
     """The caller's most recent finished sitting of this paper, if any.
+
+    With ``group_id``, the most recent finished DRILL of that group instead.
+    The two never mix: a drill is ``AttemptStatus.DRILLED`` and a sitting is
+    ``SUBMITTED``, so "you have sat this" on the take page cannot be answered
+    by a drill, and "you have drilled this" cannot be answered by a sitting.
 
     What lets somebody go back and READ a paper they have already done
     instead of sitting it again to find out how it went. Without it the only
@@ -242,7 +251,15 @@ async def last_submitted_attempt(
             .where(
                 Attempt.user_id == user_id,
                 Attempt.material_id == material_id,
-                Attempt.status == AttemptStatus.SUBMITTED,
+                Attempt.group_id == group_id
+                if group_id is not None
+                else Attempt.group_id.is_(None),  # type: ignore[attr-defined]
+                Attempt.status
+                == (
+                    AttemptStatus.DRILLED
+                    if group_id is not None
+                    else AttemptStatus.SUBMITTED
+                ),
                 Attempt.submitted_at.is_not(None),  # type: ignore[attr-defined]
             )
             .order_by(Attempt.submitted_at.desc())  # type: ignore[attr-defined]
@@ -251,17 +268,31 @@ async def last_submitted_attempt(
 
 
 async def _find_in_progress_attempt(
-    session: AsyncSession, user_id: uuid.UUID, material_id: uuid.UUID
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    material_id: uuid.UUID,
+    group_id: uuid.UUID | None = None,
 ) -> Attempt | None:
-    """The caller's most recent ``in_progress`` attempt on this material, if
-    any — §7 says an attempt is "created OR resumed", not always created
-    fresh."""
+    """The caller's most recent ``in_progress`` attempt at this exact scope,
+    if any — §7 says an attempt is "created OR resumed", not always created
+    fresh.
+
+    ``group_id`` is matched EXACTLY, never loosely: a drill resumes a drill of
+    the same group, and a sitting resumes a sitting (``group_id IS NULL``).
+    Matching "this material, either scope" would let a sitting pick up a
+    drill's half-finished row and re-grade six answers as a forty-mark paper —
+    and it would do it silently, because the re-grade overwrites the score
+    rather than failing.
+    """
     return (
         await session.exec(
             select(Attempt)
             .where(
                 Attempt.user_id == user_id,
                 Attempt.material_id == material_id,
+                Attempt.group_id == group_id
+                if group_id is not None
+                else Attempt.group_id.is_(None),  # type: ignore[attr-defined]
                 Attempt.status == AttemptStatus.IN_PROGRESS,
             )
             .order_by(Attempt.started_at.desc())  # type: ignore[attr-defined]
@@ -298,8 +329,6 @@ async def submit_attempt(
     that has already happened can never be measured retroactively.
     """
     questions = await listening_service.get_material_questions(session, material_id)
-    given_by_question_id = {a.question_id: a.given_answer for a in data.answers}
-    timing_by_question_id = {a.question_id: a.timing for a in data.answers}
 
     attempt = await _find_in_progress_attempt(session, user_id, material_id)
     if attempt is not None:
@@ -334,9 +363,103 @@ async def submit_attempt(
         session.add(attempt)
         await session.flush()  # assign attempt.id
 
-    # Marks, not questions answered. A "Choose TWO letters" question is two of
-    # the numbers on the paper and two of the marks, so a test of 40 numbers
-    # scores out of 40 however many rows it is made of.
+    await _grade_into(session, attempt, questions, data)
+    attempt.status = AttemptStatus.SUBMITTED
+    await _settle(session, attempt, data)
+    return attempt
+
+
+async def submit_drill(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    group: QuestionGroup,
+    material_id: uuid.UUID,
+    data: AttemptSubmit,
+) -> Attempt:
+    """Grade + persist one DRILL: a single question group worked on its own.
+
+    A separate function from :func:`submit_attempt` rather than a scope
+    parameter on it, and the reason is not symmetry with the take trees —
+    there the point is that a leak should be unrepresentable. Here the failure
+    is different and worse. A scope argument that defaults wrong, or a caller
+    that forgets it, writes a six-mark attempt with ``group_id = NULL``: by the
+    definition in :class:`app.models.attempt.AttemptStatus` that IS a whole
+    sitting, so it would mark the paper done, withdraw it from recommendation,
+    and become the first attempt every ability figure on the platform is
+    measured from. Silently, because nothing about it is malformed. Two
+    functions make the wrong row unrepresentable instead of guarded.
+
+    What it shares with a sitting is the arithmetic — :func:`_grade_into`
+    writes a row per question and totals the marks for both — and what it does
+    not share is the score's meaning: ``total_questions`` is the GROUP's marks,
+    six rather than forty, which is why the attempt must never be read as a
+    sitting of the paper.
+    """
+    questions = await listening_service.get_group_questions(session, group)
+
+    attempt = await _find_in_progress_attempt(
+        session, user_id, material_id, group_id=group.id
+    )
+    if attempt is not None:
+        for qa in (
+            await session.exec(
+                select(QuestionAttempt).where(
+                    QuestionAttempt.attempt_id == attempt.id
+                )
+            )
+        ).all():
+            await session.delete(qa)
+        # Flush the deletes before inserting the re-graded rows, for the same
+        # reason the sitting does: no ORM relationship teaches the
+        # unit-of-work this ordering.
+        await session.flush()
+    else:
+        attempt = Attempt(
+            user_id=user_id,
+            material_id=material_id,
+            group_id=group.id,
+            status=AttemptStatus.IN_PROGRESS,
+        )
+        if data.elapsed_ms is not None:
+            attempt.started_at = datetime.now(timezone.utc) - timedelta(
+                milliseconds=data.elapsed_ms
+            )
+        session.add(attempt)
+        await session.flush()  # assign attempt.id
+
+    await _grade_into(session, attempt, questions, data)
+    attempt.status = AttemptStatus.DRILLED
+    await _settle(session, attempt, data)
+    return attempt
+
+
+async def _grade_into(
+    session: AsyncSession,
+    attempt: Attempt,
+    questions: list[tuple[Question, QuestionGroup]],
+    data: AttemptSubmit,
+) -> None:
+    """Write one ``QuestionAttempt`` per question and total the marks.
+
+    The arithmetic both :func:`submit_attempt` and :func:`submit_drill` run,
+    in one place. What differs between them is only WHICH questions they hand
+    in — the whole material, or one group — and that is the whole of the
+    difference. A second copy of this loop would be the "three walks are three
+    chances to contradict each other" failure the take page's rules name, with
+    the marks arithmetic as the thing they would come to disagree about.
+
+    Marks, not questions answered. A "Choose TWO letters" question is two of
+    the numbers on the paper and two of the marks, so a test of 40 numbers
+    scores out of 40 however many rows it is made of.
+
+    A skipped question is still an answer: every question handed in gets a
+    row, blank ones included, which is what makes "missed entirely"
+    classifiable at all.
+    """
+    given_by_question_id = {a.question_id: a.given_answer for a in data.answers}
+    timing_by_question_id = {a.question_id: a.timing for a in data.answers}
+
     earned = 0
     total_marks = 0
     for question, group in questions:
@@ -370,7 +493,16 @@ async def submit_attempt(
 
     attempt.score = float(earned)
     attempt.total_questions = total_marks
-    attempt.status = AttemptStatus.SUBMITTED
+
+
+async def _settle(
+    session: AsyncSession, attempt: Attempt, data: AttemptSubmit
+) -> None:
+    """Stamp the finished attempt with how it was worked, and commit.
+
+    The caller has already set the status, because that is the one thing a
+    sitting and a drill genuinely disagree about.
+    """
     attempt.submitted_at = datetime.now(timezone.utc)
     if data.elapsed_ms is not None:
         attempt.time_spent_ms = data.elapsed_ms
@@ -381,7 +513,6 @@ async def submit_attempt(
     session.add(attempt)
     await session.commit()
     await session.refresh(attempt)
-    return attempt
 
 
 async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
@@ -416,11 +547,30 @@ async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
     # editor and the take page make. It is not ``question.number`` — that is
     # the question's place inside its own group, always 1..N, so printing it
     # would number a four-part test "1, 2, 1, 2, 3".
-    printed = 1
+    #
+    # And it starts where the PART says its numbering starts, not at 1. A
+    # seeded material is one part of a real paper: Part 4 is Questions 31-40
+    # and the recording says so aloud. The take page was taught this when
+    # ``parts.first_number`` arrived; this walk was not, so a review of a Part
+    # 4 numbered its rows 1-10 while the paper beside it read 31-40.
+    printed = await listening_service.first_printed_number(
+        session, attempt.material_id
+    )
+    # A drill reviews ONE group, and reviews it at the numbers the paper gives
+    # it: the map cut out of Part 2 is Questions 15-20 on the page and in the
+    # recording, which says them aloud. So the walk is still the whole
+    # material's — rows outside the group are skipped while ``printed`` keeps
+    # counting — rather than a second walk starting at the group. A separate
+    # walk would have to arrive at 15 by agreeing with this one, and two walks
+    # that must agree are two walks that eventually don't.
+    scope = attempt.group_id
     for question, group in questions:
+        marks = listening_service.question_marks(group)
+        if scope is not None and group.id != scope:
+            printed += marks
+            continue
         row = given_rows.get(question.id)
         ranges = question_ranges(question)
-        marks = listening_service.question_marks(group)
         by_letter = listening_service.answers_are_letters(group)
         correct = bool(row.is_correct) if row else False
         results.append(
@@ -489,7 +639,16 @@ async def _standing(session: AsyncSession, attempt: Attempt) -> dict:
     been answered enough times for one to mean anything, which is
     :data:`app.services.difficulty.MIN_ANSWERS`' judgement and not a second
     threshold invented here.
+
+    A DRILL's run is its own. "Your 3rd try" counted over the learner's full
+    sittings would be a sentence about a different piece of work — they may
+    have sat the paper twice and never drilled this group — so the run is
+    scoped to the same group, and a sitting's run stays scoped to sittings.
+    ``material_avg_pct`` and ``course`` are withheld outright for a drill:
+    "everybody averages 61% here" is about a forty-mark paper and this score
+    is out of six, and a drill is not a lesson in anybody's course.
     """
+    drill = attempt.group_id is not None
     run = list(
         (
             await session.exec(
@@ -497,7 +656,13 @@ async def _standing(session: AsyncSession, attempt: Attempt) -> dict:
                 .where(
                     Attempt.user_id == attempt.user_id,
                     Attempt.material_id == attempt.material_id,
-                    Attempt.status == AttemptStatus.SUBMITTED,
+                    Attempt.group_id == attempt.group_id
+                    if drill
+                    else Attempt.group_id.is_(None),  # type: ignore[attr-defined]
+                    Attempt.status
+                    == (
+                        AttemptStatus.DRILLED if drill else AttemptStatus.SUBMITTED
+                    ),
                     Attempt.submitted_at.is_not(None),  # type: ignore[attr-defined]
                 )
                 .order_by(Attempt.submitted_at)  # type: ignore[arg-type]
@@ -513,14 +678,40 @@ async def _standing(session: AsyncSession, attempt: Attempt) -> dict:
     # already reads — a primary-key lookup, not a scan, and ``None`` below the
     # threshold, which is the guard doing its job rather than a missing value.
     band = (
-        await difficulty_service.material_difficulty(session, [attempt.material_id])
-    ).get(attempt.material_id) or difficulty_service.unknown()
+        difficulty_service.unknown()
+        if drill
+        else (
+            await difficulty_service.material_difficulty(
+                session, [attempt.material_id]
+            )
+        ).get(attempt.material_id)
+        or difficulty_service.unknown()
+    )
 
     return {
         "attempt_no": attempt_no,
         "first_try_pct": score_pct(run[0]) if attempt_no > 1 and run else None,
         "material_avg_pct": band["correct_pct"],
-        "course": await collections_service.next_after(
-            session, attempt.user_id, attempt.material_id
+        "course": (
+            None
+            if drill
+            else await collections_service.next_after(
+                session, attempt.user_id, attempt.material_id
+            )
+        ),
+        "drill": await _drill_standing(session, attempt) if drill else None,
+    }
+
+
+async def _drill_standing(session: AsyncSession, attempt: Attempt) -> dict | None:
+    """What the review of a finished drill needs to offer another one."""
+    group = await session.get(QuestionGroup, attempt.group_id)
+    if group is None:
+        return None
+    return {
+        "group_id": group.id,
+        "type": group.type,
+        "next_group_id": await drills_service.next_after(
+            session, attempt.user_id, group
         ),
     }
