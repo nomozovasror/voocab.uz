@@ -168,6 +168,99 @@ LABEL_WORDS = 6
 NEAR = 0.02
 
 
+#: A column this much of which is ink is a drawn rule, not a run of letters.
+#: The rule dividing Trainer's Test 5 Part 3 covers 88% of its band; the
+#: densest column of the text beside it covers under a third.
+RULE_INK = 0.7
+#: How much taller one side's mass has to be than the other's before the rule
+#: between them is taken as the edge of a figure. Twice, and at least this
+#: much of the band: four lines of a question list stand 8% tall and the
+#: diagram beside them 73%, so the margin is wide and the test does not have
+#: to be fine.
+FIGURE_MASS = 0.4
+
+
+def tallest_run(part: np.ndarray) -> float:
+    """The tallest unbroken run of inked rows, as a fraction of the height."""
+    best = run = 0
+    for inked in part.mean(axis=1) > 0.01:
+        run = run + 1 if inked else 0
+        best = max(best, run)
+    return best / max(1, part.shape[0])
+
+
+def split_at_rule(page: pymupdf.Page,
+                  box: tuple[float, float, float, float],
+                  ) -> tuple[float, float, float, float]:
+    """The side of a drawn rule that holds the figure.
+
+    The ink rule takes the tallest mass of dark ROWS, which on a page laid out
+    two columns wide is both columns: IELTS Trainer's Test 5 Part 3 prints the
+    questions down the left and the diagram down the right, and the cut held
+    the questions as well.
+
+    Where a book sets two columns it draws a line between them, and a drawn
+    line is a column that is almost entirely ink -- 88% of the band here,
+    against under a third for the densest column of type beside it. Which side
+    is the figure is then the same question this module already answers
+    vertically: type is a stack of short runs with white between them, a
+    figure is one unbroken mass. Four lines of question list stand 8% of the
+    band tall; the diagram beside them stands 73%.
+
+    Nothing happens without a rule, without a clear winner, or on the many
+    pages whose figure has a page-wide box of its own -- every Cambridge
+    sheet.
+    """
+    dark = ink(page)
+    height, width = dark.shape
+    x0, y0, x1, y1 = box
+    top, bottom = int(y0 * height), int(y1 * height)
+    left, right = int(x0 * width), int(x1 * width)
+    band = dark[top:bottom, left:right]
+    if band.size == 0 or band.shape[0] < 2:
+        return box
+
+    cover = band.mean(axis=0)
+    # Not at the edges: the figure's own frame is a rule too, and cutting at
+    # it would keep nothing.
+    inside = int(0.1 * band.shape[1])
+    best: tuple[float, tuple[float, float, float, float]] | None = None
+    for column in range(inside, band.shape[1] - inside):
+        if cover[column] < RULE_INK:
+            continue
+        before, after = tallest_run(band[:, :column]), tallest_run(band[:, column:])
+        keep, other = max(before, after), min(before, after)
+        if keep < FIGURE_MASS or keep < 2 * other:
+            continue
+        at = (left + column) / width
+        side = (at, y0, x1, y1) if after > before else (x0, y0, at, y1)
+        if best is None or keep - other > best[0]:
+            best = (keep - other, side)
+    if best is None:
+        return box
+
+    # The band was measured across BOTH columns, so it stops where the widest
+    # of them stops -- and the figure's own frame can run lower than the list
+    # beside it. Trainer's Test 5 Part 3 lost the "H" off the bottom of its
+    # diagram that way. Re-measured down the kept side, joining runs closer
+    # together than a line break, which is the same rule `find_block` uses to
+    # tell a figure's parts from the prose under it.
+    at0, _, at1, _ = best[1]
+    column = dark[:, int(at0 * width):int(at1 * width)]
+    # NOT filtered by EDGE, unlike everywhere else. That margin exists to drop
+    # the copier's black bar along the top and bottom of a scan, and it also
+    # threw away the last two rows of this diagram's frame -- which sit at 93%
+    # and 95% of the sheet, inside the margin. The bar is a thin run of its
+    # own and is never the longest, so `grow` will not start from it; what
+    # keeps it out is the gap, which is a fifth of the page here.
+    bands = runs(column.mean(axis=1) > ROW_ANY)
+    if not bands:
+        return best[1]
+    top, bottom = grow(bands, MERGE_GAP * height)
+    return (at0, min(y0, top / height),
+            at1, min(1 - EDGE / 3, max(y1, bottom / height)))
+
+
 def grown_to_labels(page: pymupdf.Page,
                     box: tuple[float, float, float, float],
                     ) -> tuple[float, float, float, float]:
@@ -329,7 +422,13 @@ def main() -> int:
 
         page_index, box, how = hit
         page = doc[page_index]
-        narrowed = trim_to_picture(page, box)
+        # In this order, and each step's output is the next one's input.
+        # `trim_to_picture` narrows to a placed figure and is already bounded
+        # by the ink box; `split_at_rule` then cuts a two-column page at the
+        # line between its columns, and is the one step allowed to reach
+        # BELOW the ink box -- that box was measured across both columns, so
+        # it stops where the wider of them stops.
+        narrowed = split_at_rule(page, trim_to_picture(page, box))
         if narrowed != box:
             print(f"  group {group_index}: narrowed to the figure the page places "
                   f"-> {narrowed[0]:.2f},{narrowed[1]:.2f}-"
