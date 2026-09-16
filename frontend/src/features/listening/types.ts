@@ -423,6 +423,62 @@ export interface PracticeMaterial {
   last_attempt_at: string | null;
 }
 
+/** One drill: a single question group, practised on its own.
+ *
+ *  Not a material. A map group is never alone in a paper — every one of the
+ *  23 in the library sits beside another task — so the thing a learner
+ *  practises when they want maps is a group cut out of a Part 2, and this is
+ *  what a card has to say about it. */
+export interface PracticeDrill {
+  group_id: string;
+  type: QuestionGroupType;
+  material_id: string;
+  material_title: string;
+  /** Which of the paper's four parts it came from. */
+  part_number: number;
+  /** The numbers it carries on the printed paper — "Questions 15–20". Not
+   *  1..N: the recording says these numbers aloud. */
+  first_number: number;
+  last_number: number;
+  /** Numbers, not rows. A "Choose TWO letters" is two of both. */
+  question_count: number;
+  /** How long the clip runs — the promise the card makes, so it is the
+   *  clip's length and not the whole recording's. */
+  clip_ms: number | null;
+  attempts: number;
+  best_score: number | null;
+  last_attempt_id: string | null;
+  last_attempt_at: string | null;
+}
+
+export interface DrillList {
+  items: PracticeDrill[];
+  total: number;
+  done_hidden: number;
+}
+
+/** One card on the Drills tab: a kind of task, and what there is of it. */
+export interface DrillType {
+  value: QuestionGroupType;
+  exercises: number;
+  questions: number;
+  done: number;
+}
+
+/** What a drill hands the take screen: a material's shape, plus the window
+ *  of recording it is bounded to and the drill it is of. */
+export interface DrillTake {
+  id: string;
+  title: string;
+  audio_url: string | null;
+  duration_ms: number | null;
+  parts: TakePart[];
+  last_attempt: LastAttempt | null;
+  clip_start_ms: number;
+  clip_end_ms: number;
+  drill: PracticeDrill;
+}
+
 /** One option of a filter menu, with how many materials carry it.
  *
  *  Counted over the WHOLE catalogue by the server, not over the page and not
@@ -791,6 +847,17 @@ export interface CourseNext {
   total: number;
 }
 
+/** What the review of a finished drill needs to offer the next one. */
+export interface DrillDone {
+  group_id: string;
+  /** The kind of task, so the button can read "Next map" rather than "Next
+   *  drill" — naming the thing is what makes it an invitation. */
+  type: QuestionGroupType;
+  /** The next undone drill of the same kind, from a different material.
+   *  Null once they have done every one. */
+  next_group_id: string | null;
+}
+
 export interface AttemptResult {
   attempt_id: string;
   material_id: string;
@@ -817,6 +884,10 @@ export interface AttemptResult {
    *  mean anything. */
   material_avg_pct?: number | null;
   course?: CourseNext | null;
+  /** Present only when this attempt was a DRILL. Never alongside `course`:
+   *  a drill is not a lesson in anybody's sequence, so the server returns
+   *  one or the other. */
+  drill?: DrillDone | null;
 
   results: QuestionResult[];
 }

@@ -32,6 +32,10 @@ import {
 import { goToQuestion, useQuestionSpy, Q_ANCHOR } from "@/features/listening/take-focus";
 import { useAudioEngine, NUDGE_MS } from "@/features/listening/use-audio-engine";
 import { useWaveform } from "@/features/listening/use-waveform";
+import {
+  useDrillTake,
+  useSubmitDrill,
+} from "@/features/listening/queries";
 import { PRACTICE } from "@/features/listening/take-config";
 import {
   MAX_SPANS,
@@ -70,17 +74,43 @@ import {
  */
 
 export default function ListeningTakePage() {
-  const { id } = useParams<{ id: string }>();
+  // One page, two routes. `/listening/:id` is a whole paper;
+  // `/listening/drills/:groupId` is one question group cut out of one, and
+  // the payload it fetches is deliberately the same shape — a title, a
+  // recording and a list of parts — so everything below this point is the
+  // take screen it always was.
+  //
+  // Serving both from here rather than writing a second page is the whole
+  // reason it is worth doing this way. Six hundred lines of this file are
+  // rules with a reason written beside each: the docking, the keyboard
+  // interception, where the reader is measured from, what a flag belongs to.
+  // A drill page that copied them would be a page that drifts from them.
+  const { id, groupId } = useParams<{ id?: string; groupId?: string }>();
+  const drilling = groupId !== undefined;
   const navigate = useNavigate();
-  const { data: material, isLoading, isError } = useTakeMaterial(id);
-  const submitMut = useSubmitAttempt(id ?? "");
+  const paper = useTakeMaterial(drilling ? undefined : id);
+  const drill = useDrillTake(groupId);
+  const { data: material, isLoading, isError } = drilling ? drill : paper;
+  const attemptMut = useSubmitAttempt(id ?? "");
+  const drillMut = useSubmitDrill(groupId ?? "");
+  const submitMut = drilling ? drillMut : attemptMut;
   const config = PRACTICE;
+  // The stretch of recording a drill is bounded to. `undefined` for a whole
+  // paper, which is what leaves the player unbounded.
+  const clip =
+    drilling && drill.data
+      ? { startMs: drill.data.clip_start_ms, endMs: drill.data.clip_end_ms }
+      : null;
+  // A drill's draft is keyed by its group, or two drills cut from the same
+  // recording would share one — and the paper's own key must not collide
+  // with either.
+  const sessionKey = drilling ? `drill:${groupId}` : id;
 
   // Answers are state because they are on the screen. Everything else the
   // session accumulates — timings, played spans, backward seeks — is a ref:
   // it arrives several times a second while the audio runs, and none of it
   // changes a pixel.
-  const restored = useRef(id ? loadSession(id) : null);
+  const restored = useRef(sessionKey ? loadSession(sessionKey) : null);
   const [answers, setAnswers] = useState<Record<string, string>>(
     () => restored.current?.answers ?? {},
   );
@@ -112,9 +142,9 @@ export default function ListeningTakePage() {
   const persist = useCallback(
     (next: Partial<TakeSession>) => {
       session.current = { ...session.current, ...next };
-      if (id) saveSession(id, session.current);
+      if (sessionKey) saveSession(sessionKey, session.current);
     },
-    [id],
+    [sessionKey],
   );
 
   const sinceStart = () => Date.now() - session.current.startedAt;
@@ -201,7 +231,14 @@ export default function ListeningTakePage() {
   }, [persist]);
 
   const src = material?.audio_url ? mediaUrl(material.audio_url) : null;
-  const shape = useWaveform(src);
+  // Drawn over the clip, not the file. Two minutes of a seven-minute
+  // recording drawn across the whole width is a picture claiming there is
+  // far more left to hear than there is.
+  const shape = useWaveform(
+    src,
+    undefined,
+    clip ? { fromMs: clip.startMs, toMs: clip.endMs } : undefined,
+  );
 
   /**
    * The parts as the waveform shows them: where each one starts.
@@ -235,6 +272,7 @@ export default function ListeningTakePage() {
     config,
     silences: shape.silences,
     autoSkip,
+    clip,
     onSpan,
     onSeekBack,
   });
@@ -370,12 +408,12 @@ export default function ListeningTakePage() {
   // --- Submitting -----------------------------------------------------------
 
   const send = () => {
-    if (!id) return;
+    if (!sessionKey) return;
     closeFocus();
     setConfirming(false);
     submitMut.mutate(toSubmit(session.current, questionIds), {
       onSuccess: (result) => {
-        clearSession(id);
+        clearSession(sessionKey);
         // The result travels with the navigation so the review paints
         // immediately; the page also knows how to fetch it by id, which is
         // what makes the URL survive a reload.
@@ -395,7 +433,7 @@ export default function ListeningTakePage() {
     send();
   };
 
-  if (!id) return null;
+  if (!sessionKey) return null;
   if (isLoading) return <TakeSkeleton />;
   if (isError || !material) {
     return (
@@ -514,7 +552,7 @@ export default function ListeningTakePage() {
               <button
                 type="button"
                 onClick={() => {
-                  clearSession(id);
+                  clearSession(sessionKey);
                   session.current = newSession();
                   setAnswers({});
                   setFlagged(new Set());

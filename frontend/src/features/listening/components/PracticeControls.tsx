@@ -22,6 +22,8 @@ import {
   COURSE_LENGTH_ORDER,
   COURSE_STATUS_LABEL,
   COURSE_STATUS_ORDER,
+  LIST_MODES,
+  LIST_MODE_LABEL,
   SCOPE_OPTIONS,
   SORT_LABEL,
   SORT_ORDER,
@@ -37,6 +39,7 @@ import type {
   Scope,
   SortKey,
 } from "@/features/listening/practice";
+import { QUESTION_TYPE_LABEL } from "@/features/listening/parts";
 import type {
   DifficultyBand,
   PracticeFacet,
@@ -286,7 +289,7 @@ function ModeSwitch({
       aria-label="What to show"
       className="flex items-center gap-0.5"
     >
-      {(["materials", "courses"] as const).map((value) => (
+      {LIST_MODES.map((value) => (
         <Button
           key={value}
           type="button"
@@ -297,13 +300,12 @@ function ModeSwitch({
           onClick={() => onChange(value)}
           className={cn(
             PILL,
-            "capitalize",
             mode === value
               ? "bg-foreground/10 text-foreground hover:bg-foreground/10 hover:text-foreground"
               : PILL_OFF,
           )}
         >
-          {value}
+          {LIST_MODE_LABEL[value]}
         </Button>
       ))}
     </div>
@@ -494,6 +496,10 @@ interface FilterChipsProps {
   onLength: (length: CourseLength) => void;
   coverOptions: PracticeFacet[];
   lengthOptions: PracticeFacet[];
+  /** The drill the reader has opened, if any. Null is the grid of task
+   *  cards, where there is nothing to narrow yet. */
+  drillType: QuestionGroupType | null;
+  onDrillType: (type: QuestionGroupType | null) => void;
 }
 
 export function FilterChips({
@@ -513,6 +519,8 @@ export function FilterChips({
   onLength,
   coverOptions,
   lengthOptions,
+  drillType,
+  onDrillType,
 }: FilterChipsProps) {
   const { scope, showDone, bands, types } = filters;
 
@@ -537,19 +545,26 @@ export function FilterChips({
   // of the controls hanging outside the bar.
   const materialsRef = useRef<HTMLDivElement | null>(null);
   const coursesRef = useRef<HTMLDivElement | null>(null);
-  const [widths, setWidths] = useState({ materials: 0, courses: 0 });
+  const drillsRef = useRef<HTMLDivElement | null>(null);
+  const [widths, setWidths] = useState<Record<ListMode, number>>({
+    materials: 0,
+    courses: 0,
+    drills: 0,
+  });
 
   useEffect(() => {
     const measure = () =>
       setWidths({
         materials: materialsRef.current?.scrollWidth ?? 0,
         courses: coursesRef.current?.scrollWidth ?? 0,
+        drills: drillsRef.current?.scrollWidth ?? 0,
       });
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
     if (materialsRef.current) observer.observe(materialsRef.current);
     if (coursesRef.current) observer.observe(coursesRef.current);
+    if (drillsRef.current) observer.observe(drillsRef.current);
     return () => observer.disconnect();
   }, []);
 
@@ -678,6 +693,32 @@ export function FilterChips({
             onChange={onLength}
             width="w-48"
           />
+        </Group>
+
+        {/* Drills. On the grid of task cards this group is empty on purpose:
+            the cards ARE the navigation, and there is nothing to narrow until
+            one is picked, so the box collapses to the switch alone.
+
+            Inside a kind of drill it carries the one thing that stops the row
+            reading as broken — a chip naming what you are looking at, which
+            is also the way back to the grid — and the "done" toggle, which
+            means the same here as it does over the catalogue. */}
+        <Group ref={drillsRef} active={mode === "drills"}>
+          {drillType && (
+            <>
+              <ChipDivider />
+              <Chip active onClick={() => onDrillType(null)}>
+                {QUESTION_TYPE_LABEL[drillType]}
+                <X className="ml-1 size-3" aria-hidden />
+              </Chip>
+              <Chip
+                active={showDone}
+                onClick={() => onChange({ showDone: !showDone })}
+              >
+                Show done
+              </Chip>
+            </>
+          )}
         </Group>
       </div>
     </div>

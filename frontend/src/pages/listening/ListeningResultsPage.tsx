@@ -7,6 +7,7 @@ import { useClaimHeaderCentre } from "@/components/layout/header-center";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { PREFERENCES, usePreference } from "@/lib/preferences";
 import { mediaUrl } from "@/features/listening/api";
+import { QUESTION_TYPE_SHORT } from "@/features/listening/parts";
 import { useAttempt, useTakeMaterial } from "@/features/listening/queries";
 import { PlayerSkeleton } from "@/features/listening/components/PaperSkeleton";
 import {
@@ -332,10 +333,19 @@ function CleanSheet() {
  */
 function Actions({ data }: { data: AttemptResult }) {
   const course = data.course;
+  // A drill and a course can never both be here: the server returns one or
+  // the other, because a drill is not a lesson in anybody's sequence.
+  const drill = data.drill;
   return (
     <div className="mt-8 flex flex-wrap items-center gap-2 border-t border-border pt-5">
       <Link
-        to={`/listening/${data.material_id}`}
+        // Back to the same drill, not to the paper it was cut from —
+        // "Take it again" has to mean the thing that was just taken.
+        to={
+          drill
+            ? `/listening/drills/${drill.group_id}`
+            : `/listening/${data.material_id}`
+        }
         className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm text-foreground transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
       >
         <RotateCcw className="size-3.5" aria-hidden />
@@ -347,6 +357,18 @@ function Actions({ data }: { data: AttemptResult }) {
       >
         Back to listening
       </Link>
+
+      {drill?.next_group_id && (
+        <Link
+          to={`/listening/drills/${drill.next_group_id}`}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/80 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          {/* Named after the thing, not the machinery: "Next map" is an
+              invitation and "Next drill" is a noun nobody came here for. */}
+          Next {QUESTION_TYPE_SHORT[drill.type]}
+          <ArrowRight className="size-3.5" aria-hidden />
+        </Link>
+      )}
 
       {course && (
         <Link

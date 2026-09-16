@@ -21,6 +21,9 @@ import type {
   AuthorCollection,
   CollectionDetail,
   CollectionList,
+  DrillList,
+  DrillTake,
+  DrillType,
   NextUp,
   PracticeCatalogue,
   QuestionGroupIn,
@@ -156,6 +159,32 @@ export const listeningApi = {
     return api.get<PracticeCatalogue>(
       `/api/listening/practice${query ? `?${query}` : ""}`,
     );
+  },
+
+  /** Drills: one question group practised on its own.
+   *
+   *  A separate corner of the API from `practice`, because it lists a
+   *  different thing. The catalogue lists materials; this lists groups cut
+   *  out of them, which is what somebody who wants to work only on maps is
+   *  actually after. */
+  drills: {
+    /** The tab's cards: every kind of task, and what there is of it. */
+    types: () => api.get<{ items: DrillType[] }>("/api/listening/drills/types"),
+    list: (
+      params: {
+        type: string;
+        q?: string;
+        done?: boolean;
+        limit?: number;
+        offset?: number;
+      },
+    ) => api.get<DrillList>("/api/listening/drills", { params }),
+    take: (groupId: string) =>
+      api.get<DrillTake>(`/api/listening/drills/${groupId}`),
+    submit: (groupId: string, body: AttemptSubmit) =>
+      api.post<AttemptResult>(`/api/listening/drills/${groupId}/attempts`, {
+        json: body,
+      }),
   },
 
   collections: {

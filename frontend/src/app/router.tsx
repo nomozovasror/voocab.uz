@@ -89,6 +89,14 @@ export const router = createBrowserRouter([
             ...page(() => import("@/pages/listening/CollectionPage")),
           },
           {
+            // And nor is "drills". Every one of these has to stay above
+            // ``listening/:id``. It renders the take page, which serves a
+            // drill and a whole paper from one component rather than two
+            // that would drift apart.
+            path: "listening/drills/:groupId",
+            ...page(() => import("@/pages/listening/ListeningTakePage")),
+          },
+          {
             path: "listening/:id",
             ...page(() => import("@/pages/listening/ListeningTakePage")),
           },

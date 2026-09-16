@@ -86,6 +86,27 @@ export const QUESTION_TYPE_RUBRIC: Record<CompletionType, string> = {
   diagram_labelling: "Label the diagram below.",
 };
 
+/** The same eleven as a short noun, for a sentence.
+ *
+ *  "Next map" is an invitation; "Next Map labelling" reads like a filename,
+ *  and "Next drill" names the machinery rather than the thing. Written out
+ *  rather than sliced off the label, because the useful short form is not a
+ *  prefix of the long one — "flow chart" out of "Flow-chart completion" has
+ *  a hyphen in the wrong place. */
+export const QUESTION_TYPE_SHORT: Record<QuestionGroupType, string> = {
+  form_completion: "form",
+  note_completion: "set of notes",
+  sentence_completion: "set of sentences",
+  summary_completion: "summary",
+  short_answer: "set of questions",
+  table_completion: "table",
+  flow_chart_completion: "flow chart",
+  map_labelling: "map",
+  diagram_labelling: "diagram",
+  multiple_choice: "set of choices",
+  matching: "matching task",
+};
+
 /** And one mark per type, for the same reason: a type is recognised by its
  *  icon in the chooser, in the opening sequence and on a settled part, and
  *  those have to be the same icon. */

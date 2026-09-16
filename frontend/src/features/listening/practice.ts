@@ -223,9 +223,28 @@ export interface PracticeFilterState {
  * feel like one page rather than two: the same field searches whichever list
  * is showing.
  */
-export const LIST_MODES = ["materials", "courses"] as const;
+export const LIST_MODES = ["materials", "courses", "drills"] as const;
 
 export type ListMode = (typeof LIST_MODES)[number];
+
+/**
+ * What each tab is called.
+ *
+ * A table rather than the literal rendered with CSS `capitalize`, which is
+ * what the switch used to do. That trick holds exactly as long as every mode
+ * is one lowercase word that title-cases correctly, and it is an undocumented
+ * rule nobody would know they had broken. The names are in the interface's
+ * one place for names, like every other label here.
+ */
+export const LIST_MODE_LABEL: Record<ListMode, string> = {
+  materials: "Materials",
+  courses: "Courses",
+  // Not "Tasks". The codebase already uses *task* for a question TYPE —
+  // `describeTask`, `TaskPicture`, `QUESTION_TYPE_*` — and this tab lists
+  // exercises of one, not the types themselves. "Drills" is what the thing
+  // is: one group, cut out of a paper, worked on its own.
+  drills: "Drills",
+};
 
 /**
  * The one filter a course has.

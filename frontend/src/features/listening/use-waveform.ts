@@ -133,15 +133,32 @@ const CONTRAST = 1.7;
  *  speakers, and RMS smooths exactly those away. Normalised because absolute
  *  level says nothing a learner wants — a quietly mastered recording would
  *  otherwise draw as a flat line. */
-function peaksOf(buffer: AudioBuffer, buckets: number): number[] {
+function peaksOf(
+  buffer: AudioBuffer,
+  buckets: number,
+  window?: { fromMs: number; toMs: number },
+): number[] {
   const data = buffer.getChannelData(0);
-  const per = Math.max(1, Math.floor(data.length / buckets));
+  // Bucket across the WINDOW when there is one, not across the file. A drill
+  // plays two or three minutes of a seven-minute recording, and drawn over
+  // the whole file that is a sliver — a picture claiming there is far more
+  // left to hear than there is, which is the same class of lie as colouring
+  // the bars by what was heard rather than by position.
+  const rate = buffer.sampleRate;
+  const lo = window
+    ? Math.max(0, Math.floor((window.fromMs / 1000) * rate))
+    : 0;
+  const hi = window
+    ? Math.min(data.length, Math.ceil((window.toMs / 1000) * rate))
+    : data.length;
+  const span = Math.max(1, hi - lo);
+  const per = Math.max(1, Math.floor(span / buckets));
   const out: number[] = [];
   let tallest = 0;
 
   for (let b = 0; b < buckets; b++) {
-    const from = b * per;
-    const to = Math.min(from + per, data.length);
+    const from = lo + b * per;
+    const to = Math.min(from + per, hi);
     let peak = 0;
     for (let i = from; i < to; i++) {
       const v = data[i] < 0 ? -data[i] : data[i];
@@ -163,8 +180,22 @@ function peaksOf(buffer: AudioBuffer, buckets: number): number[] {
  * at all. A player that only laid out once the peaks arrived would jump the
  * whole page when they did.
  */
-export function useWaveform(src: string | null, buckets = BARS): WaveShape {
-  const key = src ? `${buckets}|${src}` : null;
+export function useWaveform(
+  src: string | null,
+  buckets = BARS,
+  /** Draw only this stretch — what a drill is bounded to. Omitted, the whole
+   *  recording, which is every other caller. */
+  window?: { fromMs: number; toMs: number },
+): WaveShape {
+  // The window is in the key: a cached array of the wrong WINDOW is a picture
+  // of the wrong recording, which is the same reason `buckets` is in it.
+  // Taken apart into numbers before anything depends on it: the caller passes
+  // an object literal, whose identity changes every render, and an effect
+  // depending on that would decode the file again on each one.
+  const fromMs = window?.fromMs ?? null;
+  const toMs = window?.toMs ?? null;
+  const scope = window ? `${fromMs}-${toMs}` : "all";
+  const key = src ? `${buckets}|${scope}|${src}` : null;
   const [shape, setShape] = useState<WaveShape>(() =>
     key ? (CACHE.get(key) ?? NOTHING) : NOTHING,
   );
@@ -181,6 +212,8 @@ export function useWaveform(src: string | null, buckets = BARS): WaveShape {
     }
     setShape(NOTHING);
 
+    const span =
+      fromMs !== null && toMs !== null ? { fromMs, toMs } : undefined;
     const abort = new AbortController();
     let ctx: AudioContext | null = null;
     let dropped = false;
@@ -195,8 +228,21 @@ export function useWaveform(src: string | null, buckets = BARS): WaveShape {
         const buffer = await ctx.decodeAudioData(bytes);
         if (dropped) return;
         const computed: WaveShape = {
-          peaks: peaksOf(buffer, buckets),
-          silences: silencesOf(buffer),
+          peaks: peaksOf(buffer, buckets, span),
+          // Silences stay in the FILE's milliseconds and are only narrowed to
+          // the window: the engine thinks in absolute time throughout, and a
+          // run half outside the clip is clipped rather than dropped, so the
+          // skip button still works at the edges.
+          silences: span
+            ? silencesOf(buffer)
+                .filter(
+                  (run) => run.end_ms > span.fromMs && run.start_ms < span.toMs,
+                )
+                .map((run) => ({
+                  start_ms: Math.max(run.start_ms, span.fromMs),
+                  end_ms: Math.min(run.end_ms, span.toMs),
+                }))
+            : silencesOf(buffer),
         };
         CACHE.set(key, computed);
         setShape(computed);
@@ -213,7 +259,7 @@ export function useWaveform(src: string | null, buckets = BARS): WaveShape {
       dropped = true;
       abort.abort();
     };
-  }, [src, key, buckets]);
+  }, [src, key, buckets, fromMs, toMs]);
 
   return shape;
 }

@@ -84,8 +84,26 @@ interface EngineOptions {
    *  arrives and doesn't resize under the pointer. */
   durationMs: number | null;
   config: TakeConfig;
-  /** The dead stretches, found in the decode (see use-waveform.ts). */
+  /** The dead stretches, found in the decode (see use-waveform.ts). In the
+   *  FILE's milliseconds, like everything else handed to this hook. */
   silences?: ListenedSpan[];
+  /**
+   * Bound the player to one stretch of the recording — what a drill plays.
+   *
+   * Not a second audio file. Every replay mark on the platform, every
+   * transcript line, and every span the client reports back are in the
+   * FILE's milliseconds; a trimmed file would put a drill in a second
+   * coordinate space, and the first thing to break would be the review,
+   * which plays the same recording seeked.
+   *
+   * So the rule is: this hook thinks in absolute file time throughout and
+   * converts only at its edges. What it PRESENTS — `atMs`, `lengthMs`, and
+   * what `seekTo` accepts — is relative to the clip, so the scrubber, the
+   * clock and the waveform are all correct with no change at their call
+   * sites. What it REPORTS through `onSpan` stays absolute, because the
+   * server crosses those against the answer marks.
+   */
+  clip?: { startMs: number; endMs: number } | null;
   /** The reader's standing preference: step over every one of them without
    *  being asked. Off unless they have said otherwise. */
   autoSkip?: boolean;
@@ -99,6 +117,7 @@ export function useAudioEngine({
   config,
   silences,
   autoSkip = false,
+  clip = null,
   onSpan,
   onSeekBack,
 }: EngineOptions): AudioEngine {
@@ -124,8 +143,21 @@ export function useAudioEngine({
   const runStart = useRef<number | null>(null);
 
   const [playing, setPlaying] = useState(false);
-  const [atMs, setAtMs] = useState(0);
+  const [atMs, setAtMs] = useState(clip?.startMs ?? 0);
   const [lengthMs, setLengthMs] = useState(durationMs ?? 0);
+  // Where the clip begins and ends in the file. `base` is what everything
+  // presented is measured from; `ceiling` is where playback stops.
+  const base = clip?.startMs ?? 0;
+  const ceiling = clip?.endMs ?? null;
+  // Read on `timeupdate` like `stopAtMs`, and unlike it never cleared: a
+  // ranged play's stop belongs to one press, but the end of the clip is a
+  // property of the recording as this page sees it.
+  const clipEnd = useRef<number | null>(ceiling);
+  clipEnd.current = ceiling;
+  // Where the clip begins, in a ref so the element handlers — attached once
+  // and never rebuilt — can read it without being a dependency of that effect.
+  const start = useRef(base);
+  start.current = base;
   const [speed, setSpeed] = useState(1);
   const [finished, setFinished] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -165,6 +197,13 @@ export function useAudioEngine({
     const onLoaded = () => {
       const seconds = audio.duration;
       if (Number.isFinite(seconds) && seconds > 0) setLengthMs(seconds * 1000);
+      // Park at the clip's start, here rather than at construction: a
+      // `currentTime` write before the metadata has arrived is silently
+      // dropped, so a drill would open at the top of the recording.
+      if (start.current > 0 && audio.currentTime === 0) {
+        audio.currentTime = start.current / 1000;
+        setAtMs(start.current);
+      }
     };
     const onPlay = () => {
       setPlaying(true);
@@ -191,6 +230,16 @@ export function useAudioEngine({
       // The end of a ranged play, on the audio's own clock. Before the skip
       // check, so a clip that ends inside a silence stops rather than being
       // carried past its own end by the skip.
+      // The end of the CLIP, checked first: a drill that ran past its own
+      // end would carry on into the next task's questions.
+      const edge = clipEnd.current;
+      if (edge != null && at >= edge) {
+        stopAtMs.current = null;
+        audio.pause();
+        setAtMs(edge);
+        setFinished(true);
+        return;
+      }
       const until = stopAtMs.current;
       if (until != null && at >= until) {
         stopAtMs.current = null;
@@ -270,7 +319,14 @@ export function useAudioEngine({
       const audio = audioRef.current;
       if (!audio || !config.allowSeek) return;
       const from = audio.currentTime * 1000;
-      const target = Math.max(0, Math.min(toMs, lengthMs || toMs));
+      // `toMs` arrives relative to the clip and the element wants absolute
+      // file time. Unclipped the two are the same number, which is why every
+      // existing caller is unaffected.
+      const top = ceiling ?? (lengthMs || start.current + toMs);
+      const target = Math.max(
+        start.current,
+        Math.min(start.current + toMs, top),
+      );
       // Any move backwards counts, including a −3s nudge — especially a −3s
       // nudge. It is the plainest "I missed that" the page ever sees.
       if (target < from) report.current.onSeekBack?.();
@@ -283,15 +339,17 @@ export function useAudioEngine({
       setAtMs(target);
       // Seeking away from the end un-finishes it; otherwise a candidate who
       // let it run out could never hear the part they jumped back to.
-      if (target < (lengthMs || Infinity)) setFinished(false);
+      if (target < (ceiling ?? (lengthMs || Infinity))) setFinished(false);
       if (!audio.paused) runStart.current = target;
     },
-    [closeRun, config.allowSeek, lengthMs],
+    [closeRun, config.allowSeek, lengthMs, ceiling],
   );
 
   const nudge = useCallback(
-    (byMs: number) => seekTo(atMs + byMs),
-    [atMs, seekTo],
+    // `atMs` is held absolute and `seekTo` speaks relative, so the base comes
+    // off here. Unclipped it is zero and this is the line it always was.
+    (byMs: number) => seekTo(atMs - base + byMs),
+    [atMs, base, seekTo],
   );
 
   const cycleSpeed = useCallback(() => {
@@ -310,7 +368,8 @@ export function useAudioEngine({
       seekTo(startMs ?? 0);
       void audio.play();
       if (startMs != null && endMs != null) {
-        stopAtMs.current = endMs;
+        // Into the file's own time, which is what `onTime` compares against.
+        stopAtMs.current = start.current + endMs;
       }
     },
     [seekTo],
@@ -342,8 +401,10 @@ export function useAudioEngine({
 
   return {
     playing,
-    atMs,
-    lengthMs,
+    // Presented relative to the clip, so the scrubber, the clock and the
+    // waveform all read 0..length without knowing a clip exists.
+    atMs: atMs - base,
+    lengthMs: ceiling != null ? ceiling - base : lengthMs,
     speed,
     failed,
     finished,

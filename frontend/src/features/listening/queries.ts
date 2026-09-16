@@ -350,3 +350,79 @@ export function useAudioAsset(assetId: string | undefined) {
     },
   });
 }
+
+// --- Drills ------------------------------------------------------------------
+
+export const DRILL_KEY = ["listening-drills"] as const;
+
+/** How many drill cards one fetch brings back. The server's own default,
+ *  written down here for the same reason `PRACTICE_PAGE` is. */
+export const DRILL_PAGE = 30;
+
+/** The Drills tab's cards — every kind of task, and what there is of it.
+ *
+ *  Eleven rows counted over the whole library, so it is one fetch and not a
+ *  paged one. Held longer than the catalogue: what exists of each type
+ *  changes when somebody publishes a material, not while you are reading. */
+export function useDrillTypes(options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: [...DRILL_KEY, "types"],
+    queryFn: () => listeningApi.drills.types(),
+    staleTime: 5 * 60_000,
+    enabled: options.enabled ?? true,
+  });
+}
+
+/** One kind of drill, a page at a time. Same shape as the catalogue's
+ *  infinite query, and for the same reasons — see `usePracticeCatalogue`. */
+export function useDrills(
+  params: { type: string; q?: string; done?: boolean },
+  options: { enabled?: boolean } = {},
+) {
+  return useInfiniteQuery({
+    queryKey: [...DRILL_KEY, "list", params],
+    queryFn: ({ pageParam }) =>
+      listeningApi.drills.list({
+        ...params,
+        limit: DRILL_PAGE,
+        offset: pageParam,
+      }),
+    initialPageParam: 0,
+    placeholderData: keepPreviousData,
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((n, page) => n + page.items.length, 0);
+      return loaded < last.total ? loaded : undefined;
+    },
+    staleTime: 60_000,
+    enabled: options.enabled ?? true,
+  });
+}
+
+/** One drill's render payload. Never cached across drills — the key carries
+ *  the group — and never `keepPreviousData`: showing the previous drill's
+ *  paper while the next one loads would be showing the wrong questions. */
+export function useDrillTake(groupId: string | undefined) {
+  return useQuery({
+    queryKey: [...DRILL_KEY, "take", groupId],
+    queryFn: () => listeningApi.drills.take(groupId!),
+    enabled: !!groupId,
+  });
+}
+
+/** Finishing a drill.
+ *
+ *  It invalidates far less than a sitting does, and that is the point rather
+ *  than an oversight: a drill is deliberately invisible to the catalogue, the
+ *  recommender, the courses and every ability figure, so refetching them would
+ *  be several requests to redraw numbers that cannot have moved. What it does
+ *  change is the drill lists and the tab's own counts. */
+export function useSubmitDrill(groupId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: AttemptSubmit) =>
+      listeningApi.drills.submit(groupId, data),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: DRILL_KEY });
+    },
+  });
+}

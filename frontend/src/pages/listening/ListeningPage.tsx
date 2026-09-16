@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import {
   PRACTICE_PAGE,
   useCollections,
+  useDrillTypes,
   useNextUp,
   usePracticeCatalogue,
   usePracticeStats,
@@ -61,6 +62,8 @@ import {
   NextUpSkeleton,
 } from "@/features/listening/components/NextUp";
 import { CollectionList } from "@/features/listening/components/CollectionList";
+import { DrillList } from "@/features/listening/components/DrillList";
+import { DrillTypeGrid } from "@/features/listening/components/DrillTypeGrid";
 
 /** How long the pointer has to rest on a row before the cards answer it, and
  *  how long they wait before turning back once it leaves. Module constants so
@@ -138,6 +141,11 @@ export default function ListeningPage() {
   const [status, setStatus] = useState<CourseStatus>("all");
   const [covers, setCovers] = useState<CourseCovers>("all");
   const [length, setLength] = useState<CourseLength>("all");
+  // Which kind of drill is open, or null for the grid of cards. Local and NOT
+  // remembered, unlike the mode: the tab is where you were working, and a
+  // particular kind of task is what you were doing there — coming back to the
+  // grid is coming back to a choice, which is the right place to land.
+  const [drillType, setDrillType] = useState<QuestionGroupType | null>(null);
   const change = useCallback(
     (next: Partial<PracticeFilterState>) =>
       setFilters((prev) => ({ ...prev, ...next })),
@@ -235,6 +243,12 @@ export default function ListeningPage() {
     [head],
   );
 
+  const drillTypes = useDrillTypes({ enabled: mode === "drills" });
+  const drillTotal = (drillTypes.data?.items ?? []).reduce(
+    (n: number, type) => n + type.exercises,
+    0,
+  );
+
   const narrowed = isNarrowed(filters);
   // Whether the list on screen — whichever one it is — has been narrowed. The
   // two modes have different filters, and the suggestion block is gated on
@@ -246,7 +260,12 @@ export default function ListeningPage() {
       status !== "all" ||
       covers !== "all" ||
       length !== "all"
-      : narrowed;
+      : mode === "drills"
+        // Picking a kind of drill IS the reader saying what they want, so the
+        // suggestion block steps back from the moment one is open — the same
+        // rule the other two lists follow, asked of this one's own control.
+        ? drillType !== null || filters.query.trim() !== "" || filters.showDone
+        : narrowed;
 
   // --- The field's journey to the header -----------------------------------
   //
@@ -526,7 +545,13 @@ export default function ListeningPage() {
             value={filters.query}
             onChange={(query) => change({ query })}
             onDown={() => focusRow(0)}
-            count={mode === "courses" ? coursesTotal : total}
+            count={
+              mode === "courses"
+                ? coursesTotal
+                : mode === "drills"
+                  ? drillTotal
+                  : total
+            }
             landed={inHeader}
             mode={mode}
           />
@@ -553,6 +578,8 @@ export default function ListeningPage() {
             onToggleType={toggleType}
             typeOptions={typeOptions}
             bandOptions={bandOptions}
+            drillType={drillType}
+            onDrillType={setDrillType}
           />
         </div>
       </div>
@@ -611,7 +638,27 @@ export default function ListeningPage() {
               />
             ) : null)}
 
-          {mode === "courses" ? (
+          {mode === "drills" ? (
+            /* Two states, one tab. The cards are the navigation — the
+               question somebody arrives with is "what can I practise", and a
+               flat list of 470 drills does not answer it — and picking one
+               swaps them for its drills without leaving the page, exactly as
+               the mode switch does. */
+            drillType ? (
+              <DrillList
+                type={drillType}
+                query={settledQuery}
+                showDone={filters.showDone}
+                revealRef={stillness ? undefined : revealRef}
+              />
+            ) : (
+              <DrillTypeGrid
+                types={drillTypes.data?.items ?? []}
+                loading={drillTypes.isLoading}
+                onPick={setDrillType}
+              />
+            )
+          ) : mode === "courses" ? (
             /* The other list. It gets the same column and the same treatment
                — one field above it, one rule between rows — because the
                control that got here is a switch and not a link: the page did
