@@ -3,7 +3,11 @@ import { Play } from "lucide-react";
 import { ChoiceGroup } from "@/features/listening/components/ChoiceGroup";
 import { FormCompletionGroup } from "@/features/listening/components/FormCompletionGroup";
 import { MatchingGroup } from "@/features/listening/components/MatchingGroup";
-import { groupNumbering, sorted } from "@/features/listening/numbering";
+import {
+  groupNumbering,
+  partNumber,
+  sorted,
+} from "@/features/listening/numbering";
 import { paperParts } from "@/features/listening/take-paper";
 import type {
   MaterialTake,
@@ -74,7 +78,11 @@ export function QuestionPaper({
 
   return (
     <div className="space-y-10" onFocus={onFocus} onBlur={onBlur}>
-      {parts.map((part, i) => (
+      {parts.map((part, i) => {
+        // The number the PAPER gives this part, not its place in the list —
+        // see `partNumber`. A drill holds one part and it is still Part 2.
+        const number = partNumber(part);
+        return (
         // scroll-mt clears the whole sticky block — app header, audio, and
         // the chips that did the jumping — because a jump that lands the
         // part's own heading underneath the bar that sent you there looks
@@ -85,7 +93,7 @@ export function QuestionPaper({
               the line that says so belongs where the break is. */}
           <h2 className="mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-border pt-4">
             <span className="text-sm font-medium text-foreground">
-              Part {i + 1}
+              Part {number}
             </span>
             {spans[i] && spans[i].rows.length > 0 && (
               <span className="text-xs tabular-nums text-muted-foreground">
@@ -93,7 +101,7 @@ export function QuestionPaper({
                 {spans[i].to > spans[i].from ? `\u2013${spans[i].to}` : ""}
               </span>
             )}
-            {part.title && part.title.toLowerCase() !== `part ${i + 1}` && (
+            {part.title && part.title.toLowerCase() !== `part ${number}` && (
               <span className="text-xs text-muted-foreground">{part.title}</span>
             )}
             {/* Where the author marked the part's boundaries, the learner can
@@ -103,7 +111,7 @@ export function QuestionPaper({
               <button
                 type="button"
                 onClick={() => onPlayPart(part.audio_start_ms, part.audio_end_ms)}
-                title={`Play part ${i + 1} from the start`}
+                title={`Play part ${number} from the start`}
                 className="ml-auto flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs text-muted-foreground transition-colors duration-fast hover:bg-surface-hover hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
               >
                 <Play className="size-3" aria-hidden />
@@ -137,7 +145,8 @@ export function QuestionPaper({
             })}
           </div>
         </section>
-      ))}
+        );
+      })}
     </div>
   );
 }

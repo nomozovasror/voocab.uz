@@ -239,12 +239,34 @@ export type ListMode = (typeof LIST_MODES)[number];
 export const LIST_MODE_LABEL: Record<ListMode, string> = {
   materials: "Materials",
   courses: "Courses",
-  // Not "Tasks". The codebase already uses *task* for a question TYPE —
-  // `describeTask`, `TaskPicture`, `QUESTION_TYPE_*` — and this tab lists
-  // exercises of one, not the types themselves. "Drills" is what the thing
-  // is: one group, cut out of a paper, worked on its own.
-  drills: "Drills",
+  // Named after what the tab SHOWS, which is the eleven kinds of question.
+  // "Drills" was tried and is the jargon of the thing rather than its name —
+  // a word a learner has to be taught before the tab means anything, where
+  // "question type" is what their teacher and their book already call it.
+  // The internal value stays `drills`, because that is what the tab lists
+  // and what the routes under it are.
+  drills: "Question types",
 };
+
+/**
+ * Which part of the paper a drill came from.
+ *
+ * The catalogue's scope question asked of a group instead of a material, and
+ * it is a real one here in a way it is not elsewhere: map labelling is a Part
+ * 2 task, diagram labelling a Part 4 one, form completion a Part 1 one. A
+ * learner working on their weakest part wants the tasks that appear in it.
+ *
+ * Matched on the server against the number the part STARTS at, never against
+ * its index — see `_in_part`. Every seeded material is one part stored at
+ * index 0, so an index match would find nothing at all.
+ */
+export type DrillPart = "all" | 1 | 2 | 3 | 4;
+
+export const DRILL_PART_ORDER: DrillPart[] = [1, 2, 3, 4];
+
+export function drillPartLabel(part: DrillPart): string {
+  return part === "all" ? "Any part" : `Part ${part}`;
+}
 
 /**
  * The one filter a course has.

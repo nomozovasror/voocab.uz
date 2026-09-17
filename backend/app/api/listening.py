@@ -406,13 +406,19 @@ async def take_material(
 
 
 @router.get("/listening/drills/types", response_model=DrillTypesOut)
-async def drill_types(user: CurrentUser, session: SessionDep) -> DrillTypesOut:
+async def drill_types(
+    user: CurrentUser,
+    session: SessionDep,
+    part: Annotated[int | None, Query(ge=1, le=4)] = None,
+) -> DrillTypesOut:
     """The Drills tab's cards: every question type, and what there is of it.
 
     Counted over the whole public library, never over a page — the catalogue's
     rule, for the catalogue's reason. Eleven rows, so it is not paged.
     """
-    return DrillTypesOut(items=await drills_service.type_summary(session, user.id))
+    return DrillTypesOut(
+        items=await drills_service.type_summary(session, user.id, part=part)
+    )
 
 
 @router.get("/listening/drills", response_model=DrillListOut)
@@ -421,6 +427,7 @@ async def list_drills(
     session: SessionDep,
     type: Annotated[str, Query(max_length=64)],
     q: Annotated[str | None, Query(max_length=200)] = None,
+    part: Annotated[int | None, Query(ge=1, le=4)] = None,
     done: Annotated[bool, Query()] = False,
     limit: Annotated[int, Query(ge=1, le=100)] = drills_service.DRILL_PAGE,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -437,6 +444,7 @@ async def list_drills(
             user.id,
             group_type=type,
             query=q,
+            part=part,
             done=done,
             limit=limit,
             offset=offset,

@@ -22,7 +22,8 @@ many that hid, and a filter exists in two places or not at all.
 
 import uuid
 
-from sqlalchemy import Integer, func
+from sqlalchemy import Integer, case, func
+from sqlalchemy import true as sa_true
 from sqlmodel import select
 
 from app.core.database import AsyncSession
@@ -41,6 +42,26 @@ def _public() -> list:
     opens with (``_catalogue_where``), so a drill can never reach a material
     the catalogue would not list."""
     return [Material.type == "listening", Material.visibility == "public"]
+
+
+def _in_part(part_number: int | None):
+    """Only drills cut from one of the paper's four parts.
+
+    Matched on ``first_number``, never on ``parts.order_index``. The importer
+    writes one part per material at index 0 whatever part it really is, so
+    every seeded material looks like Part 1 by its index — ten numbers per
+    part is what actually says which one it is (11 is Part 2, 31 is Part 4).
+    An author-written part, which has no ``first_number``, falls back to the
+    index, where the editor's ``Part {order_index + 1}`` titling does make the
+    index carry the number.
+    """
+    if part_number is None:
+        return sa_true()
+    lo = (part_number - 1) * 10 + 1
+    return case(
+        (Part.first_number.is_not(None), Part.first_number),  # type: ignore[attr-defined]
+        else_=Part.order_index * 10 + 1,
+    ) == lo
 
 
 def _drillable():
@@ -76,7 +97,9 @@ def _drillable():
     return has_questions & ~unmarked
 
 
-async def type_summary(session: AsyncSession, user_id: uuid.UUID) -> list[dict]:
+async def type_summary(
+    session: AsyncSession, user_id: uuid.UUID, *, part: int | None = None
+) -> list[dict]:
     """One row per question type: how many drills there are, how many numbers
     they cover, and how many the caller has already done.
 
@@ -94,7 +117,7 @@ async def type_summary(session: AsyncSession, user_id: uuid.UUID) -> list[dict]:
             .select_from(QuestionGroup)
             .join(Part, Part.id == QuestionGroup.part_id)  # type: ignore[arg-type]
             .join(Material, Material.id == Part.material_id)  # type: ignore[arg-type]
-            .where(*_public(), _drillable())
+            .where(*_public(), _drillable(), _in_part(part))
             .group_by(QuestionGroup.type)  # type: ignore[arg-type]
         )
     ).all()
@@ -105,9 +128,13 @@ async def type_summary(session: AsyncSession, user_id: uuid.UUID) -> list[dict]:
                 select(QuestionGroup.type, func.count(func.distinct(QuestionGroup.id)))
                 .select_from(Attempt)
                 .join(QuestionGroup, QuestionGroup.id == Attempt.group_id)  # type: ignore[arg-type]
+                .join(Part, Part.id == QuestionGroup.part_id)  # type: ignore[arg-type]
                 .where(
                     Attempt.user_id == user_id,
                     Attempt.status == AttemptStatus.DRILLED,
+                    # Narrowed the same way as the total above, or a card
+                    # could read "3 done" over "2 drills".
+                    _in_part(part),
                 )
                 .group_by(QuestionGroup.type)  # type: ignore[arg-type]
             )
@@ -159,6 +186,7 @@ async def list_drills(
     *,
     group_type: str,
     query: str | None = None,
+    part: int | None = None,
     done: bool = False,
     limit: int = DRILL_PAGE,
     offset: int = 0,
@@ -176,7 +204,12 @@ async def list_drills(
         .join(Part, Part.id == QuestionGroup.part_id)  # type: ignore[arg-type]
         .join(Material, Material.id == Part.material_id)  # type: ignore[arg-type]
     )
-    where = [*_public(), _drillable(), QuestionGroup.type == group_type]
+    where = [
+        *_public(),
+        _drillable(),
+        QuestionGroup.type == group_type,
+        _in_part(part),
+    ]
 
     if query:
         # The same term-by-term AND the catalogue searches by, over the one

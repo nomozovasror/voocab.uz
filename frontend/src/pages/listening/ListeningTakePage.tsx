@@ -495,11 +495,23 @@ export default function ListeningTakePage() {
           </h1>
           <p className="shrink-0 text-xs tabular-nums text-muted-foreground">
             {[
-              `${parts.length} ${parts.length === 1 ? "part" : "parts"}`,
+              // A drill is one group cut out of a part, so saying "1 part"
+              // about it is describing the paper it came from rather than
+              // the thing on screen. Which part it was is in the heading
+              // below, where it belongs.
+              drilling
+                ? null
+                : `${parts.length} ${parts.length === 1 ? "part" : "parts"}`,
               `${total} ${total === 1 ? "question" : "questions"}`,
-              material.duration_ms != null
-                ? fmtClock(material.duration_ms)
-                : null,
+              // The CLIP's length for a drill. The recording is seven
+              // minutes and the drill plays three of them — printing the
+              // seven beside a player counting to three is the page
+              // disagreeing with itself about what it is about to play.
+              clip
+                ? fmtClock(clip.endMs - clip.startMs)
+                : material.duration_ms != null
+                  ? fmtClock(material.duration_ms)
+                  : null,
             ]
               .filter(Boolean)
               .join(" · ")}

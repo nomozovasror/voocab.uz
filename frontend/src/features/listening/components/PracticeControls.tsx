@@ -22,6 +22,8 @@ import {
   COURSE_LENGTH_ORDER,
   COURSE_STATUS_LABEL,
   COURSE_STATUS_ORDER,
+  DRILL_PART_ORDER,
+  drillPartLabel,
   LIST_MODES,
   LIST_MODE_LABEL,
   SCOPE_OPTIONS,
@@ -31,6 +33,7 @@ import {
 } from "@/features/listening/practice";
 import type {
   CourseCovers,
+  DrillPart,
   CourseLength,
   CourseStatus,
   FilterOption,
@@ -100,7 +103,12 @@ export function SearchField({
   landed = false,
   mode = "materials",
 }: SearchFieldProps) {
-  const noun = mode === "courses" ? "collection" : "material";
+  const noun =
+    mode === "courses"
+      ? "collection"
+      : mode === "drills"
+        ? "exercise"
+        : "material";
   const input = useRef<HTMLInputElement | null>(null);
   // The hint is only worth drawing where the field is empty and idle. Once
   // there is a query in it, the key cap sits next to the answer to a question
@@ -167,9 +175,21 @@ export function SearchField({
         placeholder={
           mode === "courses"
             ? "Search collections by title or author"
-            : "Search by title, topic or author"
+            : mode === "drills"
+              ? // Two screens, one field, and it means something different on
+                // each: the grid is a choice between kinds of question, the
+                // list is a choice between papers. Saying both is what stops
+                // it reading as broken on whichever one you are not on.
+                "Search a kind of question, or a book"
+              : "Search by title, topic or author"
         }
-        aria-label="Search materials"
+        aria-label={
+          mode === "courses"
+            ? "Search collections"
+            : mode === "drills"
+              ? "Search exercises"
+              : "Search materials"
+        }
         // The count is announced, not drawn: the list header already says it
         // in print, and a screen reader needs to hear that typing changed
         // something.
@@ -500,6 +520,8 @@ interface FilterChipsProps {
    *  cards, where there is nothing to narrow yet. */
   drillType: QuestionGroupType | null;
   onDrillType: (type: QuestionGroupType | null) => void;
+  drillPart: DrillPart;
+  onDrillPart: (part: DrillPart) => void;
 }
 
 export function FilterChips({
@@ -521,6 +543,8 @@ export function FilterChips({
   lengthOptions,
   drillType,
   onDrillType,
+  drillPart,
+  onDrillPart,
 }: FilterChipsProps) {
   const { scope, showDone, bands, types } = filters;
 
@@ -704,9 +728,17 @@ export function FilterChips({
             is also the way back to the grid — and the "done" toggle, which
             means the same here as it does over the catalogue. */}
         <Group ref={drillsRef} active={mode === "drills"}>
+          <ChipDivider />
+          {/* The part menu is here on BOTH screens, and it does the same
+              thing on each: on the grid it narrows the counts the cards
+              report, in a list it narrows the list. Which part a task
+              belongs to is the sharpest question there is about these —
+              map labelling is a Part 2 task and diagram labelling a Part 4
+              one — so the cards for a chosen part are the tasks that
+              actually appear in it. */}
+          <DrillPartMenu part={drillPart} onChange={onDrillPart} />
           {drillType && (
             <>
-              <ChipDivider />
               <Chip active onClick={() => onDrillType(null)}>
                 {QUESTION_TYPE_LABEL[drillType]}
                 <X className="ml-1 size-3" aria-hidden />
@@ -768,6 +800,51 @@ function ScopeMenu({
           {SCOPE_OPTIONS.map((option) => (
             <DropdownMenuRadioItem key={option} value={String(option)}>
               {scopeLabel(option)}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** Which part of the paper a drill came from. The scope menu's shape, asked
+ *  of a question group instead of a material — and without "Full test",
+ *  which means nothing about a single task. */
+function DrillPartMenu({
+  part,
+  onChange,
+}: {
+  part: DrillPart;
+  onChange: (part: DrillPart) => void;
+}) {
+  const narrowed = part !== "all";
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className={cn(PILL, narrowed ? PILL_ON : PILL_OFF)}
+        >
+          {drillPartLabel(part)}
+          <ChevronDown className="size-3" aria-hidden />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-36">
+        <DropdownMenuRadioGroup
+          value={String(part)}
+          onValueChange={(value) =>
+            onChange(value === "all" ? "all" : (Number(value) as DrillPart))
+          }
+        >
+          <DropdownMenuRadioItem value="all">
+            {drillPartLabel("all")}
+          </DropdownMenuRadioItem>
+          {DRILL_PART_ORDER.map((option) => (
+            <DropdownMenuRadioItem key={option} value={String(option)}>
+              {drillPartLabel(option)}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>

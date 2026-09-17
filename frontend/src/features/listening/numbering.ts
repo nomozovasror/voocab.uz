@@ -61,6 +61,33 @@ export function questionNumbersShort(start: number, span: number): string {
   return `${start}–${start + span - 1}`;
 }
 
+/**
+ * Which of the paper's four parts this is.
+ *
+ * From `first_number` where there is one, because for a material that came
+ * out of a real paper that is the only field carrying the truth: the importer
+ * writes one part per material at `order_index` 0 whatever part it really is,
+ * so a Part 2 and a Part 4 are both index 0. Ten numbers to a part is what
+ * actually says which — 11 is Part 2, 31 is Part 4.
+ *
+ * Falls back to the index for an author-written part, where the editor's
+ * `Part {order_index + 1}` titling does make the index carry the number.
+ *
+ * Printing `index + 1` is what had a seeded Part 4 headed "Part 1" with the
+ * words "Part 4" beside it — the paper contradicting itself in two adjacent
+ * spans of the same heading.
+ */
+export function partNumber(part: {
+  order_index?: number;
+  index?: number;
+  first_number?: number | null;
+}): number {
+  if (part.first_number != null) {
+    return Math.floor((part.first_number - 1) / 10) + 1;
+  }
+  return (part.order_index ?? part.index ?? 0) + 1;
+}
+
 // ── Walking a material ────────────────────────────────────────────────────
 
 /** Parts, or groups, in the order the author put them. Both the take page and

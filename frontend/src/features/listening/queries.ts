@@ -364,10 +364,13 @@ export const DRILL_PAGE = 30;
  *  Eleven rows counted over the whole library, so it is one fetch and not a
  *  paged one. Held longer than the catalogue: what exists of each type
  *  changes when somebody publishes a material, not while you are reading. */
-export function useDrillTypes(options: { enabled?: boolean } = {}) {
+export function useDrillTypes(
+  params: { part?: number } = {},
+  options: { enabled?: boolean } = {},
+) {
   return useQuery({
-    queryKey: [...DRILL_KEY, "types"],
-    queryFn: () => listeningApi.drills.types(),
+    queryKey: [...DRILL_KEY, "types", params],
+    queryFn: () => listeningApi.drills.types(params),
     staleTime: 5 * 60_000,
     enabled: options.enabled ?? true,
   });
@@ -376,7 +379,7 @@ export function useDrillTypes(options: { enabled?: boolean } = {}) {
 /** One kind of drill, a page at a time. Same shape as the catalogue's
  *  infinite query, and for the same reasons — see `usePracticeCatalogue`. */
 export function useDrills(
-  params: { type: string; q?: string; done?: boolean },
+  params: { type: string; q?: string; part?: number; done?: boolean },
   options: { enabled?: boolean } = {},
 ) {
   return useInfiniteQuery({

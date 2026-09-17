@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef } from "react";
 import { Link } from "react-router";
-import { ArrowRight, Check } from "lucide-react";
+import { Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 import { QUESTION_TYPE_ICON } from "@/features/listening/parts";
 import { DRILL_PAGE, useDrills } from "@/features/listening/queries";
 import { getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import type { DrillPart } from "@/features/listening/practice";
 import type { PracticeDrill, QuestionGroupType } from "@/features/listening/types";
 
 /**
@@ -29,15 +30,29 @@ function clipLength(ms: number | null): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
+/**
+ * Cards on a grid rather than rows down the page.
+ *
+ * A drill row carries four short facts — the book, the numbers, the part, the
+ * length — and none of them is long enough to earn a full line. Down a single
+ * column that is a list three-quarters made of empty space, and eleven kinds
+ * of task mean the reader is going to be looking at one of these often. Three
+ * across puts a whole set of maps on one screen, which is the point of having
+ * cut them out of their papers in the first place.
+ */
+const GRID = "mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3";
+
 export function DrillList({
   type,
   query,
+  part,
   showDone,
   revealRef,
 }: {
   type: QuestionGroupType;
   /** Already settled — the page holds the typing, this holds a list. */
   query: string;
+  part: DrillPart;
   showDone: boolean;
   revealRef?: (el: HTMLLIElement | null) => void;
 }) {
@@ -45,9 +60,10 @@ export function DrillList({
     () => ({
       type,
       ...(query.trim() ? { q: query.trim() } : {}),
+      ...(part !== "all" ? { part } : {}),
       ...(showDone ? { done: true } : {}),
     }),
-    [type, query, showDone],
+    [type, query, part, showDone],
   );
   const {
     data,
@@ -89,7 +105,7 @@ export function DrillList({
     return (
       <div className="mt-6 rounded-xl border border-dashed border-border px-5 py-12 text-center">
         <p className="text-sm text-muted-foreground">
-          {getErrorMessage(error) || "Couldn't load the drills."}
+          {getErrorMessage(error) || "Couldn't load the exercises."}
         </p>
         <Button
           variant="outline"
@@ -105,10 +121,10 @@ export function DrillList({
 
   if (isLoading) {
     return (
-      <SkeletonBlock label="Loading drills">
-        <ul className="mt-3 space-y-2">
-          {Array.from({ length: 5 }, (_, i) => (
-            <Skeleton key={i} className="h-[4.25rem] rounded-xl" />
+      <SkeletonBlock label="Loading exercises">
+        <ul className={GRID}>
+          {Array.from({ length: 6 }, (_, i) => (
+            <Skeleton key={i} className="h-[5.5rem] rounded-xl" />
           ))}
         </ul>
       </SkeletonBlock>
@@ -119,7 +135,7 @@ export function DrillList({
     <>
       <p className="mt-3 px-1 text-xs text-muted-foreground">
         <span className="tabular-nums text-foreground">{total}</span>{" "}
-        {total === 1 ? "drill" : "drills"}
+        {total === 1 ? "exercise" : "exercises"}
         {/* Never hide rows without saying so. */}
         {doneHidden > 0 && (
           <> · {doneHidden} already done, put away</>
@@ -138,7 +154,8 @@ export function DrillList({
         <>
           <ul
             className={cn(
-              "mt-3 space-y-2 transition-opacity duration-fast",
+              GRID,
+              "transition-opacity duration-fast",
               isPlaceholderData && "opacity-50",
             )}
           >
@@ -167,44 +184,47 @@ function DrillRow({ drill }: { drill: PracticeDrill }) {
     <Link
       to={`/listening/drills/${drill.group_id}`}
       className={cn(
-        "group flex items-center gap-3 rounded-xl border border-border-subtle bg-surface px-4 py-3",
+        "group flex h-full flex-col gap-1 rounded-xl border border-border-subtle bg-surface p-4",
         "transition-colors hover:border-border hover:bg-surface-hover",
         "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
       )}
     >
-      <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm text-foreground">
+      <span className="flex items-start gap-2">
+        <Icon
+          className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+          aria-hidden
+        />
+        {/* Two lines, then clipped. A book and a test number is what tells two
+            maps apart, and it does not fit on one line in a third of the
+            column. */}
+        <span className="line-clamp-2 min-w-0 flex-1 text-sm text-foreground">
           {drill.material_title}
         </span>
-        <span className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
-          {/* The numbers the paper prints, not 1..N — the recording says
-              these aloud. */}
-          <span className="tabular-nums">
-            Questions {drill.first_number}–{drill.last_number}
+        {done && (
+          <span className="flex shrink-0 items-center gap-1 text-xs text-correct">
+            <Check className="size-3.5" aria-hidden />
+            <span className="tabular-nums">
+              {drill.best_score}/{drill.question_count}
+            </span>
           </span>
-          <span aria-hidden className="text-border">·</span>
-          <span>Part {drill.part_number}</span>
-          {drill.clip_ms != null && (
-            <>
-              <span aria-hidden className="text-border">·</span>
-              <span className="tabular-nums">{clipLength(drill.clip_ms)}</span>
-            </>
-          )}
-        </span>
+        )}
       </span>
-      {done && (
-        <span className="flex shrink-0 items-center gap-1 text-xs text-correct">
-          <Check className="size-3.5" aria-hidden />
-          <span className="tabular-nums">
-            {drill.best_score}/{drill.question_count}
-          </span>
+
+      <span className="mt-auto flex items-center gap-2 pt-2 text-xs text-muted-foreground">
+        {/* The numbers the paper prints, not 1..N — the recording says these
+            aloud. */}
+        <span className="tabular-nums">
+          Questions {drill.first_number}–{drill.last_number}
         </span>
-      )}
-      <ArrowRight
-        className="size-4 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground"
-        aria-hidden
-      />
+        <span aria-hidden className="text-border">·</span>
+        <span>Part {drill.part_number}</span>
+        {drill.clip_ms != null && (
+          <>
+            <span aria-hidden className="text-border">·</span>
+            <span className="tabular-nums">{clipLength(drill.clip_ms)}</span>
+          </>
+        )}
+      </span>
     </Link>
   );
 }

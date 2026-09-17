@@ -37,6 +37,7 @@ import type {
   CourseCovers,
   CourseLength,
   CourseStatus,
+  DrillPart,
   ListMode,
   PracticeFilterState,
   Scope,
@@ -146,6 +147,7 @@ export default function ListeningPage() {
   // particular kind of task is what you were doing there — coming back to the
   // grid is coming back to a choice, which is the right place to land.
   const [drillType, setDrillType] = useState<QuestionGroupType | null>(null);
+  const [drillPart, setDrillPart] = useState<DrillPart>("all");
   const change = useCallback(
     (next: Partial<PracticeFilterState>) =>
       setFilters((prev) => ({ ...prev, ...next })),
@@ -243,7 +245,10 @@ export default function ListeningPage() {
     [head],
   );
 
-  const drillTypes = useDrillTypes({ enabled: mode === "drills" });
+  const drillTypes = useDrillTypes(
+    { ...(drillPart !== "all" ? { part: drillPart } : {}) },
+    { enabled: mode === "drills" },
+  );
   const drillTotal = (drillTypes.data?.items ?? []).reduce(
     (n: number, type) => n + type.exercises,
     0,
@@ -264,7 +269,10 @@ export default function ListeningPage() {
         // Picking a kind of drill IS the reader saying what they want, so the
         // suggestion block steps back from the moment one is open — the same
         // rule the other two lists follow, asked of this one's own control.
-        ? drillType !== null || filters.query.trim() !== "" || filters.showDone
+        ? drillType !== null ||
+          drillPart !== "all" ||
+          filters.query.trim() !== "" ||
+          filters.showDone
         : narrowed;
 
   // --- The field's journey to the header -----------------------------------
@@ -580,6 +588,8 @@ export default function ListeningPage() {
             bandOptions={bandOptions}
             drillType={drillType}
             onDrillType={setDrillType}
+            drillPart={drillPart}
+            onDrillPart={setDrillPart}
           />
         </div>
       </div>
@@ -648,6 +658,7 @@ export default function ListeningPage() {
               <DrillList
                 type={drillType}
                 query={settledQuery}
+                part={drillPart}
                 showDone={filters.showDone}
                 revealRef={stillness ? undefined : revealRef}
               />
@@ -655,6 +666,7 @@ export default function ListeningPage() {
               <DrillTypeGrid
                 types={drillTypes.data?.items ?? []}
                 loading={drillTypes.isLoading}
+                query={settledQuery}
                 onPick={setDrillType}
               />
             )

@@ -29,6 +29,11 @@ export interface PaperRow {
 export interface PaperPart {
   id: string;
   index: number;
+  /** Where this part's numbering starts on its own paper, when it came out of
+   *  a real one. Carried through so the heading can print the part's true
+   *  number — the index says 0 for every seeded material, whichever part it
+   *  actually is. */
+  first_number?: number | null;
   title: string;
   audioStartMs: number | null;
   audioEndMs: number | null;
@@ -72,6 +77,7 @@ export function paperParts(material: MaterialTake): PaperPart[] {
     parts.push({
       id: part.id,
       index,
+      first_number: part.first_number,
       title: part.title,
       audioStartMs: part.audio_start_ms,
       audioEndMs: part.audio_end_ms,

@@ -169,11 +169,15 @@ export const listeningApi = {
    *  actually after. */
   drills: {
     /** The tab's cards: every kind of task, and what there is of it. */
-    types: () => api.get<{ items: DrillType[] }>("/api/listening/drills/types"),
+    types: (params: { part?: number } = {}) =>
+      api.get<{ items: DrillType[] }>("/api/listening/drills/types", {
+        params,
+      }),
     list: (
       params: {
         type: string;
         q?: string;
+        part?: number;
         done?: boolean;
         limit?: number;
         offset?: number;
