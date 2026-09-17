@@ -447,6 +447,10 @@ export interface PracticeDrill {
   clip_ms: number | null;
   attempts: number;
   best_score: number | null;
+  /** Their FIRST score. The card prints the best — a record is somebody's
+   *  best — but anything that MEASURES them reads the first, which is why
+   *  both are here and why the grid colours by this one. */
+  first_score: number | null;
   last_attempt_id: string | null;
   last_attempt_at: string | null;
 }

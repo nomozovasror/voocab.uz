@@ -4,7 +4,9 @@ import { Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 import { QUESTION_TYPE_ICON } from "@/features/listening/parts";
+import { DrillGrid } from "@/features/listening/components/DrillGrid";
 import { DRILL_PAGE, useDrills } from "@/features/listening/queries";
+import { useRememberedChoice } from "@/lib/preferences";
 import { getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { DrillPart } from "@/features/listening/practice";
@@ -40,7 +42,20 @@ function clipLength(ms: number | null): string {
  * across puts a whole set of maps on one screen, which is the point of having
  * cut them out of their papers in the first place.
  */
-const GRID = "mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3";
+const CARDS = "mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3";
+
+/** Where a set of exercises stops being cards and starts being a map.
+ *
+ *  The collection page's number, for the collection page's reason: thirty is
+ *  about a screenful, below it every title is legible and above it the reader
+ *  is scrolling past titles to find a shape. Only the DEFAULT — whichever they
+ *  pick is remembered, and remembered per KIND, because four short-answer
+ *  drills and a hundred and eighty-eight multiple-choice ones are not the same
+ *  decision. */
+const GRID_FROM = 30;
+
+const VIEWS = ["cards", "grid"] as const;
+type View = (typeof VIEWS)[number];
 
 export function DrillList({
   type,
@@ -84,6 +99,27 @@ export function DrillList({
   const total = data?.pages[0]?.total ?? 0;
   const doneHidden = data?.pages[0]?.done_hidden ?? 0;
 
+  const [view, setView] = useRememberedChoice<View>(
+    `voocab-drill-view:${type}`,
+    total >= GRID_FROM ? "grid" : "cards",
+    VIEWS,
+  );
+
+  // The map is only a map with every cell in it: numbered 1..30 and then
+  // growing as you scroll is a grid whose numbers mean "how far you have
+  // scrolled" rather than "which exercise". Cards page as you reach them,
+  // the way every other list here does.
+  useEffect(() => {
+    if (view === "grid" && hasNextPage && !isFetchingNextPage) {
+      void fetchNextPage();
+    }
+  }, [view, hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+  // The first one not done, in the order shown. Not a sequence anybody laid
+  // out — these are not lessons — but "which do I do next" is still the
+  // question the grid is most often opened with.
+  const nextId = rows.find((row) => row.attempts === 0)?.group_id ?? null;
+
   // The same sentinel the catalogue and the shelf use, for the same reasons.
   const bottom = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -122,7 +158,7 @@ export function DrillList({
   if (isLoading) {
     return (
       <SkeletonBlock label="Loading exercises">
-        <ul className={GRID}>
+        <ul className={CARDS}>
           {Array.from({ length: 6 }, (_, i) => (
             <Skeleton key={i} className="h-[5.5rem] rounded-xl" />
           ))}
@@ -133,14 +169,15 @@ export function DrillList({
 
   return (
     <>
-      <p className="mt-3 px-1 text-xs text-muted-foreground">
-        <span className="tabular-nums text-foreground">{total}</span>{" "}
-        {total === 1 ? "exercise" : "exercises"}
-        {/* Never hide rows without saying so. */}
-        {doneHidden > 0 && (
-          <> · {doneHidden} already done, put away</>
-        )}
-      </p>
+      <div className="mt-3 flex items-center justify-between gap-4 px-1">
+        <p className="text-xs text-muted-foreground">
+          <span className="tabular-nums text-foreground">{total}</span>{" "}
+          {total === 1 ? "exercise" : "exercises"}
+          {/* Never hide rows without saying so. */}
+          {doneHidden > 0 && <> · {doneHidden} already done, put away</>}
+        </p>
+        {rows.length > 0 && <ViewToggle view={view} onChange={setView} />}
+      </div>
 
       {rows.length === 0 ? (
         <div className="mt-3 rounded-xl border border-dashed border-border px-5 py-12 text-center">
@@ -151,27 +188,34 @@ export function DrillList({
           </p>
         </div>
       ) : (
-        <>
-          <ul
-            className={cn(
-              GRID,
-              "transition-opacity duration-fast",
-              isPlaceholderData && "opacity-50",
-            )}
-          >
-            {rows.map((drill) => (
-              <li key={drill.group_id} ref={revealRef}>
-                <DrillRow drill={drill} />
-              </li>
-            ))}
-          </ul>
-          {hasNextPage && <div ref={bottom} aria-hidden className="h-8" />}
-          {!hasNextPage && total > DRILL_PAGE && (
-            <p className="py-6 text-center text-xs text-muted-foreground">
-              That&apos;s all {total} of them.
-            </p>
+        <div
+          className={cn(
+            "transition-opacity duration-fast",
+            isPlaceholderData && "opacity-50",
           )}
-        </>
+        >
+          {view === "grid" ? (
+            <DrillGrid items={rows} nextId={nextId} />
+          ) : (
+            <>
+              <ul className={CARDS}>
+                {rows.map((drill) => (
+                  <li key={drill.group_id} ref={revealRef}>
+                    <DrillRow drill={drill} />
+                  </li>
+                ))}
+              </ul>
+              {hasNextPage && (
+                <div ref={bottom} aria-hidden className="h-8" />
+              )}
+              {!hasNextPage && total > DRILL_PAGE && (
+                <p className="py-6 text-center text-xs text-muted-foreground">
+                  That&apos;s all {total} of them.
+                </p>
+              )}
+            </>
+          )}
+        </div>
       )}
     </>
   );
@@ -226,5 +270,43 @@ function DrillRow({ drill }: { drill: PracticeDrill }) {
         )}
       </span>
     </Link>
+  );
+}
+
+/** The same control the collection page uses, and deliberately identical:
+ *  two grids in one app that are reached by two different-looking switches
+ *  are two things to learn where there is one. */
+function ViewToggle({
+  view,
+  onChange,
+}: {
+  view: View;
+  onChange: (view: View) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="How to show the exercises"
+      className="flex items-center gap-0.5 rounded-full bg-surface-sunken p-0.5"
+    >
+      {VIEWS.map((value) => (
+        <Button
+          key={value}
+          type="button"
+          variant="ghost"
+          size="xs"
+          aria-pressed={view === value}
+          onClick={() => onChange(value)}
+          className={cn(
+            "rounded-full px-2.5 text-xs capitalize",
+            view === value
+              ? "bg-primary/15 text-primary hover:bg-primary/20 hover:text-primary"
+              : "text-muted-foreground hover:bg-surface-hover hover:text-foreground",
+          )}
+        >
+          {value}
+        </Button>
+      ))}
+    </div>
   );
 }

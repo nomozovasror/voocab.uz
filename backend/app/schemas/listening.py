@@ -1262,6 +1262,10 @@ class DrillOut(BaseModel):
     clip_ms: int | None = None
     attempts: int = 0
     best_score: int | None = None
+    #: Their FIRST score. The card prints the best — a record is somebody's
+    #: best — but anything that MEASURES them reads the first, which is why
+    #: both are here and why the grid colours by this one.
+    first_score: int | None = None
     last_attempt_id: uuid.UUID | None = None
     last_attempt_at: datetime | None = None
 

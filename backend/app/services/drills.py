@@ -296,17 +296,20 @@ async def drill_row(
     marks = listening_service.question_marks(group)
     first_number = await listening_service.group_first_number(session, group)
     clip = await listening_service.group_clip(session, group)
-    last = (
-        await session.exec(
-            select(Attempt)
-            .where(
-                Attempt.group_id == group.id,
-                Attempt.user_id == user_id,
-                Attempt.status == AttemptStatus.DRILLED,
+    run = list(
+        (
+            await session.exec(
+                select(Attempt)
+                .where(
+                    Attempt.group_id == group.id,
+                    Attempt.user_id == user_id,
+                    Attempt.status == AttemptStatus.DRILLED,
+                )
+                .order_by(Attempt.submitted_at)  # type: ignore[arg-type]
             )
-            .order_by(Attempt.submitted_at.desc())  # type: ignore[attr-defined]
-        )
-    ).first()
+        ).all()
+    )
+    last = run[-1] if run else None
     return {
         "group_id": group.id,
         "type": group.type,
@@ -317,10 +320,15 @@ async def drill_row(
         "last_number": first_number + len(questions) * marks - 1,
         "question_count": len(questions) * marks,
         "clip_ms": (clip["end_ms"] - clip["start_ms"]) if clip else None,
-        "attempts": 0 if last is None else 1,
+        "attempts": len(run),
         "last_attempt_id": last.id if last else None,
         "last_attempt_at": last.submitted_at if last else None,
-        "best_score": int(last.score or 0) if last else None,
+        "best_score": max((int(a.score or 0) for a in run), default=None),
+        # The FIRST try, which is what anything measuring the learner reads —
+        # the same split the catalogue row makes. The grid colours by this
+        # one: drawn from best-of it would go green as somebody re-sat things
+        # and stop showing where the trouble was.
+        "first_score": int(run[0].score or 0) if run else None,
     }
 
 
