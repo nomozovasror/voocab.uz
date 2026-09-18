@@ -5,6 +5,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { fmtClock } from "@/lib/time";
 import {
+  familyOfType,
+  familyIcon,
   DIFFICULTY_CLASS,
   DIFFICULTY_SHORT,
   describeTask,
@@ -75,6 +77,7 @@ export function NextUp({
   data,
   onBrowse,
   onCourses,
+  onTypes,
 }: {
   data: NextUpData;
   /** Applies the block's own "browse all" to the list below it. */
@@ -84,6 +87,10 @@ export function NextUp({
    *  other tab selected, and navigating would be leaving somewhere to arrive
    *  back at it. */
   onCourses: () => void;
+  /** Into the Question types tab. Like `onCourses`, it switches the list
+   *  rather than navigating: the reader is asking to see more of the same
+   *  kind of thing, and going somewhere would throw away their search. */
+  onTypes: () => void;
 }) {
   // Too little history to say anything, and silence is the answer rather than
   // a fallback: a recommendation off one paper is a guess in a confident
@@ -95,9 +102,97 @@ export function NextUp({
   if (data.reason === "course" && data.collection && data.items.length > 0) {
     return <CarryOn data={data} onCourses={onCourses} />;
   }
+  if (data.reason === "task_type" && data.task_type && data.next_group_id) {
+    return <CarryOnTask data={data} onTypes={onTypes} />;
+  }
   // A suggestion with nothing to suggest is a heading over an empty box.
   if (data.items.length === 0) return null;
   return <Suggested data={data} onBrowse={onBrowse} />;
+}
+
+/**
+ * Carrying on with a KIND of question rather than a course.
+ *
+ * Deliberately quieter than the course card beside it, and not because there
+ * was less room: a course is a route somebody chose, drawn with its cover and
+ * the lesson they are up to. A kind of question is a habit they fell into —
+ * two maps last week — so the card reports it and offers the next one, and
+ * does not dress it up as a syllabus. No cover, because there is no book.
+ *
+ * It only ever appears where the course card does not; the server settles
+ * that, and the rule it follows is that a course outranks this.
+ */
+function CarryOnTask({
+  data,
+  onTypes,
+}: {
+  data: NextUpData;
+  onTypes: () => void;
+}) {
+  const family = familyOfType(data.task_type);
+  if (!family) return null;
+  const Icon = familyIcon(family);
+  const of = data.of ?? 0;
+  const done = data.done ?? 0;
+
+  return (
+    <Slot label="Carry on with a kind of question">
+      <div className="flex items-center gap-4">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-surface-sunken">
+          <Icon className="size-4 text-muted-foreground" aria-hidden />
+        </span>
+
+        <div className="min-w-0 flex-1">
+          <p className="min-w-0 truncate text-xs text-muted-foreground">
+            Carry on ·{" "}
+            <button
+              type="button"
+              onClick={onTypes}
+              className="text-foreground transition-colors hover:underline"
+            >
+              {family.label}
+            </button>
+          </p>
+          <p className="mt-0.5 truncate text-sm text-foreground">
+            <span className="tabular-nums text-muted-foreground">
+              {done} of {of} done ·{" "}
+            </span>
+            {data.remaining ?? 0} left
+          </p>
+          {/* Green, never the accent — the accent is the button, and how far
+              somebody has got is a report. The same bar the card on the tab
+              draws, so the two agree at a glance. */}
+          <span
+            aria-hidden
+            className="mt-1.5 block h-1 overflow-hidden rounded-full bg-border-subtle"
+          >
+            <span
+              className="block h-full rounded-full bg-correct transition-[width] duration-base"
+              style={{ width: `${Math.round((done / Math.max(1, of)) * 100)}%` }}
+            />
+          </span>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            onClick={onTypes}
+            className="hidden px-0 text-xs text-muted-foreground hover:bg-transparent hover:text-foreground sm:inline-flex"
+          >
+            See all
+          </Button>
+          <Button asChild size="sm">
+            <Link to={`/listening/drills/${data.next_group_id}`}>
+              Continue
+              <ArrowRight className="size-3.5" aria-hidden />
+            </Link>
+          </Button>
+        </div>
+      </div>
+    </Slot>
+  );
 }
 
 /** The shell all three states wear, so the slot keeps its shape. */

@@ -22,6 +22,7 @@ reader before and after a drill and demands the picture be identical.
 """
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -42,6 +43,18 @@ def _client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     )
+
+
+def _fresh() -> str:
+    """An email nobody has used before.
+
+    The helper above deliberately reuses a user by email, which suits the
+    tests that check one figure. The carry-on tests read the whole ladder —
+    every attempt this learner has ever made decides which rung answers — so
+    a user left over from the last run answers a different question than the
+    one being asked.
+    """
+    return f"drill-{uuid.uuid4().hex[:12]}@example.com"
 
 
 async def _user(email: str) -> User:
@@ -435,3 +448,203 @@ async def test_deleting_a_drilled_group_does_not_500():
                 )
             ).all()
             assert left == []
+
+
+async def _drill(client: httpx.AsyncClient, token: str, group_id: str) -> None:
+    r = await client.get(
+        f"/api/listening/drills/{group_id}", cookies={"access_token": token}
+    )
+    assert r.status_code == 200, r.text
+    questions = r.json()["parts"][0]["question_groups"][0]["questions"]
+    r = await client.post(
+        f"/api/listening/drills/{group_id}/attempts",
+        json={
+            "answers": [
+                {"question_id": q["id"], "given_answer": ""} for q in questions
+            ]
+        },
+        cookies={"access_token": token},
+    )
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_carrying_on_with_a_kind_of_question_needs_two_and_recently():
+    """"Carry on" is a report of what somebody was doing, so it has to be
+    true on both counts: one exercise is not a habit, and a kind of question
+    is not a commitment anybody enrolled in — a month later there is no plan
+    to carry on with."""
+    author = await _user("drill-author@example.com")
+    learner = await _user(_fresh())
+    author_token = create_access_token(str(author.id))
+    token = create_access_token(str(learner.id))
+
+    async with _client() as client:
+        papers = [
+            await _paper(client, author_token, f"Carry on {n} — Test {n}, Part 2")
+            for n in range(1, 4)
+        ]
+        # The block is silent until three materials are done, and that gate is
+        # checked before every branch — so the reader needs a history before
+        # any of this is reachable at all.
+        for paper in papers:
+            r = await client.get(
+                f"/api/materials/{paper['material_id']}/take",
+                cookies={"access_token": token},
+            )
+            every = [
+                q
+                for part in r.json()["parts"]
+                for group in part["question_groups"]
+                for q in group["questions"]
+            ]
+            r = await client.post(
+                f"/api/materials/{paper['material_id']}/attempts",
+                json={
+                    "answers": [
+                        {"question_id": q["id"], "given_answer": ""} for q in every
+                    ]
+                },
+                cookies={"access_token": token},
+            )
+            assert r.status_code == 200, r.text
+
+        async def reason() -> dict:
+            r = await client.get(
+                "/api/listening/next", cookies={"access_token": token}
+            )
+            assert r.status_code == 200, r.text
+            return r.json()
+
+        # One is not a habit.
+        await _drill(client, token, papers[0]["map_id"])
+        assert (await reason())["reason"] != "task_type"
+
+        # Two is.
+        await _drill(client, token, papers[1]["map_id"])
+        body = await reason()
+        assert body["reason"] == "task_type"
+        assert body["task_type"] == "map_labelling"
+        assert body["done"] == 2
+        assert body["next_group_id"] is not None
+        # And it points at one they have NOT done.
+        assert body["next_group_id"] not in {
+            papers[0]["map_id"],
+            papers[1]["map_id"],
+        }
+
+        # Stale work is not something to carry on with.
+        async with async_session_factory() as session:
+            for attempt in (
+                await session.exec(
+                    select(Attempt).where(
+                        Attempt.user_id == learner.id,
+                        Attempt.status == AttemptStatus.DRILLED,
+                    )
+                )
+            ).all():
+                attempt.submitted_at = datetime.now(timezone.utc) - timedelta(days=30)
+                session.add(attempt)
+            await session.commit()
+        assert (await reason())["reason"] != "task_type"
+
+
+@pytest.mark.asyncio
+async def test_between_two_carry_ons_the_later_one_wins():
+    """A course and a kind of question are both facts about what somebody was
+    doing, and between two facts the honest one is the later.
+
+    Not a fixed ladder, and it cannot be one: every material in a seeded
+    library belongs to a book of sixteen to thirty-two, so one material sat
+    leaves a course in progress for weeks. Ranked under that, a kind of
+    question worked every day would never be offered at all.
+    """
+    author = await _user("drill-author@example.com")
+    learner = await _user(_fresh())
+    author_token = create_access_token(str(author.id))
+    token = create_access_token(str(learner.id))
+
+    async with _client() as client:
+        # Five, so sitting the fourth leaves the course part-way through.
+        # With four it completed, and `finished_course` is a third fact that
+        # outranks both of these — said at the moment it is true, which is
+        # right, and not what this test is about.
+        papers = [
+            await _paper(client, author_token, f"Rank {n} — Test {n}, Part 2")
+            for n in range(1, 6)
+        ]
+
+        async with async_session_factory() as session:
+            collection = Collection(
+                author_id=author.id, title="Rank course", visibility="public"
+            )
+            session.add(collection)
+            await session.commit()
+            await session.refresh(collection)
+            for index, paper in enumerate(papers):
+                session.add(
+                    CollectionItem(
+                        collection_id=collection.id,
+                        material_id=uuid.UUID(paper["material_id"]),
+                        order_index=index,
+                    )
+                )
+            await session.commit()
+
+        # Three sat, which both opens the block and leaves the course
+        # part-way through.
+        for paper in papers[:3]:
+            r = await client.get(
+                f"/api/materials/{paper['material_id']}/take",
+                cookies={"access_token": token},
+            )
+            every = [
+                q
+                for part in r.json()["parts"]
+                for group in part["question_groups"]
+                for q in group["questions"]
+            ]
+            await client.post(
+                f"/api/materials/{paper['material_id']}/attempts",
+                json={
+                    "answers": [
+                        {"question_id": q["id"], "given_answer": ""} for q in every
+                    ]
+                },
+                cookies={"access_token": token},
+            )
+
+        await _drill(client, token, papers[0]["map_id"])
+        await _drill(client, token, papers[1]["map_id"])
+
+        async def reason() -> str:
+            r = await client.get(
+                "/api/listening/next", cookies={"access_token": token}
+            )
+            assert r.status_code == 200, r.text
+            return r.json()["reason"]
+
+        # The drills came last, so they are what to carry on with.
+        assert await reason() == "task_type"
+
+        # Sit another lesson and the course is the later fact again.
+        r = await client.get(
+            f"/api/materials/{papers[3]['material_id']}/take",
+            cookies={"access_token": token},
+        )
+        every = [
+            q
+            for part in r.json()["parts"]
+            for group in part["question_groups"]
+            for q in group["questions"]
+        ]
+        await client.post(
+            f"/api/materials/{papers[3]['material_id']}/attempts",
+            json={
+                "answers": [
+                    {"question_id": q["id"], "given_answer": ""} for q in every
+                ]
+            },
+            cookies={"access_token": token},
+        )
+        assert await reason() == "course"

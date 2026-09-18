@@ -536,6 +536,7 @@ export type NextUpReason =
   | "none"
   | "finished_course"
   | "course"
+  | "task_type"
   | "weak_part"
   | "steady"
   | "level";
@@ -558,6 +559,12 @@ export interface NextUp {
    *  done" can — and that subtraction finds an off-by-one that is not there. */
   remaining: number | null;
   of: number | null;
+  /** Only on `task_type`: which kind of question they are working through,
+   *  and the exercise to carry on with. A bare type rather than a title,
+   *  because what we call a kind of question belongs here with the rest of
+   *  the interface's words — `familyByKey` turns it into the card's name. */
+  task_type: QuestionGroupType | null;
+  next_group_id: string | null;
   /** Started-and-unfinished courses, for the "My courses (3)" beside the
    *  action. */
   in_progress_count: number;

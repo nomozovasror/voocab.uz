@@ -48,6 +48,7 @@ import uuid
 from app.core.database import AsyncSession
 from app.services import (
     collections as collections_service,
+    drills as drills_service,
     learner_stats,
     listening as listening_service,
 )
@@ -200,6 +201,12 @@ async def next_up(
     * ``course`` — part-way through a collection: the next lesson in it, in
       its order. This outranks the suggestions below because they chose the
       course and because its order is a person's judgement, not this module's.
+    * ``task_type`` — working through one kind of question, recently and more
+      than once (:data:`app.services.drills.CARRY_ON_FROM`,
+      :data:`~app.services.drills.CARRY_ON_WITHIN`). A report of what they
+      were doing rather than a guess about what would suit them, which is why
+      it sits above the three below. Against ``course`` it is decided by
+      which was touched last, not by rank — see the note there.
     * ``weak_part`` — one part is clearly behind the others.
     * ``steady`` — none of them is, and all four are good. Harder material,
       because "your weakest area" is a sentence with nothing behind it for
@@ -234,9 +241,30 @@ async def next_up(
             ),
         }
 
-    # Carrying on beats being recommended to, so this is asked next and its
-    # answer is taken whole.
+    # Carrying on beats being recommended to, so these are asked next.
+    #
+    # Two things can be carried on with — a course, and a kind of question —
+    # and which one is offered is decided by WHEN, not by a fixed ladder. The
+    # rule that a course outranks everything else was written against the
+    # three suggestions below: those are guesses about what would suit
+    # somebody, and a course is a judgement they made. It was never a rule
+    # about two facts, and between two facts the honest one is the later —
+    # which is exactly the argument `collections.in_progress_for` already
+    # makes for choosing between two courses ("the question a page asks when
+    # somebody comes back is where they left off").
+    #
+    # It also has to work this way to mean anything. Every material in a
+    # seeded library belongs to a book of sixteen to thirty-two, so one
+    # material sat leaves a course in progress for weeks; ranked below that,
+    # a kind of question could be worked every day and never be offered.
     carrying_on = await collections_service.in_progress_for(session, user_id)
+    drilling = await drills_service.in_progress_for(session, user_id)
+    if (
+        carrying_on is not None
+        and drilling is not None
+        and drilling["last_at"] > carrying_on["last_at"]
+    ):
+        carrying_on = None
     if carrying_on is not None:
         collection = carrying_on["collection"]
         # One lesson, not three. Two rows under a Continue button leave the
@@ -264,6 +292,27 @@ async def next_up(
             ),
             "items": await listening_service._catalogue_rows(
                 session, user_id, materials
+            ),
+        }
+
+    # The other carrying-on, reached when there is no course to carry on with
+    # or when this was worked more recently. Above the three below it for the
+    # reason the course is: this is a report of what they were doing, and
+    # those are guesses about what would suit them.
+    if drilling is not None:
+        return {
+            **_nothing(),
+            "reason": "task_type",
+            # The TYPE, not a name: what we call a kind of question belongs
+            # with the rest of the interface's words, and the client already
+            # holds the table that turns one into a card's title.
+            "task_type": drilling["type"],
+            "next_group_id": drilling["next_group_id"],
+            "done": drilling["done"],
+            "of": drilling["total"],
+            "remaining": drilling["total"] - drilling["done"],
+            "in_progress_count": await collections_service.in_progress_count(
+                session, user_id
             ),
         }
 
@@ -336,6 +385,8 @@ def _nothing() -> dict:
         "done": None,
         "remaining": None,
         "of": None,
+        "task_type": None,
+        "next_group_id": None,
         "in_progress_count": 0,
         "items": [],
     }

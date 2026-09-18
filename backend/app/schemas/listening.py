@@ -919,6 +919,11 @@ class NextUpOut(BaseModel):
       ``remaining`` how many are left; both are true at once even when they
       look like an off-by-one, because somebody who skipped a lesson is
       legitimately on lesson four with four done.
+    * ``task_type`` — part-way through one KIND of question, worked recently
+      and more than once. ``task_type`` names the kind, ``done``/``of`` how
+      far through it they are, and ``next_group_id`` is the one to carry on
+      with. ``items`` is empty: a drill is not a material and the row this
+      draws is its own.
     * ``steady`` — level across all four parts and good at all of them, so
       there is no weak one to name. Harder material instead.
     * ``weak_part`` — one part is clearly behind the others; ``part`` and
@@ -938,6 +943,7 @@ class NextUpOut(BaseModel):
         "none",
         "finished_course",
         "course",
+        "task_type",
         "weak_part",
         "steady",
         "level",
@@ -961,6 +967,11 @@ class NextUpOut(BaseModel):
     #: off-by-one that is not there.
     remaining: int | None = None
     of: int | None = None
+    #: Only on ``task_type``: which kind of question, and the exercise to
+    #: carry on with. A bare type rather than a title, because what we call a
+    #: kind of question belongs with the rest of the interface's words.
+    task_type: str | None = None
+    next_group_id: uuid.UUID | None = None
     #: How many courses they have started and not finished, for the "My
     #: courses (3)" beside the action. Somebody carrying one on should be able
     #: to see there are others without being shown them.

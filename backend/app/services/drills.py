@@ -21,6 +21,7 @@ many that hid, and a filter exists in two places or not at all.
 """
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import Integer, case, func
 from sqlalchemy import true as sa_true
@@ -42,6 +43,23 @@ def _public() -> list:
     opens with (``_catalogue_where``), so a drill can never reach a material
     the catalogue would not list."""
     return [Material.type == "listening", Material.visibility == "public"]
+
+
+def family_of(group_type: str) -> list[str]:
+    """The types a card covers, given one of them.
+
+    Only labelling is more than itself: map and diagram labelling are the same
+    task on two kinds of picture, the library holds twenty-three maps and two
+    diagrams, and the tab draws them as one card. Everything else is a family
+    of one.
+
+    One definition, because two readers ask the question and they must agree —
+    what "the next one of the same kind" means (:func:`next_after`) and what
+    somebody is part-way through (:func:`in_progress_for`). The client has the
+    same table; this is the half of it the server needs, and it is derived
+    from the same ``LABELLING_TYPES`` the models already declare.
+    """
+    return sorted(LABELLING_TYPES) if group_type in LABELLING_TYPES else [group_type]
 
 
 def _in_part(part_number: int | None):
@@ -354,11 +372,7 @@ async def next_after(
     every map should be offered the diagrams rather than told they are done.
     Anything else is its own family of one.
     """
-    kin = (
-        sorted(LABELLING_TYPES)
-        if group.type in LABELLING_TYPES
-        else [group.type]
-    )
+    kin = family_of(group.type)
     drilled = (
         select(Attempt.id)
         .where(
@@ -387,3 +401,116 @@ async def next_after(
             )
         )
     ).first()
+
+
+#: How many of a kind must be done before "carry on" is a fair thing to say.
+#:
+#: Two, and the reason is the same one the whole recommender rests on: one is
+#: not a habit. Somebody who tried a single map found out what a map is; two
+#: in the same kind is a person working through them, which is the only thing
+#: worth interrupting the page to point at.
+CARRY_ON_FROM = 2
+
+#: And how recently the last one has to have been. A course carry-on has no
+#: window, because a course is a thing somebody committed to and its order is
+#: still waiting for them. A kind of question is not a commitment — nobody
+#: enrolled — so "carry on with maps" a month after the last one is the page
+#: inventing a plan the learner never made. A week is the unit study is
+#: planned in; past it, the honest thing to carry on with is whatever they did
+#: most recently instead.
+CARRY_ON_WITHIN = timedelta(days=7)
+
+
+async def in_progress_for(session: AsyncSession, user_id: uuid.UUID) -> dict | None:
+    """The kind of exercise this learner was last working through, or None.
+
+    "Last working on" and not "furthest through", exactly as the collections
+    answer it: the question a page asks when somebody comes back is where they
+    left off, and the most recent attempt is the only honest answer. Furthest
+    through would keep pointing at the maps they abandoned in March because
+    they happened to get most of the way through them first.
+
+    Two conditions, and both are about not inventing a plan the learner never
+    made — see :data:`CARRY_ON_FROM` and :data:`CARRY_ON_WITHIN`.
+
+    Returns the family, how much of it is done, and the next one not done.
+    ``None`` when there is nothing to carry on with, including when they have
+    finished every exercise of the kind: "carry on" with nothing left is a
+    button onto an empty page.
+    """
+    last = (
+        await session.exec(
+            select(Attempt)
+            .where(
+                Attempt.user_id == user_id,
+                Attempt.status == AttemptStatus.DRILLED,
+                Attempt.submitted_at.is_not(None),  # type: ignore[attr-defined]
+            )
+            .order_by(Attempt.submitted_at.desc())  # type: ignore[attr-defined]
+        )
+    ).first()
+    if last is None or last.submitted_at is None:
+        return None
+    if datetime.now(timezone.utc) - last.submitted_at > CARRY_ON_WITHIN:
+        return None
+
+    group = await session.get(QuestionGroup, last.group_id)
+    if group is None:
+        return None
+    kin = family_of(group.type)
+
+    drilled = (
+        select(Attempt.id)
+        .where(
+            Attempt.group_id == QuestionGroup.id,
+            Attempt.user_id == user_id,
+            Attempt.status == AttemptStatus.DRILLED,
+        )
+        .exists()
+    )
+    in_family = [*_public(), _drillable(), QuestionGroup.type.in_(kin)]  # type: ignore[attr-defined]
+
+    def count(*extra):
+        return (
+            select(func.count())
+            .select_from(QuestionGroup)
+            .join(Part, Part.id == QuestionGroup.part_id)  # type: ignore[arg-type]
+            .join(Material, Material.id == Part.material_id)  # type: ignore[arg-type]
+            .where(*in_family, *extra)
+        )
+
+    total = int((await session.exec(count())).one())
+    done = int((await session.exec(count(drilled))).one())
+    if done < CARRY_ON_FROM or done >= total:
+        return None
+
+    # The next one not done, in the order the list shows them, so the button
+    # and the list agree about what comes next.
+    next_id = (
+        await session.exec(
+            select(QuestionGroup.id)
+            .join(Part, Part.id == QuestionGroup.part_id)  # type: ignore[arg-type]
+            .join(Material, Material.id == Part.material_id)  # type: ignore[arg-type]
+            .where(*in_family, ~drilled)
+            .order_by(
+                Material.created_at.desc(),  # type: ignore[attr-defined]
+                Material.id,  # type: ignore[arg-type]
+                QuestionGroup.order_index,  # type: ignore[arg-type]
+            )
+        )
+    ).first()
+    if next_id is None:
+        return None
+
+    return {
+        # The type the card is keyed by. The client turns it into the family's
+        # name, because what we call a kind of question is not the server's
+        # business — the same split the catalogue's facets already make.
+        "type": group.type,
+        #: When they last did one, so the caller can weigh this against a
+        #: course they were also part-way through.
+        "last_at": last.submitted_at,
+        "done": done,
+        "total": total,
+        "next_group_id": next_id,
+    }

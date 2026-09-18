@@ -650,6 +650,14 @@ export default function ListeningPage() {
                   setScope(scope);
                 }}
                 onCourses={() => setMode("courses")}
+                // Into the tab, and onto the grid of cards rather than
+                // whichever kind was last open: the block named a kind and
+                // its Continue button goes straight there, so "See all" is
+                // the other question — what else is there.
+                onTypes={() => {
+                  setMode("drills");
+                  setDrillKey(null);
+                }}
               />
             ) : null)}
 

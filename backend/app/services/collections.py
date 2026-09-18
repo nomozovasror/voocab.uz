@@ -309,10 +309,14 @@ async def in_progress_for(
     if best is None:
         return None
 
-    _when, collection, remaining = best
+    when, collection, remaining = best
     ids = ordered[collection.id]
     return {
         "collection": collection,
+        # When they last touched it. Computed here anyway to pick between
+        # courses; returned so the caller can pick between a course and the
+        # other kind of carrying-on (see app/services/recommend.py).
+        "last_at": when,
         "remaining": remaining,
         # 1-based, so it reads as a lesson number rather than an index.
         "position": ids.index(remaining[0]) + 1,

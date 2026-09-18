@@ -515,6 +515,22 @@ export function familyByKey(key: string | null): TaskFamily | null {
   return TASK_FAMILIES.find((family) => family.key === key) ?? null;
 }
 
+/** The card a question TYPE belongs to.
+ *
+ *  A different lookup from `familyByKey`, and both are needed: the tab's own
+ *  state carries a key, while anything the server says carries a type —
+ *  a group has a type, not a card. Looking a type up by key silently finds
+ *  nothing for exactly the pair this table exists for, since the labelling
+ *  card's key is neither of its types. */
+export function familyOfType(type: string | null): TaskFamily | null {
+  if (!type) return null;
+  return (
+    TASK_FAMILIES.find((family) =>
+      family.types.includes(type as QuestionGroupType),
+    ) ?? null
+  );
+}
+
 /** The mark a family wears: its own type's icon, and for the labelling pair
  *  the map's — a map is what all but two of them are. */
 export function familyIcon(family: TaskFamily): LucideIcon {
