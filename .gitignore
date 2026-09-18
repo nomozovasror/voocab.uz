@@ -37,4 +37,9 @@ seed/.venv/
 seed/work/
 # Rebuilt in seconds by `seed/db.py init`. Worth backing up once stage progress
 # accumulates in it -- that part is real work, not a fact about a file.
-seed/catalogue.db
+#
+# Unanchored, so it matches wherever one turns up rather than only in seed/:
+# every command in the pipeline takes its path relative to where it was run,
+# so running one from the repo root leaves an empty catalogue.db there. That
+# is a mis-run to notice, not a file to commit.
+catalogue.db
