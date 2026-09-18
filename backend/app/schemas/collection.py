@@ -85,6 +85,8 @@ class CollectionOut(BaseModel):
     """A collection as a learner sees it listed."""
 
     id: uuid.UUID
+    #: Which paper it is a course in.
+    skill: str
     title: str
     summary: str = ""
     visibility: str
@@ -156,6 +158,8 @@ class AuthorCollectionOut(BaseModel):
     """
 
     id: uuid.UUID
+    #: Which paper it is a course in.
+    skill: str
     title: str
     summary: str = ""
     visibility: str

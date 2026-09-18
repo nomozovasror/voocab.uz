@@ -514,6 +514,11 @@ async def sequenced_material_ids(
 def _summarise(collection: Collection, author: User | None) -> dict:
     return {
         "id": collection.id,
+        # Which paper it is a course in. Sent rather than inferred from the
+        # items: an EMPTY collection has none to infer from, and the editor
+        # needs it before there is anything in it — it decides which
+        # catalogue the picker beside it may offer.
+        "skill": collection.skill,
         "title": collection.title,
         "summary": collection.summary,
         "visibility": collection.visibility,

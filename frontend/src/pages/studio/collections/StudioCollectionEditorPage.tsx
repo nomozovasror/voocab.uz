@@ -34,10 +34,10 @@ import {
   useCollection,
   useDeleteCollection,
   useMyCollections,
-  usePracticeCatalogue,
   useSetCollectionItems,
   useUpdateCollection,
 } from "@/features/listening/queries";
+import { usePracticeCatalogue } from "@/features/paper/queries";
 import {
   DIFFICULTY_CLASS,
   DIFFICULTY_SHORT,
@@ -278,7 +278,11 @@ export default function StudioCollectionEditorPage() {
             setOrder((prev) => prev.filter((x) => x !== materialId))
           }
         />
-        <Picker inCollection={order} onAdd={add} />
+        <Picker
+          skill={collection?.skill ?? "listening"}
+          inCollection={order}
+          onAdd={add}
+        />
       </div>
     </div>
   );
@@ -693,9 +697,14 @@ const PARTS: Array<{ value: string; label: string }> = [
  * implementation.
  */
 function Picker({
+  skill,
   inCollection,
   onAdd,
 }: {
+  /** Which paper this course is in. A collection is one paper's by
+   *  construction, and the server refuses an item of the other — so offering
+   *  them here would be offering rows the save will reject. */
+  skill: string;
   inCollection: string[];
   onAdd: (m: PracticeMaterial) => void;
 }) {
@@ -714,7 +723,11 @@ function Picker({
   }, [settled, scope]);
 
   const { data, isLoading, hasNextPage, fetchNextPage, isFetchingNextPage } =
-    usePracticeCatalogue(params);
+    // The catalogue of the paper this course is IN. A collection is one
+    // paper's by construction (`Collection.skill`), and the server refuses an
+    // item of the other one — so offering them here would be offering rows
+    // the save will reject.
+    usePracticeCatalogue(skill, params);
 
   const rows = useMemo(
     () => data?.pages.flatMap((page) => page.items) ?? [],

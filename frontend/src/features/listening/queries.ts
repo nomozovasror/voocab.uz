@@ -70,62 +70,6 @@ export function useDeleteListeningMaterial() {
 
 // --- Consumption (§8) --------------------------------------------------------
 
-const PRACTICE_KEY = ["listening-practice"] as const;
-
-/** How many rows one fetch brings back. Matches the server's own default;
- *  written down here too because the page needs it to work out the next
- *  offset, and a client guessing at the server's page size is a client that
- *  skips rows the day it changes. */
-export const PRACTICE_PAGE = 30;
-
-/**
- * The catalogue, a page at a time.
- *
- * `useInfiniteQuery` rather than `useQuery` because the list is now paged and
- * the page scrolls: each fetch appends, and the whole thing is one cache
- * entry keyed by the filters. Change a chip and that is a different key — a
- * different list, from the top, which is right: a filter is not a scroll
- * position.
- *
- * `getNextPageParam` returns undefined when the pages in hand already cover
- * the total, which is what turns the sentinel at the bottom of the list off.
- * It counts what arrived rather than trusting `offset + PAGE` to be right:
- * the server clamps `limit`, and a client that assumed otherwise would ask
- * for a page that starts past where it actually got to and skip rows.
- */
-export function usePracticeCatalogue(
-  params: Record<string, string | string[]>,
-) {
-  return useInfiniteQuery({
-    queryKey: [...PRACTICE_KEY, params],
-    queryFn: ({ pageParam }) =>
-      listeningApi.practice({
-        ...params,
-        limit: String(PRACTICE_PAGE),
-        offset: String(pageParam),
-      }),
-    initialPageParam: 0,
-    // A chip is a different query key, so without this the list would empty
-    // itself to a page of skeletons on every click and fill back in — and
-    // the document collapsing under a sticky search field takes the field
-    // with it. The old rows stay while the new ones are fetched, and
-    // `isPlaceholderData` is what says they are the old ones.
-    placeholderData: keepPreviousData,
-    getNextPageParam: (last, pages) => {
-      const loaded = pages.reduce((n, page) => n + page.items.length, 0);
-      return loaded < last.total ? loaded : undefined;
-    },
-    // The rows are a moving target — somebody else's material is published,
-    // the difficulty refresh lands — and refetching every page on every
-    // window focus would be several requests to redraw a list nobody asked
-    // to be redrawn. A minute is long enough to cover a trip to the tab
-    // beside this one.
-    staleTime: 60_000,
-  });
-}
-
-// --- Collections -------------------------------------------------------------
-
 const COLLECTIONS_KEY = ["listening-collections"] as const;
 
 /** How many collections one fetch brings back. Smaller than the catalogue's
@@ -236,36 +180,6 @@ export function useDeleteCollection() {
   return useCollectionWrite((id: string) =>
     listeningApi.collections.remove(id),
   );
-}
-
-const NEXT_UP_KEY = ["listening-next-up"] as const;
-
-/** What to practise next. Not keyed by the filters — a recommendation is
- *  about the library and the learner, and neither of those changes because
- *  somebody clicked a chip. */
-export function useNextUp() {
-  return useQuery({
-    queryKey: NEXT_UP_KEY,
-    queryFn: () => listeningApi.nextUp(),
-    staleTime: 60_000,
-  });
-}
-
-const PRACTICE_STATS_KEY = ["listening-practice-stats"] as const;
-
-/** What the learner is good and bad at — the catalogue's right-hand panel.
- *
- *  Its own query rather than a field on the catalogue: the two answer
- *  different questions ("what is there to sit" and "where am I weak"), the
- *  panel is a third of the page and the list is the rest of it, and a single
- *  response would make the list wait on an aggregate over every answer the
- *  learner has ever given. Invalidated by the same submit, because finishing
- *  something moves both. */
-export function usePracticeStats() {
-  return useQuery({
-    queryKey: PRACTICE_STATS_KEY,
-    queryFn: () => listeningApi.practiceStats(),
-  });
 }
 
 // --- Editor support -----------------------------------------------------

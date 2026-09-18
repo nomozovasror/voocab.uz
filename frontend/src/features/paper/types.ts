@@ -695,6 +695,8 @@ export interface CollectionProgress {
  *  this says what to do in what order. */
 export interface Collection {
   id: string;
+  /** Which paper this is a course in. */
+  skill: string;
   title: string;
   summary: string;
   visibility: string;
@@ -748,6 +750,8 @@ export interface CollectionDetail extends Collection {
  *  studio can print. */
 export interface AuthorCollection {
   id: string;
+  /** Which paper this is a course in. */
+  skill: string;
   title: string;
   summary: string;
   visibility: string;
