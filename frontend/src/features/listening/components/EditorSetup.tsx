@@ -8,6 +8,7 @@ import {
 import { formatClock } from "@/features/studio/format";
 import { MediaDropzone } from "@/features/listening/components/MediaDropzone";
 import { PartsPicker } from "@/features/listening/components/PartsPicker";
+import type { Skill } from "@/features/paper/skill";
 import { QuestionTypeChoices } from "@/features/listening/components/QuestionTypeChoices";
 import { QUESTION_TYPE_ICON, QUESTION_TYPE_LABEL } from "@/features/paper/question-types";
 import type {
@@ -47,6 +48,11 @@ export interface SetupChoice {
 export type SetupStep = "parts" | "audio" | "types";
 
 interface EditorSetupProps {
+  /** Which paper is being written. It decides how many parts the opening
+   *  offers, what one is called, and whether there is a recording step at
+   *  all — a reading paper has no recording to attach, and a rail with a
+   *  step on it that never happens is a rail that lies. */
+  skill: Skill;
   step: SetupStep;
   /** Whether this material's opening has a type step at all. A lone Part 1
    *  takes one kind of question, so it is never asked — and a rail with a
@@ -79,20 +85,26 @@ interface EditorSetupProps {
   onSkip: () => void;
 }
 
-const STEP_TITLE: Record<SetupStep, string> = {
-  parts: "What are you building?",
-  audio: "Add the recording",
-  types: "What does each part ask?",
-};
+/** What each step asks, in the words of the paper being written.
+ *
+ *  "What does each PART ask" over three reading passages is the studio using
+ *  the other exam's vocabulary at the one moment an author is deciding what
+ *  they are building. */
+function stepTitle(step: SetupStep, skill: Skill): string {
+  if (step === "audio") return "Add the recording";
+  if (step === "parts") return "What are you building?";
+  return `What does each ${skill.part.one} ask?`;
+}
 
-const STEP_BLURB: Record<SetupStep, string> = {
-  parts:
-    "One part on its own, or the whole test. This is settled here — parts can't be added to a material later.",
-  audio:
-    "Everything else is written against it — the transcript it comes back with, the answers, and the moment each one is said.",
-  types:
-    "One set of questions per part to begin with. More can be added to any part once the editor opens.",
-};
+function stepBlurb(step: SetupStep, skill: Skill): string {
+  if (step === "audio") {
+    return "Everything else is written against it — the transcript it comes back with, the answers, and the moment each one is said.";
+  }
+  if (step === "parts") {
+    return `One ${skill.part.one} on its own, or the whole test. This is settled here — ${skill.part.many} can't be added to a material later.`;
+  }
+  return `One set of questions per ${skill.part.one} to begin with. More can be added to any ${skill.part.one} once the editor opens.`;
+}
 
 /** What the recording is doing, in the words the transcript pane uses. */
 function transcriptLine(status: AudioTranscriptStatus | null): string {
@@ -192,6 +204,7 @@ function StepRail({
 }
 
 export function EditorSetup({
+  skill,
   step,
   hasTypeStep,
   leaving,
@@ -211,8 +224,12 @@ export function EditorSetup({
   const [reopened, setReopened] = useState<string[]>([]);
 
   const steps: { key: SetupStep; label: string }[] = [
-    { key: "parts", label: "parts" },
-    { key: "audio", label: "recording" },
+    { key: "parts", label: skill.part.many },
+    // A reading paper is answered from its passages, which are written in the
+    // editor rather than uploaded — so there is nothing to ask for here.
+    ...(skill.id === "reading"
+      ? []
+      : [{ key: "audio" as const, label: "recording" }]),
     ...(hasTypeStep ? [{ key: "types" as const, label: "questions" }] : []),
   ];
 
@@ -224,18 +241,18 @@ export function EditorSetup({
           through its questions, not three panels in a row. */}
       <div key={step} className="setup-step" data-leaving={leaving}>
         <DialogTitle className="setup-rise mb-1 text-center text-lg font-medium">
-          {STEP_TITLE[step]}
+          {stepTitle(step, skill)}
         </DialogTitle>
         <DialogDescription
           className="setup-rise mb-6 text-center text-xs leading-relaxed"
           style={{ "--i": 1 } as CSSProperties}
         >
-          {STEP_BLURB[step]}
+          {stepBlurb(step, skill)}
         </DialogDescription>
 
         {step === "parts" && (
           <div className="setup-rise" style={{ "--i": 2 } as CSSProperties}>
-            <PartsPicker onPick={onPickParts} />
+            <PartsPicker skill={skill} onPick={onPickParts} />
           </div>
         )}
 

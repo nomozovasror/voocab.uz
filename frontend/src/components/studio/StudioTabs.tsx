@@ -1,12 +1,11 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import { useStudioListening } from "@/features/studio/queries";
+import { useStudioPapers } from "@/features/studio/queries";
 import { useMyCollections } from "@/features/listening/queries";
 
 /**
- * The listening studio's own header: one title, one line of totals, and the
- * two halves of authoring as tabs.
+ * The studio's own header: one title, and the halves of authoring as tabs.
  *
  * Materials and collections were two pages that only knew about each other
  * through a sentence of prose ("your listening materials · collections"). A
@@ -35,33 +34,32 @@ import { useMyCollections } from "@/features/listening/queries";
  * shared is this header, so the two pages cannot drift into looking like two
  * different features.
  *
- * **Both counts are always shown, on both tabs**, and they are the page's
+ * **Every count is always shown, on every tab**, and they are the page's
  * only totals. A count that appears only once you are on the tab makes the
  * tab a door with nothing written on it — and the number is the thing an
  * author is deciding on. They are withheld while loading rather than drawn
  * as 0: the studio's rule everywhere is that a fabricated zero is worse than
  * a missing figure.
  */
-export type StudioListeningTab = "materials" | "collections";
+export type StudioTab = "listening" | "reading" | "collections";
 
-const TABS: Array<{ id: StudioListeningTab; label: string; to: string }> = [
-  { id: "materials", label: "Materials", to: "/studio/listening" },
+const TABS: Array<{ id: StudioTab; label: string; to: string }> = [
+  { id: "listening", label: "Listening", to: "/studio/listening" },
+  { id: "reading", label: "Reading", to: "/studio/reading" },
   { id: "collections", label: "Collections", to: "/studio/collections" },
 ];
 
-export function StudioListeningHeader({
-  active,
-}: {
-  active: StudioListeningTab;
-}) {
-  // Cached queries, both of which the page under this header is likely to be
-  // using anyway — so the second tab's count costs one small request once per
-  // visit and nothing after it.
-  const materials = useStudioListening();
+export function StudioTabsHeader({ active }: { active: StudioTab }) {
+  // Cached queries, all of which the page under this header is likely to be
+  // using anyway — so a tab's count costs one small request once per visit
+  // and nothing after it.
+  const listening = useStudioPapers("listening");
+  const reading = useStudioPapers("reading");
   const collections = useMyCollections();
 
-  const counts: Record<StudioListeningTab, number | null> = {
-    materials: materials.data?.total ?? null,
+  const counts: Record<StudioTab, number | null> = {
+    listening: listening.data?.total ?? null,
+    reading: reading.data?.total ?? null,
     collections: collections.data?.length ?? null,
   };
 
@@ -70,9 +68,7 @@ export function StudioListeningHeader({
   // first paint is a control introducing itself, which is not what a tab bar
   // is for.
   const trackRef = useRef<HTMLDivElement>(null);
-  const tabRefs = useRef<Partial<Record<StudioListeningTab, HTMLAnchorElement>>>(
-    {},
-  );
+  const tabRefs = useRef<Partial<Record<StudioTab, HTMLAnchorElement>>>({});
   const [pill, setPill] = useState<{ x: number; w: number } | null>(null);
 
   useLayoutEffect(() => {
@@ -94,7 +90,7 @@ export function StudioListeningHeader({
     observer.observe(track);
     observer.observe(tab);
     return () => observer.disconnect();
-  }, [active, counts.materials, counts.collections]);
+  }, [active, counts.listening, counts.reading, counts.collections]);
 
   return (
     // One row, held apart: the page's name at one end and the two halves of
@@ -103,10 +99,10 @@ export function StudioListeningHeader({
     // which is the same fact twice and one of them always slightly stale.
     <div className="mb-6 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
       <h1 className="text-2xl font-medium tracking-wide text-foreground">
-        Listening
+        Studio
       </h1>
 
-      <nav aria-label="Listening studio">
+      <nav aria-label="Studio">
         <div
           ref={trackRef}
           className="relative flex rounded-full bg-surface-sunken p-1"
@@ -176,15 +172,17 @@ export function StudioListeningHeader({
  * page — it is somewhere you went from it — and a tab bar over it would
  * offer to switch away from unsaved work.
  */
-export function StudioListeningTabsLayout() {
+export function StudioTabsLayout() {
   const { pathname } = useLocation();
-  const active: StudioListeningTab = pathname.startsWith("/studio/collections")
+  const active: StudioTab = pathname.startsWith("/studio/collections")
     ? "collections"
-    : "materials";
+    : pathname.startsWith("/studio/reading")
+      ? "reading"
+      : "listening";
 
   return (
     <div className="mx-auto w-full max-w-[56.25rem] font-mono">
-      <StudioListeningHeader active={active} />
+      <StudioTabsHeader active={active} />
       <Outlet />
     </div>
   );

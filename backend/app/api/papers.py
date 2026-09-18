@@ -32,6 +32,7 @@ from app.core.database import AsyncSession, get_session
 from app.models.material import Material
 from app.models.part import Part
 from app.models.question_group import QuestionGroup
+from app.schemas.studio import ListeningList
 from app.schemas.listening import (
     AttemptResultOut,
     AttemptSubmit,
@@ -47,6 +48,7 @@ from app.schemas.listening import (
 from app.services import drills as drills_service
 from app.services import grading as grading_service
 from app.services import learner_stats as learner_stats_service
+from app.services import studio as studio_service
 from app.services import listening as listening_service
 from app.services import recommend as recommend_service
 
@@ -165,6 +167,23 @@ def paper_router(skill: str) -> APIRouter:
             **await recommend_service.next_up(session, user.id, skill=skill),
         )
 
+
+    @api.get(f"/{skill}/studio", response_model=ListeningList)
+    async def studio_list(
+        user: CurrentUser, session: SessionDep
+    ) -> ListeningList:
+        """The author's own table of this paper: every material they have
+        written, published or not, with what is in it and how it has gone.
+
+        Under the skill rather than under /studio, because it is one paper's
+        list and the studio has one per paper. What stays at /studio is what
+        is about the AUTHOR rather than about a paper — the dashboard's
+        counters, which span all of them.
+        """
+        data = await studio_service.get_listening_list(
+            session, user.id, skill=skill
+        )
+        return ListeningList(**data)
 
     @api.get(f"/{skill}/stats", response_model=ListeningStatsOut)
     async def listening_statistics(

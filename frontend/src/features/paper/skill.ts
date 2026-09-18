@@ -1,6 +1,9 @@
 import { BookOpen, Headphones } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ListMode } from "@/features/listening/practice";
+import type { QuestionGroupType } from "@/features/paper/types";
+import { questionTypesForPart } from "@/features/listening/parts";
+import { questionTypesForPassage } from "@/features/reading/parts";
 
 /**
  * Which paper a page is about, as a value.
@@ -33,6 +36,18 @@ export interface Skill {
   icon: LucideIcon;
   /** Where the studio's editor for this paper lives. */
   studioPath: string;
+  /** Which question types belong on which part, in the order to offer them.
+   *  Editorial: the server stores any type under any part, and this is the
+   *  difference between a tool that knows the exam and a tool that makes you
+   *  know it. */
+  typesForPart: (orderIndex: number) => QuestionGroupType[];
+  /** What "Full test" seeds, said in the opening step's own words. */
+  fullTestBlurb: string;
+  /** What writing one of these starts with, under the "new material" tile.
+   *  A listening paper begins with a recording to upload and a reading one
+   *  with a passage to paste, and telling a reading author to upload audio is
+   *  the studio describing the other half of itself. */
+  newBlurb: string;
   /** Which lists this paper has, in the order the tabs offer them.
    *
    *  Reading has only its materials until its collections and drills are
@@ -54,6 +69,9 @@ export const LISTENING: Skill = {
   fullParts: 4,
   icon: Headphones,
   studioPath: "/studio/listening",
+  typesForPart: questionTypesForPart,
+  fullTestBlurb: "Seed all four parts — audio and questions added per part",
+  newBlurb: "upload audio, add parts and questions",
   modes: ["materials", "courses", "drills"],
   tabKey: "voocab-listening-tab",
 };
@@ -72,6 +90,9 @@ export const READING: Skill = {
   fullParts: 3,
   icon: BookOpen,
   studioPath: "/studio/reading",
+  typesForPart: questionTypesForPassage,
+  fullTestBlurb: "Seed all three passages — text and questions added per passage",
+  newBlurb: "paste the passages, add questions",
   // Materials only, for now. Reading's courses and drills are real work that
   // has not been done — see the plan — and a Courses tab over an empty shelf
   // would say they had.

@@ -2,7 +2,7 @@ import type { ComponentType } from "react";
 import { Navigate, createBrowserRouter, redirect } from "react-router-dom";
 import { Layout } from "@/components/layout/Layout";
 import { StudioLayout } from "@/components/studio/StudioLayout";
-import { StudioListeningTabsLayout } from "@/components/studio/ListeningTabs";
+import { StudioTabsLayout } from "@/components/studio/StudioTabs";
 import { RequireAuth } from "@/auth/RequireAuth";
 import { PageLoader } from "@/components/ui/spinner";
 
@@ -178,17 +178,23 @@ export const router = createBrowserRouter([
             // pending `lazy` does, so this route blanks on a cold load too.
             HydrateFallback: PageLoader,
           },
-          // The two halves of the listening studio, under one header. A
-          // pathless layout route rather than a component each page renders,
-          // so the tab bar is the SAME element on both — see
-          // StudioListeningTabsLayout for why that is load-bearing.
+          // The three halves of the studio, under one header. A pathless
+          // layout route rather than a component each page renders, so the
+          // tab bar is the SAME element on all of them — see StudioTabsLayout
+          // for why that is load-bearing.
           {
-            element: <StudioListeningTabsLayout />,
+            element: <StudioTabsLayout />,
             children: [
               {
                 path: "listening",
                 ...page(
                   () => import("@/pages/studio/listening/StudioListeningListPage"),
+                ),
+              },
+              {
+                path: "reading",
+                ...page(
+                  () => import("@/pages/studio/reading/StudioReadingListPage"),
                 ),
               },
               {
@@ -206,6 +212,14 @@ export const router = createBrowserRouter([
           {
             path: "listening/:id",
             ...page(() => import("@/pages/studio/listening/StudioListeningEditorPage")),
+          },
+          {
+            path: "reading/new",
+            ...page(() => import("@/pages/studio/reading/StudioReadingEditorPage")),
+          },
+          {
+            path: "reading/:id",
+            ...page(() => import("@/pages/studio/reading/StudioReadingEditorPage")),
           },
           {
             path: "collections/:id",

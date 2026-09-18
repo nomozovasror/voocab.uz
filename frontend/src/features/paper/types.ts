@@ -28,7 +28,9 @@ export interface PaperMaterialDetail extends PaperMaterial {
 
 export interface PaperMaterialCreate {
   title: string;
-  type: "listening";
+  /** Which paper it is. `PaperMaterialCreate` is the one place this is
+   *  written rather than read, so it is the union rather than one member. */
+  type: "listening" | "reading";
   audio_asset_id?: string | null;
   visibility?: Visibility;
 }
@@ -78,6 +80,9 @@ export interface PaperPart {
   /** Where this part's numbering starts on the paper it came from, or null
    *  to carry on from the part before. See `groupNumbering`. */
   first_number?: number | null;
+  /** The text a reading part's questions are answered from. Null on a
+   *  listening part. */
+  passage?: Passage | null;
   question_groups: PaperQuestionGroup[];
 }
 
@@ -86,6 +91,7 @@ export interface PartCreate {
   title: string;
   audio_start_ms?: number | null;
   audio_end_ms?: number | null;
+  passage?: Passage | null;
 }
 
 /** PATCH /api/parts/{id} — all fields optional, adjusts the range later
@@ -94,6 +100,9 @@ export interface PartUpdate {
   title?: string;
   audio_start_ms?: number | null;
   audio_end_ms?: number | null;
+  /** Sent as null to clear it, the way the audio bounds are — a part written
+   *  as reading and corrected to listening has a passage to get rid of. */
+  passage?: Passage | null;
 }
 
 /** Response shape of POST /api/materials/{id}/parts (PartOut) — no nested
@@ -106,6 +115,8 @@ export interface PartOut {
   title: string;
   audio_start_ms: number | null;
   audio_end_ms: number | null;
+  first_number?: number | null;
+  passage?: Passage | null;
   created_at: string;
 }
 

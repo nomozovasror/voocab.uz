@@ -1,4 +1,4 @@
-"""Integration tests for GET /api/studio/listening — real DB, ASGI transport
+"""Integration tests for GET /api/listening/studio — real DB, ASGI transport
 + minted cookie (same pattern as the other studio/listening tests). Rows are
 created directly via the ORM for determinism; the endpoint itself is
 exercised over HTTP.
@@ -227,7 +227,7 @@ async def test_listening_row_fields_and_avg_score() -> None:
 
         async with _client() as client:
             r = await client.get(
-                "/api/studio/listening", cookies={"access_token": token}
+                "/api/listening/studio", cookies={"access_token": token}
             )
             assert r.status_code == 200, r.text
             body = r.json()
@@ -261,7 +261,7 @@ async def test_material_without_audio_has_null_duration_and_status() -> None:
     try:
         async with _client() as client:
             r = await client.get(
-                "/api/studio/listening", cookies={"access_token": token}
+                "/api/listening/studio", cookies={"access_token": token}
             )
             assert r.status_code == 200, r.text
             item = r.json()["items"][0]
@@ -309,7 +309,7 @@ async def test_a_material_mixing_types_names_both_of_them() -> None:
     try:
         async with _client() as client:
             r = await client.get(
-                "/api/studio/listening", cookies={"access_token": token}
+                "/api/listening/studio", cookies={"access_token": token}
             )
             assert r.status_code == 200, r.text
             item = r.json()["items"][0]
@@ -330,7 +330,7 @@ async def test_material_without_group_has_no_question_types_zero_count() -> None
     try:
         async with _client() as client:
             r = await client.get(
-                "/api/studio/listening", cookies={"access_token": token}
+                "/api/listening/studio", cookies={"access_token": token}
             )
             assert r.status_code == 200, r.text
             item = r.json()["items"][0]
@@ -357,7 +357,7 @@ async def test_dictation_and_other_authors_materials_never_appear() -> None:
     try:
         async with _client() as client:
             r = await client.get(
-                "/api/studio/listening", cookies={"access_token": token_a}
+                "/api/listening/studio", cookies={"access_token": token_a}
             )
             assert r.status_code == 200, r.text
             body = r.json()
@@ -383,7 +383,7 @@ async def test_top_level_duration_does_not_double_count_shared_blob() -> None:
     try:
         async with _client() as client:
             r = await client.get(
-                "/api/studio/listening", cookies={"access_token": token}
+                "/api/listening/studio", cookies={"access_token": token}
             )
             assert r.status_code == 200, r.text
             body = r.json()
