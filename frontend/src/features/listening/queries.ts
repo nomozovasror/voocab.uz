@@ -142,7 +142,7 @@ export const COLLECTIONS_PAGE = 12;
  * than a filter applied afterwards.
  */
 export function useCollections(
-  params: { q?: string; status?: string } = {},
+  params: { skill?: string; q?: string; status?: string } = {},
   { enabled = true }: { enabled?: boolean } = {},
 ) {
   return useInfiniteQuery({

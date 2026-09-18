@@ -269,14 +269,21 @@ export function CollectionCover({
   );
 }
 
-export function CollectionBook({ collection }: { collection: Collection }) {
+export function CollectionBook({
+  collection,
+  basePath,
+}: {
+  collection: Collection;
+  /** Where this paper's pages live. See PracticeRow. */
+  basePath: string;
+}) {
   const { done, total } = collection.progress;
   const finished = total > 0 && done === total;
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 
   return (
     <Link
-      to={`/listening/collections/${collection.id}`}
+      to={`${basePath}/collections/${collection.id}`}
       // The focus ring goes on the whole book rather than on the cover, so a
       // keyboard lands on something the size of the thing it is choosing.
       className="group/book block rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"

@@ -239,9 +239,16 @@ async def progress(
 
 
 async def in_progress_for(
-    session: AsyncSession, user_id: uuid.UUID
+    session: AsyncSession, user_id: uuid.UUID, *, skill: str
 ) -> dict | None:
-    """The course this learner was last working on, and what comes next in it.
+    """The course this learner was last working on in ONE paper, and what
+    comes next in it.
+
+    One paper, because a collection is one paper's by construction
+    (``Collection.skill``) and because the block this feeds sits above one
+    catalogue. Unfiltered, the reading page offered a listening course to
+    carry on with — which is a recommendation the reader cannot act on
+    without leaving the page that made it.
 
     "Last working on" and not "furthest through": the question a page asks
     when somebody comes back is where they left off, and the most recent
@@ -262,7 +269,10 @@ async def in_progress_for(
     collections = list(
         (
             await session.exec(
-                select(Collection).where(Collection.visibility == "public")
+                select(Collection).where(
+                    Collection.visibility == "public",
+                    Collection.skill == skill,
+                )
             )
         ).all()
     )
@@ -329,7 +339,7 @@ async def in_progress_for(
 
 
 async def just_finished_for(
-    session: AsyncSession, user_id: uuid.UUID
+    session: AsyncSession, user_id: uuid.UUID, *, skill: str
 ) -> dict | None:
     """The course they have this moment finished, if that is what just
     happened.
@@ -347,7 +357,10 @@ async def just_finished_for(
     collections = list(
         (
             await session.exec(
-                select(Collection).where(Collection.visibility == "public")
+                select(Collection).where(
+                    Collection.visibility == "public",
+                    Collection.skill == skill,
+                )
             )
         ).all()
     )
@@ -394,7 +407,9 @@ async def just_finished_for(
     return None
 
 
-async def in_progress_count(session: AsyncSession, user_id: uuid.UUID) -> int:
+async def in_progress_count(
+    session: AsyncSession, user_id: uuid.UUID, *, skill: str
+) -> int:
     """How many published courses they have started and not finished.
 
     For the "My courses (3)" beside the action: somebody carrying one on
@@ -403,7 +418,10 @@ async def in_progress_count(session: AsyncSession, user_id: uuid.UUID) -> int:
     collections = list(
         (
             await session.exec(
-                select(Collection).where(Collection.visibility == "public")
+                select(Collection).where(
+                    Collection.visibility == "public",
+                    Collection.skill == skill,
+                )
             )
         ).all()
     )
@@ -438,7 +456,7 @@ async def in_progress_count(session: AsyncSession, user_id: uuid.UUID) -> int:
 
 
 async def sequenced_material_ids(
-    session: AsyncSession, user_id: uuid.UUID
+    session: AsyncSession, user_id: uuid.UUID, *, skill: str
 ) -> set[uuid.UUID]:
     """Materials that are waiting their turn inside a course this learner has
     started.
@@ -454,7 +472,10 @@ async def sequenced_material_ids(
     collections = list(
         (
             await session.exec(
-                select(Collection).where(Collection.visibility == "public")
+                select(Collection).where(
+                    Collection.visibility == "public",
+                    Collection.skill == skill,
+                )
             )
         ).all()
     )
@@ -697,6 +718,7 @@ async def list_public(
     session: AsyncSession,
     user_id: uuid.UUID,
     *,
+    skill: str,
     query: str = "",
     status: str = "all",
     covers: str = "all",
@@ -731,7 +753,9 @@ async def list_public(
     answer — items, a total and facet counts — is already the catalogue's, and
     the fix is the one already written.
     """
-    statement = select(Collection).where(Collection.visibility == "public")
+    statement = select(Collection).where(
+        Collection.visibility == "public", Collection.skill == skill
+    )
     # Title, summary and author, every term having to hit. The same field
     # searches both lists on the practice page, so it had better find a course
     # the way it finds a material.
@@ -984,7 +1008,7 @@ async def for_author(
 
 
 async def next_after(
-    session: AsyncSession, user_id: uuid.UUID, material_id: uuid.UUID
+    session: AsyncSession, user_id: uuid.UUID, material_id: uuid.UUID, *, skill: str
 ) -> dict | None:
     """The course this material sits in, and what to do next in it.
 

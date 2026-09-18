@@ -428,7 +428,7 @@ async def first_try_average_for(
 
 
 async def _carried_on_ids(
-    session: AsyncSession, user_id: uuid.UUID
+    session: AsyncSession, user_id: uuid.UUID, *, skill: str
 ) -> set[uuid.UUID]:
     """The materials of the course the block above the list is carrying on
     with, if there is one.
@@ -440,7 +440,7 @@ async def _carried_on_ids(
     """
     from app.services import collections as collections_service
 
-    carrying_on = await collections_service.in_progress_for(session, user_id)
+    carrying_on = await collections_service.in_progress_for(session, user_id, skill=skill)
     if carrying_on is None:
         return set()
     ids = await collections_service._item_ids(
@@ -486,7 +486,7 @@ async def listening_stats(
         # different jobs: the left one is what to do, this one is how it is
         # going.
         "resume": await _resume(
-            session, attempts, exclude=await _carried_on_ids(session, user_id)
+            session, attempts, exclude=await _carried_on_ids(session, user_id, skill=skill)
         ),
         "mistakes": await _mistakes(session, first_ids),
         "trend": _trend(first_attempts),

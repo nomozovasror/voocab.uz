@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -46,17 +46,17 @@ interface SplitPanesProps {
   rightLabel: string;
   /** False below the breakpoint, where the two become tabs instead. */
   split: boolean;
+  /** How tall the pair is, measured by the page from where they start. Null
+   *  until the first measurement, which is one frame. */
+  height: number | null;
   className?: string;
 }
 
-export function SplitPanes({
-  left,
-  right,
-  leftLabel,
-  rightLabel,
-  split,
-  className,
-}: SplitPanesProps) {
+export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
+  function SplitPanes(
+    { left, right, leftLabel, rightLabel, split, height, className },
+    outerRef,
+  ) {
   const [percent, setPercent] = useState(remembered);
   const [showing, setShowing] = useState<"left" | "right">("right");
   const frame = useRef<HTMLDivElement | null>(null);
@@ -94,7 +94,11 @@ export function SplitPanes({
 
   if (!split) {
     return (
-      <div className={cn("flex min-h-0 flex-1 flex-col", className)}>
+      <div
+        ref={outerRef}
+        style={height ? { height } : undefined}
+        className={cn("flex min-h-0 flex-col", className)}
+      >
         {/* Tabs rather than a stack, and rather than a split nobody can read.
             The strip along the bottom still numbers every question, so this
             is only ever "which of the two am I looking at". */}
@@ -141,7 +145,15 @@ export function SplitPanes({
   }
 
   return (
-    <div ref={frame} className={cn("flex min-h-0 flex-1", className)}>
+    <div
+      ref={(el) => {
+        frame.current = el;
+        if (typeof outerRef === "function") outerRef(el);
+        else if (outerRef) outerRef.current = el;
+      }}
+      style={height ? { height } : undefined}
+      className={cn("flex min-h-0", className)}
+    >
       <div
         className="min-w-0 overflow-y-auto pr-5"
         style={{ width: `${percent}%` }}
@@ -186,4 +198,5 @@ export function SplitPanes({
       <div className="min-w-0 flex-1 overflow-y-auto pl-5">{right}</div>
     </div>
   );
-}
+  },
+);

@@ -29,6 +29,7 @@ from app.core.database import async_session_factory
 from app.core.security import create_access_token
 from app.main import app
 from app.models.attempt import Attempt
+from app.models.collection import Collection, CollectionItem
 from app.models.material import Material
 from app.models.part import Part
 from app.models.question import Question
@@ -429,6 +430,82 @@ async def test_a_sidebar_counts_its_own_paper_and_not_the_other():
             assert r.json()["resume"] is None
     finally:
         await _cleanup(reading.id, email)
+
+
+@pytest.mark.asyncio
+async def test_a_course_shelf_holds_one_paper_s_courses():
+    """The second half of the same bug the sidebar had.
+
+    A collection is one paper's by construction, and nothing filtered on it:
+    the reading page offered a LISTENING course to carry on with, which is a
+    recommendation the reader cannot act on without leaving the page that
+    made it.
+    """
+    email = f"reading-courses-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    reading = await _make_material(user.id, skill="reading")
+    listening = await _make_material(user.id, skill="listening")
+    headers = {"Cookie": f"access_token={create_access_token(str(user.id))}"}
+    made: list[uuid.UUID] = []
+    try:
+        await _make_public(reading.id)
+        await _make_public(listening.id)
+        async with _client() as client:
+            async with async_session_factory() as session:
+                for skill, material_id in (
+                    ("reading", reading.id),
+                    ("listening", listening.id),
+                ):
+                    collection = Collection(
+                        author_id=user.id,
+                        skill=skill,
+                        title=f"{skill} course {uuid.uuid4()}",
+                        visibility="public",
+                    )
+                    session.add(collection)
+                    await session.flush()
+                    session.add(
+                        CollectionItem(
+                            collection_id=collection.id,
+                            material_id=material_id,
+                            order_index=0,
+                        )
+                    )
+                    made.append(collection.id)
+                await session.commit()
+
+            r = await client.get(
+                "/api/collections", params={"skill": "reading"}, headers=headers
+            )
+            assert r.status_code == 200, r.text
+            titles = {row["title"] for row in r.json()["items"]}
+            assert any(t.startswith("reading course") for t in titles)
+            assert not any(t.startswith("listening course") for t in titles)
+
+            r = await client.get(
+                "/api/collections", params={"skill": "listening"}, headers=headers
+            )
+            titles = {row["title"] for row in r.json()["items"]}
+            assert any(t.startswith("listening course") for t in titles)
+            assert not any(t.startswith("reading course") for t in titles)
+    finally:
+        async with async_session_factory() as session:
+            for collection_id in made:
+                for item in (
+                    await session.exec(
+                        select(CollectionItem).where(
+                            CollectionItem.collection_id == collection_id
+                        )
+                    )
+                ).all():
+                    await session.delete(item)
+                await session.flush()
+                found = await session.get(Collection, collection_id)
+                if found is not None:
+                    await session.delete(found)
+            await session.commit()
+        await _cleanup(reading.id)
+        await _cleanup(listening.id, email)
 
 
 @pytest.mark.asyncio

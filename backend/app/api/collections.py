@@ -66,6 +66,11 @@ async def _load_owned(
 async def list_collections(
     user: CurrentUser,
     session: SessionDep,
+    # Which paper's shelf. A collection is one paper's by construction, and
+    # the list sits on one paper's page; defaulted rather than required
+    # because every caller that existed before reading did was asking about
+    # listening.
+    skill: Annotated[str, Query(pattern="^(listening|reading)$")] = "listening",
     q: Annotated[str, Query(max_length=200)] = "",
     status: Annotated[
         str, Query(pattern="^(all|in_progress|not_started|finished)$")
@@ -96,6 +101,7 @@ async def list_collections(
     page = await collections_service.list_public(
         session,
         user.id,
+        skill=skill,
         query=q.strip(),
         status=status,
         covers=covers,

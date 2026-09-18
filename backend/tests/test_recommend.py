@@ -588,7 +588,7 @@ async def test_a_loose_suggestion_never_jumps_a_course_queue() -> None:
 
         async with async_session_factory() as session:
             waiting = await collections_service.sequenced_material_ids(
-                session, user.id
+                session, user.id, skill="listening"
             )
 
         assert course[2][0] in waiting

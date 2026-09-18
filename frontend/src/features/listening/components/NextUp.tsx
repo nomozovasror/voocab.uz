@@ -75,10 +75,13 @@ function browse(data: NextUpData): { label: string; scope: Scope } | null {
 
 export function NextUp({
   data,
+  basePath,
   onBrowse,
   onCourses,
   onTypes,
 }: {
+  /** Where this paper's pages live. See PracticeRow. */
+  basePath: string;
   data: NextUpData;
   /** Applies the block's own "browse all" to the list below it. */
   onBrowse: (scope: Scope) => void;
@@ -97,13 +100,13 @@ export function NextUp({
   // voice, and the reader cannot tell those apart.
   if (data.reason === "none") return null;
   if (data.reason === "finished_course" && data.collection) {
-    return <Finished data={data} onCourses={onCourses} />;
+    return <Finished data={data} basePath={basePath} onCourses={onCourses} />;
   }
   if (data.reason === "course" && data.collection && data.items.length > 0) {
-    return <CarryOn data={data} onCourses={onCourses} />;
+    return <CarryOn data={data} basePath={basePath} onCourses={onCourses} />;
   }
   if (data.reason === "task_type" && data.task_type && data.next_group_id) {
-    return <CarryOnTask data={data} onTypes={onTypes} />;
+    return <CarryOnTask data={data} basePath={basePath} onTypes={onTypes} />;
   }
   // A suggestion with nothing to suggest is a heading over an empty box.
   if (data.items.length === 0) return null;
@@ -124,8 +127,11 @@ export function NextUp({
  */
 function CarryOnTask({
   data,
+  basePath,
   onTypes,
 }: {
+  /** Where this paper's pages live. See PracticeRow. */
+  basePath: string;
   data: NextUpData;
   onTypes: () => void;
 }) {
@@ -184,7 +190,7 @@ function CarryOnTask({
             See all
           </Button>
           <Button asChild size="sm">
-            <Link to={`/listening/drills/${data.next_group_id}`}>
+            <Link to={`${basePath}/drills/${data.next_group_id}`}>
               Continue
               <ArrowRight className="size-3.5" aria-hidden />
             </Link>
@@ -216,10 +222,13 @@ function Slot({
 /** Cover, header line, progress bar — the half these two states share. */
 function CourseHead({
   data,
+  basePath,
   lead,
   right,
   children,
 }: {
+  /** Where this paper's pages live. See PracticeRow. */
+  basePath: string;
   data: NextUpData;
   lead: React.ReactNode;
   right?: React.ReactNode;
@@ -237,7 +246,7 @@ function CourseHead({
           colour and the pattern, which is what the reader recognises the book
           by in the first place. */}
       <Link
-        to={`/listening/collections/${collection.id}`}
+        to={`${basePath}/collections/${collection.id}`}
         tabIndex={-1}
         aria-hidden
         className="w-14 shrink-0 self-start"
@@ -282,8 +291,11 @@ function CourseHead({
 
 function CarryOn({
   data,
+  basePath,
   onCourses,
 }: {
+  /** Where this paper's pages live. See PracticeRow. */
+  basePath: string;
   data: NextUpData;
   onCourses: () => void;
 }) {
@@ -293,12 +305,13 @@ function CarryOn({
   return (
     <Slot label="Carry on with your course">
       <CourseHead
+      basePath={basePath}
         data={data}
         lead={
           <p className="min-w-0 truncate text-xs text-muted-foreground">
             Carry on ·{" "}
             <Link
-              to={`/listening/collections/${collection.id}`}
+              to={`${basePath}/collections/${collection.id}`}
               className="text-foreground transition-colors hover:underline"
             >
               {collection.title}
@@ -358,7 +371,7 @@ function CarryOn({
             </Button>
           )}
           <Link
-            to={`/listening/collections/${collection.id}`}
+            to={`${basePath}/collections/${collection.id}`}
             className="text-xs text-muted-foreground transition-colors hover:text-foreground"
           >
             View course
@@ -379,8 +392,11 @@ function CarryOn({
 
 function Finished({
   data,
+  basePath,
   onCourses,
 }: {
+  /** Where this paper's pages live. See PracticeRow. */
+  basePath: string;
   data: NextUpData;
   onCourses: () => void;
 }) {
@@ -390,6 +406,7 @@ function Finished({
   return (
     <Slot label="You finished a course">
       <CourseHead
+      basePath={basePath}
         data={data}
         lead={
           <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">

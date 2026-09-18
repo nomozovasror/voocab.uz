@@ -157,6 +157,9 @@ export const paperApi = {
      *  courses is the one they were in the middle of. */
     list: (
       params: {
+        /** Which paper's shelf. A collection is one paper's by
+         *  construction, and this list sits on one paper's page. */
+        skill?: string;
         q?: string;
         status?: string;
         limit?: number;

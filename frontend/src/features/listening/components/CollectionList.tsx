@@ -60,12 +60,19 @@ const REVEAL =
   "scale-95 opacity-0 transition-[opacity,scale] delay-100 duration-base ease-out data-[visible=true]:scale-100 data-[visible=true]:opacity-100";
 
 export function CollectionList({
+  skill,
+  basePath,
   query,
   status,
   covers,
   length,
   revealRef,
 }: {
+  /** Which paper's shelf this is. Built into the query rather than assumed,
+   *  so a reading page never offers a listening course. */
+  skill: string;
+  /** Where this paper's pages live — `/listening`, `/reading`. */
+  basePath: string;
   /** The same field that searches the catalogue. Passed in already settled —
    *  the page holds the typing, this holds a list. */
   query: string;
@@ -77,13 +84,13 @@ export function CollectionList({
   // Built exactly as the page builds it, so the two calls share one cache
   // entry and switching lists draws from what the strip already fetched.
   const params = useMemo(() => {
-    const next: Record<string, string> = {};
+    const next: Record<string, string> = { skill };
     if (query.trim()) next.q = query.trim();
     if (status !== "all") next.status = status;
     if (covers !== "all") next.covers = covers;
     if (length !== "all") next.length = length;
     return next;
-  }, [query, status, covers, length]);
+  }, [skill, query, status, covers, length]);
   const {
     data,
     isLoading,
@@ -194,7 +201,7 @@ export function CollectionList({
                 ref={revealRef}
                 className={revealRef ? REVEAL : undefined}
               >
-                <CollectionBook collection={collection} />
+                <CollectionBook collection={collection} basePath={basePath} />
               </li>
             ))}
           </ul>

@@ -224,7 +224,7 @@ async def next_up(
         return _nothing()
 
     # Just finished one — said at the moment it is true and not after.
-    finished = await collections_service.just_finished_for(session, user_id)
+    finished = await collections_service.just_finished_for(session, user_id, skill=skill)
     if finished is not None:
         collection = finished["collection"]
         ids = finished["material_ids"]
@@ -239,7 +239,7 @@ async def next_up(
             "remaining": 0,
             "of": len(ids),
             "in_progress_count": await collections_service.in_progress_count(
-                session, user_id
+                session, user_id, skill=skill
             ),
         }
 
@@ -259,7 +259,7 @@ async def next_up(
     # seeded library belongs to a book of sixteen to thirty-two, so one
     # material sat leaves a course in progress for weeks; ranked below that,
     # a kind of question could be worked every day and never be offered.
-    carrying_on = await collections_service.in_progress_for(session, user_id)
+    carrying_on = await collections_service.in_progress_for(session, user_id, skill=skill)
     drilling = await drills_service.in_progress_for(session, user_id, skill=skill)
     if (
         carrying_on is not None
@@ -290,7 +290,7 @@ async def next_up(
             "remaining": len(carrying_on["remaining"]),
             "of": carrying_on["total"],
             "in_progress_count": await collections_service.in_progress_count(
-                session, user_id
+                session, user_id, skill=skill
             ),
             "items": await listening_service._catalogue_rows(
                 session, user_id, materials, skill=skill
@@ -314,12 +314,12 @@ async def next_up(
             "of": drilling["total"],
             "remaining": drilling["total"] - drilling["done"],
             "in_progress_count": await collections_service.in_progress_count(
-                session, user_id
+                session, user_id, skill=skill
             ),
         }
 
     # Nothing that is waiting its turn inside a course they have started.
-    skip = await collections_service.sequenced_material_ids(session, user_id)
+    skip = await collections_service.sequenced_material_ids(session, user_id, skill=skill)
     average = profile["average_pct"]
     by_part = profile["by_part"]
 

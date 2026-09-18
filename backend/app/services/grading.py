@@ -700,7 +700,7 @@ async def _standing(session: AsyncSession, attempt: Attempt, *, skill: str) -> d
             None
             if drill
             else await collections_service.next_after(
-                session, attempt.user_id, attempt.material_id
+                session, attempt.user_id, attempt.material_id, skill=skill
             )
         ),
         "drill": (

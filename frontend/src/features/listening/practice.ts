@@ -171,10 +171,19 @@ export type Scope = "all" | "full" | 1 | 2 | 3 | 4;
  *  of chips said, at a sixth of the width. */
 export const SCOPE_OPTIONS: Scope[] = ["all", 1, 2, 3, 4, "full"];
 
-export function scopeLabel(scope: Scope): string {
-  if (scope === "all") return "All parts";
+/** The same menu for a paper with a different number of parts.
+ *
+ *  A reading paper has three passages, so offering a fourth is offering a
+ *  filter that can only ever match nothing. */
+export function scopeOptions(parts: number): Scope[] {
+  const numbered = [1, 2, 3, 4].filter((n) => n <= parts) as Scope[];
+  return ["all", ...numbered, "full"];
+}
+
+export function scopeLabel(scope: Scope, word = "Part"): string {
+  if (scope === "all") return `All ${word.toLowerCase()}s`;
   if (scope === "full") return "Full test";
-  return `Part ${scope}`;
+  return `${word} ${scope}`;
 }
 
 /**

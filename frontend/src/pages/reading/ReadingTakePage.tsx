@@ -57,6 +57,10 @@ import { SplitPanes } from "@/features/reading/components/SplitPanes";
  * optional (see AttemptSubmit).
  */
 
+/** What the strip along the bottom leaves under the panes: its own height is
+ *  measured, this is the air around it. */
+const PANE_FOOT = 24;
+
 export default function ReadingTakePage() {
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
@@ -220,6 +224,42 @@ export default function ReadingTakePage() {
   // is a pair of tabs — see SplitPanes.
   const wide = useMediaQuery("(min-width: 64rem)");
 
+  // --- How tall the panes are ----------------------------------------------
+  //
+  // Measured from where the panes actually START, not computed from the
+  // viewport and a guess at everything above them. What is above them varies:
+  // the app's own header, the title, and a "you have sat this" row that is
+  // there for some papers and not others. A number written down here was
+  // wrong for whichever combination it had not been written for — and wrong
+  // in the way that matters, because a container taller than the space left
+  // makes the PAGE scroll, which is the one thing two panes exist to stop.
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  const [paneH, setPaneH] = useState<number | null>(null);
+
+  useEffect(() => {
+    const el = paneRef.current;
+    if (!el) return;
+    const measure = () => {
+      const top = el.getBoundingClientRect().top + window.scrollY;
+      setPaneH(Math.max(240, window.innerHeight - top - navH - PANE_FOOT));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    if (typeof ResizeObserver === "undefined") {
+      return () => window.removeEventListener("resize", measure);
+    }
+    // The block above the panes changes height when the material lands — the
+    // title wraps, the "you have sat this" row appears — so the panes are
+    // re-measured against it rather than against the frame it was first
+    // drawn in.
+    const observer = new ResizeObserver(measure);
+    if (el.parentElement) observer.observe(el.parentElement);
+    return () => {
+      window.removeEventListener("resize", measure);
+      observer.disconnect();
+    };
+  }, [navH, material]);
+
   // --- Submitting -----------------------------------------------------------
 
   const send = () => {
@@ -269,13 +309,9 @@ export default function ReadingTakePage() {
   );
 
   return (
-    // Bounded by the viewport, not by the content: the two panes scroll
-    // inside the page rather than the page scrolling past them, which is the
-    // whole of what makes them two panes.
-    <div
-      className="mx-auto flex w-full max-w-[1500px] flex-col"
-      style={{ height: `calc(100svh - ${navH + 96}px)` }}
-    >
+    // The page itself does not scroll: the panes do. That is the whole of
+    // what makes them two panes rather than two columns of one document.
+    <div className="mx-auto flex w-full max-w-[1500px] flex-col overflow-hidden">
       <HeaderGround />
 
       <div className="shrink-0 pt-1">
@@ -337,7 +373,9 @@ export default function ReadingTakePage() {
       )}
 
       <SplitPanes
+        ref={paneRef}
         className="mt-4"
+        height={paneH}
         split={wide}
         leftLabel={sorted.length > 1 ? "Passages" : "Passage"}
         rightLabel="Questions"

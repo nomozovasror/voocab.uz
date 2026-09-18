@@ -24,9 +24,8 @@ import {
   COURSE_STATUS_ORDER,
   DRILL_PART_ORDER,
   drillPartLabel,
-  LIST_MODES,
   LIST_MODE_LABEL,
-  SCOPE_OPTIONS,
+  scopeOptions,
   SORT_LABEL,
   SORT_ORDER,
   scopeLabel,
@@ -299,17 +298,23 @@ function ChipDivider() {
 function ModeSwitch({
   mode,
   onChange,
+  modes,
 }: {
   mode: ListMode;
   onChange: (mode: ListMode) => void;
+  /** The lists this paper has. One of them is a whole tab, so a paper with
+   *  only its materials draws no switch at all rather than a switch with
+   *  nothing to switch to. */
+  modes: ListMode[];
 }) {
+  if (modes.length < 2) return null;
   return (
     <div
       role="tablist"
       aria-label="What to show"
       className="flex items-center gap-0.5"
     >
-      {LIST_MODES.map((value) => (
+      {modes.map((value) => (
         <Button
           key={value}
           type="button"
@@ -495,6 +500,13 @@ interface FilterChipsProps {
    *  band, so this row swaps to the questions a course can answer. */
   mode: ListMode;
   onMode: (mode: ListMode) => void;
+  /** The lists this paper has. */
+  modes: ListMode[];
+  /** What one section of it is called, and how many there are — the scope
+   *  menu asks about the parts THIS paper has, so a three-passage reading
+   *  paper is never offered a fourth. */
+  partWord: string;
+  parts: number;
   /** The two multi-selects flip one value rather than being handed a new
    *  list, and that is not a style choice: computing `[...bands, band]` here
    *  reads the array off THIS render, so two toggles landing in one batch
@@ -531,6 +543,9 @@ export function FilterChips({
   onChange,
   mode,
   onMode,
+  modes,
+  partWord,
+  parts,
   onToggleBand,
   onToggleType,
   typeOptions,
@@ -642,7 +657,7 @@ export function FilterChips({
       aria-label={mode === "courses" ? "Filter collections" : "Filter materials"}
       className="inline-flex flex-wrap items-center justify-center gap-0.5 rounded-2xl border border-border-subtle bg-card/50 p-1"
     >
-      <ModeSwitch mode={mode} onChange={onMode} />
+      <ModeSwitch mode={mode} onChange={onMode} modes={modes} />
 
       {/*
         The controls the switch swaps between, stacked in one box that resizes
@@ -673,6 +688,8 @@ export function FilterChips({
           <ScopeMenu
             scope={scope}
             onChange={(next) => onChange({ scope: next })}
+            partWord={partWord}
+            parts={parts}
           />
           {/* The one chip that starts the list off narrower than the
               catalogue. It reads as what it does rather than as what it hides
@@ -792,10 +809,14 @@ export function FilterChips({
  */
 function ScopeMenu({
   scope,
+  partWord,
+  parts,
   onChange,
 }: {
   scope: Scope;
   onChange: (scope: Scope) => void;
+  partWord: string;
+  parts: number;
 }) {
   const narrowed = scope !== "all";
   return (
@@ -807,7 +828,7 @@ function ScopeMenu({
           size="sm"
           className={cn(PILL, narrowed ? PILL_ON : PILL_OFF)}
         >
-          {scopeLabel(scope)}
+          {scopeLabel(scope, partWord)}
           <ChevronDown className="size-3" aria-hidden />
         </Button>
       </DropdownMenuTrigger>
@@ -822,9 +843,9 @@ function ScopeMenu({
             )
           }
         >
-          {SCOPE_OPTIONS.map((option) => (
+          {scopeOptions(parts).map((option) => (
             <DropdownMenuRadioItem key={option} value={String(option)}>
-              {scopeLabel(option)}
+              {scopeLabel(option, partWord)}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
