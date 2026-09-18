@@ -51,10 +51,6 @@ export const router = createBrowserRouter([
         ...page(() => import("@/pages/home/HomePage")),
       },
       {
-        path: "reading",
-        ...page(() => import("@/pages/reading/ReadingPage")),
-      },
-      {
         path: "vocabulary",
         ...page(() => import("@/pages/vocabulary/VocabularyPage")),
       },
@@ -69,6 +65,22 @@ export const router = createBrowserRouter([
           {
             path: "listening",
             ...page(() => import("@/pages/listening/ListeningPage")),
+          },
+          // Reading, and every one of these has to stay ABOVE
+          // ``reading/:id`` for the same reason the listening ones do: an
+          // attempt id read as a material id fetches a material that doesn't
+          // exist, and "statistics" is not a material either.
+          {
+            path: "reading",
+            ...page(() => import("@/pages/reading/ReadingPage")),
+          },
+          {
+            path: "reading/attempts/:attemptId",
+            ...page(() => import("@/pages/reading/ReadingResultsPage")),
+          },
+          {
+            path: "reading/:id",
+            ...page(() => import("@/pages/reading/ReadingTakePage")),
           },
           {
             // Before ``listening/:id``, or an attempt id would be read as a
