@@ -10,7 +10,7 @@ import {
   difficultyTitle,
   partLabel,
 } from "@/features/listening/practice";
-import type { PracticeMaterial } from "@/features/listening/types";
+import type { PracticeMaterial } from "@/features/paper/types";
 
 /**
  * A collection's materials, as a route through them.

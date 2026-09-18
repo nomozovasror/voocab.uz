@@ -2,7 +2,7 @@ export type Visibility = "private" | "public";
 
 // --- Material (listening) ---------------------------------------------------
 
-export interface ListeningMaterial {
+export interface PaperMaterial {
   id: string;
   author_id: string;
   type: string;
@@ -19,22 +19,22 @@ export interface ListeningMaterial {
   segment_count: number;
 }
 
-export interface ListeningMaterialDetail extends ListeningMaterial {
-  parts: ListeningPart[];
+export interface PaperMaterialDetail extends PaperMaterial {
+  parts: PaperPart[];
   audio_url: string | null;
   transcript_status: string | null;
   duration_ms: number | null;
 }
 
-export interface ListeningMaterialCreate {
+export interface PaperMaterialCreate {
   title: string;
   type: "listening";
   audio_asset_id?: string | null;
   visibility?: Visibility;
 }
 
-export type ListeningMaterialUpdate = Partial<
-  Omit<ListeningMaterialCreate, "type">
+export type PaperMaterialUpdate = Partial<
+  Omit<PaperMaterialCreate, "type">
 >;
 
 export interface AudioUpload {
@@ -69,7 +69,7 @@ export interface GroupImage {
 
 // --- Authoring tree: Part -> QuestionGroup -> Question ----------------------
 
-export interface ListeningPart {
+export interface PaperPart {
   id: string;
   order_index: number;
   title: string;
@@ -78,7 +78,7 @@ export interface ListeningPart {
   /** Where this part's numbering starts on the paper it came from, or null
    *  to carry on from the part before. See `groupNumbering`. */
   first_number?: number | null;
-  question_groups: ListeningQuestionGroup[];
+  question_groups: PaperQuestionGroup[];
 }
 
 export interface PartCreate {
@@ -124,15 +124,64 @@ export type CompletionType =
   | "map_labelling"
   | "diagram_labelling";
 
+/** Every task that is one box of options answering a list of items. One
+ *  shape, five names: the Reading paper prints its own instruction line for
+ *  each, exactly as the nine completion tasks are one document under nine
+ *  names. What differs is the wording, and how the box is lettered. */
+export type MatchingType =
+  | "matching"
+  | "matching_headings"
+  | "matching_information"
+  | "matching_features"
+  | "matching_sentence_endings";
+
+/** The two whose options the exam fixes. Answered in the words the key
+ *  prints, never in letters — which is why `FIXED_CHOICE_OPTIONS` below is
+ *  the only place those words are written down on this side. */
+export type FixedChoiceType = "true_false_not_given" | "yes_no_not_given";
+
 export type QuestionGroupType =
   | CompletionType
   | "multiple_choice"
-  | "matching";
+  | MatchingType
+  | FixedChoiceType;
+
+/** Which alphabet a box is lettered in. `roman` is matching headings, whose
+ *  ITEMS are lettered paragraphs — so its box cannot be lettered too, or an
+ *  answer of "C" would name a heading and a paragraph at once. */
+export type LabelStyle = "letters" | "roman";
+
+const MATCHING_TYPES: MatchingType[] = [
+  "matching",
+  "matching_headings",
+  "matching_information",
+  "matching_features",
+  "matching_sentence_endings",
+];
+
+const FIXED_CHOICE_TYPES: FixedChoiceType[] = [
+  "true_false_not_given",
+  "yes_no_not_given",
+];
+
+/** One box of options answering a list of items, under any of its names. */
+export function isMatching(type: QuestionGroupType | null): type is MatchingType {
+  return MATCHING_TYPES.includes(type as MatchingType);
+}
+
+/** A statement judged against three words the exam fixes. */
+export function isFixedChoice(
+  type: QuestionGroupType | null,
+): type is FixedChoiceType {
+  return FIXED_CHOICE_TYPES.includes(type as FixedChoiceType);
+}
 
 /** Whether this task is answered by writing words rather than by picking a
  *  letter — which is what decides which builder it gets. */
 export function isCompletion(type: QuestionGroupType): type is CompletionType {
-  return type !== "multiple_choice" && type !== "matching";
+  return (
+    type !== "multiple_choice" && !isMatching(type) && !isFixedChoice(type)
+  );
 }
 
 /** The two completion tasks answered on a picture. Everything else about them
@@ -142,7 +191,7 @@ export function isLabelling(type: QuestionGroupType | null): boolean {
   return type === "map_labelling" || type === "diagram_labelling";
 }
 
-export interface ListeningQuestion {
+export interface PaperQuestion {
   id: string;
   /** The question's place within its GROUP, always 1..N. What the candidate
    *  reads runs across the whole material and is worked out from the ordered
@@ -163,7 +212,7 @@ export interface ListeningQuestion {
   option_replay?: Record<string, [number, number]> | null;
 }
 
-export interface ListeningQuestionGroup {
+export interface PaperQuestionGroup {
   id: string;
   // Present on the direct create/update (QuestionGroupOut) response; omitted
   // when nested inside the material's author tree (GET /api/materials/{id}),
@@ -174,7 +223,7 @@ export interface ListeningQuestionGroup {
   instructions: string;
   word_limit: number | null;
   config: GroupConfig;
-  questions: ListeningQuestion[];
+  questions: PaperQuestion[];
 }
 
 export interface QuestionIn {
@@ -241,6 +290,10 @@ export interface GroupConfig {
   image_url?: string;
   image_width?: number;
   image_height?: number;
+
+  // --- matching -------------------------------------------------------------
+  /** Which alphabet the box is lettered in. See `MatchingConfig`. */
+  label_style?: LabelStyle;
 }
 
 export interface FormConfig extends GroupConfig {
@@ -289,10 +342,13 @@ export interface MatchingQuestionIn {
 export interface MatchingConfig {
   options: string[];
   allow_reuse: boolean;
+  /** Which alphabet the box is lettered in. Absent on every group written
+   *  before matching had more than one name, which is what "letters" means. */
+  label_style?: LabelStyle;
 }
 
 export interface MatchingGroupIn {
-  type: "matching";
+  type: MatchingType;
   instructions: string;
   /** Never set, for the same reason multiple choice never sets it. */
   word_limit?: null;
@@ -300,7 +356,20 @@ export interface MatchingGroupIn {
   questions: MatchingQuestionIn[];
 }
 
-export type QuestionGroupIn = FormGroupIn | ChoiceGroupIn | MatchingGroupIn;
+/** A true/false set as it is sent. No config: its three words come from its
+ *  type, so there is nothing at group level for an author to have written. */
+export interface FixedChoiceGroupIn {
+  type: FixedChoiceType;
+  instructions: string;
+  config: Record<string, never>;
+  questions: MatchingQuestionIn[];
+}
+
+export type QuestionGroupIn =
+  | FormGroupIn
+  | ChoiceGroupIn
+  | MatchingGroupIn
+  | FixedChoiceGroupIn;
 
 // --- Consumption ("take") tree: no correct_answers anywhere (§3.4/§7) -------
 
@@ -326,12 +395,32 @@ export interface TakeQuestionGroup {
   questions: TakeQuestion[];
 }
 
+/** One paragraph of a reading passage, and the letter the book prints beside
+ *  it where it prints one. Null on most passages: a book letters its
+ *  paragraphs only where a task is answered by naming one. */
+export interface PassageParagraph {
+  label: string | null;
+  text: string;
+}
+
+/** What a reading part's questions are answered from — the counterpart of the
+ *  recording a listening part points into. */
+export interface Passage {
+  paragraphs: PassageParagraph[];
+  subtitle: string | null;
+  source: string | null;
+}
+
 export interface TakePart {
   id: string;
   order_index: number;
   title: string;
   audio_start_ms: number | null;
   audio_end_ms: number | null;
+  /** The text, on a reading paper. Null on a listening one, whose questions
+   *  are answered from the recording — so this is also how a page can tell
+   *  which paper it is holding. */
+  passage?: Passage | null;
   /** Where this part's numbering starts on the paper it came from, or null
    *  to carry on from the part before. See `groupNumbering`. */
   first_number?: number | null;
@@ -362,7 +451,7 @@ export interface MaterialTake {
   last_attempt?: LastAttempt | null;
 }
 
-/** One row of the learner's catalogue. Deliberately not `ListeningMaterial`:
+/** One row of the learner's catalogue. Deliberately not `PaperMaterial`:
  *  that is the author's view — visibility, the concurrency version — and
  *  pointing the practice list at it showed learners their own unfinished
  *  drafts labelled "private". */
@@ -735,7 +824,8 @@ export interface Trend {
  * `mistakes` and `trend` are null below their evidence thresholds. The page
  * says so in a sentence; it does not draw a thin chart.
  */
-export interface ListeningStats {
+/** The practice page's right-hand column, for one paper. */
+export interface LearnerStats {
   materials_done: number;
   first_try_avg_pct: number | null;
   /** Absent until something has actually been sat twice. */

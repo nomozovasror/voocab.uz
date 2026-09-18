@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { TakeConfig } from "@/features/listening/take-config";
-import type { ListenedSpan } from "@/features/listening/types";
+import type { TakeConfig } from "@/features/paper/take-config";
+import type { ListenedSpan } from "@/features/paper/types";
 
 /**
  * The recording, as a piece of state — with no view attached.

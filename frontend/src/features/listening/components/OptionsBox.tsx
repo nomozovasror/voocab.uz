@@ -6,7 +6,7 @@ import {
   matchLetter,
   newMatchOption,
   type MatchOption,
-} from "@/features/listening/matching";
+} from "@/features/paper/matching";
 
 /**
  * The box of lettered options a group is answered from.

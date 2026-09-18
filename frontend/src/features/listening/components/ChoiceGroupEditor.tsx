@@ -2,12 +2,12 @@ import { useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { ChoiceBuilder } from "@/features/listening/components/ChoiceBuilder";
 import { GroupHeader } from "@/features/listening/components/GroupHeader";
-import { questionRangeLabel } from "@/features/listening/numbering";
+import { questionRangeLabel } from "@/features/paper/numbering";
 import {
   ANSWER_COUNTS,
   choiceIssues,
   type ChoiceQuestion,
-} from "@/features/listening/mcq";
+} from "@/features/paper/mcq";
 
 /**
  * One multiple-choice group: its header, its instruction line, and the

@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 import { ordinal } from "@/features/listening/practice";
-import type { ReviewRow } from "@/features/listening/review";
-import type { AttemptResult } from "@/features/listening/types";
+import type { ReviewRow } from "@/features/paper/review";
+import type { AttemptResult } from "@/features/paper/types";
 
 /**
  * What the attempt came to, and what that is worth knowing against.

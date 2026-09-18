@@ -1,9 +1,5 @@
-import {
-  QUESTION_TYPE_BLURB,
-  QUESTION_TYPE_ICON,
-  QUESTION_TYPE_LABEL,
-} from "@/features/listening/parts";
-import type { QuestionGroupType } from "@/features/listening/types";
+import { QUESTION_TYPE_BLURB, QUESTION_TYPE_ICON, QUESTION_TYPE_LABEL } from "@/features/paper/question-types";
+import type { QuestionGroupType } from "@/features/paper/types";
 
 /**
  * The question "what kind?", as a row of cards.

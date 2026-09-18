@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { COVER_INK } from "@/features/listening/cover";
+import { COVER_INK } from "@/features/paper/cover";
 import { CollectionCover } from "@/features/listening/components/CollectionBook";
 
 /**

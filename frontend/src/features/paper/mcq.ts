@@ -1,9 +1,9 @@
-import { newId } from "@/features/listening/form-syntax";
-import { questionNumbers } from "@/features/listening/numbering";
+import { newId } from "@/features/paper/form-syntax";
+import { questionNumbers } from "@/features/paper/numbering";
 import type {
   ChoiceQuestionIn,
-  ListeningQuestion,
-} from "@/features/listening/types";
+  PaperQuestion,
+} from "@/features/paper/types";
 
 /**
  * The multiple-choice document: what the builder edits, and how it becomes
@@ -253,7 +253,7 @@ export function choiceQuestionsToApi(
  *  options they stand for by position — which is what they were written from,
  *  and why the two are only ever saved together. */
 export function choiceQuestionsFromApi(
-  questions: ListeningQuestion[],
+  questions: PaperQuestion[],
 ): ChoiceQuestion[] {
   const restored = questions
     .slice()

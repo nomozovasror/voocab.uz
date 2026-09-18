@@ -1,13 +1,13 @@
-import { parseTemplateLayout, type FormBlock, type FormLine } from "@/features/listening/form-syntax";
-import { sorted } from "@/features/listening/numbering";
-import { paperParts } from "@/features/listening/take-paper";
+import { parseTemplateLayout, type FormBlock, type FormLine } from "@/features/paper/form-syntax";
+import { sorted } from "@/features/paper/numbering";
+import { paperParts } from "@/features/paper/take-paper";
 import type {
   MaterialTake,
   MistakeKind,
   QuestionResult,
   TakeQuestionGroup,
   TranscriptLine,
-} from "@/features/listening/types";
+} from "@/features/paper/types";
 
 /**
  * Turning a marked attempt into something a candidate can work from.
@@ -331,9 +331,52 @@ export interface ReviewRow {
  * server's own `number` where it could not — the two agree, since the server
  * walks the tree the same way, but only one of them exists in both cases.
  */
+/**
+ * Where an answer is found in the material, as a line to quote.
+ *
+ * Listening's answer is a moment in a recording, and the server sends the
+ * transcript across it. Reading's is a sentence on the page, and nothing is
+ * sent: the passage came down with the paper, so the quote is found in it
+ * here — by the same text match the transcript's own highlight uses, and
+ * under the same rule. An answer that appears twice in a passage is not
+ * quoted at all: a quote pointing at the wrong occurrence teaches a candidate
+ * they missed something they never read.
+ */
+export function passageQuote(
+  material: MaterialTake | undefined,
+  result: QuestionResult,
+): string {
+  const wanted = result.correct_answers
+    .map((a) => a.trim())
+    .filter((a) => a.length > 1);
+  if (!wanted.length) return "";
+
+  const paragraphs = (material?.parts ?? []).flatMap(
+    (part) => part.passage?.paragraphs ?? [],
+  );
+  for (const answer of wanted) {
+    const needle = answer.toLowerCase();
+    const hits = paragraphs.filter((p) =>
+      p.text.toLowerCase().includes(needle),
+    );
+    if (hits.length !== 1) continue;
+    // The SENTENCE, not the paragraph. A paragraph is eighty words and the
+    // point of the quote is to put the reader back in front of the line they
+    // misread — the same argument `spoken` makes about widening a marked
+    // moment to its sentence rather than quoting the whole turn.
+    const sentences = hits[0].text.split(/(?<=[.!?])\s+/);
+    const line = sentences.find((one) => one.toLowerCase().includes(needle));
+    return (line ?? hits[0].text).trim();
+  }
+  return "";
+}
+
 export function reviewRows(
   results: QuestionResult[],
   material: MaterialTake | undefined,
+  /** Where to find the line to quote. Absent means the recording's
+   *  transcript, which is what the server sends with a listening attempt. */
+  quote?: (result: QuestionResult) => string,
 ): ReviewRow[] {
   const context = questionContexts(material);
   const groups = questionOptions(material);
@@ -370,7 +413,9 @@ export function reviewRows(
         context: context.get(result.question_id) ?? null,
         byLetter,
         options,
-        transcript: transcriptText(result.transcript),
+        transcript: quote
+          ? quote(result)
+          : transcriptText(result.transcript),
         startMs,
         endMs,
       };

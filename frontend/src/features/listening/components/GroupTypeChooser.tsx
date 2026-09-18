@@ -1,7 +1,7 @@
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { QuestionTypeChoices } from "@/features/listening/components/QuestionTypeChoices";
-import type { QuestionGroupType } from "@/features/listening/types";
+import type { QuestionGroupType } from "@/features/paper/types";
 
 /**
  * What a group is, asked once, before there is anything in it.

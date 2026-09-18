@@ -1,7 +1,7 @@
 import { Fragment, type ReactNode } from "react";
 import { ArrowDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { FormBlock } from "@/features/listening/form-syntax";
+import type { FormBlock } from "@/features/paper/form-syntax";
 
 interface FormLayoutProps {
   blocks: FormBlock[];

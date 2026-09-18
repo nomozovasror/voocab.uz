@@ -6,7 +6,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { listeningApi } from "@/features/listening/api";
-import type { AttemptResult, AttemptSubmit } from "@/features/listening/types";
+import type { AttemptSubmit } from "@/features/paper/types";
 
 const MATERIALS_KEY = ["listening-materials"] as const;
 
@@ -69,18 +69,6 @@ export function useDeleteListeningMaterial() {
 }
 
 // --- Consumption (§8) --------------------------------------------------------
-
-const TAKE_KEY = ["listening-take"] as const;
-
-/** The student's render payload — answer-free by construction. Never mix
- *  this query key/cache with the author `useListeningMaterial` above. */
-export function useTakeMaterial(id: string | undefined) {
-  return useQuery({
-    queryKey: [...TAKE_KEY, id],
-    queryFn: () => listeningApi.take(id as string),
-    enabled: !!id,
-  });
-}
 
 const PRACTICE_KEY = ["listening-practice"] as const;
 
@@ -277,46 +265,6 @@ export function usePracticeStats() {
   return useQuery({
     queryKey: PRACTICE_STATS_KEY,
     queryFn: () => listeningApi.practiceStats(),
-  });
-}
-
-export function useSubmitAttempt(materialId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: AttemptSubmit) =>
-      listeningApi.submitAttempt(materialId, data),
-    // Finishing a material changes its row in the catalogue — a score where
-    // there was none, a better one than last time. Left alone, going back to
-    // the list after a test showed it as never attempted.
-    //
-    // And it moves the panel beside the list: a part's accuracy, the weakest
-    // one, the totals underneath. The very first submit changes it from
-    // "start with Part 1" into a panel with numbers in it.
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: PRACTICE_KEY });
-      void qc.invalidateQueries({ queryKey: PRACTICE_STATS_KEY });
-      // And what to do next: the material just finished must drop out of the
-      // suggestions, and finishing it may have moved which part is behind.
-      void qc.invalidateQueries({ queryKey: NEXT_UP_KEY });
-      // And any collection holding it: progress through a course is counted
-      // from attempts, so finishing something moves the bar on every course
-      // it appears in.
-      void qc.invalidateQueries({ queryKey: COLLECTIONS_KEY });
-    },
-  });
-}
-
-/** One finished attempt, by id. A submitted attempt never changes, so this is
- *  fetched once and kept — and `initialData` lets the page that just
- *  submitted hand over the result it already has instead of asking for it
- *  again on the way in. */
-export function useAttempt(attemptId: string | undefined, seed?: AttemptResult) {
-  return useQuery({
-    queryKey: ["listening-attempt", attemptId],
-    queryFn: () => listeningApi.attempt(attemptId as string),
-    enabled: !!attemptId,
-    initialData: seed,
-    staleTime: Infinity,
   });
 }
 

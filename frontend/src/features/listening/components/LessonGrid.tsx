@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { fmtClock } from "@/lib/time";
 import { describeTask, partLabel } from "@/features/listening/practice";
-import type { PracticeMaterial } from "@/features/listening/types";
+import type { PracticeMaterial } from "@/features/paper/types";
 
 /**
  * A collection's materials as a map of results.

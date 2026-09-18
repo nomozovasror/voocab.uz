@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { getErrorMessage } from "@/lib/api";
 import { toast } from "@/lib/toast";
-import type { Visibility } from "@/features/listening/types";
+import type { Visibility } from "@/features/paper/types";
 
 /**
  * Publish or return a material to draft.

@@ -2,7 +2,7 @@ import { Check, ImageUp, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MediaDropzone } from "@/features/listening/components/MediaDropzone";
 import { TaskPicture } from "@/features/listening/components/TaskPicture";
-import type { GroupImage } from "@/features/listening/types";
+import type { GroupImage } from "@/features/paper/types";
 
 /**
  * The picture a map or diagram group is answered on, as the author works with

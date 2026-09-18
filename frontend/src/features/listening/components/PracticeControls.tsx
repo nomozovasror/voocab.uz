@@ -47,7 +47,7 @@ import type {
   DifficultyBand,
   PracticeFacet,
   QuestionGroupType,
-} from "@/features/listening/types";
+} from "@/features/paper/types";
 
 /**
  * What narrows the list: one search field and one row of controls.

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { fmtClock } from "@/lib/time";
-import type { PracticeDrill } from "@/features/listening/types";
+import type { PracticeDrill } from "@/features/paper/types";
 
 /**
  * One kind of question as a map of results.

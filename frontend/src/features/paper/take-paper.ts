@@ -1,5 +1,5 @@
-import { questionSpan, sorted } from "@/features/listening/numbering";
-import type { MaterialTake } from "@/features/listening/types";
+import { questionSpan, sorted } from "@/features/paper/numbering";
+import type { MaterialTake } from "@/features/paper/types";
 
 /**
  * The paper as a flat list of questions, in the order they are printed.

@@ -11,8 +11,8 @@ import { PREFERENCES, usePreference } from "@/lib/preferences";
 import { useClaimHeaderCentre } from "@/components/layout/header-center";
 import { HeaderGround } from "@/components/layout/HeaderGround";
 import { mediaUrl } from "@/features/listening/api";
-import { useSubmitAttempt, useTakeMaterial } from "@/features/listening/queries";
-import { QuestionPaper } from "@/features/listening/components/QuestionPaper";
+import { useSubmitAttempt, useTakeMaterial } from "@/features/paper/queries";
+import { QuestionPaper } from "@/features/paper/components/QuestionPaper";
 import {
   PaperSkeleton,
   PlayerSkeleton,
@@ -21,22 +21,22 @@ import {
   TakePlayer,
   useDockOpening,
 } from "@/features/listening/components/TakeAudio";
-import { QuestionNav } from "@/features/listening/components/QuestionNav";
+import { QuestionNav } from "@/features/paper/components/QuestionNav";
 import type { WavePart } from "@/features/listening/components/Waveform";
 import {
   answeredIn,
   paperParts,
   paperRows,
   paperTotal,
-} from "@/features/listening/take-paper";
-import { goToQuestion, useQuestionSpy, Q_ANCHOR } from "@/features/listening/take-focus";
+} from "@/features/paper/take-paper";
+import { goToQuestion, useQuestionSpy, Q_ANCHOR } from "@/features/paper/take-focus";
 import { useAudioEngine, NUDGE_MS } from "@/features/listening/use-audio-engine";
 import { useWaveform } from "@/features/listening/use-waveform";
 import {
   useDrillTake,
   useSubmitDrill,
 } from "@/features/listening/queries";
-import { PRACTICE } from "@/features/listening/take-config";
+import { PRACTICE } from "@/features/paper/take-config";
 import {
   MAX_SPANS,
   clearSession,
@@ -47,7 +47,7 @@ import {
   saveSession,
   toSubmit,
   type TakeSession,
-} from "@/features/listening/take-session";
+} from "@/features/paper/take-session";
 
 /**
  * Practice: the material, its recording, and nothing between the two.
@@ -88,10 +88,10 @@ export default function ListeningTakePage() {
   const { id, groupId } = useParams<{ id?: string; groupId?: string }>();
   const drilling = groupId !== undefined;
   const navigate = useNavigate();
-  const paper = useTakeMaterial(drilling ? undefined : id);
+  const paper = useTakeMaterial("listening", drilling ? undefined : id);
   const drill = useDrillTake(groupId);
   const { data: material, isLoading, isError } = drilling ? drill : paper;
-  const attemptMut = useSubmitAttempt(id ?? "");
+  const attemptMut = useSubmitAttempt("listening", id ?? "");
   const drillMut = useSubmitDrill(groupId ?? "");
   const submitMut = drilling ? drillMut : attemptMut;
   const config = PRACTICE;

@@ -1,18 +1,21 @@
 import type { FocusEventHandler } from "react";
 import { Play } from "lucide-react";
-import { ChoiceGroup } from "@/features/listening/components/ChoiceGroup";
-import { FormCompletionGroup } from "@/features/listening/components/FormCompletionGroup";
-import { MatchingGroup } from "@/features/listening/components/MatchingGroup";
+import { ChoiceGroup } from "@/features/paper/components/ChoiceGroup";
+import { FormCompletionGroup } from "@/features/paper/components/FormCompletionGroup";
+import { FixedChoiceGroup } from "@/features/paper/components/FixedChoiceGroup";
+import { MatchingGroup } from "@/features/paper/components/MatchingGroup";
 import {
   groupNumbering,
   partNumber,
   sorted,
-} from "@/features/listening/numbering";
-import { paperParts } from "@/features/listening/take-paper";
+} from "@/features/paper/numbering";
+import { paperParts } from "@/features/paper/take-paper";
+import { isFixedChoice, isMatching } from "@/features/paper/types";
 import type {
   MaterialTake,
+  QuestionGroupType,
   QuestionResult,
-} from "@/features/listening/types";
+} from "@/features/paper/types";
 
 /**
  * The paper: every part, every group, in the author's order.
@@ -55,6 +58,11 @@ interface QuestionPaperProps {
    *  move through here, rather than by every group component reporting it. */
   onFocus?: FocusEventHandler<HTMLDivElement>;
   onBlur?: FocusEventHandler<HTMLDivElement>;
+  /** What one section of this paper is called to a candidate: "Part" on a
+   *  listening test, "Passage" on a reading one. Taken rather than assumed —
+   *  the paper prints its own word, and a reading paper headed "Part 1" is
+   *  the app calling it something the page beside it doesn't. */
+  partWord?: string;
 }
 
 export function QuestionPaper({
@@ -69,6 +77,7 @@ export function QuestionPaper({
   onFlag,
   onFocus,
   onBlur,
+  partWord = "Part",
 }: QuestionPaperProps) {
   const parts = sorted(material.parts);
   const startNumbers = groupNumbering(material);
@@ -93,7 +102,7 @@ export function QuestionPaper({
               the line that says so belongs where the break is. */}
           <h2 className="mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-border pt-4">
             <span className="text-sm font-medium text-foreground">
-              Part {number}
+              {partWord} {number}
             </span>
             {spans[i] && spans[i].rows.length > 0 && (
               <span className="text-xs tabular-nums text-muted-foreground">
@@ -101,7 +110,9 @@ export function QuestionPaper({
                 {spans[i].to > spans[i].from ? `\u2013${spans[i].to}` : ""}
               </span>
             )}
-            {part.title && part.title.toLowerCase() !== `part ${number}` && (
+            {part.title &&
+              part.title.toLowerCase() !==
+                `${partWord.toLowerCase()} ${number}` && (
               <span className="text-xs text-muted-foreground">{part.title}</span>
             )}
             {/* Where the author marked the part's boundaries, the learner can
@@ -137,8 +148,10 @@ export function QuestionPaper({
               // better than leaving the questions out of the paper entirely.
               return group.type === "multiple_choice" ? (
                 <ChoiceGroup key={group.id} {...shared} />
-              ) : group.type === "matching" ? (
+              ) : isMatching(group.type as QuestionGroupType) ? (
                 <MatchingGroup key={group.id} {...shared} />
+              ) : isFixedChoice(group.type as QuestionGroupType) ? (
+                <FixedChoiceGroup key={group.id} {...shared} />
               ) : (
                 <FormCompletionGroup key={group.id} {...shared} />
               );

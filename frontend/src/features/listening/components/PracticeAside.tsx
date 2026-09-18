@@ -2,7 +2,7 @@ import { ArrowRight } from "lucide-react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { fmtClock, timeAgo } from "@/lib/time";
-import { QUESTION_TYPE_ICON, QUESTION_TYPE_LABEL } from "@/features/listening/parts";
+import { QUESTION_TYPE_ICON, QUESTION_TYPE_LABEL } from "@/features/paper/question-types";
 import {
   ACCURACY_TEXT,
   DIFFICULTY_CLASS,
@@ -17,7 +17,7 @@ import {
   PracticeStats,
   PracticeStatsSkeleton,
 } from "@/features/listening/components/PracticeStats";
-import type { ListeningStats, PracticeMaterial } from "@/features/listening/types";
+import type { LearnerStats, PracticeMaterial } from "@/features/paper/types";
 
 /**
  * The column beside the list — two cards, each with something to say about
@@ -65,7 +65,9 @@ function Label({ children }: { children: React.ReactNode }) {
 }
 
 interface PracticeAsideProps {
-  stats: ListeningStats | undefined;
+  /** Where this paper's pages live. See PracticeRow. */
+  basePath: string;
+  stats: LearnerStats | undefined;
   statsLoading: boolean;
   /** The row under the pointer, or with keyboard focus. */
   preview: PracticeMaterial | null;
@@ -75,6 +77,7 @@ interface PracticeAsideProps {
 
 export function PracticeAside({
   stats,
+  basePath,
   statsLoading,
   preview,
   onPractisePart,
@@ -100,7 +103,7 @@ export function PracticeAside({
     <Face key={preview.id}>
       <div className="space-y-3">
         <Card label="About this material">
-          <MaterialPreview material={preview} stats={stats} />
+          <MaterialPreview material={preview} stats={stats} basePath={basePath} />
         </Card>
         {preview.author && (
           <Card label="About the author" className="px-4 py-3.5">
@@ -132,9 +135,12 @@ function Face({ children }: { children: React.ReactNode }) {
 function MaterialPreview({
   material: m,
   stats,
+  basePath,
 }: {
   material: PracticeMaterial;
-  stats: ListeningStats | undefined;
+  stats: LearnerStats | undefined;
+  /** Where this paper's pages live. See PracticeRow. */
+  basePath: string;
 }) {
   const standing = standingFor(m, stats);
   const done = m.attempts > 0 && m.best_score !== null;
@@ -217,7 +223,7 @@ function MaterialPreview({
             to a result you have already earned. */}
         {done && m.last_attempt_id && (
           <Link
-            to={`/listening/attempts/${m.last_attempt_id}`}
+            to={`${basePath}/attempts/${m.last_attempt_id}`}
             className="mt-1 inline-flex items-center gap-1 text-xs text-primary transition-colors hover:underline"
           >
             See your answers
@@ -263,7 +269,7 @@ function MaterialPreview({
           see the page's hover handling. */}
       <div className="mt-auto border-t border-border-subtle px-4 py-3">
         <Link
-          to={`/listening/${m.id}`}
+          to={`${basePath}/${m.id}`}
           className="inline-flex items-center gap-1.5 text-sm text-primary transition-colors hover:underline"
         >
           {done ? "Sit it again" : "Sit this material"}

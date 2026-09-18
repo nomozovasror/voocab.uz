@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
-import { COVER_INK, coverFor } from "@/features/listening/cover";
+import { COVER_INK, coverFor } from "@/features/paper/cover";
 import { Pattern } from "@/features/listening/components/CollectionBook";
 
 /**

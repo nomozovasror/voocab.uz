@@ -3,16 +3,13 @@ import { Check, ChevronDown, CircleAlert, SquareDashed } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FormBuilder } from "@/features/listening/components/FormBuilder";
 import { GroupHeader } from "@/features/listening/components/GroupHeader";
-import { questionRangeLabel } from "@/features/listening/numbering";
-import {
-  QUESTION_TYPE_LABEL,
-  QUESTION_TYPE_RUBRIC,
-} from "@/features/listening/parts";
+import { questionRangeLabel } from "@/features/paper/numbering";
+import { QUESTION_TYPE_LABEL, QUESTION_TYPE_RUBRIC } from "@/features/paper/question-types";
 import {
   docGaps,
   docPublishIssues,
   gapAnswered,
-} from "@/features/listening/form-syntax";
+} from "@/features/paper/form-syntax";
 import { GroupPicture } from "@/features/listening/components/GroupPicture";
 import { OptionsBox } from "@/features/listening/components/OptionsBox";
 import {
@@ -20,14 +17,14 @@ import {
   newMatchOptions,
   pictureLetterBox,
   type MatchOption,
-} from "@/features/listening/matching";
-import { ANSWER_RUBRICS, deriveRubric } from "@/features/listening/rubric";
-import type { DocBlock, LetterSource } from "@/features/listening/form-syntax";
+} from "@/features/paper/matching";
+import { ANSWER_RUBRICS, deriveRubric } from "@/features/paper/rubric";
+import type { DocBlock, LetterSource } from "@/features/paper/form-syntax";
 import type {
   AnswerRubric,
   CompletionType,
   GroupImage,
-} from "@/features/listening/types";
+} from "@/features/paper/types";
 
 interface QuestionFormEditorProps {
   /** Which completion task this group is. It decides what the group is

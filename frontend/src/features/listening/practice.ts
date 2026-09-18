@@ -1,20 +1,16 @@
 import { AudioLines, Layers } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import {
-  QUESTION_TYPE_BLURB,
-  QUESTION_TYPE_ICON,
-  QUESTION_TYPE_LABEL,
-} from "@/features/listening/parts";
+import { QUESTION_TYPE_BLURB, QUESTION_TYPE_ICON, QUESTION_TYPE_LABEL } from "@/features/paper/question-types";
 import type {
   CatalogueAuthor,
   DifficultyBand,
-  ListeningStats,
+  LearnerStats,
   MistakeKind,
   PartAccuracy,
   PracticeFacet,
   PracticeMaterial,
   QuestionGroupType,
-} from "@/features/listening/types";
+} from "@/features/paper/types";
 
 /**
  * What a catalogue row says about itself, and what the filters above it mean.
@@ -141,10 +137,16 @@ export function describeTask(m: PracticeMaterial): TaskDescription | null {
 }
 
 /** "Part 2", or nothing where there is more than one to name. */
-export function partLabel(m: PracticeMaterial): string | null {
+export function partLabel(
+  m: PracticeMaterial,
+  /** What one section of this paper is called. A reading paper prints
+   *  "Reading Passage 1" and calling it "Part 1" here would be the catalogue
+   *  and the paper disagreeing about what the thing is. */
+  word = "Part",
+): string | null {
   if (m.part_count !== 1) return null;
   const [n] = m.part_numbers;
-  return n ? `Part ${n}` : null;
+  return n ? `${word} ${n}` : null;
 }
 
 // --- Filters -----------------------------------------------------------------
@@ -629,7 +631,7 @@ export interface Standing {
 
 export function standingFor(
   m: PracticeMaterial,
-  stats: ListeningStats | undefined,
+  stats: LearnerStats | undefined,
 ): Standing | null {
   if (!stats || m.part_numbers.length === 0) return null;
   const rows = m.part_numbers
@@ -744,8 +746,15 @@ export function mistakePhrase(kind: MistakeKind, many: boolean): string {
  * read their sheet back rather than play the recording a fourth time. Every
  * line is written to work for one mistake or twelve, so the sentence around
  * it only has to choose a number in one place.
+ *
+ * And per PAPER, for the same reason. Half of these name the thing the
+ * candidate should do next, and on a reading paper that thing is not
+ * listening: telling somebody who missed an answer in a passage to go and
+ * listen for it is advice they cannot act on, from a page that has not
+ * noticed what it is about. The kinds themselves are shared — a plural is a
+ * plural — so only the sentences differ.
  */
-export const MISTAKE_ADVICE: Record<MistakeKind, string> = {
+const LISTENING_ADVICE: Record<MistakeKind, string> = {
   spelling:
     "worth reading your sheet back before you submit, rather than listening again",
   missed: "worth going back to where the answer was said and listening for it",
@@ -754,6 +763,23 @@ export const MISTAKE_ADVICE: Record<MistakeKind, string> = {
   format: "worth writing numbers and dates the way the question does",
   wrong: "worth listening again to where the answer is given",
 };
+
+const READING_ADVICE: Record<MistakeKind, string> = {
+  spelling:
+    "worth copying the word straight off the passage, letter for letter",
+  missed: "worth finding the paragraph the answer is in and reading it again",
+  plural: "worth checking the article and the verb around the word",
+  word_limit: "worth re-reading the rubric before you write",
+  format: "worth writing numbers and dates the way the question does",
+  wrong: "worth re-reading the sentence the answer is in",
+};
+
+export const MISTAKE_ADVICE = LISTENING_ADVICE;
+
+/** The advice for one paper. */
+export function mistakeAdvice(skill: string): Record<MistakeKind, string> {
+  return skill === "reading" ? READING_ADVICE : LISTENING_ADVICE;
+}
 
 /** "1st", "2nd", "3rd", "4th" — for "83% on your 2nd try", where the ordinal
  *  is doing as much work as the percentage. */

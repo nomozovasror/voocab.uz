@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { BARS } from "@/features/listening/components/Waveform";
-import type { ListenedSpan } from "@/features/listening/types";
+import type { ListenedSpan } from "@/features/paper/types";
 
 /**
  * The shape of a recording, as a row of peak heights.

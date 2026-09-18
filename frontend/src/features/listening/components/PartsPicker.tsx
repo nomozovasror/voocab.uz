@@ -1,9 +1,7 @@
 import { ClipboardList, Layers, ListChecks, Map, NotebookPen } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import {
-  QUESTION_TYPE_LABEL,
-  questionTypesForPart,
-} from "@/features/listening/parts";
+import { questionTypesForPart } from "@/features/listening/parts";
+import { QUESTION_TYPE_LABEL } from "@/features/paper/question-types";
 
 interface PickerPart {
   n: 1 | 2 | 3 | 4;

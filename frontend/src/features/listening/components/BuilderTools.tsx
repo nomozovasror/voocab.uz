@@ -5,11 +5,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  QUESTION_TYPE_ICON,
-  QUESTION_TYPE_LABEL,
-} from "@/features/listening/parts";
-import type { QuestionGroupType } from "@/features/listening/types";
+import { QUESTION_TYPE_ICON, QUESTION_TYPE_LABEL } from "@/features/paper/question-types";
+import type { QuestionGroupType } from "@/features/paper/types";
 
 /**
  * The row of controls under a builder, and the one control both builders

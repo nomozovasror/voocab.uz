@@ -43,7 +43,7 @@ import {
   type DocBlock,
   type DocLine,
   type DocPart,
-} from "@/features/listening/form-syntax";
+} from "@/features/paper/form-syntax";
 
 /**
  * The form builder. Structure comes from buttons, and a gap is made either by

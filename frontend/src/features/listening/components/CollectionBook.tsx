@@ -1,9 +1,9 @@
 import { Link } from "react-router-dom";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { COVER_INK, coverFor, coverKeyOf } from "@/features/listening/cover";
-import type { PatternName } from "@/features/listening/cover";
-import type { Collection } from "@/features/listening/types";
+import { COVER_INK, coverFor, coverKeyOf } from "@/features/paper/cover";
+import type { PatternName } from "@/features/paper/cover";
+import type { Collection } from "@/features/paper/types";
 
 /**
  * A collection, as a book.

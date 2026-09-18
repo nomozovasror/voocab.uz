@@ -2,7 +2,7 @@ import { TASK_FAMILIES, familyIcon } from "@/features/listening/practice";
 import type { TaskFamily } from "@/features/listening/practice";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import type { DrillType } from "@/features/listening/types";
+import type { DrillType } from "@/features/paper/types";
 
 /**
  * The Drills tab's front page: every kind of task, and what there is of it.

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Headphones } from "lucide-react";
+import { LISTENING } from "@/features/paper/skill";
 import { Button } from "@/components/ui/button";
 import { useClaimHeaderCentre } from "@/components/layout/header-center";
 import { useDebounced } from "@/hooks/use-debounced";
@@ -47,8 +48,8 @@ import type {
 import type {
   DifficultyBand,
   QuestionGroupType,
-} from "@/features/listening/types";
-import { QUESTION_TYPE_LABEL } from "@/features/listening/parts";
+} from "@/features/paper/types";
+import { QUESTION_TYPE_LABEL } from "@/features/paper/question-types";
 import {
   FilterChips,
   ListHeader,
@@ -847,6 +848,7 @@ export default function ListeningPage() {
                 >
                   {visible.map((m, i) => (
                     <PracticeRow
+                      basePath={LISTENING.basePath}
                       key={m.id}
                       material={m}
                       innerRef={(el) => {
@@ -926,6 +928,7 @@ export default function ListeningPage() {
           className="scrollbar-quiet lg:sticky lg:-mr-3 lg:overflow-y-auto lg:pr-3"
         >
           <PracticeAside
+          basePath={LISTENING.basePath}
             stats={stats.data}
             statsLoading={stats.isLoading}
             preview={preview}

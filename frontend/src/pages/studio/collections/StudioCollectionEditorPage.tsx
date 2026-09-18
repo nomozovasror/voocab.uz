@@ -29,7 +29,7 @@ import { timeAgo } from "@/lib/time";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { formatClock } from "@/features/studio/format";
-import { COVER_INK, coverKeyOf, newCoverSeed } from "@/features/listening/cover";
+import { COVER_INK, coverKeyOf, newCoverSeed } from "@/features/paper/cover";
 import {
   useCollection,
   useDeleteCollection,
@@ -47,7 +47,7 @@ import {
 import type {
   AuthorCollection,
   PracticeMaterial,
-} from "@/features/listening/types";
+} from "@/features/paper/types";
 
 /**
  * Building one collection: what is in it, and in what order.

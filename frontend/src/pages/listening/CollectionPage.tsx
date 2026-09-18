@@ -17,7 +17,7 @@ import {
 } from "@/features/listening/practice";
 import { AuthorAvatar } from "@/features/listening/components/AuthorTag";
 import { CollectionCover } from "@/features/listening/components/CollectionBook";
-import { coverKeyOf } from "@/features/listening/cover";
+import { coverKeyOf } from "@/features/paper/cover";
 import {
   LessonList,
   LessonListSkeleton,
@@ -26,7 +26,7 @@ import { LessonGrid } from "@/features/listening/components/LessonGrid";
 import type {
   CollectionDetail,
   PracticeMaterial,
-} from "@/features/listening/types";
+} from "@/features/paper/types";
 
 /**
  * One collection, opened.

@@ -2,8 +2,8 @@ import { Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fmtClock } from "@/lib/time";
 import { MISTAKE_LABEL } from "@/features/listening/practice";
-import { markAnswer, sayAnswer, type ReviewRow } from "@/features/listening/review";
-import { questionNumbersShort } from "@/features/listening/numbering";
+import { markAnswer, sayAnswer, type ReviewRow } from "@/features/paper/review";
+import { questionNumbersShort } from "@/features/paper/numbering";
 
 /**
  * One question, after it has been marked.
@@ -126,6 +126,10 @@ export function ReviewItem({
 
       {row.transcript && (
         <div className="mt-2.5 ml-9 flex items-start gap-3 rounded-lg bg-surface-sunken px-3 py-2.5">
+          {/* Only where there is a recording behind it. A reading quote has
+              nothing to play, and a disabled play button beside it would be a
+              control that exists to be greyed out. */}
+          {onPlay && (
           <button
             type="button"
             disabled={!canPlay}
@@ -136,6 +140,7 @@ export function ReviewItem({
           >
             <Play className="size-3" fill="currentColor" aria-hidden />
           </button>
+          )}
           <div className="min-w-0 flex-1">
             {row.startMs != null && (
               <p className="text-xs tabular-nums text-muted-foreground">

@@ -1,10 +1,10 @@
 import { cn } from "@/lib/utils";
 import {
-  MISTAKE_ADVICE,
   MISTAKE_LABEL,
+  mistakeAdvice,
   mistakePhrase,
 } from "@/features/listening/practice";
-import type { MistakeKind } from "@/features/listening/types";
+import type { MistakeKind } from "@/features/paper/types";
 
 /**
  * Where the marks went on this paper.
@@ -34,9 +34,13 @@ import type { MistakeKind } from "@/features/listening/types";
  */
 export function ReviewMistakes({
   groups,
+  skill = "listening",
   className,
 }: {
   groups: { kind: MistakeKind; count: number }[];
+  /** Which paper this was, because half the advice names what to do next and
+   *  that is different on a paper you read. */
+  skill?: string;
   className?: string;
 }) {
   if (!groups.length) return null;
@@ -50,7 +54,7 @@ export function ReviewMistakes({
         Where the marks went
       </h2>
       {groups.length === 1 ? (
-        <OneKind kind={groups[0].kind} count={groups[0].count} />
+        <OneKind kind={groups[0].kind} count={groups[0].count} skill={skill} />
       ) : (
         <Breakdown groups={groups} />
       )}
@@ -69,7 +73,15 @@ export function ReviewMistakes({
  * somebody and exactly wrong for one they heard and misspelled, who needs to
  * read their sheet back rather than play the recording a fourth time.
  */
-function OneKind({ kind, count }: { kind: MistakeKind; count: number }) {
+function OneKind({
+  kind,
+  count,
+  skill,
+}: {
+  kind: MistakeKind;
+  count: number;
+  skill: string;
+}) {
   const many = count > 1;
   return (
     <p className="text-sm leading-normal text-muted-foreground">
@@ -78,7 +90,7 @@ function OneKind({ kind, count }: { kind: MistakeKind; count: number }) {
           out loud. */}
       {many ? `All ${word(count)} marks went to ` : "Your one mistake was "}
       <span className="text-foreground">{mistakePhrase(kind, many)}</span> —{" "}
-      {MISTAKE_ADVICE[kind]}.
+      {mistakeAdvice(skill)[kind]}.
     </p>
   );
 }

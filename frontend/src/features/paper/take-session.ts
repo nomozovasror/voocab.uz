@@ -2,7 +2,7 @@ import type {
   AnswerTiming,
   AttemptSubmit,
   ListenedSpan,
-} from "@/features/listening/types";
+} from "@/features/paper/types";
 
 /**
  * Everything a half-finished attempt consists of, and how it survives the tab

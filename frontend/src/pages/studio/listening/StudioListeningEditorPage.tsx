@@ -44,7 +44,7 @@ import {
   newId,
   type DocBlock,
   type LetterSource,
-} from "@/features/listening/form-syntax";
+} from "@/features/paper/form-syntax";
 import {
   choiceIssues,
   choiceMarks,
@@ -57,7 +57,7 @@ import {
   DEFAULT_ANSWERS_PER_QUESTION,
   type ChoiceIssue,
   type ChoiceQuestion,
-} from "@/features/listening/mcq";
+} from "@/features/paper/mcq";
 import {
   isMatchingGroupEmpty,
   matchLetter,
@@ -77,11 +77,11 @@ import {
   type MatchItem,
   type MatchOption,
   type MatchingIssue,
-} from "@/features/listening/matching";
+} from "@/features/paper/matching";
 import {
   questionRangeLabel,
   questionSpan,
-} from "@/features/listening/numbering";
+} from "@/features/paper/numbering";
 import {
   questionTypesForPart,
 } from "@/features/listening/parts";
@@ -93,6 +93,7 @@ import {
 import { AddGroupButton } from "@/features/listening/components/BuilderTools";
 import { ChoiceGroupEditor } from "@/features/listening/components/ChoiceGroupEditor";
 import { MatchingGroupEditor } from "@/features/listening/components/MatchingGroupEditor";
+import { FixedChoiceGroupEditor } from "@/features/reading/components/FixedChoiceGroupEditor";
 import {
   EditorSetup,
   type SetupChoice,
@@ -102,18 +103,26 @@ import { GroupTypeChooser } from "@/features/listening/components/GroupTypeChoos
 import { QuestionFormEditor } from "@/features/listening/components/QuestionFormEditor";
 import { FormHelpCard } from "@/features/listening/components/FormHelpCard";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { ANSWER_RUBRICS, deriveRubric } from "@/features/listening/rubric";
+import { ANSWER_RUBRICS, deriveRubric } from "@/features/paper/rubric";
 import type { StudioListeningList } from "@/features/studio/types";
-import { isCompletion, isLabelling } from "@/features/listening/types";
+import {
+  isCompletion,
+  isFixedChoice,
+  isLabelling,
+  isMatching,
+} from "@/features/paper/types";
 import type {
   AnswerRubric,
   AudioSegment,
   CompletionType,
+  FixedChoiceType,
   GroupImage,
+  LabelStyle,
+  MatchingType,
   QuestionGroupIn,
   QuestionGroupType,
   Visibility,
-} from "@/features/listening/types";
+} from "@/features/paper/types";
 
 // The structure is fixed at creation by the picker (§1): a single part
 // (Part 1 or Part 4) trims the shared recording to its range; a full test
@@ -175,13 +184,28 @@ interface ChoiceGroupState extends GroupStateBase {
 }
 
 interface MatchingGroupState extends GroupStateBase {
-  type: "matching";
+  /** Which of matching's five names it is printed under. One shape, five
+   *  instruction lines — see `MatchingType`. */
+  type: MatchingType;
   /** The box every item under it is answered from. A group property because
    *  the paper prints it once, above the whole set. */
   options: MatchOption[];
   /** Whether one option may answer more than one item — the paper's "you may
    *  use any letter more than once". */
   allowReuse: boolean;
+  /** Which alphabet the box is lettered in. Roman for matching headings,
+   *  whose items are lettered paragraphs. */
+  labelStyle: LabelStyle;
+  items: MatchItem[];
+}
+
+/** A set of statements judged against three words the exam fixes.
+ *
+ *  It has no box and no options of its own: TRUE / FALSE / NOT GIVEN comes
+ *  from the type, on the server as here, so there is nothing for an author to
+ *  write except the statements and which of the three each one is. */
+interface FixedChoiceGroupState extends GroupStateBase {
+  type: FixedChoiceType;
   items: MatchItem[];
 }
 
@@ -194,10 +218,29 @@ interface PendingGroupState extends GroupStateBase {
   type: null;
 }
 
+/** The group-level twins of `isMatching`/`isFixedChoice`.
+ *
+ *  They take the GROUP rather than its type because that is what narrows.
+ *  TypeScript narrows a discriminated union on a comparison against the
+ *  discriminant (`group.type === "matching"`), and a type predicate applied
+ *  to `group.type` narrows the string and leaves `group` exactly as wide as
+ *  it was — which reads as though it works and then fails on every field
+ *  access underneath. */
+function isMatchingGroup(group: GroupState): group is MatchingGroupState {
+  return isMatching(group.type);
+}
+
+function isFixedChoiceGroup(
+  group: GroupState,
+): group is FixedChoiceGroupState {
+  return isFixedChoice(group.type);
+}
+
 type GroupState =
   | FormGroupState
   | ChoiceGroupState
   | MatchingGroupState
+  | FixedChoiceGroupState
   | PendingGroupState;
 
 interface PartState {
@@ -299,15 +342,32 @@ function groupPayload(group: GroupState): QuestionGroupIn | null {
     };
   }
 
-  if (group.type === "matching") {
+  if (isMatchingGroup(group)) {
     return {
-      type: "matching",
+      type: group.type,
       instructions: group.instructions.trim(),
       config: {
         options: matchingOptionsToApi(group.options),
         allow_reuse: group.allowReuse,
+        label_style: group.labelStyle,
       },
-      questions: matchingToApi(group.options, group.items),
+      questions: matchingToApi(group.options, group.items, group.labelStyle),
+    };
+  }
+
+  if (isFixedChoiceGroup(group)) {
+    // No config at all: the three words belong to the type, here as on the
+    // server. An item's answer IS the word, so it travels as written rather
+    // than as a position in a box that does not exist.
+    return {
+      type: group.type,
+      instructions: group.instructions.trim(),
+      config: {},
+      questions: group.items.map((item, index) => ({
+        number: index + 1,
+        prompt: item.prompt.trim(),
+        correct_answers: item.answer ? [item.answer] : [],
+      })),
     };
   }
 
@@ -397,7 +457,7 @@ function groupLetterSource(group: FormGroupState): LetterSource {
 function groupQuestionCount(group: GroupState): number {
   if (isCompletionGroup(group)) return docGaps(group.doc).length;
   if (group.type === "multiple_choice") return group.questions.length;
-  if (group.type === "matching") return group.items.length;
+  if (isMatchingGroup(group)) return group.items.length;
   return 0;
 }
 
@@ -419,7 +479,7 @@ function groupNumberSpan(group: GroupState): number {
 function isGroupEmpty(group: GroupState): boolean {
   if (isCompletionGroup(group)) return isDocEmpty(group.doc) && !group.image;
   if (group.type === "multiple_choice") return isChoiceGroupEmpty(group.questions);
-  if (group.type === "matching") {
+  if (isMatchingGroup(group)) {
     return isMatchingGroupEmpty(group.options, group.items);
   }
   return true;
@@ -436,14 +496,20 @@ function newGroup(type: QuestionGroupType | null): GroupState {
       questions: newChoiceQuestions(),
     };
   }
-  if (type === "matching") {
+  if (isMatching(type)) {
     return {
       ...base,
       type,
       options: newMatchOptions(),
       allowReuse: false,
+      // Matching headings is the one printed in roman numerals, because its
+      // items are the lettered paragraphs themselves.
+      labelStyle: type === "matching_headings" ? "roman" : "letters",
       items: newMatchItems(),
     };
+  }
+  if (isFixedChoice(type)) {
+    return { ...base, type, items: newMatchItems() };
   }
   return {
     ...base,
@@ -797,7 +863,7 @@ export default function StudioListeningEditorPage() {
   const editGroupItems = useCallback(
     (key: string, edit: (current: MatchItem[]) => MatchItem[]) => {
       updateGroup(key, (group) =>
-        group.type === "matching" ? { ...group, items: edit(group.items) } : group,
+        isMatchingGroup(group) ? { ...group, items: edit(group.items) } : group,
       );
     },
     [updateGroup],
@@ -806,7 +872,7 @@ export default function StudioListeningEditorPage() {
   const editGroupOptions = useCallback(
     (key: string, edit: (current: MatchOption[]) => MatchOption[]) => {
       updateGroup(key, (group) =>
-        group.type === "matching"
+        isMatchingGroup(group)
           ? { ...group, options: edit(group.options) }
           : group,
       );
@@ -920,7 +986,7 @@ export default function StudioListeningEditorPage() {
   const dropMatchOption = useCallback(
     (key: string, optionId: string) => {
       updateGroup(key, (group) =>
-        group.type === "matching"
+        isMatchingGroup(group)
           ? { ...group, ...removeMatchOption(group.options, group.items, optionId) }
           : group,
       );
@@ -962,11 +1028,34 @@ export default function StudioListeningEditorPage() {
                     questions: choiceQuestionsFromApi(group.questions),
                   };
                 }
-                if (group.type === "matching") {
+                // `isMatching` on the TYPE, not `isMatchingGroup` on the
+                // object: what is in hand here is the API's shape, not the
+                // editor's state, and the two only look alike.
+                if (isMatching(group.type as QuestionGroupType)) {
                   return {
                     ...base,
-                    type: "matching",
+                    type: group.type as MatchingType,
+                    labelStyle: group.config.label_style ?? "letters",
                     ...matchingFromApi(group),
+                  };
+                }
+                if (isFixedChoice(group.type as QuestionGroupType)) {
+                  return {
+                    ...base,
+                    type: group.type as FixedChoiceType,
+                    // The answer is the word itself, so it needs no box to be
+                    // resolved against — which is the whole difference
+                    // between this and the matching arm above.
+                    items: group.questions
+                      .slice()
+                      .sort((a, b) => a.number - b.number)
+                      .map((question) => ({
+                        id: newId(),
+                        prompt: question.prompt ?? "",
+                        answer: question.correct_answers?.[0] ?? null,
+                        replayStartMs: question.replay_start_ms ?? null,
+                        replayEndMs: question.replay_end_ms ?? null,
+                      })),
                   };
                 }
                 // Anything else is a completion task, including a type this
@@ -1807,7 +1896,7 @@ export default function StudioListeningEditorPage() {
                 startNumber - 1,
                 group.answersPerQuestion,
               )[0]?.message
-            : group.type === "matching"
+            : isMatchingGroup(group)
               ? matchingPublishIssues(
                   group.options,
                   group.items,
@@ -1986,10 +2075,10 @@ export default function StudioListeningEditorPage() {
             )
           : [],
     );
-    const matchingGroups = run.filter(({ group }) => group.type === "matching");
+    const matchingGroups = run.filter(({ group }) => isMatchingGroup(group));
     const matchingProblems: MatchingIssue[] = matchingGroups.flatMap(
       ({ group, startNumber }) =>
-        group.type === "matching"
+        isMatchingGroup(group)
           ? matchingIssues(
               group.options,
               group.items,
@@ -2102,7 +2191,7 @@ export default function StudioListeningEditorPage() {
           total +
           // Per item, not per option: one item is one answer at one moment,
           // and an option answering three of them is three moments.
-          (group.type === "matching"
+          (isMatchingGroup(group)
             ? group.items.filter((item) => item.replayStartMs == null).length
             : 0),
         0,
@@ -2158,7 +2247,7 @@ export default function StudioListeningEditorPage() {
           );
         }
         if (group.type === "multiple_choice") return choiceMarks(group.questions);
-        if (group.type === "matching") return matchingMarks(group.items);
+        if (isMatchingGroup(group)) return matchingMarks(group.items);
         return [];
       }),
     [run],
@@ -2193,7 +2282,7 @@ export default function StudioListeningEditorPage() {
             total + group.questions.filter((q) => q.correct.length > 0).length
           );
         }
-        if (group.type === "matching") {
+        if (isMatchingGroup(group)) {
           return total + group.items.filter((item) => item.answer).length;
         }
         return total;
@@ -2708,7 +2797,7 @@ export default function StudioListeningEditorPage() {
                           extraTools={tools}
                           {...actions}
                         />
-                      ) : group.type === "matching" ? (
+                      ) : isMatchingGroup(group) ? (
                         <MatchingGroupEditor
                           options={group.options}
                           items={group.items}
@@ -2728,7 +2817,7 @@ export default function StudioListeningEditorPage() {
                           allowReuse={group.allowReuse}
                           onAllowReuseChange={(allowReuse) =>
                             updateGroup(group.key, (g) =>
-                              g.type === "matching" ? { ...g, allowReuse } : g,
+                              isMatchingGroup(g) ? { ...g, allowReuse } : g,
                             )
                           }
                           startNumber={startNumber}
@@ -2738,6 +2827,22 @@ export default function StudioListeningEditorPage() {
                             hasAudioEverAttached ? requestMark : undefined
                           }
                           disabled={!hasAudioEverAttached}
+                          extraTools={tools}
+                          {...actions}
+                        />
+                      ) : isFixedChoiceGroup(group) ? (
+                        <FixedChoiceGroupEditor
+                          type={group.type}
+                          items={group.items}
+                          onItemsChange={(edit) =>
+                            editGroupItems(group.key, edit)
+                          }
+                          instructions={group.instructions}
+                          onInstructionsChange={(instructions) =>
+                            updateGroup(group.key, (g) => ({ ...g, instructions }))
+                          }
+                          startNumber={startNumber}
+                          showIssues={badGroupKey === group.key}
                           extraTools={tools}
                           {...actions}
                         />

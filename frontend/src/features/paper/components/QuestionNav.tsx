@@ -1,7 +1,7 @@
 import { useCallback, useRef } from "react";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { answeredIn, type PaperPart } from "@/features/listening/take-paper";
+import { answeredIn, type PaperPart } from "@/features/paper/take-paper";
 
 /**
  * The strip along the bottom: every question on the paper, at once.

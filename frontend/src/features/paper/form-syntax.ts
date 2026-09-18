@@ -1,8 +1,8 @@
 import type {
   CompletionType,
-  ListeningQuestion,
+  PaperQuestion,
   QuestionIn,
-} from "@/features/listening/types";
+} from "@/features/paper/types";
 
 /**
  * The form-completion document: what the builder edits, and how it becomes
@@ -681,7 +681,7 @@ export function docToGroup(
  *  line, so there is one conversion rather than two that can drift. */
 function docLine(
   line: FormLine,
-  byNumber: Map<number, ListeningQuestion>,
+  byNumber: Map<number, PaperQuestion>,
   optionIdOf?: (letter: string) => string | undefined,
 ): DocLine {
   return {
@@ -710,7 +710,7 @@ function docLine(
 /** The inverse, for reopening a saved material. */
 export function docFromGroup(
   template: string,
-  questions: ListeningQuestion[],
+  questions: PaperQuestion[],
   /** Letter -> the option it stands for, for a group printed with a box. */
   optionIdOf?: (letter: string) => string | undefined,
 ): DocBlock[] {

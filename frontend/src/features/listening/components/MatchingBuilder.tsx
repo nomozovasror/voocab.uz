@@ -17,7 +17,7 @@ import {
   type MatchItem,
   type MatchOption,
   type MatchingIssue,
-} from "@/features/listening/matching";
+} from "@/features/paper/matching";
 
 /**
  * The matching builder.

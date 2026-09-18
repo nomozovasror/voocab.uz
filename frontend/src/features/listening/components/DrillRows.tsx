@@ -3,7 +3,7 @@ import { Check } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { fmtClock } from "@/lib/time";
-import type { PracticeDrill } from "@/features/listening/types";
+import type { PracticeDrill } from "@/features/paper/types";
 
 /**
  * The exercises of one kind, as a list.

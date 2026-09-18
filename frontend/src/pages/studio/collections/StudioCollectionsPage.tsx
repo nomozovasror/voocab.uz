@@ -7,12 +7,12 @@ import { getErrorMessage } from "@/lib/api";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { StudioCollectionCover } from "@/components/studio/StudioCollectionCover";
-import { coverKeyOf } from "@/features/listening/cover";
+import { coverKeyOf } from "@/features/paper/cover";
 import {
   useCreateCollection,
   useMyCollections,
 } from "@/features/listening/queries";
-import type { AuthorCollection } from "@/features/listening/types";
+import type { AuthorCollection } from "@/features/paper/types";
 
 /**
  * The author's collections — the second half of the listening studio, under

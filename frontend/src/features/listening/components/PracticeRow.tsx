@@ -14,7 +14,7 @@ import {
   difficultyTitle,
   partLabel,
 } from "@/features/listening/practice";
-import type { PracticeMaterial } from "@/features/listening/types";
+import type { PracticeMaterial } from "@/features/paper/types";
 
 /**
  * One material, as somebody deciding what to practise reads it.
@@ -35,11 +35,17 @@ import type { PracticeMaterial } from "@/features/listening/types";
  *  template string because two of them carry a component (the task's icon,
  *  the author's avatar) and one is conditional on the material having a
  *  recording at all. */
-function MetaLine({ material: m }: { material: PracticeMaterial }) {
+function MetaLine({
+  material: m,
+  partWord,
+}: {
+  material: PracticeMaterial;
+  partWord: string;
+}) {
   const task = describeTask(m);
   const segments: React.ReactNode[] = [];
 
-  const part = partLabel(m);
+  const part = partLabel(m, partWord);
   if (part) segments.push(part);
 
   if (task) {
@@ -56,7 +62,7 @@ function MetaLine({ material: m }: { material: PracticeMaterial }) {
   // a count. For two or three parts the count IS the label above and saying
   // it twice would be padding.
   if (m.part_count >= FULL_TEST_PARTS) {
-    segments.push(`${m.part_count} parts`);
+    segments.push(`${m.part_count} ${partWord.toLowerCase()}s`);
   }
 
   segments.push(
@@ -86,6 +92,12 @@ function MetaLine({ material: m }: { material: PracticeMaterial }) {
 
 interface PracticeRowProps {
   material: PracticeMaterial;
+  /** Where this paper's pages live — `/listening`, `/reading`. Taken rather
+   *  than assumed: the row is the same row on both, and the only thing about
+   *  it that knows which paper it is showing is where it points. */
+  basePath: string;
+  /** What one section of this paper is called: "Part", "Passage". */
+  partWord?: string;
   /** Its place in the SEQUENCE, where there is one — the third lesson of a
    *  course. Absent in the catalogue, and that absence is the point: there,
    *  the order is "Newest first" and changes with every chip, so a number
@@ -107,6 +119,8 @@ interface PracticeRowProps {
 
 export function PracticeRow({
   material: m,
+  basePath,
+  partWord = "Part",
   index,
   innerRef,
   onFocus,
@@ -156,7 +170,7 @@ export function PracticeRow({
     >
       <Link
         ref={innerRef}
-        to={`/listening/${m.id}`}
+        to={`${basePath}/${m.id}`}
         onFocus={() => {
           onFocus?.();
           onPreview?.(m.id);
@@ -215,7 +229,7 @@ export function PracticeRow({
               </span>
             )}
           </span>
-          <MetaLine material={m} />
+          <MetaLine material={m} partWord={partWord} />
         </div>
 
         {/*

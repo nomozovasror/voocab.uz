@@ -7,28 +7,28 @@ import { useClaimHeaderCentre } from "@/components/layout/header-center";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { PREFERENCES, usePreference } from "@/lib/preferences";
 import { mediaUrl } from "@/features/listening/api";
-import { QUESTION_TYPE_SHORT } from "@/features/listening/parts";
-import { useAttempt, useTakeMaterial } from "@/features/listening/queries";
+import { QUESTION_TYPE_SHORT } from "@/features/paper/question-types";
+import { useAttempt, useTakeMaterial } from "@/features/paper/queries";
 import { PlayerSkeleton } from "@/features/listening/components/PaperSkeleton";
 import {
   TakePlayer,
   useDockOpening,
 } from "@/features/listening/components/TakeAudio";
-import { ReviewScore } from "@/features/listening/components/ReviewScore";
-import { ReviewMistakes } from "@/features/listening/components/ReviewMistakes";
-import { ReviewItem } from "@/features/listening/components/ReviewItem";
+import { ReviewScore } from "@/features/paper/components/ReviewScore";
+import { ReviewMistakes } from "@/features/paper/components/ReviewMistakes";
+import { ReviewItem } from "@/features/paper/components/ReviewItem";
 import {
   ReviewFilter,
   type ReviewScope,
-} from "@/features/listening/components/ReviewFilter";
+} from "@/features/paper/components/ReviewFilter";
 import type { WavePart } from "@/features/listening/components/Waveform";
-import { reviewRows, tallyMistakes } from "@/features/listening/review";
-import { Q_ANCHOR, goToQuestion } from "@/features/listening/take-focus";
-import { sorted } from "@/features/listening/numbering";
-import { PRACTICE } from "@/features/listening/take-config";
+import { reviewRows, tallyMistakes } from "@/features/paper/review";
+import { Q_ANCHOR, goToQuestion } from "@/features/paper/take-focus";
+import { sorted } from "@/features/paper/numbering";
+import { PRACTICE } from "@/features/paper/take-config";
 import { useAudioEngine } from "@/features/listening/use-audio-engine";
 import { useWaveform } from "@/features/listening/use-waveform";
-import type { AttemptResult } from "@/features/listening/types";
+import type { AttemptResult } from "@/features/paper/types";
 
 /**
  * What one attempt came to, and — the part that matters — why.
@@ -94,8 +94,8 @@ export default function ListeningResultsPage() {
   const { attemptId } = useParams<{ attemptId: string }>();
   const location = useLocation();
   const seed = (location.state as { result?: AttemptResult } | null)?.result;
-  const { data, isLoading, isError } = useAttempt(attemptId, seed);
-  const { data: material } = useTakeMaterial(data?.material_id);
+  const { data, isLoading, isError } = useAttempt("listening", attemptId, seed);
+  const { data: material } = useTakeMaterial("listening", data?.material_id);
   const parts = useMemo(
     () => (material ? sorted(material.parts) : []),
     [material],

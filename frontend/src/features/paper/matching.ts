@@ -1,9 +1,10 @@
-import { newId } from "@/features/listening/form-syntax";
+import { newId } from "@/features/paper/form-syntax";
 import type {
-  ListeningQuestion,
-  ListeningQuestionGroup,
+  LabelStyle,
+  PaperQuestion,
+  PaperQuestionGroup,
   MatchingQuestionIn,
-} from "@/features/listening/types";
+} from "@/features/paper/types";
 
 /**
  * The matching document: what the builder edits, and how it becomes what the
@@ -36,10 +37,33 @@ import type {
 //: The option labels, in order. The same alphabet the server letters by, and
 //: the same one mcq.ts uses — a matching box rarely runs past H.
 const OPTION_LETTERS = "abcdefghijklmnopqrstuvwxyz";
+
+/** The other alphabet a box can be lettered in.
+ *
+ *  Matching headings is printed "i, ii, iii" rather than "A, B, C", and it is
+ *  the one matching task whose ITEMS are themselves lettered — paragraphs A
+ *  to G answered by headings i to viii. Two alphabets on one page is not
+ *  decoration: were the headings lettered too, an answer of "C" would name a
+ *  heading and a paragraph at once.
+ *
+ *  Lowercase like the letters, and for the same reason: the key is stored
+ *  lowercase and cased on the way out, so "VII" and "vii" are one answer. */
+const OPTION_ROMAN = [
+  "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x",
+  "xi", "xii", "xiii", "xiv", "xv", "xvi", "xvii", "xviii", "xix", "xx",
+  "xxi", "xxii", "xxiii", "xxiv", "xxv", "xxvi",
+];
+
 export const MAX_MATCH_OPTIONS = OPTION_LETTERS.length;
 
 export function matchLetter(index: number): string {
   return OPTION_LETTERS[index] ?? "?";
+}
+
+/** The label for the option at `index`, in this box's own alphabet. */
+export function matchLabel(index: number, style: LabelStyle = "letters"): string {
+  if (style === "roman") return OPTION_ROMAN[index] ?? "?";
+  return matchLetter(index);
 }
 
 // ── Letters drawn on a picture ───────────────────────────────────────────
@@ -274,9 +298,10 @@ export function takenOptions(items: MatchItem[]): Set<string> {
 export function matchingToApi(
   options: MatchOption[],
   items: MatchItem[],
+  labelStyle: LabelStyle = "letters",
 ): MatchingQuestionIn[] {
   const letterOf = new Map(
-    options.map((option, index) => [option.id, matchLetter(index)]),
+    options.map((option, index) => [option.id, matchLabel(index, labelStyle)]),
   );
   return items.map((item, index) => {
     const letter = item.answer ? letterOf.get(item.answer) : undefined;
@@ -302,7 +327,7 @@ export function matchingOptionsToApi(options: MatchOption[]): string[] {
 /** The inverse, for reopening a saved group. Letters are resolved back to
  *  the options they stand for by position — which is what they were written
  *  from, and why the box and the answers are only ever saved together. */
-export function matchingFromApi(group: ListeningQuestionGroup): {
+export function matchingFromApi(group: PaperQuestionGroup): {
   options: MatchOption[];
   items: MatchItem[];
   allowReuse: boolean;
@@ -315,8 +340,8 @@ export function matchingFromApi(group: ListeningQuestionGroup): {
   );
   const items = group.questions
     .slice()
-    .sort((a: ListeningQuestion, b: ListeningQuestion) => a.number - b.number)
-    .map((question: ListeningQuestion) => {
+    .sort((a: PaperQuestion, b: PaperQuestion) => a.number - b.number)
+    .map((question: PaperQuestion) => {
       const letter = (question.correct_answers ?? [])[0]?.trim().toLowerCase();
       return {
         ...newMatchItem(),

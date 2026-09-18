@@ -6,7 +6,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { Visibility } from "@/features/listening/types";
+import type { Visibility } from "@/features/paper/types";
 
 /**
  * Where the material stands, and the one move available from it.

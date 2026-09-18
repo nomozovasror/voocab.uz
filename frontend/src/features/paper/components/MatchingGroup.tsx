@@ -1,13 +1,14 @@
 import { Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FlagQuestion } from "@/features/listening/components/FlagQuestion";
-import { Q_ANCHOR } from "@/features/listening/take-focus";
-import { matchLetter } from "@/features/listening/matching";
+import { Q_ANCHOR } from "@/features/paper/take-focus";
+import { matchLabel } from "@/features/paper/matching";
 import type {
+  LabelStyle,
   QuestionResult,
   TakeQuestion,
   TakeQuestionGroup,
-} from "@/features/listening/types";
+} from "@/features/paper/types";
 
 /**
  * A matching group, as the candidate sits it.
@@ -58,6 +59,15 @@ export function MatchingGroup({
   onFlag,
 }: MatchingGroupProps) {
   const options = group.config.options ?? [];
+  // Matching headings is printed in roman numerals, because ITS items are
+  // the lettered paragraphs: two alphabets on one page so that an answer of
+  // "C" can only ever mean one of them. Everything else is lettered.
+  const style: LabelStyle = group.config.label_style ?? "letters";
+  // ...and a roman numeral stays lowercase. "VII" is not how the paper prints
+  // it, and upper-casing it would make iii and III two spellings of one
+  // answer for a reader comparing the box against their own sheet.
+  const cased = (label: string) =>
+    style === "roman" ? label : label.toUpperCase();
 
   return (
     <div className="space-y-3">
@@ -78,7 +88,7 @@ export function MatchingGroup({
               aria-hidden
               className="flex size-5 shrink-0 items-center justify-center self-center rounded-full border border-border text-xs font-semibold text-muted-foreground"
             >
-              {matchLetter(index).toUpperCase()}
+              {cased(matchLabel(index, style))}
             </span>
             <span className="text-foreground">{text}</span>
           </li>
@@ -97,6 +107,7 @@ export function MatchingGroup({
               // on multiple choice has nothing to do here.
               number={startNumber + index}
               options={options}
+              style={style}
               chosen={(answers[question.id] ?? "").trim().toLowerCase()}
               onChange={(letter) => onChange(question.id, letter)}
               result={results?.[question.id]}
@@ -115,6 +126,7 @@ function MatchingItem({
   question,
   number,
   options,
+  style,
   chosen,
   onChange,
   result,
@@ -126,6 +138,7 @@ function MatchingItem({
   question: TakeQuestion;
   number: number;
   options: string[];
+  style: LabelStyle;
   chosen: string;
   onChange: (letter: string) => void;
   result?: QuestionResult;
@@ -166,14 +179,15 @@ function MatchingItem({
 
       <div className="flex shrink-0 flex-wrap items-center gap-1">
         {options.map((_text, index) => {
-          const letter = matchLetter(index);
+          const letter = matchLabel(index, style);
+          const shown = style === "roman" ? letter : letter.toUpperCase();
           const picked = chosen === letter;
           const isKey = graded && key === letter;
           return (
             <label
               key={letter}
               className={cn(
-                "flex size-7 cursor-pointer items-center justify-center rounded-full border text-xs font-semibold transition-colors",
+                "flex h-7 min-w-7 cursor-pointer items-center justify-center rounded-full border px-1.5 text-xs font-semibold transition-colors",
                 // The real input is sr-only, so the ring goes on the visible
                 // letter. `has-[:focus-visible]` because the input is a child
                 // of this label, not a preceding sibling — there is no peer.
@@ -203,9 +217,9 @@ function MatchingItem({
                 disabled={disabled}
                 className="sr-only"
               />
-              <span aria-hidden>{letter.toUpperCase()}</span>
+              <span aria-hidden>{shown}</span>
               <span className="sr-only">
-                Question {number}, option {letter.toUpperCase()}
+                Question {number}, option {shown}
               </span>
             </label>
           );

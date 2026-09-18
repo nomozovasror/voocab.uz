@@ -1,5 +1,5 @@
-import { docGaps, type DocBlock } from "@/features/listening/form-syntax";
-import type { AnswerRubric } from "@/features/listening/types";
+import { docGaps, type DocBlock } from "@/features/paper/form-syntax";
+import type { AnswerRubric } from "@/features/paper/types";
 
 /**
  * The rubric printed above a completion task.

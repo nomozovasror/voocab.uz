@@ -9,14 +9,11 @@ import { formatClock } from "@/features/studio/format";
 import { MediaDropzone } from "@/features/listening/components/MediaDropzone";
 import { PartsPicker } from "@/features/listening/components/PartsPicker";
 import { QuestionTypeChoices } from "@/features/listening/components/QuestionTypeChoices";
-import {
-  QUESTION_TYPE_ICON,
-  QUESTION_TYPE_LABEL,
-} from "@/features/listening/parts";
+import { QUESTION_TYPE_ICON, QUESTION_TYPE_LABEL } from "@/features/paper/question-types";
 import type {
   AudioTranscriptStatus,
   QuestionGroupType,
-} from "@/features/listening/types";
+} from "@/features/paper/types";
 
 /**
  * Opening a listening material, one question at a time.

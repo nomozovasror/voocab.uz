@@ -3,12 +3,12 @@ import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GroupHeader } from "@/features/listening/components/GroupHeader";
 import { MatchingBuilder } from "@/features/listening/components/MatchingBuilder";
-import { questionRangeLabel } from "@/features/listening/numbering";
+import { questionRangeLabel } from "@/features/paper/numbering";
 import {
   matchingIssues,
   type MatchItem,
   type MatchOption,
-} from "@/features/listening/matching";
+} from "@/features/paper/matching";
 
 /**
  * One matching group: its header, its instruction line, and the box and items

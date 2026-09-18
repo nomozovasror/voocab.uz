@@ -1,14 +1,14 @@
 import { Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FlagQuestion } from "@/features/listening/components/FlagQuestion";
-import { Q_ANCHOR } from "@/features/listening/take-focus";
-import { optionLetter } from "@/features/listening/mcq";
-import { questionNumbers } from "@/features/listening/numbering";
+import { Q_ANCHOR } from "@/features/paper/take-focus";
+import { optionLetter } from "@/features/paper/mcq";
+import { questionNumbers } from "@/features/paper/numbering";
 import type {
   QuestionResult,
   TakeQuestion,
   TakeQuestionGroup,
-} from "@/features/listening/types";
+} from "@/features/paper/types";
 
 /**
  * A multiple-choice group, as the candidate sits it.

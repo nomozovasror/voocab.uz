@@ -15,11 +15,11 @@ import {
 } from "@/features/listening/practice";
 import type { Scope } from "@/features/listening/practice";
 import { CollectionCover } from "@/features/listening/components/CollectionBook";
-import { coverKeyOf } from "@/features/listening/cover";
+import { coverKeyOf } from "@/features/paper/cover";
 import type {
   NextUp as NextUpData,
   PracticeMaterial,
-} from "@/features/listening/types";
+} from "@/features/paper/types";
 
 /**
  * One slot above the list, and what fills it depends on where the reader is.

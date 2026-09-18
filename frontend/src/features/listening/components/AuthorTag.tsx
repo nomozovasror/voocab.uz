@@ -5,7 +5,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { AuthorSummary } from "@/features/listening/practice";
-import type { CatalogueAuthor } from "@/features/listening/types";
+import type { CatalogueAuthor } from "@/features/paper/types";
 
 /**
  * Who wrote it, at the end of a catalogue row's meta line.

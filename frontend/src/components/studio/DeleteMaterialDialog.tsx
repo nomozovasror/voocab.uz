@@ -7,7 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { Visibility } from "@/features/listening/types";
+import type { Visibility } from "@/features/paper/types";
 
 /**
  * Asking before deleting a material.

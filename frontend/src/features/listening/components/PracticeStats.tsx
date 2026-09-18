@@ -11,7 +11,7 @@ import {
   ordinal,
 } from "@/features/listening/practice";
 import type { Scope } from "@/features/listening/practice";
-import type { ListeningStats, Mistakes, Trend } from "@/features/listening/types";
+import type { LearnerStats, Mistakes, Trend } from "@/features/paper/types";
 
 /**
  * What the reader should do next, and why they are losing the marks they lose.
@@ -64,7 +64,7 @@ function Label({ children }: { children: React.ReactNode }) {
 }
 
 interface PracticeStatsProps {
-  stats: ListeningStats;
+  stats: LearnerStats;
   onBrowsePart: (scope: Scope) => void;
 }
 
@@ -110,7 +110,7 @@ export function PracticeStats({ stats, onBrowsePart }: PracticeStatsProps) {
  * what kind of mistakes, then the trend, then the totals — and the page has a
  * side for what to do and a side for how it is going.
  */
-function ResumeCard({ resume }: { resume: NonNullable<ListeningStats["resume"]> }) {
+function ResumeCard({ resume }: { resume: NonNullable<LearnerStats["resume"]> }) {
   return (
     <Card label="Your last result">
       <Label>Your last result</Label>
@@ -314,7 +314,7 @@ function Sparkline({ points, up }: { points: number[]; up: boolean }) {
 
 // --- 4. Totals --------------------------------------------------------------
 
-function Totals({ stats }: { stats: ListeningStats }) {
+function Totals({ stats }: { stats: LearnerStats }) {
   return (
     <Card label="Totals">
       <dl className="space-y-1 text-sm">

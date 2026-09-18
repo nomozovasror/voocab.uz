@@ -42,7 +42,7 @@ import {
   useAudioAsset,
   useUpdateSegmentText,
 } from "@/features/listening/queries";
-import type { AudioSegment } from "@/features/listening/types";
+import type { AudioSegment } from "@/features/paper/types";
 // Type-only: erased at compile time, so these never pull the real library
 // into the eager graph — only the `await import(...)` calls below do, and
 // each becomes its own chunk (verified in the build output).

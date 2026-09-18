@@ -2,13 +2,13 @@ import { useMemo } from "react";
 import { Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FlagQuestion } from "@/features/listening/components/FlagQuestion";
-import { Q_ANCHOR } from "@/features/listening/take-focus";
+import { Q_ANCHOR } from "@/features/paper/take-focus";
 import { FormLayout } from "@/features/listening/components/FormLayout";
 import { TaskPicture } from "@/features/listening/components/TaskPicture";
-import { parseTemplateLayout } from "@/features/listening/form-syntax";
-import { matchLetter } from "@/features/listening/matching";
-import { rubricSentence } from "@/features/listening/rubric";
-import type { QuestionResult, TakeQuestionGroup } from "@/features/listening/types";
+import { parseTemplateLayout } from "@/features/paper/form-syntax";
+import { matchLetter } from "@/features/paper/matching";
+import { rubricSentence } from "@/features/paper/rubric";
+import type { QuestionResult, TakeQuestionGroup } from "@/features/paper/types";
 
 interface FormCompletionGroupProps {
   group: TakeQuestionGroup;

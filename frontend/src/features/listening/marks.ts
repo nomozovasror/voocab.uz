@@ -1,5 +1,5 @@
-import { docGaps, type DocBlock, type DocGap } from "@/features/listening/form-syntax";
-import type { AudioSegment } from "@/features/listening/types";
+import { docGaps, type DocBlock, type DocGap } from "@/features/paper/form-syntax";
+import type { AudioSegment } from "@/features/paper/types";
 
 /**
  * Checking an author's audio marks against the transcript.

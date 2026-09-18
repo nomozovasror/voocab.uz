@@ -6,7 +6,7 @@ import { ToolbarButton } from "@/features/listening/components/BuilderTools";
 import {
   questionNumbers,
   questionNumbersShort,
-} from "@/features/listening/numbering";
+} from "@/features/paper/numbering";
 import {
   addOption,
   answerSummary,
@@ -21,7 +21,7 @@ import {
   type ChoiceIssue,
   type ChoiceOption,
   type ChoiceQuestion,
-} from "@/features/listening/mcq";
+} from "@/features/paper/mcq";
 
 /**
  * The multiple-choice builder.

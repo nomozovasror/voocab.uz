@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { textToParts } from "@/features/listening/form-syntax";
-import type { DocLine, DocPart } from "@/features/listening/form-syntax";
+import { textToParts } from "@/features/paper/form-syntax";
+import type { DocLine, DocPart } from "@/features/paper/form-syntax";
 
 /**
  * A form value: real text with real chips in it, in one editable region.
