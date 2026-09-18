@@ -37,7 +37,11 @@ import sqlite3
 from collections import defaultdict
 from pathlib import Path
 
+import vision
+
 SEED = Path(__file__).resolve().parent
+REPO = SEED.parent
+MATERIALS = REPO / "Materials"
 WORK = SEED / "work"
 
 #: "READING PASSAGE 2", in the shapes the fourteen books print it.
@@ -182,7 +186,8 @@ def locate(book: int) -> tuple[list[dict], list[dict]]:
     return passages, barren
 
 
-def write(conn: sqlite3.Connection, book: int, passages: list[dict]) -> int:
+def write(conn: sqlite3.Connection, book: int, passages: list[dict],
+          how: str = "heading") -> int:
     """Upsert what was found. Nothing is deleted: a passage located by hand,
     or by a re-read, is not undone by a run that could not see it."""
     written = 0
@@ -195,11 +200,12 @@ def write(conn: sqlite3.Connection, book: int, passages: list[dict]) -> int:
         conn.execute(
             """INSERT INTO passage
                    (id, book_number, test_no, passage_no, document_id, pages,
-                    located_by)
-               VALUES (?, ?, ?, ?, ?, ?, 'heading')
+                    title, located_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                    document_id = excluded.document_id,
                    pages       = excluded.pages,
+                   title       = COALESCE(excluded.title, passage.title),
                    located_by  = excluded.located_by""",
             (
                 f"cam{book}-t{one['test']}-p{one['passage']}",
@@ -208,6 +214,8 @@ def write(conn: sqlite3.Connection, book: int, passages: list[dict]) -> int:
                 one["passage"],
                 one["doc_id"],
                 json.dumps(one["pages"]),
+                one.get("title"),
+                how,
             ),
         )
         written += 1
@@ -260,11 +268,200 @@ def report(conn: sqlite3.Connection) -> None:
             print(f"  {passage_id:<16} {count} page{'' if count == 1 else 's'}")
 
 
+# --- Asking the page itself -------------------------------------------------
+
+#: The one question left, and nothing else.
+#:
+#: Every stage in this pipeline learned the same lesson: a general question
+#: gets a general answer. `locate_pages` asked each page what it WAS and got
+#: "reading" for all 829 of these, which is true and not what is needed now.
+#: What is needed is which passage of which test — and on the books that come
+#: here, the heading does not say, so the page has to be asked about the two
+#: things that do: the number its questions carry, and the paper it belongs
+#: to.
+#:
+#: Question numbers, because an Academic Reading paper runs 1 to 40 across
+#: three passages in a fixed shape: roughly 1-13, 14-26, 27-40. A page headed
+#: "Questions 14-19" is passage 2 whatever its heading says, and that is
+#: arithmetic rather than a guess.
+ASK = """This is one page of an IELTS book. Answer about THIS PAGE ONLY.
+
+Give me, as JSON and nothing else:
+
+{"paper": "reading" | "listening" | "writing" | "speaking" | "other",
+ "numbers": [the question numbers printed on this page, as integers],
+ "title": "the passage's own title, if this page prints one, else null",
+ "test": the test number if the page prints one, else null,
+ "continues": true if this page is the middle or end of a passage that
+              started earlier (no title, no question numbers at the top),
+              else false}
+
+Rules:
+- "numbers" is what is PRINTED beside the questions, not a count. A page with
+  "Questions 14-19" gives [14,15,16,17,18,19]. A page of prose with no
+  questions on it gives [].
+- Do not infer the test number from the question numbers. Every test numbers
+  its reading questions 1 to 40, so they say nothing about which test it is.
+- "title" is the passage's own heading, like "The kākāpō" — not "READING
+  PASSAGE 2" and not a running header."""
+
+
+def passage_of(numbers: list[int]) -> int | None:
+    """Which passage a page's question numbers put it in.
+
+    An Academic Reading paper numbers 1 to 40 straight through its three
+    passages, and the boundaries fall in a narrow band — 13 or 14, and 26 or
+    27. So the LOWEST number on the page settles it, and a page whose numbers
+    straddle a boundary belongs to the passage its first question is in.
+
+    None where there are no numbers: a page of pure prose is part of whichever
+    passage it continues, which is the caller's arithmetic and not this one's.
+    """
+    if not numbers:
+        return None
+    first = min(numbers)
+    if first <= 13:
+        return 1
+    if first <= 26:
+        return 2
+    return 3
+
+
+def read_document(conn, book: int, doc_id: int, rel_path: str,
+                  indices: list[int], test_hint: int | None) -> list[dict]:
+    """Ask each of a document's reading pages the narrow question, and group.
+
+    Pages are read ONE AT A TIME, which is the measurement `locate_pages`
+    already made and paid for: a twelve-up contact sheet costs the same tokens
+    as one page and gets a twelfth of the detail, and on twelve pages it
+    classified five correctly and invented two.
+    """
+    # Cached, like every other reading in this pipeline. The grouping below
+    # got its rule wrong on the first run — the text pages come BEFORE the
+    # questions, not after — and fixing it should not cost the pages again.
+    cache = WORK / f"passages-book{book}-doc{doc_id}.json"
+    if cache.exists():
+        answers = json.loads(cache.read_text())
+        print(f"    {len(answers)} pages (cached)")
+    else:
+        pdf = MATERIALS / rel_path
+        images = vision.render(pdf, indices, WORK / f"passages-book{book}-doc{doc_id}")
+        answers = []
+        for index, image in zip(indices, images):
+            reply = vision.ask_json(ASK, [image])
+            reply["index"] = index
+            answers.append(reply)
+            shown = reply.get("numbers") or []
+            print(f"    {index:>4}  {str(reply.get('paper')):<9}"
+                  f" {('q' + str(min(shown)) + '-' + str(max(shown))) if shown else '—':<10}"
+                  f" {reply.get('title') or ''}")
+        cache.write_text(json.dumps(answers, indent=2, ensure_ascii=False))
+
+    # Group what came back. The rule is the shape of the paper, and the first
+    # run got it backwards.
+    #
+    # A reading passage is printed TEXT FIRST, questions after — three or four
+    # sheets of prose with nothing numbered on them, then two of questions. So
+    # a page with no question numbers belongs to the passage whose questions
+    # come NEXT, not to the one whose questions came last. Read the other way,
+    # every passage took the following passage's text and passage 1 lost its
+    # own.
+    #
+    # So number-less pages are held and handed to whichever passage claims
+    # them. What is left holding at the end of a document is the tail — a
+    # page after the last question — and goes to the passage it followed.
+    found: list[dict] = []
+    by_passage: dict[tuple[int, int], dict] = {}
+    waiting: list[dict] = []
+    test = test_hint or 1
+    last: int | None = None
+    current: dict | None = None
+
+    for reply in answers:
+        if reply.get("paper") not in (None, "reading"):
+            continue
+        number = passage_of([int(n) for n in reply.get("numbers") or []
+                             if isinstance(n, (int, float))])
+        if number is None:
+            waiting.append(reply)
+            continue
+
+        if number != last:
+            # Numbers that do not go up are the next test beginning — the same
+            # arithmetic the heading pass uses, and the only thing that says
+            # so, since every test numbers its reading questions 1 to 40.
+            if last is not None and number <= last:
+                test += 1
+            key = (test, number)
+            current = by_passage.get(key)
+            if current is None:
+                current = {"test": test, "passage": number, "pages": [],
+                           "title": None, "doc_id": doc_id}
+                by_passage[key] = current
+                found.append(current)
+            last = number
+
+        assert current is not None
+        for held in waiting:
+            current["pages"].append(held["index"])
+            if not current["title"] and held.get("title"):
+                current["title"] = held["title"]
+        waiting = []
+        current["pages"].append(reply["index"])
+        if not current["title"] and reply.get("title"):
+            current["title"] = reply["title"]
+
+    # Anything still held followed the last question of the document.
+    if waiting and current is not None:
+        current["pages"] += [held["index"] for held in waiting]
+
+    for one in found:
+        one["pages"].sort()
+    return found
+
+
+def reread(conn: sqlite3.Connection, book: int) -> list[dict]:
+    """Every reading page of a book, asked the narrow question.
+
+    Only for the books the heading pass could not group. It costs one request
+    per page — at book 103's ninety-three pages, the most expensive single
+    thing in the reading pipeline, and still cents.
+    """
+    documents = {
+        row["id"]: row["rel_path"]
+        for row in conn.execute(
+            "SELECT id, rel_path FROM document WHERE book_number = ? ORDER BY id",
+            (book,),
+        )
+    }
+    maps = page_maps(book)
+    per_document = len(maps) > 1
+    found: list[dict] = []
+
+    for position, (doc_id, pages) in enumerate(maps, start=1):
+        indices = [page["index"] for page in academic_reading(pages)]
+        if not indices:
+            continue
+        rel_path = documents.get(doc_id)
+        if rel_path is None:
+            print(f"    doc {doc_id}: not in the catalogue, skipped")
+            continue
+        print(f"  doc {doc_id}: reading {len(indices)} pages")
+        found += read_document(
+            conn, book, doc_id, rel_path, indices,
+            test_hint=position if per_document else None,
+        )
+    return found
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--book", type=int, help="one book, rather than all of them")
     parser.add_argument("--report", action="store_true",
                         help="print what is located and what is not, and stop")
+    parser.add_argument("--read", action="store_true",
+                        help="ask the pages themselves, for books whose "
+                             "headings say nothing. Costs one request a page")
     args = parser.parse_args()
 
     conn = sqlite3.connect(SEED / "catalogue.db")
@@ -283,6 +480,13 @@ def main() -> None:
 
     barren_books: list[int] = []
     for book in books:
+        if args.read:
+            print(f"book {book}:")
+            passages = reread(conn, book)
+            written = write(conn, book, passages, how="read")
+            conn.commit()
+            print(f"book {book:<4} {written:>3} passages, read off the page")
+            continue
         passages, barren = locate(book)
         written = write(conn, book, passages)
         conn.commit()
