@@ -147,6 +147,48 @@ CREATE TABLE IF NOT EXISTS finding (
 CREATE INDEX IF NOT EXISTS ix_finding_subject ON finding(subject);
 
 
+-- A reading passage: the text, its questions, and where both are printed.
+--
+-- Its OWN table rather than a column on `section`, and the reason is what
+-- `section` is: facts about an audio FILE -- a path, a sha256, a duration, a
+-- sample rate, all NOT NULL and none of them true of a passage. Bending them
+-- to nullable would leave one table where half the columns are about the
+-- other half of the corpus, and the row would no longer say what it is.
+--
+-- The two are siblings, not parent and child: one book holds sixteen
+-- listening sections and twelve reading passages, and neither is part of the
+-- other.
+CREATE TABLE IF NOT EXISTS passage (
+    id            TEXT    PRIMARY KEY,          -- cam11-t1-p2
+    book_number   INTEGER NOT NULL REFERENCES book(number),
+    -- Up to eight, like a section: the Official Guide prints eight tests.
+    test_no       INTEGER NOT NULL CHECK (test_no    BETWEEN 1 AND 8),
+    -- Three to an Academic paper, always. A fourth is a misread.
+    passage_no    INTEGER NOT NULL CHECK (passage_no BETWEEN 1 AND 3),
+    document_id   INTEGER          REFERENCES document(id),
+    -- Every page this passage runs across, questions included, as ZERO-BASED
+    -- pdf indices -- the same indexing `section.question_pages` uses, and for
+    -- the same reason: a printed page number is not a pdf index.
+    pages         TEXT,                          -- JSON array of ints
+    -- Where its answers are printed. Separate from the listening key, which
+    -- these books print on the facing page and which cost a whole test of
+    -- wrong answers the one time the two were confused.
+    key_page      INTEGER,
+    -- The passage's own title, once read off the page. NULL until then.
+    title         TEXT,
+    -- How the pages were grouped. `heading` where the book prints "READING
+    -- PASSAGE 2" and the grouping fell out of the page map for free; `read`
+    -- where that came back empty and a narrowed re-read settled it. Kept so a
+    -- grouping that later looks wrong can be told apart from one that was
+    -- never in doubt.
+    located_by    TEXT    CHECK (located_by IN ('heading', 'read')),
+    note          TEXT,
+    UNIQUE (book_number, test_no, passage_no)
+);
+
+CREATE INDEX IF NOT EXISTS ix_passage_book ON passage(book_number);
+
+
 -- What is left to do, in the order it blocks on. A section with no audioscript
 -- cannot be aligned, so it shows here as blocked rather than pending, and a
 -- batch run that ignores the difference wastes an hour finding out.
