@@ -1,6 +1,7 @@
 import { AudioLines, Layers } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
+  QUESTION_TYPE_BLURB,
   QUESTION_TYPE_ICON,
   QUESTION_TYPE_LABEL,
 } from "@/features/listening/parts";
@@ -249,12 +250,48 @@ export const LIST_MODE_LABEL: Record<ListMode, string> = {
 };
 
 /**
+ * What one card on the Question types tab covers.
+ *
+ * Usually one kind of question, and then the card is that kind. The exception
+ * is labelling: map and diagram labelling are the same task on two kinds of
+ * picture — the same sheet of A-I letters, the same eight options, the same
+ * thing to do — and the library holds twenty-three maps and TWO diagrams. Two
+ * cards there would be one nobody clicks beside one that answers the same
+ * question, and a learner who wants to practise labelling wants both.
+ *
+ * Flow-chart completion is deliberately NOT in it, though the seed pipeline
+ * groups it with them for its own reasons. Every map and diagram group in the
+ * library carries a picture and its letters; not one flow chart does — it is a
+ * template with gaps, which is a different thing to sit.
+ *
+ * A family is a set of types because that is what the server filters by: the
+ * list endpoint takes `type` repeated, so a card is just the types it names.
+ */
+export interface TaskFamily {
+  /** What the tab's state and the filter chip carry. Equal to the single
+   *  type's name where there is one, so nothing had to be migrated. */
+  key: string;
+  types: QuestionGroupType[];
+  label: string;
+  blurb: string;
+}
+
+/** The one family that is more than its type. */
+const LABELLING: TaskFamily = {
+  key: "labelling",
+  types: ["map_labelling", "diagram_labelling"],
+  label: "Map & diagram labelling",
+  blurb: "Places or parts named on a picture",
+};
+
+/**
  * Which part of the paper a drill came from.
  *
  * The catalogue's scope question asked of a group instead of a material, and
- * it is a real one here in a way it is not elsewhere: map labelling is a Part
- * 2 task, diagram labelling a Part 4 one, form completion a Part 1 one. A
- * learner working on their weakest part wants the tasks that appear in it.
+ * it is a real one here in a way it is not elsewhere: every map in the
+ * library is Part 2, every form completion Part 1, and choosing Part 2 leaves
+ * the eight kinds that actually appear in it. A learner working on their
+ * weakest part wants the tasks that live there.
  *
  * Matched on the server against the number the part STARTS at, never against
  * its index — see `_in_part`. Every seeded material is one part stored at
@@ -447,6 +484,42 @@ export function filterOptions<T extends string>(
 export const QUESTION_TYPE_ORDER = Object.keys(
   QUESTION_TYPE_LABEL,
 ) as QuestionGroupType[];
+
+/**
+ * The cards, in the order the tab draws them.
+ *
+ * Built from the canonical order rather than written out again, so a question
+ * type added to `QUESTION_TYPE_LABEL` gets a card without anybody remembering
+ * this list — and the labelling pair collapses into one card at the position
+ * of whichever of them comes first.
+ */
+export const TASK_FAMILIES: TaskFamily[] = (() => {
+  const families: TaskFamily[] = [];
+  for (const type of QUESTION_TYPE_ORDER) {
+    if (LABELLING.types.includes(type)) {
+      if (!families.includes(LABELLING)) families.push(LABELLING);
+      continue;
+    }
+    families.push({
+      key: type,
+      types: [type],
+      label: QUESTION_TYPE_LABEL[type],
+      blurb: QUESTION_TYPE_BLURB[type],
+    });
+  }
+  return families;
+})();
+
+export function familyByKey(key: string | null): TaskFamily | null {
+  if (!key) return null;
+  return TASK_FAMILIES.find((family) => family.key === key) ?? null;
+}
+
+/** The mark a family wears: its own type's icon, and for the labelling pair
+ *  the map's — a map is what all but two of them are. */
+export function familyIcon(family: TaskFamily): LucideIcon {
+  return QUESTION_TYPE_ICON[family.types[0]];
+}
 
 // --- Accuracy ----------------------------------------------------------------
 

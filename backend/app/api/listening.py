@@ -425,7 +425,7 @@ async def drill_types(
 async def list_drills(
     user: CurrentUser,
     session: SessionDep,
-    type: Annotated[str, Query(max_length=64)],
+    type: Annotated[list[str], Query(max_length=64)],
     q: Annotated[str | None, Query(max_length=200)] = None,
     part: Annotated[int | None, Query(ge=1, le=4)] = None,
     done: Annotated[bool, Query()] = False,
@@ -434,15 +434,16 @@ async def list_drills(
 ) -> DrillListOut:
     """One page of drills of a given type.
 
-    ``type`` is an open string for the same reason the catalogue's is: the
-    question types grow without a migration, and one we do not recognise
-    simply matches nothing.
+    ``type`` repeats, because a card on the tab can cover more than one kind:
+    map and diagram labelling are the same task on two kinds of picture. Open
+    strings for the same reason the catalogue's are — the question types grow
+    without a migration, and one we do not recognise simply matches nothing.
     """
     return DrillListOut(
         **await drills_service.list_drills(
             session,
             user.id,
-            group_type=type,
+            group_types=type,
             query=q,
             part=part,
             done=done,

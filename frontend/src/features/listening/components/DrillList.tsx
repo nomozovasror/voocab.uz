@@ -10,8 +10,7 @@ import { DRILL_PAGE, useDrills } from "@/features/listening/queries";
 import { useRememberedChoice } from "@/lib/preferences";
 import { getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import type { DrillPart } from "@/features/listening/practice";
-import type { QuestionGroupType } from "@/features/listening/types";
+import type { DrillPart, TaskFamily } from "@/features/listening/practice";
 
 /**
  * Every drill of one kind — a list of question groups, not of materials.
@@ -39,13 +38,13 @@ const VIEWS = ["list", "grid"] as const;
 type View = (typeof VIEWS)[number];
 
 export function DrillList({
-  type,
+  family,
   query,
   part,
   showDone,
   revealRef,
 }: {
-  type: QuestionGroupType;
+  family: TaskFamily;
   /** Already settled — the page holds the typing, this holds a list. */
   query: string;
   part: DrillPart;
@@ -54,12 +53,15 @@ export function DrillList({
 }) {
   const params = useMemo(
     () => ({
-      type,
+      // The card's types, repeated on the wire — a card covering two kinds
+      // asks for both in one query rather than merging two lists here, where
+      // the paging and the totals would have to be merged too.
+      type: family.types,
       ...(query.trim() ? { q: query.trim() } : {}),
       ...(part !== "all" ? { part } : {}),
       ...(showDone ? { done: true } : {}),
     }),
-    [type, query, part, showDone],
+    [family, query, part, showDone],
   );
   const {
     data,
@@ -81,7 +83,7 @@ export function DrillList({
   const doneHidden = data?.pages[0]?.done_hidden ?? 0;
 
   const [view, setView] = useRememberedChoice<View>(
-    `voocab-drill-view:${type}`,
+    `voocab-drill-view:${family.key}`,
     total >= GRID_FROM ? "grid" : "list",
     VIEWS,
   );

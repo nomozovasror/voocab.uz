@@ -31,7 +31,7 @@ from app.models.attempt import Attempt, AttemptStatus
 from app.models.material import Material
 from app.models.part import Part
 from app.models.question import Question
-from app.models.question_group import QuestionGroup
+from app.models.question_group import LABELLING_TYPES, QuestionGroup
 from app.services import listening as listening_service
 
 DRILL_PAGE = 30
@@ -184,14 +184,20 @@ async def list_drills(
     session: AsyncSession,
     user_id: uuid.UUID,
     *,
-    group_type: str,
+    group_types: list[str],
     query: str | None = None,
     part: int | None = None,
     done: bool = False,
     limit: int = DRILL_PAGE,
     offset: int = 0,
 ) -> dict:
-    """One page of drills of a given type, with the total and what was hidden.
+    """One page of drills, with the total and what was hidden.
+
+    Several types rather than one, because a card on the tab can cover more
+    than a single kind: map and diagram labelling are the same task on two
+    kinds of picture, and there are two diagrams in the whole library. A card
+    per type would be a card nobody clicks beside one that answers the same
+    question.
 
     ``done`` defaults to False and hides drills the caller has already
     submitted, reporting how many that hid — the catalogue's rule, for the
@@ -207,7 +213,7 @@ async def list_drills(
     where = [
         *_public(),
         _drillable(),
-        QuestionGroup.type == group_type,
+        QuestionGroup.type.in_(group_types),  # type: ignore[attr-defined]
         _in_part(part),
     ]
 
@@ -342,7 +348,17 @@ async def next_after(
     beside it in the same Part 2 are the same recording: offering it as the
     next map would be offering the same two minutes again. Newest-first, like
     the list, so the button and the list agree about what comes next.
+
+    "The same kind" means the same FAMILY, not the same type — the two
+    labelling types are one card on the tab, and somebody who has worked
+    every map should be offered the diagrams rather than told they are done.
+    Anything else is its own family of one.
     """
+    kin = (
+        sorted(LABELLING_TYPES)
+        if group.type in LABELLING_TYPES
+        else [group.type]
+    )
     drilled = (
         select(Attempt.id)
         .where(
@@ -361,7 +377,7 @@ async def next_after(
             .where(
                 *_public(),
                 _drillable(),
-                QuestionGroup.type == group.type,
+                QuestionGroup.type.in_(kin),  # type: ignore[attr-defined]
                 Part.material_id != (part.material_id if part else None),
                 ~drilled,
             )

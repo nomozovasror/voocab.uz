@@ -173,16 +173,30 @@ export const listeningApi = {
       api.get<{ items: DrillType[] }>("/api/listening/drills/types", {
         params,
       }),
-    list: (
-      params: {
-        type: string;
-        q?: string;
-        part?: number;
-        done?: boolean;
-        limit?: number;
-        offset?: number;
-      },
-    ) => api.get<DrillList>("/api/listening/drills", { params }),
+    /** One page of one card's exercises.
+     *
+     *  The query is built by hand rather than handed to the `params` helper,
+     *  for the reason `practice` does the same: `type` REPEATS — a card can
+     *  cover two kinds of question — and that is what FastAPI reads a
+     *  `list[str]` from. Comma-joined it would arrive as one type nobody
+     *  has. */
+    list: (params: {
+      type: string[];
+      q?: string;
+      part?: number;
+      done?: boolean;
+      limit?: number;
+      offset?: number;
+    }) => {
+      const search = new URLSearchParams();
+      for (const type of params.type) search.append("type", type);
+      if (params.q) search.set("q", params.q);
+      if (params.part != null) search.set("part", String(params.part));
+      if (params.done) search.set("done", "true");
+      if (params.limit != null) search.set("limit", String(params.limit));
+      if (params.offset != null) search.set("offset", String(params.offset));
+      return api.get<DrillList>(`/api/listening/drills?${search}`);
+    },
     take: (groupId: string) =>
       api.get<DrillTake>(`/api/listening/drills/${groupId}`),
     submit: (groupId: string, body: AttemptSubmit) =>

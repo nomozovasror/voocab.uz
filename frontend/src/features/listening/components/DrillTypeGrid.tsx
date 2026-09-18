@@ -1,12 +1,8 @@
-import {
-  QUESTION_TYPE_BLURB,
-  QUESTION_TYPE_ICON,
-  QUESTION_TYPE_LABEL,
-} from "@/features/listening/parts";
-import { QUESTION_TYPE_ORDER } from "@/features/listening/practice";
+import { TASK_FAMILIES, familyIcon } from "@/features/listening/practice";
+import type { TaskFamily } from "@/features/listening/practice";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import type { DrillType, QuestionGroupType } from "@/features/listening/types";
+import type { DrillType } from "@/features/listening/types";
 
 /**
  * The Drills tab's front page: every kind of task, and what there is of it.
@@ -24,14 +20,29 @@ import type { DrillType, QuestionGroupType } from "@/features/listening/types";
 
 const GRID = "mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3";
 
+/** One card: a family, and what the library holds of it.
+ *
+ *  The server counts per TYPE, because that is what a question group has. The
+ *  folding happens here, where the families are — a card covering two types
+ *  carries the sum of both, and because families never share a type the sums
+ *  cannot double-count. */
+interface Card extends TaskFamily {
+  exercises: number;
+  questions: number;
+  done: number;
+}
+
 /** Whether a card answers what was typed. Over the NAME and the description,
  *  not the materials underneath: on this screen the reader is choosing a kind
- *  of task, and "map" should find map labelling without them having to know
- *  which books contain one. Every whitespace-separated term must appear, the
- *  same rule the studio's own search follows. */
-function matches(type: DrillType, terms: string[]): boolean {
-  const hay =
-    `${QUESTION_TYPE_LABEL[type.value]} ${QUESTION_TYPE_BLURB[type.value]}`.toLowerCase();
+ *  of task, and "map" should find labelling without them having to know which
+ *  books contain one. Every whitespace-separated term must appear, the same
+ *  rule the studio's own search follows. */
+function matches(card: Card, terms: string[]): boolean {
+  // The member types' own names are searched too, so "diagram" still finds
+  // the card that swallowed diagram labelling.
+  const hay = `${card.label} ${card.blurb} ${card.types.join(" ")}`
+    .toLowerCase()
+    .replace(/_/g, " ");
   return terms.every((term) => hay.includes(term));
 }
 
@@ -45,7 +56,7 @@ export function DrillTypeGrid({
   loading: boolean;
   /** The same field that searches the other two lists. */
   query: string;
-  onPick: (type: QuestionGroupType) => void;
+  onPick: (key: string) => void;
 }) {
   if (loading) {
     return (
@@ -63,10 +74,17 @@ export function DrillTypeGrid({
   // all, the same rule the filter menus apply.
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const byValue = new Map(types.map((t) => [t.value, t]));
-  const shown = QUESTION_TYPE_ORDER.map((value) => byValue.get(value)).filter(
-    (t): t is DrillType =>
-      t !== undefined && t.exercises > 0 && matches(t, terms),
-  );
+  const shown = TASK_FAMILIES.map((family) => {
+    const counted = family.types
+      .map((type) => byValue.get(type))
+      .filter((t): t is DrillType => t !== undefined);
+    return {
+      ...family,
+      exercises: counted.reduce((n, t) => n + t.exercises, 0),
+      questions: counted.reduce((n, t) => n + t.questions, 0),
+      done: counted.reduce((n, t) => n + t.done, 0),
+    };
+  }).filter((card) => card.exercises > 0 && matches(card, terms));
 
   if (shown.length === 0) {
     return (
@@ -88,26 +106,26 @@ export function DrillTypeGrid({
 
   return (
     <div className={GRID}>
-      {shown.map((type) => (
-        <DrillTypeCard key={type.value} type={type} onPick={onPick} />
+      {shown.map((card) => (
+        <DrillTypeCard key={card.key} card={card} onPick={onPick} />
       ))}
     </div>
   );
 }
 
 function DrillTypeCard({
-  type,
+  card,
   onPick,
 }: {
-  type: DrillType;
-  onPick: (type: QuestionGroupType) => void;
+  card: Card;
+  onPick: (key: string) => void;
 }) {
-  const Icon = QUESTION_TYPE_ICON[type.value];
-  const finished = type.done >= type.exercises && type.exercises > 0;
+  const Icon = familyIcon(card);
+  const finished = card.done >= card.exercises && card.exercises > 0;
   return (
     <button
       type="button"
-      onClick={() => onPick(type.value)}
+      onClick={() => onPick(card.key)}
       className={cn(
         "group flex flex-col items-start gap-1 rounded-xl border border-border-subtle bg-surface p-4 text-left",
         "transition-colors hover:border-border hover:bg-surface-hover",
@@ -117,17 +135,17 @@ function DrillTypeCard({
       <span className="flex items-center gap-2">
         <Icon className="size-4 text-muted-foreground" aria-hidden />
         <span className="text-sm font-medium text-foreground">
-          {QUESTION_TYPE_LABEL[type.value]}
+          {card.label}
         </span>
       </span>
       <span className="text-xs text-muted-foreground">
-        {QUESTION_TYPE_BLURB[type.value]}
+        {card.blurb}
       </span>
       <span className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-        <span className="tabular-nums text-foreground">{type.exercises}</span>
-        {type.exercises === 1 ? "exercise" : "exercises"}
+        <span className="tabular-nums text-foreground">{card.exercises}</span>
+        {card.exercises === 1 ? "exercise" : "exercises"}
         <span aria-hidden className="text-border">·</span>
-        <span className="tabular-nums">{type.questions}</span>
+        <span className="tabular-nums">{card.questions}</span>
         questions
       </span>
 
@@ -144,11 +162,11 @@ function DrillTypeCard({
               finished ? "text-correct" : "text-muted-foreground",
             )}
           >
-            {finished ? "All done" : `${type.done} of ${type.exercises} done`}
+            {finished ? "All done" : `${card.done} of ${card.exercises} done`}
           </span>
-          {type.done > 0 && !finished && (
+          {card.done > 0 && !finished && (
             <span className="tabular-nums text-muted-foreground">
-              {Math.round((type.done / type.exercises) * 100)}%
+              {Math.round((card.done / card.exercises) * 100)}%
             </span>
           )}
         </span>
@@ -159,7 +177,7 @@ function DrillTypeCard({
           <span
             className="block h-full rounded-full bg-correct transition-[width] duration-base"
             style={{
-              width: `${Math.round((type.done / Math.max(1, type.exercises)) * 100)}%`,
+              width: `${Math.round((card.done / Math.max(1, card.exercises)) * 100)}%`,
             }}
           />
         </span>

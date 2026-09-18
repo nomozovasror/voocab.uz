@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { ChevronDown, Command, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -34,6 +34,7 @@ import {
 import type {
   CourseCovers,
   DrillPart,
+  TaskFamily,
   CourseLength,
   CourseStatus,
   FilterOption,
@@ -42,7 +43,6 @@ import type {
   Scope,
   SortKey,
 } from "@/features/listening/practice";
-import { QUESTION_TYPE_LABEL } from "@/features/listening/parts";
 import type {
   DifficultyBand,
   PracticeFacet,
@@ -518,8 +518,10 @@ interface FilterChipsProps {
   lengthOptions: PracticeFacet[];
   /** The drill the reader has opened, if any. Null is the grid of task
    *  cards, where there is nothing to narrow yet. */
-  drillType: QuestionGroupType | null;
-  onDrillType: (type: QuestionGroupType | null) => void;
+  /** The card the reader has opened, if any. Null is the grid, where there
+   *  is nothing to narrow yet. */
+  drillFamily: TaskFamily | null;
+  onDrillFamily: (family: TaskFamily | null) => void;
   drillPart: DrillPart;
   onDrillPart: (part: DrillPart) => void;
 }
@@ -541,8 +543,8 @@ export function FilterChips({
   onLength,
   coverOptions,
   lengthOptions,
-  drillType,
-  onDrillType,
+  drillFamily,
+  onDrillFamily,
   drillPart,
   onDrillPart,
 }: FilterChipsProps) {
@@ -576,21 +578,44 @@ export function FilterChips({
     drills: 0,
   });
 
+  // Guarded, so it can be called on every render without looping: React only
+  // bails out of a `setState` when the value is identical, and a fresh object
+  // never is.
+  const measure = useCallback(() => {
+    const next = {
+      materials: materialsRef.current?.scrollWidth ?? 0,
+      courses: coursesRef.current?.scrollWidth ?? 0,
+      drills: drillsRef.current?.scrollWidth ?? 0,
+    };
+    setWidths((was) =>
+      was.materials === next.materials &&
+      was.courses === next.courses &&
+      was.drills === next.drills
+        ? was
+        : next,
+    );
+  }, []);
+
+  // Twice over, and it needs to be both.
+  //
+  // The observer catches a group changing size on its own — a menu label
+  // growing as its counts load. What it does NOT reliably catch is a group
+  // gaining a CHILD on the same commit the box is asked to resize, and that
+  // is the common case here: opening a card adds two chips to the drills
+  // group, and measured only by the observer the box kept the width it had
+  // on the grid and clipped them out of sight. So the measurement also runs
+  // after every render, where the guard above makes it free when nothing
+  // moved.
+  useLayoutEffect(measure);
+
   useEffect(() => {
-    const measure = () =>
-      setWidths({
-        materials: materialsRef.current?.scrollWidth ?? 0,
-        courses: coursesRef.current?.scrollWidth ?? 0,
-        drills: drillsRef.current?.scrollWidth ?? 0,
-      });
-    measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
     if (materialsRef.current) observer.observe(materialsRef.current);
     if (coursesRef.current) observer.observe(coursesRef.current);
     if (drillsRef.current) observer.observe(drillsRef.current);
     return () => observer.disconnect();
-  }, []);
+  }, [measure]);
 
   // Only where the row is on one line. Below `sm` it wraps, an explicit width
   // would fight the wrapping, and `scrollWidth` measured off a wrapped row is
@@ -733,14 +758,14 @@ export function FilterChips({
               thing on each: on the grid it narrows the counts the cards
               report, in a list it narrows the list. Which part a task
               belongs to is the sharpest question there is about these —
-              map labelling is a Part 2 task and diagram labelling a Part 4
-              one — so the cards for a chosen part are the tasks that
+              every map in the library is Part 2 and every form completion
+              Part 1 — so the cards for a chosen part are the tasks that
               actually appear in it. */}
           <DrillPartMenu part={drillPart} onChange={onDrillPart} />
-          {drillType && (
+          {drillFamily && (
             <>
-              <Chip active onClick={() => onDrillType(null)}>
-                {QUESTION_TYPE_LABEL[drillType]}
+              <Chip active onClick={() => onDrillFamily(null)}>
+                {drillFamily.label}
                 <X className="ml-1 size-3" aria-hidden />
               </Chip>
               <Chip

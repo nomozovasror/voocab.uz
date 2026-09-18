@@ -30,6 +30,7 @@ import {
   QUESTION_TYPE_ORDER,
   catalogueParams,
   filterOptions,
+  familyByKey,
   isNarrowed,
   toggle,
 } from "@/features/listening/practice";
@@ -146,7 +147,11 @@ export default function ListeningPage() {
   // remembered, unlike the mode: the tab is where you were working, and a
   // particular kind of task is what you were doing there — coming back to the
   // grid is coming back to a choice, which is the right place to land.
-  const [drillType, setDrillType] = useState<QuestionGroupType | null>(null);
+  // Which CARD is open, not which type: one card covers the two labelling
+  // types, because they are the same task on two kinds of picture and the
+  // library holds two diagrams.
+  const [drillKey, setDrillKey] = useState<string | null>(null);
+  const drillFamily = familyByKey(drillKey);
   const [drillPart, setDrillPart] = useState<DrillPart>("all");
   const change = useCallback(
     (next: Partial<PracticeFilterState>) =>
@@ -269,7 +274,7 @@ export default function ListeningPage() {
         // Picking a kind of drill IS the reader saying what they want, so the
         // suggestion block steps back from the moment one is open — the same
         // rule the other two lists follow, asked of this one's own control.
-        ? drillType !== null ||
+        ? drillKey !== null ||
           drillPart !== "all" ||
           filters.query.trim() !== "" ||
           filters.showDone
@@ -586,8 +591,8 @@ export default function ListeningPage() {
             onToggleType={toggleType}
             typeOptions={typeOptions}
             bandOptions={bandOptions}
-            drillType={drillType}
-            onDrillType={setDrillType}
+            drillFamily={drillFamily}
+            onDrillFamily={() => setDrillKey(null)}
             drillPart={drillPart}
             onDrillPart={setDrillPart}
           />
@@ -654,9 +659,9 @@ export default function ListeningPage() {
                flat list of 470 drills does not answer it — and picking one
                swaps them for its drills without leaving the page, exactly as
                the mode switch does. */
-            drillType ? (
+            drillFamily ? (
               <DrillList
-                type={drillType}
+                family={drillFamily}
                 query={settledQuery}
                 part={drillPart}
                 showDone={filters.showDone}
@@ -667,7 +672,7 @@ export default function ListeningPage() {
                 types={drillTypes.data?.items ?? []}
                 loading={drillTypes.isLoading}
                 query={settledQuery}
-                onPick={setDrillType}
+                onPick={setDrillKey}
               />
             )
           ) : mode === "courses" ? (

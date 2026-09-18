@@ -379,7 +379,7 @@ export function useDrillTypes(
 /** One kind of drill, a page at a time. Same shape as the catalogue's
  *  infinite query, and for the same reasons — see `usePracticeCatalogue`. */
 export function useDrills(
-  params: { type: string; q?: string; part?: number; done?: boolean },
+  params: { type: string[]; q?: string; part?: number; done?: boolean },
   options: { enabled?: boolean } = {},
 ) {
   return useInfiniteQuery({
