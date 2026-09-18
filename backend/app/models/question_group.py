@@ -25,6 +25,15 @@ class QuestionGroupType(enum.StrEnum):
     DIAGRAM_LABELLING = "diagram_labelling"
     MULTIPLE_CHOICE = "multiple_choice"
     MATCHING = "matching"
+    #: Reading's own. The first two are answered in words the exam fixes; the
+    #: four below are matching under the names the Reading paper prints, which
+    #: is the same reason there are nine completion types rather than one.
+    TRUE_FALSE_NOT_GIVEN = "true_false_not_given"
+    YES_NO_NOT_GIVEN = "yes_no_not_given"
+    MATCHING_HEADINGS = "matching_headings"
+    MATCHING_INFORMATION = "matching_information"
+    MATCHING_FEATURES = "matching_features"
+    MATCHING_SENTENCE_ENDINGS = "matching_sentence_endings"
 
 
 #: The tasks that are answered by filling in what's missing. They are one
@@ -62,6 +71,43 @@ LABELLING_TYPES = frozenset(
 )
 
 
+#: The two whose options the EXAM fixes rather than the author. A candidate
+#: answers them in words — "TRUE", "NOT GIVEN" — which is what the answer key
+#: prints and therefore what ``correct_answers`` holds, so they are graded by
+#: :func:`app.services.grading.grade_answer` like any other written answer and
+#: need no special case there.
+#:
+#: Their options are deliberately NOT stored in ``config``. Writing them down
+#: would make them look authored, would let two groups of the same type offer
+#: different words, and — because a group with options in its config is a
+#: lettered group (:func:`app.services.listening.answers_are_letters`) — would
+#: silently switch grading to set-matching letters against the word "TRUE".
+FIXED_CHOICE_OPTIONS: dict[str, tuple[str, ...]] = {
+    QuestionGroupType.TRUE_FALSE_NOT_GIVEN: ("TRUE", "FALSE", "NOT GIVEN"),
+    QuestionGroupType.YES_NO_NOT_GIVEN: ("YES", "NO", "NOT GIVEN"),
+}
+
+FIXED_CHOICE_TYPES = frozenset(FIXED_CHOICE_OPTIONS)
+
+#: Every task that is a box of options answering a list of items. The Reading
+#: paper gives four of them their own names and their own instruction lines —
+#: headings against paragraphs, information against paragraphs, features
+#: against statements, sentence beginnings against endings — and underneath
+#: they are one task, exactly as the nine completion types are one task.
+#:
+#: What differs between them is where the box comes from and how it is
+#: lettered, and both of those live in the group's config rather than here.
+MATCHING_TYPES = frozenset(
+    {
+        QuestionGroupType.MATCHING,
+        QuestionGroupType.MATCHING_HEADINGS,
+        QuestionGroupType.MATCHING_INFORMATION,
+        QuestionGroupType.MATCHING_FEATURES,
+        QuestionGroupType.MATCHING_SENTENCE_ENDINGS,
+    }
+)
+
+
 def same_question_kind(before: str, after: str) -> bool:
     """Whether a group changing type keeps the questions it already has.
 
@@ -70,7 +116,16 @@ def same_question_kind(before: str, after: str) -> bool:
     form turning into multiple choice is not — the answer key means something
     else entirely — and nothing is kept across that.
     """
-    return before == after or (before in COMPLETION_TYPES and after in COMPLETION_TYPES)
+    return (
+        before == after
+        or (before in COMPLETION_TYPES and after in COMPLETION_TYPES)
+        # The same for matching under its four Reading names: headings and
+        # features are one box of letters answering one list of items, and
+        # renaming the task no more changes its answers than renaming a form
+        # to a set of notes does.
+        or (before in MATCHING_TYPES and after in MATCHING_TYPES)
+        or (before in FIXED_CHOICE_TYPES and after in FIXED_CHOICE_TYPES)
+    )
 
 
 class QuestionGroup(SQLModel, table=True):

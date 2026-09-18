@@ -169,6 +169,74 @@ def matching(
     }
 
 
+def judgement(
+    type_: str,
+    instructions: str,
+    items: list[tuple[str, str]],
+) -> dict:
+    """A true/false/not-given set, or its yes/no twin.
+
+    No options anywhere: the three words belong to the TYPE
+    (``FIXED_CHOICE_OPTIONS``), so writing them here would be writing down a
+    second copy that could disagree with the one grading uses.
+    """
+    return {
+        "type": type_,
+        "instructions": instructions,
+        "word_limit": None,
+        "config": {},
+        "questions": [
+            {"number": n, "correct_answers": [verdict], "config": {"prompt": prompt}}
+            for n, (prompt, verdict) in enumerate(items, start=1)
+        ],
+    }
+
+
+def matching_of(
+    type_: str,
+    instructions: str,
+    options: list[str],
+    items: list[tuple[str, str]],
+    *,
+    allow_reuse: bool = False,
+    label_style: str = "letters",
+) -> dict:
+    """Matching under any of its five names, in either alphabet.
+
+    Reading's own four are this same shape: headings against paragraphs,
+    information against paragraphs, features against statements, sentence
+    beginnings against endings. ``label_style="roman"`` is what matching
+    headings is printed in, and the only reason it exists — its ITEMS are
+    lettered paragraphs, so its box cannot be lettered too.
+    """
+    return {
+        "type": type_,
+        "instructions": instructions,
+        "word_limit": None,
+        "config": {
+            "options": options,
+            "allow_reuse": allow_reuse,
+            "label_style": label_style,
+        },
+        "questions": [
+            {"number": n, "correct_answers": [label], "config": {"prompt": prompt}}
+            for n, (prompt, label) in enumerate(items, start=1)
+        ],
+    }
+
+
+def passage(title: str, paragraphs: list[tuple[str | None, str]], *, source=None) -> dict:
+    """A reading passage: its paragraphs, each with the letter the book
+    prints beside it where it prints one."""
+    return {
+        "title": title,
+        "source": source,
+        "paragraphs": [
+            {"label": label, "text": text} for label, text in paragraphs
+        ],
+    }
+
+
 # --- The catalogue ----------------------------------------------------------
 #
 # Part numbers are 1-based here and stored 0-based, which is the one place the
@@ -1052,6 +1120,18 @@ CATALOGUE: list[dict] = [
 
 COLLECTIONS: list[dict] = [
     {
+        "title": "Three passages, three shapes",
+        "author": "nodira",
+        "skill": "reading",
+        "summary": "One paper of each kind: judgements, headings, and a set of features to match.",
+        "sit": 1,
+        "titles": [
+            "The Return of the Beaver",
+            "Why We Sleep Badly in New Places",
+            "The Long Road to the Electric Car",
+        ],
+    },
+    {
         "title": "Part 1 from scratch",
         "author": "nodira",
         "summary": "Six form-filling papers in the order they get harder. Start here if Part 1 is where the marks go.",
@@ -1216,6 +1296,299 @@ async def _claim_audio(session, owner_id: uuid.UUID, blob: AudioBlob) -> AudioAs
     return asset
 
 
+# --- The reading catalogue --------------------------------------------------
+#
+# Three papers, and between them every question type the Reading paper uses
+# that the Listening one does not: true/false/not given, yes/no/not given,
+# and matching under its four Reading names. The completion tasks and
+# multiple choice are the same objects the listening catalogue above builds,
+# which is the point — one editor, one take page, one grader.
+#
+# A reading paper is THREE passages numbered 1 to 40 straight through, so each
+# part carries its own `first_number` the way a seeded listening part does.
+
+READING: list[dict] = [
+    {
+        "title": "The Return of the Beaver",
+        "author": "nodira",
+        "skill": "reading",
+        "band": "easy",
+        "days_ago": 2,
+        "passages": {
+            1: passage(
+                "The Return of the Beaver",
+                [
+                    (
+                        "A",
+                        "The Eurasian beaver was hunted to extinction in Britain "
+                        "in the sixteenth century, valued for its fur, its meat "
+                        "and for castoreum, a secretion once used in medicine. "
+                        "For four hundred years the animal existed here only in "
+                        "place names.",
+                    ),
+                    (
+                        "B",
+                        "Reintroduction began quietly. A small population was "
+                        "released in Knapdale, Argyll, in 2009 under licence, and "
+                        "a second, unlicensed group was found living on the River "
+                        "Otter in Devon in 2013. Nobody has established how the "
+                        "Devon animals arrived.",
+                    ),
+                    (
+                        "C",
+                        "The case for the beaver is made in water rather than in "
+                        "fur. Its dams slow the passage of rainfall off the hills, "
+                        "and the pools behind them hold silt and nitrates that "
+                        "would otherwise reach the rivers. On one Devon "
+                        "catchment, peak flows downstream of a beaver site fell "
+                        "by roughly thirty per cent.",
+                    ),
+                    (
+                        "D",
+                        "Farmers are not uniformly persuaded. A dam raises the "
+                        "water table behind it, and land that was pasture can "
+                        "become marsh within a season. The compensation schemes "
+                        "that exist are administered county by county and differ "
+                        "widely in what they will pay for.",
+                    ),
+                    (
+                        "E",
+                        "What is no longer in question is the animal's legal "
+                        "standing. Since 2022 the beaver has been a protected "
+                        "species in England, and removing one, or its dam, "
+                        "requires a licence.",
+                    ),
+                ],
+                source="Adapted from a magazine feature",
+            ),
+        },
+        "parts": {
+            1: [
+                judgement(
+                    "true_false_not_given",
+                    "Do the following statements agree with the information given "
+                    "in the passage? Write TRUE, FALSE or NOT GIVEN.",
+                    [
+                        ("Beavers were hunted in Britain for more than one reason.", "TRUE"),
+                        ("The Knapdale release was carried out without a licence.", "FALSE"),
+                        ("The origin of the Devon beavers is known.", "FALSE"),
+                        ("Beavers were reintroduced to Wales before Scotland.", "NOT GIVEN"),
+                    ],
+                ),
+                matching_of(
+                    "matching_information",
+                    "Which paragraph contains the following information? Write the "
+                    "correct letter, A-E.",
+                    ["Paragraph A", "Paragraph B", "Paragraph C", "Paragraph D", "Paragraph E"],
+                    [
+                        ("a measured effect on river flow", "c"),
+                        ("a change in the animal's legal status", "e"),
+                        ("an objection raised by landowners", "d"),
+                    ],
+                ),
+                completion(
+                    "sentence_completion",
+                    "Complete the sentences below. Choose NO MORE THAN TWO WORDS "
+                    "from the passage for each answer.",
+                    "Beavers were valued for a secretion called {{1}}.\n"
+                    "Peak flows below one Devon site fell by about {{2}} per cent.\n"
+                    "Pasture behind a dam may turn to {{3}} within one season.",
+                    [
+                        ["castoreum"],
+                        ["thirty", "30"],
+                        ["marsh"],
+                    ],
+                    word_limit=2,
+                ),
+            ],
+        },
+    },
+    {
+        "title": "Why We Sleep Badly in New Places",
+        "author": "otabek",
+        "skill": "reading",
+        "band": "medium",
+        "days_ago": 9,
+        "passages": {
+            1: passage(
+                "Why We Sleep Badly in New Places",
+                [
+                    (
+                        "A",
+                        "Almost everyone has spent a poor first night in an "
+                        "unfamiliar bed. Sleep researchers have a name for it — "
+                        "the first-night effect — and until recently no "
+                        "explanation beyond the obvious one of unfamiliarity.",
+                    ),
+                    (
+                        "B",
+                        "Work at Brown University suggested a mechanism. Scanning "
+                        "sleepers on successive nights, the team found that on the "
+                        "first night one hemisphere of the brain slept less deeply "
+                        "than the other, and responded more readily to sounds "
+                        "played into the corresponding ear.",
+                    ),
+                    (
+                        "C",
+                        "The asymmetry is familiar from other animals. Many birds "
+                        "and marine mammals sleep one hemisphere at a time, a "
+                        "state known as unihemispheric sleep, which allows an "
+                        "animal to keep moving or keep watch while resting.",
+                    ),
+                    (
+                        "D",
+                        "Human sleep is not unihemispheric in that sense. The "
+                        "difference the scanner found was one of degree rather "
+                        "than of kind, and it had gone by the second night.",
+                    ),
+                ],
+            ),
+        },
+        "parts": {
+            1: [
+                matching_of(
+                    "matching_headings",
+                    "Choose the correct heading for each paragraph from the list "
+                    "of headings below. Write the correct number, i-vi.",
+                    [
+                        "A comparison with other species",
+                        "A problem without an explanation",
+                        "Evidence from brain imaging",
+                        "How long the effect lasts",
+                        "The commercial uses of sleep research",
+                        "Advice for frequent travellers",
+                    ],
+                    [
+                        ("Paragraph A", "ii"),
+                        ("Paragraph B", "iii"),
+                        ("Paragraph C", "i"),
+                        ("Paragraph D", "iv"),
+                    ],
+                    label_style="roman",
+                ),
+                judgement(
+                    "yes_no_not_given",
+                    "Do the following statements agree with the claims of the "
+                    "writer? Write YES, NO or NOT GIVEN.",
+                    [
+                        ("The first-night effect was well understood before the Brown study.", "NO"),
+                        ("Human sleep is fully unihemispheric.", "NO"),
+                        ("The effect is stronger in older travellers.", "NOT GIVEN"),
+                    ],
+                ),
+                choice(
+                    "Choose the correct letter, A, B or C.",
+                    [
+                        (
+                            "On the first night, one hemisphere",
+                            [
+                                "slept more deeply than the other",
+                                "slept less deeply than the other",
+                                "did not sleep at all",
+                            ],
+                            ["b"],
+                        ),
+                        (
+                            "By the second night the difference had",
+                            ["grown", "stayed the same", "disappeared"],
+                            ["c"],
+                        ),
+                    ],
+                ),
+            ],
+        },
+    },
+    {
+        "title": "The Long Road to the Electric Car",
+        "author": "malika",
+        "skill": "reading",
+        "band": "hard",
+        "days_ago": 20,
+        "passages": {
+            1: passage(
+                "The Long Road to the Electric Car",
+                [
+                    (
+                        "A",
+                        "Electric cars are older than petrol ones. Robert "
+                        "Anderson built a crude electric carriage in the 1830s, "
+                        "and by 1900 electric vehicles outsold petrol ones in the "
+                        "United States, being quieter, cleaner and far easier to "
+                        "start.",
+                    ),
+                    (
+                        "B",
+                        "Two things ended that lead. Cheap oil made petrol running "
+                        "costs trivial, and the electric starter motor, introduced "
+                        "in 1912, removed the crank handle that had been the "
+                        "petrol car's worst feature.",
+                    ),
+                    (
+                        "C",
+                        "The battery never caught up. Lead-acid cells of the "
+                        "period stored roughly a fiftieth of the energy per "
+                        "kilogram that petrol does, and no chemistry available "
+                        "before the 1990s came close to closing that gap.",
+                    ),
+                ],
+            ),
+        },
+        "parts": {
+            1: [
+                matching_of(
+                    "matching_features",
+                    "Match each statement with the correct person or thing, A-D. "
+                    "You may use any letter more than once.",
+                    [
+                        "Robert Anderson",
+                        "The electric starter motor",
+                        "Cheap oil",
+                        "Lead-acid batteries",
+                    ],
+                    [
+                        ("built an early electric carriage", "a"),
+                        ("removed a drawback of petrol cars", "b"),
+                        ("stored little energy for their weight", "d"),
+                        ("made running a petrol car inexpensive", "c"),
+                    ],
+                    allow_reuse=True,
+                ),
+                matching_of(
+                    "matching_sentence_endings",
+                    "Complete each sentence with the correct ending, A-E.",
+                    [
+                        "outsold petrol cars in the United States.",
+                        "was introduced in 1912.",
+                        "stored a fraction of petrol's energy per kilogram.",
+                        "was abandoned entirely after 1900.",
+                        "required a crank handle to start.",
+                    ],
+                    [
+                        ("By 1900 the electric car", "a"),
+                        ("The electric starter motor", "b"),
+                        ("The lead-acid cell of the period", "c"),
+                    ],
+                ),
+                completion(
+                    "summary_completion",
+                    "Complete the summary below. Choose NO MORE THAN ONE WORD "
+                    "from the passage for each answer.",
+                    "The electric car led the market until {{1}} oil and a new "
+                    "{{2}} motor gave the petrol car its advantage. The real "
+                    "obstacle, though, was the {{3}}.",
+                    [
+                        ["cheap"],
+                        ["starter"],
+                        ["battery"],
+                    ],
+                    word_limit=1,
+                ),
+            ],
+        },
+    },
+]
+
+
 def _part_ranges(part_numbers: list[int], duration_ms: int | None) -> dict[int, tuple[int, int] | None]:
     """Where each part sits in the recording.
 
@@ -1240,10 +1613,17 @@ async def _write_material(session, spec: dict, author: User, blob: AudioBlob | N
     Returns the question ids grouped by part number, which is what the attempt
     generator needs to make the statistics panel say anything true.
     """
-    asset = await _claim_audio(session, author.id, blob) if blob else None
+    skill = spec.get("skill", "listening")
+    # A reading paper has no recording to borrow and wants none: its questions
+    # are answered from the passage on each part.
+    asset = (
+        await _claim_audio(session, author.id, blob)
+        if blob and skill == "listening"
+        else None
+    )
     material = Material(
         author_id=author.id,
-        type="listening",
+        type=skill,
         title=spec["title"],
         visibility="public",
         audio_asset_id=asset.id if asset else None,
@@ -1253,7 +1633,12 @@ async def _write_material(session, spec: dict, author: User, blob: AudioBlob | N
     await session.flush()
 
     part_numbers = sorted(spec["parts"])
-    ranges = _part_ranges(part_numbers, blob.duration_ms if blob else None)
+    ranges = (
+        _part_ranges(part_numbers, blob.duration_ms if blob else None)
+        if skill == "listening"
+        else {n: None for n in part_numbers}
+    )
+    passages = spec.get("passages", {})
 
     questions_by_part: dict[int, list[uuid.UUID]] = {}
     for part_number in part_numbers:
@@ -1264,9 +1649,14 @@ async def _write_material(session, spec: dict, author: User, blob: AudioBlob | N
             # index IS the part number minus one — that is how a material
             # about Part 3 alone is still Part 3 (see the editor's picker).
             order_index=part_number - 1,
-            title=f"Part {part_number}",
+            title=(
+                f"Reading Passage {part_number}"
+                if skill == "reading"
+                else f"Part {part_number}"
+            ),
             audio_start_ms=span[0] if span else None,
             audio_end_ms=span[1] if span else None,
+            passage=passages.get(part_number),
         )
         session.add(part)
         await session.flush()
@@ -1484,7 +1874,7 @@ async def _own_history(session, me: User, written: list[dict]) -> None:
                 )
 
 
-async def seed() -> None:
+async def seed(skill: str | None = None) -> None:
     async with async_session_factory() as session:
         authors = {
             key: await _get_or_create_user(session, email, name)
@@ -1501,8 +1891,13 @@ async def seed() -> None:
                 "handles)."
             )
 
+        specs = [
+            spec
+            for spec in [*CATALOGUE, *READING]
+            if skill is None or spec.get("skill", "listening") == skill
+        ]
         written = []
-        for spec in CATALOGUE:
+        for spec in specs:
             row = await _write_material(session, spec, authors[spec["author"]], blob)
             written.append({**row, "spec": spec})
 
@@ -1522,7 +1917,7 @@ async def seed() -> None:
                 "once with Dev login, then re-run with --reset."
             )
 
-        await _write_collections(session, authors, written, me)
+        await _write_collections(session, authors, written, me, skill)
 
         await session.commit()
 
@@ -1533,11 +1928,19 @@ async def seed() -> None:
         # bands, showing one, on a dev box where the worker is very often not
         # running at all.
         written_count = await difficulty_service.recompute(session)
-        print(f"Seeded {len(written)} materials by {len(authors)} authors.")
+        reading_count = sum(
+            1 for row in written if row["spec"].get("skill") == "reading"
+        )
+        print(
+            f"Seeded {len(written)} materials by {len(authors)} authors "
+            f"({len(written) - reading_count} listening, {reading_count} reading)."
+        )
         print(f"Difficulty computed for {written_count} materials.")
 
 
-async def _write_collections(session, authors: dict, written: list[dict], me) -> None:
+async def _write_collections(
+    session, authors: dict, written: list[dict], me, skill: str | None = None
+) -> None:
     """The courses, and the reader's way into them.
 
     Materials are looked up by title and a miss is fatal rather than skipped:
@@ -1567,7 +1970,10 @@ async def _write_collections(session, authors: dict, written: list[dict], me) ->
             ).all()
         )
 
+    written_collections = 0
     for spec in COLLECTIONS:
+        if skill is not None and spec.get("skill", "listening") != skill:
+            continue
         titles = list(spec["titles"])
         if spec.get("fresh"):
             titles = [
@@ -1590,6 +1996,7 @@ async def _write_collections(session, authors: dict, written: list[dict], me) ->
 
         collection = Collection(
             author_id=authors[spec["author"]].id,
+            skill=spec.get("skill", "listening"),
             title=spec["title"],
             summary=spec.get("summary", ""),
             visibility="private" if spec.get("draft") else "public",
@@ -1597,6 +2004,7 @@ async def _write_collections(session, authors: dict, written: list[dict], me) ->
         session.add(collection)
         await session.commit()
         await session.refresh(collection)
+        written_collections += 1
 
         for index, title in enumerate(titles):
             session.add(
@@ -1631,11 +2039,15 @@ async def _write_collections(session, authors: dict, written: list[dict], me) ->
             # just sat on their behalf.
             sat.add(row["material"].id)
 
-    print(f"Seeded {len(COLLECTIONS)} collections.")
+    print(f"Seeded {written_collections} collections.")
 
 
-async def clean() -> None:
+async def clean(skill: str | None = None) -> None:
     """Everything the seed wrote, and nothing else.
+
+    ``skill`` narrows it to one paper's materials, for the same reason
+    ``seed`` takes it: a database holding a real corpus wants the three
+    invented reading papers gone without losing anything else.
 
     Found by author rather than by a marker in the title, so the titles can
     read like real material. Attempts go first, then questions, groups, parts,
@@ -1654,11 +2066,15 @@ async def clean() -> None:
         # Collections first: they point at the materials, so they have to
         # stop pointing before the materials can go. Their items go with them
         # at the database level, but the ORM is happier being told.
-        collections = (
-            await session.exec(
-                select(Collection).where(Collection.author_id.in_(author_ids))  # type: ignore[attr-defined]
-            )
-        ).all()
+        collections = [
+            collection
+            for collection in (
+                await session.exec(
+                    select(Collection).where(Collection.author_id.in_(author_ids))  # type: ignore[attr-defined]
+                )
+            ).all()
+            if skill is None or collection.skill == skill
+        ]
         for collection in collections:
             for item in (
                 await session.exec(
@@ -1672,11 +2088,15 @@ async def clean() -> None:
             await session.delete(collection)
         await session.flush()
 
-        materials = (
-            await session.exec(
-                select(Material).where(Material.author_id.in_(author_ids))  # type: ignore[attr-defined]
-            )
-        ).all()
+        materials = [
+            material
+            for material in (
+                await session.exec(
+                    select(Material).where(Material.author_id.in_(author_ids))  # type: ignore[attr-defined]
+                )
+            ).all()
+            if skill is None or material.type == skill
+        ]
 
         for material in materials:
             attempts = (
@@ -1752,12 +2172,19 @@ async def clean() -> None:
             await session.delete(attempt)
         await session.flush()
 
-        for user in users:
-            await session.delete(user)
+        # The accounts go only when everything of theirs has. A --skill run
+        # leaves the other paper's materials behind, and those still name
+        # their author: deleting the user would fail on the foreign key, and
+        # if it did not it would orphan work this run was asked to keep.
+        removed_users = 0
+        if skill is None:
+            for user in users:
+                await session.delete(user)
+            removed_users = len(users)
         await session.commit()
         print(
             f"Removed {len(materials)} seeded materials, "
-            f"{len(collections)} collections and {len(users)} accounts."
+            f"{len(collections)} collections and {removed_users} accounts."
         )
 
 
@@ -1765,6 +2192,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--clean", action="store_true", help="remove seeded data")
     parser.add_argument("--reset", action="store_true", help="clean, then seed")
+    parser.add_argument(
+        "--skill",
+        choices=("listening", "reading"),
+        help=(
+            "seed only one paper's materials. Useful against a database that "
+            "already holds a real corpus: --skill reading adds the three "
+            "reading papers without twenty-one invented listening ones."
+        ),
+    )
     parser.add_argument(
         "--force",
         action="store_true",
@@ -1780,9 +2216,9 @@ def main() -> None:
 
     async def run() -> None:
         if args.clean or args.reset:
-            await clean()
+            await clean(skill=args.skill)
         if not args.clean:
-            await seed()
+            await seed(skill=args.skill)
 
     asyncio.run(run())
 

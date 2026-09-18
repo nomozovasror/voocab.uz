@@ -17,7 +17,7 @@ from app.core.database import AsyncSession
 from app.models.attempt import Attempt, AttemptStatus
 from app.models.audio_asset import AudioAsset
 from app.models.audio_blob import AudioBlob
-from app.models.material import Material
+from app.models.material import PAPER_TYPES, Material
 from app.models.part import Part
 from app.models.question import Question
 from app.models.question_group import QuestionGroup
@@ -38,7 +38,7 @@ _QUESTION_MARKS = func.coalesce(
 # Material types the dashboard always reports a row for, even at zero, so
 # the UI can render a real "0" instead of guessing whether a missing entry
 # means "none yet" or "still loading".
-KNOWN_TYPES = ("listening", "dictation")
+KNOWN_TYPES = ("listening", "reading", "dictation")
 
 RECENT_LIMIT = 8
 
@@ -152,19 +152,19 @@ async def _recent(session: AsyncSession, author_id: uuid.UUID) -> list[dict]:
     if not materials:
         return []
 
-    listening_ids = [m.id for m in materials if m.type == "listening"]
+    paper_ids = [m.id for m in materials if m.type in PAPER_TYPES]
     dictation_ids = [m.id for m in materials if m.type == "dictation"]
 
     # item_count for the (at most RECENT_LIMIT) recent materials: one grouped
     # query per kind, not one query per material (no N+1).
     question_counts: dict[uuid.UUID, int] = {}
-    if listening_ids:
+    if paper_ids:
         stmt_q = (
             select(Part.material_id, func.sum(_QUESTION_MARKS))
             .select_from(Question)
             .join(QuestionGroup, Question.group_id == QuestionGroup.id)  # type: ignore[arg-type]
             .join(Part, QuestionGroup.part_id == Part.id)  # type: ignore[arg-type]
-            .where(Part.material_id.in_(listening_ids))  # type: ignore[attr-defined]
+            .where(Part.material_id.in_(paper_ids))  # type: ignore[attr-defined]
             .group_by(Part.material_id)
         )
         question_counts = dict((await session.exec(stmt_q)).all())
@@ -180,7 +180,7 @@ async def _recent(session: AsyncSession, author_id: uuid.UUID) -> list[dict]:
 
     recent: list[dict] = []
     for m in materials:
-        if m.type == "listening":
+        if m.type in PAPER_TYPES:
             item_count = question_counts.get(m.id, 0)
         elif m.type == "dictation":
             item_count = segment_counts.get(m.id, 0)
@@ -200,7 +200,9 @@ async def _recent(session: AsyncSession, author_id: uuid.UUID) -> list[dict]:
     return recent
 
 
-async def get_listening_list(session: AsyncSession, author_id: uuid.UUID) -> dict:
+async def get_listening_list(
+    session: AsyncSession, author_id: uuid.UUID, *, skill: str
+) -> dict:
     """Row data for the Studio listening list page: one row per the
     caller's own ``listening`` materials, newest-``updated_at`` first, plus
     the top-level totals. Every per-row column is either a plain 1:1 join
@@ -212,7 +214,7 @@ async def get_listening_list(session: AsyncSession, author_id: uuid.UUID) -> dic
         .select_from(Material)
         .outerjoin(AudioAsset, Material.audio_asset_id == AudioAsset.id)  # type: ignore[arg-type]
         .outerjoin(AudioBlob, AudioAsset.blob_id == AudioBlob.id)  # type: ignore[arg-type]
-        .where(Material.author_id == author_id, Material.type == "listening")
+        .where(Material.author_id == author_id, Material.type == skill)
         .order_by(Material.updated_at.desc())  # type: ignore[attr-defined]
     )
     rows = (await session.exec(base_stmt)).all()
@@ -282,7 +284,7 @@ async def get_listening_list(session: AsyncSession, author_id: uuid.UUID) -> dic
         .select_from(Material)
         .join(AudioAsset, Material.audio_asset_id == AudioAsset.id)  # type: ignore[arg-type]
         .join(AudioBlob, AudioAsset.blob_id == AudioBlob.id)  # type: ignore[arg-type]
-        .where(Material.author_id == author_id, Material.type == "listening")
+        .where(Material.author_id == author_id, Material.type == skill)
         .distinct()
     ).subquery()
     total_duration_ms = (

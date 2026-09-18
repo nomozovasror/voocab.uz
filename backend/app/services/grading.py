@@ -572,6 +572,9 @@ async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
         row = given_rows.get(question.id)
         ranges = question_ranges(question)
         by_letter = listening_service.answers_are_letters(group)
+        # Whether the answer was PICKED rather than written — wider than
+        # by_letter, and a different question. See answers_are_chosen.
+        chosen = listening_service.answers_are_chosen(group)
         correct = bool(row.is_correct) if row else False
         results.append(
             {
@@ -588,12 +591,13 @@ async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
                 # a spelling slip — the same call, over the same rules, in
                 # app/services/mistakes.py.
                 #
-                # ``None`` twice over: a right answer has no kind, and neither
-                # has a letter, because there is no spelling in "b" and which
-                # distractor pulled somebody is a different analysis.
+                # ``None`` twice over: a right answer has no kind, and
+                # neither has a CHOSEN one, because there is no spelling in
+                # "b" — nor in TRUE — and which distractor pulled somebody is
+                # a different analysis.
                 "mistake": (
                     None
-                    if correct or by_letter
+                    if correct or chosen
                     else mistakes_service.classify(
                         row.given_answer if row else "",
                         question.correct_answers,
@@ -620,12 +624,12 @@ async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
         "total_questions": attempt.total_questions or 0,
         "submitted_at": attempt.submitted_at,
         "time_spent_ms": attempt.time_spent_ms,
-        **(await _standing(session, attempt)),
+        **(await _standing(session, attempt, skill=material.type if material else "")),
         "results": results,
     }
 
 
-async def _standing(session: AsyncSession, attempt: Attempt) -> dict:
+async def _standing(session: AsyncSession, attempt: Attempt, *, skill: str) -> dict:
     """The three things that turn a score into a sentence.
 
     ``43%`` on its own says nothing anybody can act on. "Your 2nd try — the
@@ -699,11 +703,15 @@ async def _standing(session: AsyncSession, attempt: Attempt) -> dict:
                 session, attempt.user_id, attempt.material_id
             )
         ),
-        "drill": await _drill_standing(session, attempt) if drill else None,
+        "drill": (
+            await _drill_standing(session, attempt, skill=skill) if drill else None
+        ),
     }
 
 
-async def _drill_standing(session: AsyncSession, attempt: Attempt) -> dict | None:
+async def _drill_standing(
+    session: AsyncSession, attempt: Attempt, *, skill: str
+) -> dict | None:
     """What the review of a finished drill needs to offer another one."""
     group = await session.get(QuestionGroup, attempt.group_id)
     if group is None:
@@ -712,6 +720,6 @@ async def _drill_standing(session: AsyncSession, attempt: Attempt) -> dict | Non
         "group_id": group.id,
         "type": group.type,
         "next_group_id": await drills_service.next_after(
-            session, attempt.user_id, group
+            session, attempt.user_id, group, skill=skill
         ),
     }

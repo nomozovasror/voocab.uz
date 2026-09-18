@@ -29,6 +29,13 @@ class Collection(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     author_id: uuid.UUID = Field(foreign_key="users.id", index=True)
+    #: Which paper this is a course in. A collection is single-skill by
+    #: construction rather than by what happens to be in it: an EMPTY one has
+    #: no items to read a skill off, and the sequence logic above it
+    #: (``sequenced_material_ids``, ``next_material_id``) assumes one paper's
+    #: numbering throughout. Not null, and every collection that existed
+    #: before this column was a listening course.
+    skill: str = Field(default="listening", nullable=False)
     title: str
     #: One line, printed under the title wherever the collection appears. Not
     #: a description field with a rich-text editor behind it: what a learner

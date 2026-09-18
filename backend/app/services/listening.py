@@ -27,7 +27,10 @@ from app.models.part import Part
 from app.models.question import Question
 from app.models.question_attempt import QuestionAttempt
 from app.models.question_group import (
+    FIXED_CHOICE_OPTIONS,
+    FIXED_CHOICE_TYPES,
     LABELLING_TYPES,
+    MATCHING_TYPES,
     QuestionGroup,
     QuestionGroupType,
     same_question_kind,
@@ -35,6 +38,7 @@ from app.models.question_group import (
 from app.models.user import User
 from app.schemas.listening import (
     ChoiceQuestionIn,
+    FixedChoiceQuestionIn,
     MatchingQuestionIn,
     PartCreate,
     PartUpdate,
@@ -73,6 +77,7 @@ async def create_part(
         title=data.title,
         audio_start_ms=data.audio_start_ms,
         audio_end_ms=data.audio_end_ms,
+        passage=data.passage.model_dump() if data.passage else None,
     )
     session.add(part)
     await session.commit()
@@ -81,7 +86,7 @@ async def create_part(
 
 
 async def update_part(session: AsyncSession, part: Part, data: PartUpdate) -> Part:
-    """Partial update (title / audio range).
+    """Partial update (title / audio range / passage).
 
     A field is touched only when the key is actually present in the request
     body -- "absent" and "sent as null" are different requests, and telling
@@ -104,6 +109,11 @@ async def update_part(session: AsyncSession, part: Part, data: PartUpdate) -> Pa
         part.audio_start_ms = data.audio_start_ms
     if "audio_end_ms" in sent:
         part.audio_end_ms = data.audio_end_ms
+    if "passage" in sent:
+        # Sent as null clears it, the same way the audio bounds above are
+        # cleared: a part written as reading and corrected to listening has a
+        # passage to get rid of.
+        part.passage = data.passage.model_dump() if data.passage else None
 
     if (
         part.audio_start_ms is not None
@@ -282,7 +292,10 @@ def _question_config(question) -> dict | None:
     it may be matched to is the group's box of options, printed once above the
     set. Multiple choice stores the most, because its options really are one
     question's."""
-    if isinstance(question, MatchingQuestionIn):
+    if isinstance(question, (MatchingQuestionIn, FixedChoiceQuestionIn)):
+        # A statement to be judged stores exactly what a matching item does:
+        # its own text. What it may be answered WITH is the group's — the box
+        # for one, the type for the other.
         return {"prompt": question.prompt}
     if not isinstance(question, ChoiceQuestionIn):
         return None
@@ -532,9 +545,7 @@ async def get_material_questions(
 #: whether the question has options — a matching item's are its group's — but
 #: what the candidate submits: a letter, matched as a set, against words,
 #: matched after normalization.
-LETTERED_TYPES = frozenset(
-    {QuestionGroupType.MULTIPLE_CHOICE, QuestionGroupType.MATCHING}
-)
+LETTERED_TYPES = frozenset({QuestionGroupType.MULTIPLE_CHOICE}) | MATCHING_TYPES
 
 
 def group_options(group: QuestionGroup) -> list[str]:
@@ -597,6 +608,14 @@ def letter_count(group: QuestionGroup) -> int:
     publishing and the take page each ask once — the alternative was every
     caller knowing which of the two kinds of box it was looking at, and
     getting it wrong for whichever kind arrived second."""
+    # A true/false set is answered in words the exam fixes, never in letters,
+    # whatever its config happens to hold. Refused here rather than trusted
+    # not to happen: a group that somehow acquired an ``options`` list — a
+    # rename from matching, a hand-written row, a seed script — would
+    # otherwise be graded by set-matching letters against the word "TRUE",
+    # and every answer on it would be wrong.
+    if group.type in FIXED_CHOICE_TYPES:
+        return 0
     return len(group_options(group)) or image_letter_count(group)
 
 
@@ -611,6 +630,22 @@ def answers_are_letters(group: QuestionGroup) -> bool:
     assumed it could would compare a letter against the words of an option and
     mark every answer wrong."""
     return group.type in LETTERED_TYPES or letter_count(group) > 0
+
+
+def answers_are_chosen(group: QuestionGroup) -> bool:
+    """Whether this group's answers are PICKED from something printed rather
+    than written out.
+
+    A wider question than :func:`answers_are_letters`, and a different one.
+    That one decides how to grade; this one decides whether asking *what kind
+    of wrong* an answer was means anything. There is no spelling in "b", and
+    there is none in TRUE either — a candidate choosing between three buttons
+    cannot misspell the one they chose, so classifying their mistake would
+    invent a reading problem out of a judgement they got wrong.
+
+    Which is why the two are separate: a true/false set is graded as words
+    (its key is the word the book prints) and is nonetheless not written."""
+    return answers_are_letters(group) or group.type in FIXED_CHOICE_TYPES
 
 
 def choice_select_count(group: QuestionGroup) -> int:
@@ -663,6 +698,15 @@ async def group_config_out(session: AsyncSession, group: QuestionGroup) -> dict:
     drop it on the next save. Renaming back is meant to find it still there.
     """
     config = dict(group.config or {})
+    # The three words a true/false set is answered in. Derived from the type
+    # on the way out rather than stored, so there is exactly one place they
+    # are written down and no way for the box the candidate reads to disagree
+    # with the answers grading compares against. Same shape as matching's box
+    # — the options a group's questions are answered from, printed once above
+    # the set — which is what lets one component draw both.
+    fixed = FIXED_CHOICE_OPTIONS.get(group.type)
+    if fixed is not None:
+        config["options"] = list(fixed)
     image_id = _parse_image_id((group.config or {}).get("image"))
     if image_id is None:
         return config
@@ -735,6 +779,11 @@ async def get_take_tree(session: AsyncSession, material_id: uuid.UUID) -> list[d
                 "title": part.title,
                 "audio_start_ms": part.audio_start_ms,
                 "audio_end_ms": part.audio_end_ms,
+                # What a reading part's questions are answered from. NULL on a
+                # listening part, whose questions are answered from the
+                # recording — so a client can tell which kind of paper it is
+                # holding without being told separately.
+                "passage": part.passage,
                 # Where this part's numbering starts on its own paper. Built
                 # field by field here, so a column added to the model reaches
                 # the client only by being named: `first_number` was on the
@@ -1021,6 +1070,11 @@ async def get_author_tree(
                 "title": part.title,
                 "audio_start_ms": part.audio_start_ms,
                 "audio_end_ms": part.audio_end_ms,
+                # What a reading part's questions are answered from. NULL on a
+                # listening part, whose questions are answered from the
+                # recording — so a client can tell which kind of paper it is
+                # holding without being told separately.
+                "passage": part.passage,
                 # The author's tree needs it for the same reason the
                 # student's does: the studio prints the numbers beside the
                 # questions, and two trees that disagree about question 27
@@ -1051,9 +1105,21 @@ CATALOGUE_MAX_PAGE = 100
 _EASIEST_FIRST = {"easy": 0, "medium": 1, "hard": 2, "new": 3}
 _HARDEST_FIRST = {"hard": 0, "medium": 1, "easy": 2, "new": 3}
 
-#: Four parts is a whole paper; anything less is an excerpt from one. The same
-#: constant the frontend calls FULL_TEST_PARTS.
+#: How many parts make a whole paper; anything less is an excerpt from one.
+#: The same constant the frontend calls FULL_TEST_PARTS.
+#:
+#: Four for listening and three for reading, because that is what the two
+#: papers are: forty questions over four recordings, or forty over three
+#: passages. One number for both would have called every complete reading
+#: paper an excerpt, which is the one thing the "full test" filter exists to
+#: tell apart.
 FULL_TEST_PARTS = 4
+_FULL_PARTS = {"listening": 4, "reading": 3}
+
+
+def full_test_parts(skill: str) -> int:
+    """How many parts a whole paper of this skill has."""
+    return _FULL_PARTS.get(skill, FULL_TEST_PARTS)
 
 
 def _band_of():
@@ -1076,6 +1142,7 @@ def _band_of():
 def _catalogue_where(
     user_id: uuid.UUID,
     *,
+    skill: str,
     query: str,
     scope: str,
     types: list[str],
@@ -1094,7 +1161,7 @@ def _catalogue_where(
     twice, and every one of these asks "is there one" rather than "which".
     """
     where = [
-        Material.type == "listening",
+        Material.type == skill,
         Material.visibility == "public",
     ]
 
@@ -1103,7 +1170,7 @@ def _catalogue_where(
             select(func.count(Part.id))
             .where(Part.material_id == Material.id)
             .scalar_subquery()
-            >= FULL_TEST_PARTS
+            >= full_test_parts(skill)
         )
     elif scope.isdigit():
         # A part chip matches a material that HOLDS that part, whole paper
@@ -1196,7 +1263,7 @@ def _band_case(ranks: dict[str, int]):
     return case(*[(band == name, rank) for name, rank in ranks.items()], else_=99)
 
 
-async def _catalogue_facets(session: AsyncSession) -> dict:
+async def _catalogue_facets(session: AsyncSession, *, skill: str) -> dict:
     """What there is to filter BY, counted over the WHOLE catalogue.
 
     Not over what is currently showing, and not over the current page. An
@@ -1205,7 +1272,7 @@ async def _catalogue_facets(session: AsyncSession) -> dict:
     a number nobody could act on. Two grouped queries for the whole library,
     which is why they are cheap enough to run on every request.
     """
-    public = [Material.type == "listening", Material.visibility == "public"]
+    public = [Material.type == skill, Material.visibility == "public"]
 
     types = [
         {"value": group_type, "count": int(count)}
@@ -1244,6 +1311,7 @@ async def practice_catalogue(
     session: AsyncSession,
     user_id: uuid.UUID,
     *,
+    skill: str,
     query: str = "",
     scope: str = "all",
     types: list[str] | None = None,
@@ -1282,6 +1350,7 @@ async def practice_catalogue(
     offset = max(0, offset)
     where = _catalogue_where(
         user_id,
+        skill=skill,
         query=query,
         scope=scope,
         types=types or [],
@@ -1331,6 +1400,7 @@ async def practice_catalogue(
     if not done:
         done_where = _catalogue_where(
             user_id,
+            skill=skill,
             query=query,
             scope=scope,
             types=types or [],
@@ -1355,10 +1425,10 @@ async def practice_catalogue(
         )
 
     return {
-        "items": await _catalogue_rows(session, user_id, materials),
+        "items": await _catalogue_rows(session, user_id, materials, skill=skill),
         "total": total,
         "done_hidden": done_hidden,
-        **await _catalogue_facets(session),
+        **await _catalogue_facets(session, skill=skill),
     }
 
 
@@ -1366,6 +1436,7 @@ async def recommended(
     session: AsyncSession,
     user_id: uuid.UUID,
     *,
+    skill: str,
     part: int | None,
     ranks: dict[str, int],
     size: int,
@@ -1396,7 +1467,7 @@ async def recommended(
     grows rather than recommending the same three things forever.
     """
     where = [
-        Material.type == "listening",
+        Material.type == skill,
         Material.visibility == "public",
         ~select(Attempt.id)
         .where(
@@ -1441,7 +1512,7 @@ async def recommended(
                                     select(func.count(Part.id))
                                     .where(Part.material_id == Material.id)
                                     .scalar_subquery()
-                                    >= FULL_TEST_PARTS,
+                                    >= full_test_parts(skill),
                                     0,
                                 ),
                                 else_=1,
@@ -1458,7 +1529,7 @@ async def recommended(
             )
         ).all()
     )
-    return await _catalogue_rows(session, user_id, materials)
+    return await _catalogue_rows(session, user_id, materials, skill=skill)
 
 
 async def materials_in_order(
@@ -1485,7 +1556,11 @@ async def materials_in_order(
 
 
 async def _catalogue_rows(
-    session: AsyncSession, user_id: uuid.UUID, materials: list[Material]
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    materials: list[Material],
+    *,
+    skill: str,
 ) -> list[dict]:
     """Everything a row prints, for one page of materials.
 
@@ -1557,7 +1632,7 @@ async def _catalogue_rows(
                 select(Material.author_id, func.count(Material.id))
                 .where(
                     Material.author_id.in_(author_ids),  # type: ignore[attr-defined]
-                    Material.type == "listening",
+                    Material.type == skill,
                     Material.visibility == "public",
                 )
                 .group_by(Material.author_id)  # type: ignore[arg-type]
@@ -1573,7 +1648,7 @@ async def _catalogue_rows(
                 .join(Attempt, Attempt.material_id == Material.id)  # type: ignore[arg-type]
                 .where(
                     Material.author_id.in_(author_ids),  # type: ignore[attr-defined]
-                    Material.type == "listening",
+                    Material.type == skill,
                     Material.visibility == "public",
                     Attempt.user_id == user_id,
                     Attempt.status == AttemptStatus.SUBMITTED,

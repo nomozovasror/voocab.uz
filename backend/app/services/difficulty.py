@@ -52,7 +52,7 @@ from sqlmodel import select
 
 from app.core.database import AsyncSession
 from app.models.attempt import Attempt, AttemptStatus
-from app.models.material import Material
+from app.models.material import PAPER_TYPES, Material
 from app.models.material_difficulty import MaterialDifficulty
 from app.models.part import Part
 from app.models.question import Question
@@ -181,7 +181,9 @@ async def recompute(
         material_ids = list(
             (
                 await session.exec(
-                    select(Material.id).where(Material.type == "listening")
+                    select(Material.id).where(
+                        Material.type.in_(PAPER_TYPES)  # type: ignore[attr-defined]
+                    )
                 )
             ).all()
         )

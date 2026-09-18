@@ -8,6 +8,8 @@ from app.api.audio import router as audio_router
 from app.api.auth import router as auth_router
 from app.api.collections import router as collections_router
 from app.api.listening import router as listening_router
+from app.api.papers import paper_router
+from app.models.material import PAPER_TYPES
 from app.api.materials import MATERIAL_VERSION_HEADER, MATERIAL_VISIBILITY_HEADER
 from app.api.materials import router as materials_router
 from app.api.studio import router as studio_router
@@ -36,6 +38,11 @@ app.include_router(auth_router)
 app.include_router(materials_router)
 app.include_router(audio_router)
 app.include_router(listening_router)
+# One router, mounted once per paper. /api/listening/* is exactly where it
+# always was; /api/reading/* is the same code answering about reading
+# materials, which is what makes the two impossible to drift apart.
+for _skill in PAPER_TYPES:
+    app.include_router(paper_router(_skill))
 app.include_router(collections_router)
 app.include_router(studio_router)
 

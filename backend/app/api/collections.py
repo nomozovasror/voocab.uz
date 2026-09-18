@@ -237,7 +237,11 @@ async def set_collection_items(
                 await session.exec(
                     select(Material.id, Material.author_id, Material.visibility).where(
                         Material.id.in_(data.material_ids),  # type: ignore[attr-defined]
-                        Material.type == "listening",
+                        # A course is in ONE paper. Mixing a reading passage
+                        # into a listening course would give the sequence two
+                        # numberings and the recommendation engine two
+                        # different questions to reason about.
+                        Material.type == collection.skill,
                     )
                 )
             ).all()

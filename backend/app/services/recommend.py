@@ -184,7 +184,7 @@ def _weak_part(by_part: list[dict]) -> dict | None:
 
 
 async def next_up(
-    session: AsyncSession, user_id: uuid.UUID, *, size: int = SIZE
+    session: AsyncSession, user_id: uuid.UUID, *, skill: str, size: int = SIZE
 ) -> dict:
     """What the block above the list says, and why.
 
@@ -217,7 +217,9 @@ async def next_up(
     learner who has sat everything gets the reason and no rows, and the page
     has to be able to draw that.
     """
-    profile = await learner_stats.first_attempt_profile(session, user_id)
+    profile = await learner_stats.first_attempt_profile(
+        session, user_id, skill=skill
+    )
     if not profile["sat_anything"] or profile["materials_done"] < MIN_MATERIALS:
         return _nothing()
 
@@ -258,7 +260,7 @@ async def next_up(
     # material sat leaves a course in progress for weeks; ranked below that,
     # a kind of question could be worked every day and never be offered.
     carrying_on = await collections_service.in_progress_for(session, user_id)
-    drilling = await drills_service.in_progress_for(session, user_id)
+    drilling = await drills_service.in_progress_for(session, user_id, skill=skill)
     if (
         carrying_on is not None
         and drilling is not None
@@ -291,7 +293,7 @@ async def next_up(
                 session, user_id
             ),
             "items": await listening_service._catalogue_rows(
-                session, user_id, materials
+                session, user_id, materials, skill=skill
             ),
         }
 
@@ -331,6 +333,7 @@ async def next_up(
             "items": await listening_service.recommended(
                 session,
                 user_id,
+                skill=skill,
                 part=weak["part"],
                 ranks=_ranks_for(average),
                 size=size,
@@ -346,6 +349,7 @@ async def next_up(
             "items": await listening_service.recommended(
                 session,
                 user_id,
+                skill=skill,
                 part=None,
                 ranks=_STEADY_RANKS,
                 size=size,
@@ -361,6 +365,7 @@ async def next_up(
         "items": await listening_service.recommended(
             session,
             user_id,
+            skill=skill,
             part=None,
             ranks=_ranks_for(average),
             size=size,

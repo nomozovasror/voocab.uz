@@ -5,9 +5,23 @@ from sqlalchemy import Column, DateTime, func
 from sqlmodel import Field, SQLModel
 
 
+#: The material types that are a PAPER — a tree of parts, question groups and
+#: questions, sat as an attempt and marked out of its numbers. Dictation is not
+#: one of them: it is segments of audio typed back, graded word by word.
+#:
+#: Named once because three different readers ask the question and they must
+#: agree: the difficulty projection scans "every paper on the platform", the
+#: studio dashboard counts them, and the catalogue filters to one of them.
+PAPER_TYPES: tuple[str, ...] = ("listening", "reading")
+
+
 class Material(SQLModel, table=True):
-    """A piece of practice content authored by a user. Today only ``dictation``
-    exists; ``type`` leaves room for reading/listening/etc. later."""
+    """A piece of practice content authored by a user.
+
+    ``type`` is what kind: ``dictation``, ``listening`` or ``reading``. The
+    two in :data:`PAPER_TYPES` share this whole tree — parts, question
+    groups, questions, attempts — and differ only in what a part is answered
+    from (see :class:`app.models.part.Part`)."""
 
     __tablename__ = "materials"
 

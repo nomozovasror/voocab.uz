@@ -238,7 +238,7 @@ async def test_empty_author_gets_zeros_not_404() -> None:
             assert body["completions"] == 0
             assert body["recent"] == []
             by_type = {row["type"]: row for row in body["by_type"]}
-            assert set(by_type) == {"listening", "dictation"}
+            assert set(by_type) == {"listening", "reading", "dictation"}
             for row in by_type.values():
                 assert row["total"] == 0
                 assert row["public"] == 0

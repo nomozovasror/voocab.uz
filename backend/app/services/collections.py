@@ -940,7 +940,7 @@ async def for_learner(
         "progress": await progress(session, user_id, ids),
         "stats": await stats_for(session, user_id, ids),
         "items": await listening_service._catalogue_rows(
-            session, user_id, materials
+            session, user_id, materials, skill=collection.skill
         ),
     }
 

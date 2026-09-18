@@ -32,6 +32,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.models.question_group import FIXED_CHOICE_OPTIONS
 from app.services.mistakes import MistakeKind
 
 #: The tasks answered by filling in what's missing. One payload shape, nine
@@ -52,6 +53,23 @@ CompletionType = Literal[
 #: The two of those that are answered on an uploaded picture.
 LABELLING_TYPES = frozenset({"map_labelling", "diagram_labelling"})
 
+#: Every task that is a box of options answering a list of items. One shape,
+#: five names: the Reading paper prints its own instruction line for each, and
+#: an author looking for "matching headings" should not have to know it is
+#: "matching" wearing a different hat — the same argument that makes nine
+#: completion types out of one template.
+MatchingType = Literal[
+    "matching",
+    "matching_headings",
+    "matching_information",
+    "matching_features",
+    "matching_sentence_endings",
+]
+
+#: The two whose options the exam fixes. Answered in the words the key prints,
+#: never in letters — see FixedChoiceGroupIn.
+FixedChoiceType = Literal["true_false_not_given", "yes_no_not_given"]
+
 QuestionGroupType = Literal[
     "form_completion",
     "note_completion",
@@ -64,6 +82,12 @@ QuestionGroupType = Literal[
     "diagram_labelling",
     "multiple_choice",
     "matching",
+    "matching_headings",
+    "matching_information",
+    "matching_features",
+    "matching_sentence_endings",
+    "true_false_not_given",
+    "yes_no_not_given",
 ]
 
 _TOKEN_RE = re.compile(r"\{\{(\d+)\}\}")
@@ -78,12 +102,72 @@ OPTION_LETTERS = "abcdefghijklmnopqrstuvwxyz"
 MAX_OPTIONS = len(OPTION_LETTERS)
 
 
+#: The other alphabet a box can be lettered in. Matching headings is printed
+#: "i, ii, iii" rather than "A, B, C", and it is the one matching task whose
+#: items are themselves lettered — paragraphs A to G answered by headings i to
+#: viii. Two alphabets on one page is not decoration: were the headings
+#: lettered too, an answer of "C" would name a heading and a paragraph.
+#:
+#: Lowercase like OPTION_LETTERS, and for the same reason: an answer key is
+#: stored lowercase and cased on the way out, so "VII" and "vii" are one
+#: answer rather than two.
+OPTION_ROMAN = (
+    "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x",
+    "xi", "xii", "xiii", "xiv", "xv", "xvi", "xvii", "xviii", "xix", "xx",
+    "xxi", "xxii", "xxiii", "xxiv", "xxv", "xxvi",
+)
+
+#: How a group's box is labelled. A property of the SET, like the box itself
+#: and like "you may use any letter more than once": the paper prints one
+#: lettering above one list.
+LabelStyle = Literal["letters", "roman"]
+
+
 def option_letter(index: int) -> str:
     """The label for the option at ``index`` (0 -> "a")."""
     return OPTION_LETTERS[index]
 
 
+def option_label(index: int, style: str = "letters") -> str:
+    """The label for the option at ``index``, in this box's own alphabet."""
+    if style == "roman":
+        return OPTION_ROMAN[index]
+    return OPTION_LETTERS[index]
+
+
 # --- Part -------------------------------------------------------------------
+
+
+class PassageParagraph(BaseModel):
+    """One paragraph of a reading passage, and the letter the paper prints
+    beside it.
+
+    The letter is nullable because most passages have none: a book letters its
+    paragraphs only where a task is answered by naming one. Where it does,
+    this is the letter the answer key uses, so it is stored as printed rather
+    than derived from position — a passage whose lettering starts at B, or
+    skips one, would otherwise have every one of those answers off by one."""
+
+    label: str | None = Field(default=None, max_length=8)
+    text: str = ""
+
+    @field_validator("label")
+    @classmethod
+    def _clean_label(cls, v: str | None) -> str | None:
+        return v.strip().upper() or None if v else None
+
+
+class Passage(BaseModel):
+    """The text a reading part's questions are answered from.
+
+    Paragraphs rather than one block of prose, because two of Reading's own
+    tasks are answered by naming one — see ``Part.passage``. ``source`` is the
+    acknowledgement line a book prints under the title; ``subtitle`` is the
+    standfirst above the text."""
+
+    paragraphs: list[PassageParagraph] = Field(default_factory=list)
+    subtitle: str | None = Field(default=None, max_length=500)
+    source: str | None = Field(default=None, max_length=500)
 
 
 class PartCreate(BaseModel):
@@ -91,6 +175,9 @@ class PartCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     audio_start_ms: int | None = Field(default=None, ge=0)
     audio_end_ms: int | None = Field(default=None, ge=0)
+    #: A reading part's text. Null on a listening part, which is answered from
+    #: the recording the audio bounds above point into.
+    passage: Passage | None = None
 
     @field_validator("title")
     @classmethod
@@ -120,6 +207,7 @@ class PartUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     audio_start_ms: int | None = Field(default=None, ge=0)
     audio_end_ms: int | None = Field(default=None, ge=0)
+    passage: Passage | None = None
 
     @field_validator("title")
     @classmethod
@@ -140,6 +228,7 @@ class PartOut(BaseModel):
     audio_start_ms: int | None
     audio_end_ms: int | None
     first_number: int | None = None
+    passage: Passage | None = None
     created_at: datetime
 
 
@@ -259,6 +348,12 @@ class MatchingConfig(BaseModel):
     #: options as items, each used once, and two items sharing a letter is
     #: then something publishing objects to.
     allow_reuse: bool = False
+    #: Which alphabet the box is labelled in. ``letters`` for every listening
+    #: matching task and for most of Reading's; ``roman`` for matching
+    #: headings, whose items are lettered paragraphs and whose box therefore
+    #: cannot be. Defaults to letters, which is what every group written
+    #: before this field existed is.
+    label_style: LabelStyle = "letters"
 
 
 class _QuestionInBase(BaseModel):
@@ -593,9 +688,15 @@ class MultipleChoiceGroupIn(_QuestionGroupInBase):
 
 class MatchingGroupIn(_QuestionGroupInBase):
     """Full authoring payload for a matching group: the box of options, and
-    the items answered from it, replaced as one unit like any other group."""
+    the items answered from it, replaced as one unit like any other group.
 
-    type: Literal["matching"]
+    One schema for all five of matching's names, exactly as
+    :class:`FormCompletionGroupIn` is one schema for all nine completion
+    tasks. What differs between matching headings and matching features is
+    what the instruction line says and how the box is lettered, and both of
+    those are fields rather than shapes."""
+
+    type: MatchingType
     config: MatchingConfig = Field(default_factory=MatchingConfig)
     #: Empty for the same reason as the other two: this is what a group looks
     #: like between being given a kind and being given a question.
@@ -617,7 +718,10 @@ class MatchingGroupIn(_QuestionGroupInBase):
         used once. Reassigning two items is two saves, and the state between
         them has both pointing at the same option; publishing is where that
         has to be resolved."""
-        available = {option_letter(i) for i in range(len(self.config.options))}
+        available = {
+            option_label(i, self.config.label_style)
+            for i in range(len(self.config.options))
+        }
         unknown = sorted(
             {
                 letter
@@ -633,12 +737,102 @@ class MatchingGroupIn(_QuestionGroupInBase):
         return self
 
 
+class FixedChoiceQuestionIn(_QuestionInBase):
+    """One statement to be judged TRUE, FALSE or NOT GIVEN.
+
+    Its answer is a WORD, not a letter, because that is what the answer key
+    prints and what the candidate writes on the paper. Which means it is
+    graded by :func:`app.services.grading.grade_answer` like a gap-fill, and
+    needs no case of its own anywhere in grading — "true" and "TRUE" are one
+    answer after normalization, and "NOT GIVEN" and "not given" likewise.
+
+    The three words are not stored here, on the question, or on the group.
+    They belong to the TYPE: ``FIXED_CHOICE_OPTIONS`` in
+    ``app/models/question_group.py`` is the only place they are written down,
+    so two groups of the same type can never offer different ones.
+    """
+
+    prompt: str = ""
+    #: Exactly one of the three. Empty is a statement the author has not
+    #: judged yet — a draft, like every other emptiness here.
+    correct_answers: list[str] = Field(default_factory=list, max_length=1)
+
+    @field_validator("prompt")
+    @classmethod
+    def _clean_prompt(cls, v: str) -> str:
+        return v.strip()
+
+    @field_validator("correct_answers")
+    @classmethod
+    def _clean_answers(cls, v: list[str]) -> list[str]:
+        return [answer.strip().upper() for answer in v if answer.strip()]
+
+
+class FixedChoiceConfig(BaseModel):
+    """Nothing, and that is the point.
+
+    A true/false set has no box to store, no picture and no count: its three
+    words come from its type. The model exists rather than a bare ``dict`` so
+    that every group arm here has the same shape — ``config`` is always
+    something with a ``model_dump``, which is what the service writes into
+    JSONB — and so that a stray key sent by a client is dropped rather than
+    stored to be puzzled over later."""
+
+    model_config = {"extra": "ignore"}
+
+
+class FixedChoiceGroupIn(_QuestionGroupInBase):
+    """Full authoring payload for a true/false/not-given set — or its
+    yes/no/not-given twin, which is the same task asked about a writer's
+    opinions rather than about facts.
+
+    Its ``config`` is empty and stays empty. Writing the three words into it
+    would make them look like something an author chose, would let two groups
+    of one type disagree about them, and — because a group with options in its
+    config is a LETTERED group
+    (:func:`app.services.listening.answers_are_letters`) — would silently
+    switch grading to set-matching letters against the word "TRUE"."""
+
+    type: FixedChoiceType
+    config: FixedChoiceConfig = Field(default_factory=FixedChoiceConfig)
+    questions: list[FixedChoiceQuestionIn] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _numbers_contiguous(self) -> "FixedChoiceGroupIn":
+        _contiguous_numbers(list(self.questions))
+        return self
+
+    @model_validator(mode="after")
+    def _answers_are_one_of_the_three(self) -> "FixedChoiceGroupIn":
+        """An answer the exam does not offer is not an unfinished question —
+        it is one that can never be marked right, since the candidate has no
+        way to submit it. The same line every other group here draws."""
+        allowed = FIXED_CHOICE_OPTIONS[self.type]
+        unknown = sorted(
+            {
+                answer
+                for question in self.questions
+                for answer in question.correct_answers
+                if answer not in allowed
+            }
+        )
+        if unknown:
+            raise ValueError(
+                f"answers must be one of {', '.join(allowed)}: "
+                f"got {', '.join(unknown)}"
+            )
+        return self
+
+
 #: What the create/replace endpoints accept. Tagged on ``type`` so the request
 #: is validated against the group it claims to be — a multiple-choice payload
 #: is never checked for a template it shouldn't have, and a form-completion
 #: one can't quietly arrive without questions for its gaps.
 QuestionGroupIn = Annotated[
-    FormCompletionGroupIn | MultipleChoiceGroupIn | MatchingGroupIn,
+    FormCompletionGroupIn
+    | MultipleChoiceGroupIn
+    | MatchingGroupIn
+    | FixedChoiceGroupIn,
     Field(discriminator="type"),
 ]
 
@@ -738,6 +932,10 @@ class TakePartOut(BaseModel):
     title: str
     audio_start_ms: int | None
     audio_end_ms: int | None
+    #: What a reading part is answered from. Carrying the whole passage to the
+    #: candidate is the point of the page, and gives nothing away: it is what
+    #: the paper prints.
+    passage: Passage | None = None
     #: Where this part's numbering starts on the paper it came from. NULL
     #: means from 1. See Part.first_number.
     first_number: int | None = None

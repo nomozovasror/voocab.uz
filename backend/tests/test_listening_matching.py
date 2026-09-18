@@ -207,7 +207,11 @@ async def test_the_box_is_stored_on_the_group_and_each_item_holds_only_its_own_t
             assert r.status_code == 201, r.text
             body = r.json()
             assert body["type"] == "matching"
-            assert body["config"] == {"options": OPTIONS, "allow_reuse": False}
+            assert body["config"] == {
+                "options": OPTIONS,
+                "allow_reuse": False,
+                "label_style": "letters",
+            }
 
             first, second = body["questions"]
             assert first["prompt"] == "Trelawney"

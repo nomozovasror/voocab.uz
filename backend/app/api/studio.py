@@ -27,5 +27,5 @@ async def get_studio_stats(user: CurrentUser, session: SessionDep) -> StudioStat
 async def get_studio_listening(
     user: CurrentUser, session: SessionDep
 ) -> ListeningList:
-    data = await studio_service.get_listening_list(session, user.id)
+    data = await studio_service.get_listening_list(session, user.id, skill="listening")
     return ListeningList(**data)

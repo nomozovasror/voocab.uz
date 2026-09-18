@@ -34,7 +34,7 @@ from app.models.question import Question
 from app.models.question_attempt import QuestionAttempt
 from app.models.question_group import QuestionGroup
 from app.services import mistakes as mistakes_service
-from app.services.listening import answers_are_letters
+from app.services.listening import answers_are_chosen
 
 #: How many answers a distribution row needs before its percentage is worth
 #: drawing. A percentage over three answers is noise wearing a number's
@@ -75,23 +75,37 @@ def _mean(values: list[int]) -> int | None:
     return _pct(sum(values) / len(values)) if values else None
 
 
-async def _submitted(session: AsyncSession, user_id: uuid.UUID) -> list[Attempt]:
-    """Every attempt this learner has finished, oldest first.
+async def _submitted(
+    session: AsyncSession, user_id: uuid.UUID, *, skill: str
+) -> list[Attempt]:
+    """Every attempt this learner has finished at ONE paper, oldest first.
 
     Read whole rather than aggregated in SQL, and deliberately: almost every
     figure below needs to know which attempt at a material came FIRST, which
     is an ordering question, and answering it five times in five queries would
     be five chances for the five answers to disagree. A learner's finished
     attempts number in the tens.
+
+    **One paper, and this is not a refinement.** ``attempts`` is general
+    across material types — a dictation attempt scores its accuracy into the
+    same column — so an unfiltered read makes every figure in the listening
+    sidebar a figure about something else as well. It went unnoticed while
+    dictation was the only other kind, because a dictation attempt has no
+    ``total_questions`` and drops out of most of the sums on its own. Reading
+    does not: it is a paper, marked out of its questions, and the first thing
+    it did was put a reading title under "Your last result" on the listening
+    page.
     """
     return list(
         (
             await session.exec(
                 select(Attempt)
+                .join(Material, Material.id == Attempt.material_id)  # type: ignore[arg-type]
                 .where(
                     Attempt.user_id == user_id,
                     Attempt.status == AttemptStatus.SUBMITTED,
                     Attempt.submitted_at.is_not(None),  # type: ignore[attr-defined]
+                    Material.type == skill,
                 )
                 .order_by(Attempt.submitted_at)  # type: ignore[arg-type]
             )
@@ -273,7 +287,7 @@ async def _mistakes(
     answered = 0
     counts: Counter[str] = Counter()
     for question_attempt, question, group in rows:
-        if answers_are_letters(group):
+        if answers_are_chosen(group):
             continue
         answered += 1
         if question_attempt.is_correct:
@@ -305,7 +319,7 @@ async def _mistakes(
     }
 
 
-async def _time_spent(session: AsyncSession, user_id: uuid.UUID) -> int:
+async def _time_spent(session: AsyncSession, user_id: uuid.UUID, *, skill: str) -> int:
     """Every finished attempt, retries included — time spent is time spent.
 
     From ``time_spent_ms`` where the client reported it and from the gap
@@ -337,7 +351,7 @@ async def _time_spent(session: AsyncSession, user_id: uuid.UUID) -> int:
                 Attempt.user_id == user_id,
                 Attempt.status == AttemptStatus.SUBMITTED,
                 Attempt.submitted_at.is_not(None),  # type: ignore[attr-defined]
-                Material.type == "listening",
+                Material.type == skill,
             )
         )
     ).one()
@@ -345,7 +359,7 @@ async def _time_spent(session: AsyncSession, user_id: uuid.UUID) -> int:
 
 
 async def first_attempt_profile(
-    session: AsyncSession, user_id: uuid.UUID
+    session: AsyncSession, user_id: uuid.UUID, *, skill: str
 ) -> dict:
     """The little of this module that anything else needs to know.
 
@@ -360,7 +374,7 @@ async def first_attempt_profile(
     spent, the trend and where they left off, none of which chooses a
     material, and all of which is work.
     """
-    attempts = await _submitted(session, user_id)
+    attempts = await _submitted(session, user_id, skill=skill)
     if not attempts:
         return {"sat_anything": False, "average_pct": None, "by_part": []}
 
@@ -435,13 +449,15 @@ async def _carried_on_ids(
     return set(ids)
 
 
-async def listening_stats(session: AsyncSession, user_id: uuid.UUID) -> dict:
+async def listening_stats(
+    session: AsyncSession, user_id: uuid.UUID, *, skill: str
+) -> dict:
     """The practice page's right-hand column, whole.
 
     ``materials_done == 0`` is the signal the page reads to drop every card
     and put guidance in their place.
     """
-    attempts = await _submitted(session, user_id)
+    attempts = await _submitted(session, user_id, skill=skill)
     first_by_material, best_by_material, repeated = _first_and_best(attempts)
     first_attempts = sorted(
         first_by_material.values(),
@@ -463,7 +479,7 @@ async def listening_stats(session: AsyncSession, user_id: uuid.UUID) -> dict:
         "best_avg_pct": (
             _mean(list(best_by_material.values())) if repeated else None
         ),
-        "time_spent_ms": await _time_spent(session, user_id),
+        "time_spent_ms": await _time_spent(session, user_id, skill=skill),
         # Stepped back from whatever the block above the list is showing.
         # Both columns naming the same material is the page saying one thing
         # twice and looking like it is saying two — and the two columns have

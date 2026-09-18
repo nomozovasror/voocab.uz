@@ -12,7 +12,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 Visibility = Literal["private", "public"]
-MaterialType = Literal["dictation", "listening"]
+MaterialType = Literal["dictation", "listening", "reading"]
 
 
 class SegmentIn(BaseModel):

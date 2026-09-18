@@ -38,11 +38,11 @@ from app.services import listening as listening_service
 DRILL_PAGE = 30
 
 
-def _public() -> list:
+def _public(skill: str) -> list:
     """The library a learner may drill: the same two predicates the catalogue
     opens with (``_catalogue_where``), so a drill can never reach a material
     the catalogue would not list."""
-    return [Material.type == "listening", Material.visibility == "public"]
+    return [Material.type == skill, Material.visibility == "public"]
 
 
 def family_of(group_type: str) -> list[str]:
@@ -116,7 +116,11 @@ def _drillable():
 
 
 async def type_summary(
-    session: AsyncSession, user_id: uuid.UUID, *, part: int | None = None
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    *,
+    skill: str,
+    part: int | None = None,
 ) -> list[dict]:
     """One row per question type: how many drills there are, how many numbers
     they cover, and how many the caller has already done.
@@ -135,7 +139,7 @@ async def type_summary(
             .select_from(QuestionGroup)
             .join(Part, Part.id == QuestionGroup.part_id)  # type: ignore[arg-type]
             .join(Material, Material.id == Part.material_id)  # type: ignore[arg-type]
-            .where(*_public(), _drillable(), _in_part(part))
+            .where(*_public(skill), _drillable(), _in_part(part))
             .group_by(QuestionGroup.type)  # type: ignore[arg-type]
         )
     ).all()
@@ -202,6 +206,7 @@ async def list_drills(
     session: AsyncSession,
     user_id: uuid.UUID,
     *,
+    skill: str,
     group_types: list[str],
     query: str | None = None,
     part: int | None = None,
@@ -229,7 +234,7 @@ async def list_drills(
         .join(Material, Material.id == Part.material_id)  # type: ignore[arg-type]
     )
     where = [
-        *_public(),
+        *_public(skill),
         _drillable(),
         QuestionGroup.type.in_(group_types),  # type: ignore[attr-defined]
         _in_part(part),
@@ -357,7 +362,7 @@ async def drill_row(
 
 
 async def next_after(
-    session: AsyncSession, user_id: uuid.UUID, group: QuestionGroup
+    session: AsyncSession, user_id: uuid.UUID, group: QuestionGroup, *, skill: str
 ) -> uuid.UUID | None:
     """The next drill of the same type the caller has not done — what the
     review's "Next map" points at.
@@ -389,7 +394,7 @@ async def next_after(
             .join(Part, Part.id == QuestionGroup.part_id)  # type: ignore[arg-type]
             .join(Material, Material.id == Part.material_id)  # type: ignore[arg-type]
             .where(
-                *_public(),
+                *_public(skill),
                 _drillable(),
                 QuestionGroup.type.in_(kin),  # type: ignore[attr-defined]
                 Part.material_id != (part.material_id if part else None),
@@ -421,7 +426,9 @@ CARRY_ON_FROM = 2
 CARRY_ON_WITHIN = timedelta(days=7)
 
 
-async def in_progress_for(session: AsyncSession, user_id: uuid.UUID) -> dict | None:
+async def in_progress_for(
+    session: AsyncSession, user_id: uuid.UUID, *, skill: str
+) -> dict | None:
     """The kind of exercise this learner was last working through, or None.
 
     "Last working on" and not "furthest through", exactly as the collections
@@ -468,7 +475,7 @@ async def in_progress_for(session: AsyncSession, user_id: uuid.UUID) -> dict | N
         )
         .exists()
     )
-    in_family = [*_public(), _drillable(), QuestionGroup.type.in_(kin)]  # type: ignore[attr-defined]
+    in_family = [*_public(skill), _drillable(), QuestionGroup.type.in_(kin)]  # type: ignore[attr-defined]
 
     def count(*extra):
         return (

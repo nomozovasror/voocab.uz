@@ -20,10 +20,12 @@ Two callers, and they are deliberately different:
 import uuid
 
 from app.core.database import AsyncSession
-from app.models.material import Material
+from app.models.material import PAPER_TYPES, Material
 from app.models.question import Question
 from app.models.question_group import (
+    FIXED_CHOICE_TYPES,
     LABELLING_TYPES,
+    MATCHING_TYPES,
     QuestionGroup,
     QuestionGroupType,
 )
@@ -32,7 +34,12 @@ from app.services import materials as materials_service
 
 #: Titles the editors fill in for an author who hasn't named the material
 #: yet. They are placeholders standing in for a title, not titles.
-PLACEHOLDER_TITLES = {"untitled", "untitled listening", "untitled dictation"}
+PLACEHOLDER_TITLES = {
+    "untitled",
+    "untitled listening",
+    "untitled reading",
+    "untitled dictation",
+}
 
 
 async def publish_blockers(session: AsyncSession, material: Material) -> list[str]:
@@ -50,23 +57,45 @@ async def publish_blockers(session: AsyncSession, material: Material) -> list[st
     elif title.lower() in PLACEHOLDER_TITLES:
         blockers.append("Give the material a real title, not the placeholder.")
 
-    if material.audio_asset_id is None:
+    # A recording is what a listening test and a dictation are made of, and
+    # what a reading paper has instead is its passages — checked per part in
+    # _paper_blockers, since a material has one recording and a passage each.
+    #
+    # This check was unconditional, which was right while every material type
+    # had audio and would have made a reading paper impossible to publish: no
+    # recording to attach, and no way to say so.
+    if material.type != "reading" and material.audio_asset_id is None:
         blockers.append("Attach the audio recording.")
 
-    if material.type == "listening":
-        blockers.extend(await _listening_blockers(session, material.id))
+    if material.type in PAPER_TYPES:
+        blockers.extend(
+            await _paper_blockers(session, material.id, skill=material.type)
+        )
     else:
         blockers.extend(await _dictation_blockers(session, material.id))
 
     return blockers
 
 
-async def _listening_blockers(
-    session: AsyncSession, material_id: uuid.UUID
+async def _paper_blockers(
+    session: AsyncSession, material_id: uuid.UUID, *, skill: str
 ) -> list[str]:
+    """What a paper still needs before somebody else can sit it.
+
+    One walk for both papers, because a question group is the same object in
+    either: the same instruction line, the same box of options, the same
+    answer key. What the skill decides is exactly two things — whether a part
+    carries a passage, and whether each answer has to be linked to the
+    recording — and both are named as such below rather than being a second
+    copy of this function with two lines different.
+    """
     parts = await listening_service.get_parts(session, material_id)
     if not parts:
-        return ["Add at least one part."]
+        return ["Add at least one part."] if skill == "listening" else [
+            "Add at least one passage."
+        ]
+
+    linked = skill == "listening"
 
     blockers: list[str] = []
     # Questions are numbered 1..N inside their own group; what the candidate
@@ -79,6 +108,12 @@ async def _listening_blockers(
     for part in parts:
         label = part.title.strip() or f"Part {part.order_index + 1}"
         groups = await listening_service.get_question_groups(session, part.id)
+        if skill == "reading" and groups and not _passage_text(part):
+            # Only where there are questions: a passage an author has opened
+            # and not yet pasted the text into is a draft, exactly as an empty
+            # part is, and complaining about it would be complaining about
+            # work in progress.
+            blockers.append(f"{label}: add the passage text.")
         if not groups:
             # A part with nothing in it is how a four-part test looks while
             # it is being written, so it isn't an error on its own — the
@@ -97,15 +132,27 @@ async def _listening_blockers(
             marks = listening_service.question_marks(group)
             if group.type == QuestionGroupType.MULTIPLE_CHOICE:
                 blockers.extend(
-                    _choice_blockers(label, questions, numbered_so_far, marks)
+                    _choice_blockers(
+                        label, questions, numbered_so_far, marks, linked=linked
+                    )
                 )
-            elif group.type == QuestionGroupType.MATCHING:
+            elif group.type in MATCHING_TYPES:
                 blockers.extend(
-                    _matching_blockers(label, group, questions, numbered_so_far)
+                    _matching_blockers(
+                        label, group, questions, numbered_so_far, linked=linked
+                    )
+                )
+            elif group.type in FIXED_CHOICE_TYPES:
+                blockers.extend(
+                    _fixed_choice_blockers(
+                        label, group, questions, numbered_so_far, linked=linked
+                    )
                 )
             else:
                 blockers.extend(
-                    _gap_blockers(label, group, questions, numbered_so_far)
+                    _gap_blockers(
+                        label, group, questions, numbered_so_far, linked=linked
+                    )
                 )
 
             numbered_so_far += len(questions) * marks
@@ -117,7 +164,12 @@ async def _listening_blockers(
 
 
 def _gap_blockers(
-    label: str, group: QuestionGroup, questions: list[Question], offset: int
+    label: str,
+    group: QuestionGroup,
+    questions: list[Question],
+    offset: int,
+    *,
+    linked: bool = True,
 ) -> list[str]:
     """What a completion group still needs. ``offset`` is how many questions
     come before this group in the material, so the numbers quoted are the ones
@@ -148,7 +200,11 @@ def _gap_blockers(
     # Where the answer is said is what the learner gets back with their
     # result — the reason to re-listen rather than just be told they were
     # wrong. Required, by the same reasoning as the answer itself.
-    unmarked = [offset + q.number for q in questions if q.replay_start_ms is None]
+    unmarked = (
+        [offset + q.number for q in questions if q.replay_start_ms is None]
+        if linked
+        else []
+    )
     if unmarked:
         blockers.append(f"{label}: {_numbers(unmarked)} not linked to the audio.")
 
@@ -156,7 +212,12 @@ def _gap_blockers(
 
 
 def _choice_blockers(
-    label: str, questions: list[Question], offset: int, wanted: int
+    label: str,
+    questions: list[Question],
+    offset: int,
+    wanted: int,
+    *,
+    linked: bool = True,
 ) -> list[str]:
     """What a multiple-choice group still needs. ``wanted`` is how many
     letters the group tells the candidate to pick.
@@ -223,10 +284,14 @@ def _choice_blockers(
     # unexplained. Options that aren't right are ignored — a distractor has
     # no moment, and a mark left on one from before the key changed is kept
     # rather than demanded.
-    unlinked = numbers(
-        lambda q: any(
-            letter not in q.option_replay for letter in (q.correct_answers or [])
+    unlinked = (
+        numbers(
+            lambda q: any(
+                letter not in q.option_replay for letter in (q.correct_answers or [])
+            )
         )
+        if linked
+        else []
     )
     if unlinked:
         blockers.append(f"{label}: {_numbers(unlinked)} not linked to the audio.")
@@ -358,6 +423,8 @@ def _matching_blockers(
     group: QuestionGroup,
     questions: list[Question],
     offset: int,
+    *,
+    linked: bool = True,
 ) -> list[str]:
     """What a matching group still needs.
 
@@ -382,11 +449,58 @@ def _matching_blockers(
     if unanswered:
         blockers.append(f"{label}: {_numbers(unanswered)} without an answer.")
 
-    unmarked = numbers(lambda q: q.replay_start_ms is None)
+    unmarked = numbers(lambda q: q.replay_start_ms is None) if linked else []
     if unmarked:
         blockers.append(f"{label}: {_numbers(unmarked)} not linked to the audio.")
 
     return blockers
+
+
+def _fixed_choice_blockers(
+    label: str,
+    group: QuestionGroup,
+    questions: list[Question],
+    offset: int,
+    *,
+    linked: bool = True,
+) -> list[str]:
+    """What a true/false/not-given set still needs.
+
+    It has no box to check — its three words come from the type — and no
+    options to count, so what is left is the statement and the judgement of
+    it. Each item is one number and one mark, like a matching item.
+    """
+    blockers: list[str] = []
+
+    def numbers(matching) -> list[int]:
+        return [offset + q.number for q in questions if matching(q)]
+
+    unwritten = numbers(lambda q: not (q.config or {}).get("prompt", "").strip())
+    if unwritten:
+        blockers.append(f"{label}: {_numbers(unwritten)} without any statement.")
+
+    unanswered = numbers(lambda q: not q.correct_answers)
+    if unanswered:
+        blockers.append(f"{label}: {_numbers(unanswered)} without an answer.")
+
+    unmarked = numbers(lambda q: q.replay_start_ms is None) if linked else []
+    if unmarked:
+        blockers.append(f"{label}: {_numbers(unmarked)} not linked to the audio.")
+
+    return blockers
+
+
+def _passage_text(part) -> str:
+    """The words of a part's passage, or an empty string where there are
+    none — which covers a part with no passage at all, one whose paragraphs
+    are an empty list, and one whose paragraphs are all blank. All three are
+    the same thing to an author: nothing to read."""
+    paragraphs = (part.passage or {}).get("paragraphs") or []
+    return "".join(
+        str(paragraph.get("text") or "")
+        for paragraph in paragraphs
+        if isinstance(paragraph, dict)
+    ).strip()
 
 
 async def _dictation_blockers(

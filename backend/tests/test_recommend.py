@@ -278,7 +278,7 @@ async def test_nothing_is_said_until_there_is_something_to_go_on() -> None:
     try:
         # Nothing sat at all.
         async with async_session_factory() as session:
-            assert (await recommend.next_up(session, user.id))["reason"] == "none"
+            assert (await recommend.next_up(session, user.id, skill="listening"))["reason"] == "none"
 
         # One short of the threshold, and still nothing.
         for i in range(recommend.MIN_MATERIALS - 1):
@@ -288,7 +288,7 @@ async def test_nothing_is_said_until_there_is_something_to_go_on() -> None:
             await _sit(user.id, material_id, questions, answers=4, correct=3)
             made.append(material_id)
         async with async_session_factory() as session:
-            out = await recommend.next_up(session, user.id)
+            out = await recommend.next_up(session, user.id, skill="listening")
         assert out["reason"] == "none"
         assert out["items"] == []
 
@@ -299,7 +299,7 @@ async def test_nothing_is_said_until_there_is_something_to_go_on() -> None:
         spare, _q = await _material(user.id, f"Spare {uuid.uuid4()}", 1)
         made.append(spare)
         async with async_session_factory() as session:
-            out = await recommend.next_up(session, user.id)
+            out = await recommend.next_up(session, user.id, skill="listening")
         assert out["reason"] != "none"
     finally:
         await _cleanup(made, email)
@@ -318,7 +318,7 @@ async def test_a_paper_already_sat_is_never_recommended() -> None:
         warm = await _warm_up(user.id)
         await _sit(user.id, sat, questions, answers=4, correct=2)
         async with async_session_factory() as session:
-            out = await recommend.next_up(session, user.id)
+            out = await recommend.next_up(session, user.id, skill="listening")
         ids = [row["id"] for row in out["items"]]
         assert sat not in ids
         assert fresh in ids
@@ -337,7 +337,7 @@ async def test_an_empty_shell_is_never_recommended() -> None:
     try:
         warm = await _warm_up(user.id)
         async with async_session_factory() as session:
-            out = await recommend.next_up(session, user.id)
+            out = await recommend.next_up(session, user.id, skill="listening")
         assert all(row["id"] != shell for row in out["items"])
     finally:
         await _cleanup([shell, *warm], email)
@@ -365,7 +365,7 @@ async def test_a_lopsided_learner_is_sent_to_the_part_they_are_behind_on() -> No
         await _sit(user.id, weak, weak_q, answers=MIN_ANSWERS, correct=0)
 
         async with async_session_factory() as session:
-            out = await recommend.next_up(session, user.id)
+            out = await recommend.next_up(session, user.id, skill="listening")
 
         assert out["reason"] == "weak_part"
         assert out["part"] == 3
@@ -400,7 +400,7 @@ async def test_an_even_learner_is_told_about_their_level_instead() -> None:
             )
 
         async with async_session_factory() as session:
-            out = await recommend.next_up(session, user.id)
+            out = await recommend.next_up(session, user.id, skill="listening")
 
         assert out["reason"] == "level"
         assert out["part"] is None
@@ -486,7 +486,7 @@ async def test_a_course_in_progress_outranks_everything_else() -> None:
             await _sit(user.id, material_id, questions, answers=4, correct=2)
 
         async with async_session_factory() as session:
-            out = await recommend.next_up(session, user.id)
+            out = await recommend.next_up(session, user.id, skill="listening")
 
         assert out["reason"] == "course"
         assert out["collection"]["id"] == collection_id
@@ -530,7 +530,7 @@ async def test_the_course_carried_on_with_is_the_one_last_touched() -> None:
         await _sit(user.id, new[0][0], new[0][1], answers=4, correct=2)
 
         async with async_session_factory() as session:
-            out = await recommend.next_up(session, user.id)
+            out = await recommend.next_up(session, user.id, skill="listening")
 
         assert out["reason"] == "course"
         assert out["collection"]["id"] == recent_id
@@ -557,7 +557,7 @@ async def test_a_finished_course_is_not_something_to_carry_on_with() -> None:
         await _sit(user.id, done_material, done_q, answers=4, correct=2)
 
         async with async_session_factory() as session:
-            out = await recommend.next_up(session, user.id)
+            out = await recommend.next_up(session, user.id, skill="listening")
 
         assert out["reason"] != "course"
     finally:
@@ -620,7 +620,7 @@ async def test_done_is_counted_not_read_off_the_queue() -> None:
             await _sit(user.id, material_id, questions, answers=4, correct=2)
 
         async with async_session_factory() as session:
-            out = await recommend.next_up(session, user.id)
+            out = await recommend.next_up(session, user.id, skill="listening")
 
         assert out["reason"] == "course"
         assert out["position"] == 2  # the next one still waiting
@@ -656,7 +656,7 @@ async def test_finishing_a_course_is_said_once_and_then_dropped() -> None:
             await _sit(user.id, material_id, questions, answers=4, correct=3)
 
         async with async_session_factory() as session:
-            out = await recommend.next_up(session, user.id)
+            out = await recommend.next_up(session, user.id, skill="listening")
         assert out["reason"] == "finished_course"
         assert out["collection"]["id"] == collection_id
         assert out["done"] == out["of"] == 3
@@ -665,7 +665,7 @@ async def test_finishing_a_course_is_said_once_and_then_dropped() -> None:
         # Anything else, and it is no longer what just happened.
         await _sit(user.id, after, after_q, answers=4, correct=3)
         async with async_session_factory() as session:
-            out = await recommend.next_up(session, user.id)
+            out = await recommend.next_up(session, user.id, skill="listening")
         assert out["reason"] != "finished_course"
     finally:
         await _drop_collections(email)
@@ -692,7 +692,7 @@ async def test_a_retake_inside_a_finished_course_is_not_a_completion() -> None:
         await _sit(user.id, course[1][0], course[1][1], answers=4, correct=4)
 
         async with async_session_factory() as session:
-            out = await recommend.next_up(session, user.id)
+            out = await recommend.next_up(session, user.id, skill="listening")
         assert out["reason"] != "finished_course"
     finally:
         await _drop_collections(email)
@@ -772,7 +772,7 @@ async def test_steady_reaches_for_a_whole_paper_first() -> None:
 
     try:
         async with async_session_factory() as session:
-            out = await recommend.next_up(session, user.id)
+            out = await recommend.next_up(session, user.id, skill="listening")
 
         assert out["reason"] == "steady"
         assert out["accuracy_pct"] == 100
