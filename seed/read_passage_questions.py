@@ -51,6 +51,7 @@ import sys
 
 import vision
 from locate_passages import TEST_IN_HEADER, page_maps
+from read_questions import repair
 
 SEED = pathlib.Path(__file__).resolve().parent
 REPO = SEED.parent
@@ -86,6 +87,11 @@ READS = 2
 #: server because this is where a group is first called one, and a group of
 #: these that came back carrying options would be graded as letters.
 FIXED_CHOICE = {"true_false_not_given", "yes_no_not_given"}
+
+#: Matching's five names. The same set `build_questions.py` and the server
+#: keep; here it decides which groups have no template of their own.
+MATCHING_TYPES = {"matching", "matching_headings", "matching_information",
+                  "matching_features", "matching_sentence_endings"}
 
 #: An answer to one of them, however the key prints it.
 #: The numerals a heading box is numbered with, in order. Twelve is more
@@ -838,13 +844,36 @@ def assemble(groups: list[dict], answers: dict[int, str]) -> list[dict]:
         kind = group_type(group)
         style = label_style(group)
         questions = [q for q in group.get("questions") or [] if isinstance(q, dict)]
+        # Blank only for the shapes that HAVE no template: a true/false set, a
+        # matching task, a multiple choice. Not for anything with options,
+        # which is where this was wrong -- a summary completion with a box of
+        # words above it has both, and the prompt says so in as many words.
+        # Blanked, twenty-seven of them reached the build as "template gaps []
+        # != question numbers [1,2,3]".
+        template = "" if (kind in FIXED_CHOICE or kind in MATCHING_TYPES
+                          or kind == "multiple_choice") else group.get(
+                              "template", "")
+        if template:
+            # The same two repairs the listening reader makes, and the same
+            # argument for making them here: the model transcribes a page line
+            # by line, and "merge this line into the one above" is not what
+            # the page looks like. A line that wrongly begins "+" becomes a
+            # one-row table, where the take page draws no gaps at all -- six
+            # reading passages were refused for exactly that.
+            template, mended = repair(template, questions)
+            for note in mended:
+                print(f"{'':<16} repaired: {note}")
         built = {
             "type": kind,
             "instructions": group.get("instructions", ""),
             "word_limit": group.get("word_limit"),
-            "template": group.get("template", "") if not (
-                kind in FIXED_CHOICE or group.get("options")
-                or group.get("pick")) else "",
+            # Blank only for the shapes that HAVE no template: a true/false
+            # set, a matching task, a multiple choice. Not for anything with
+            # options, which is where this was wrong -- a summary completion
+            # with a box of words above it has both, and the prompt says so
+            # in as many words. Blanked, twenty-seven of them reached the
+            # build as "template gaps [] != question numbers [1,2,3]".
+            "template": template,
             "questions": [
                 {"number": q.get("number"), "paper_number": q.get("paper_number"),
                  "key": tidy_key(answers.get(q.get("paper_number"), ""), style),

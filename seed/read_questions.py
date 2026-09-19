@@ -167,6 +167,9 @@ that is part of the task."""
 #: they mean different things: one question worth two marks, or two questions.
 PAIR_OF_LETTERS = re.compile(r"^[A-K](?:\s*[,/&;]\s*[A-K])*$", re.I)
 
+#: A gap token in a template, the same shape `build_questions.py` reads.
+GAP = re.compile(r"\{\{(\d+)\}\}")
+
 #: How many pages past the one the catalogue names a key may run.
 KEY_SPILL = 3
 #: The most a key may run when it is read as text, where a page costs nothing
@@ -391,6 +394,24 @@ def repair(template: str, questions: list[dict]) -> tuple[str, list[str]]:
         columns = 0 if not bare else columns
         filled.append(line)
     template = "\n".join(filled)
+
+    # 0c. A gap in the FIRST table row means the table has no header.
+    #
+    #     The grammar reads the first `+` line as the header row and draws no
+    #     gap in it -- which is right for a table that has one, and Cambridge
+    #     15's nutmeg table does not: its first row is "Middle Ages | Nutmeg
+    #     was brought to Europe by the {{1}}", data from the top. An empty
+    #     header row above it costs nothing to draw and puts every row of the
+    #     table back in the body.
+    lines = template.split("\n")
+    first = next((i for i, line in enumerate(lines)
+                  if line.lstrip().startswith("+")), None)
+    if first is not None and GAP.search(lines[first]):
+        columns = lines[first].lstrip()[1:].count("|") + 1
+        lines.insert(first, "+" + " |" * (columns - 1))
+        notes.append("a table whose first row holds a gap was given an empty "
+                     "header row")
+        template = "\n".join(lines)
 
     lines = template.split("\n")
     out: list[str] = []
