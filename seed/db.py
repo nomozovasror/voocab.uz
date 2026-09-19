@@ -118,22 +118,30 @@ FINDINGS: list[tuple[str, str, str, str]] = [
      "2 of test 6 -- its text and questions 14 to 30 -- so the paper can be read as two "
      "passages or not at all. This is the one gap in 192 that locate_passages.py cannot "
      "close, and it is a gap in the source rather than in the pipeline."),
-    ("cam11-t4-p2", "blocker",
+    ("cam11-t4-p2", "resolved",
      "Cambridge 11 test 4's reading key disagrees with its own paper",
      "The question pages are unambiguous across three sheets -- 14-18 multiple "
      "choice, 19-23 TRUE/FALSE/NOT GIVEN, 24-26 -- and the key page prints 14-19 "
      "as letters, 20-24 as TRUE/FALSE/NOT GIVEN and 25-26 as letters. One number "
      "apart from question 19 on. Both were read repeatedly and both come back the "
      "same, so this is the scan rather than the reading, and build_questions.py "
-     "refuses it: half the answers would be against the wrong questions."),
-    ("cam15-t3-p2", "blocker",
-     "One sheet of Cambridge 15 test 3 cannot be read by either provider",
+     "refuses it: half the answers would be against the wrong questions. "
+     "Settled off a third source, which agrees with the QUESTION pages "
+     "question by question; the thirteen corrected answers are in "
+     "seed/work/cam11-t4-p2/key.json with the URL they came from."),
+    ("cam15-t3-p2", "resolved",
+     "One sheet of Cambridge 15 test 3 is refused by the ASK, not the page",
      "Gemini answers content_filter: RECITATION for pdf page 62 whole, in halves "
      "and in three overlapping bands -- every framing, every time -- and nvidia, "
      "the fallback, reads a question page too poorly to use (it answers in prose "
      "and invents question numbers). Questions 14-20 come off the other sheet "
-     "correctly; 21-26 are on this one. Located, read and refused rather than "
-     "published half."),
+     "correctly; 21-26 were on this one. Resolved: the refusal is about the "
+     "REQUEST rather than the image. The main prompt asks for the task in a "
+     "layout grammar, which is a request to reproduce it; the same bands, "
+     "asked for a heading, an instruction line and a list of lines one field "
+     "at a time, answer in full and verbatim. read_passage_questions.py tries "
+     "that before the fallback now, and the summary it recovered matches the "
+     "book's own answer key word for word."),
     ("12", "info",
      "Cambridge 12 numbers its tests 5 to 8",
      "It continues from Cambridge 11 rather than starting again, so a book's own test "

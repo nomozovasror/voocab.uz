@@ -605,6 +605,34 @@ def read_key(conn, row, *, model: str, force: bool = False) -> dict:
     return answers
 
 
+def corrections(passage_id: str) -> dict:
+    """What a person established that the book's own pages could not settle.
+
+    `work/<passage id>/key.json`, written by hand and never by this program:
+
+        {"source": "<where it came from>",
+         "why": "<what was wrong with the book's own key>",
+         "answers": {"19": "TRUE", ...}}
+
+    It exists because a scan can contradict itself. Cambridge 11's test 4
+    prints its questions over three sheets -- 14-18 multiple choice, 19-23
+    TRUE/FALSE/NOT GIVEN, 24-26 sentence endings -- and its key column
+    prints 14-19 as letters, shifting everything from 19 on and losing the
+    last answer. Both were read repeatedly and both come back the same, so
+    no amount of re-reading settles it: one of the two is simply wrong in
+    the book, and which one is a judgement made off a third source.
+
+    Kept beside the reading rather than folded into it, and carrying WHERE
+    it came from, so that a corrected answer can never be mistaken for one
+    the pipeline read.
+    """
+    path = WORK / passage_id / "key.json"
+    if not path.exists():
+        return {}
+    held = json.loads(path.read_text())
+    return {str(n): str(v) for n, v in (held.get("answers") or {}).items()}
+
+
 def slice_key(answers: dict, first: int, last: int) -> tuple[dict, list[int]]:
     """The answers in this passage's band, and which of its numbers are absent.
 
@@ -768,6 +796,53 @@ N counting from 1 within this group; otherwise empty>",
 printed>, "prompt": "<the statement or question, without its number>"}}]}}]}}"""
 
 
+#: The last thing to try on a band the provider will not transcribe.
+#:
+#: The refusal is not about the page, it is about the ASK. The main prompt
+#: says "read the questions and return them in this layout grammar", which
+#: is a request to reproduce the task; the same band, asked for its heading,
+#: its instruction lines, its headline and its lines ONE FIELD AT A TIME, is
+#: answered in full and verbatim. Cambridge 15's test 3 sheet is refused
+#: whole, in halves and in bands by the first prompt, and gives up its whole
+#: summary to this one.
+#:
+#: No layout grammar here, deliberately. It asks for the lines as printed
+#: with the blanks left as the book prints them -- "21 ____" -- and the
+#: grammar is applied below, where the numbers are known. Asking a model to
+#: apply a grammar is the expensive half of the main prompt and the half it
+#: refuses.
+NARROW_PROMPT = """\
+This image is a band cut out of a page of an IELTS Academic Reading paper.
+
+Describe the ONE question group on it, piece by piece. Answer with JSON and \
+nothing else:
+
+{{"heading": "<the 'Questions N-M' heading, or null>",
+ "type": "<one of: true_false_not_given, yes_no_not_given, matching_headings, \
+matching_information, matching_features, matching_sentence_endings, \
+multiple_choice, summary_completion, sentence_completion, note_completion, \
+table_completion, short_answer, diagram_labelling>",
+ "instructions": "<the italic lines under the heading, verbatim, newline \
+separated>",
+ "word_limit": <the most words an answer may be, as a number, or null>,
+ "title": "<the bold headline above the task, or null>",
+ "lines": ["<each line of the task, verbatim, with every blank left exactly \
+as printed -- the number and the rule, like '21 ____'>"],
+ "items": [{{"number": <the number printed beside it>, "text": "<the \
+statement or question, without its number>"}}],
+ "options": ["<each line of the lettered box above the task, without its \
+letter; empty if there is no box>"]}}
+
+Only what is on THIS band. A task cut off at the edge gives the lines that \
+are there and no others."""
+
+
+#: A blank as the book prints it inside a line: the question's number, then a
+#: rule. What the layout grammar wants instead is `{{N}}`, N counting from 1
+#: within the group -- and only here are both numbers known.
+PRINTED_GAP = re.compile(r"\b(\d{1,2})\s*[_.…]{2,}")
+
+
 #: A roman numeral, which is what a matching-headings box is numbered with.
 ROMAN_ANSWER = re.compile(r"^\s*[ivxl]+\s*$", re.I)
 #: One letter, which is what every other matching box and multiple choice is
@@ -844,8 +919,53 @@ def halves(shot: pathlib.Path) -> list[pathlib.Path]:
     return out
 
 
+def from_narrow(said: dict, first: int, last: int) -> list[dict]:
+    """A group in the reader's own shape, built from the narrow answer.
+
+    The grammar is applied HERE rather than asked for. Each line comes back
+    with its blanks as the book prints them -- "21 ____" -- and the gap
+    token needs the number the question has WITHIN the group, which is known
+    only once every number on the band has been seen.
+    """
+    numbers: list[int] = []
+    for line in said.get("lines") or []:
+        numbers += [int(n) for n in PRINTED_GAP.findall(str(line))]
+    items = [one for one in said.get("items") or []
+             if isinstance(one, dict) and str(one.get("number", "")).isdigit()]
+    numbers += [int(one["number"]) for one in items]
+    numbers = sorted({n for n in numbers if first <= n <= last})
+    if not numbers:
+        return []
+
+    place = {number: i + 1 for i, number in enumerate(numbers)}
+    template = "\n".join(
+        PRINTED_GAP.sub(
+            lambda m: "{{%d}}" % place[int(m.group(1))]
+            if int(m.group(1)) in place else m.group(0),
+            str(line))
+        for line in said.get("lines") or [])
+    if said.get("title") and template:
+        template = f"# {said['title']}\n\n{template}"
+
+    group = {
+        "type": said.get("type") or "summary_completion",
+        "instructions": said.get("instructions") or "",
+        "word_limit": said.get("word_limit"),
+        "template": template,
+        "options": [one for one in said.get("options") or [] if str(one).strip()],
+        "questions": [
+            {"number": place[number], "paper_number": number,
+             **({"prompt": next((str(one["text"]) for one in items
+                                 if int(one["number"]) == number), "")}
+                if items else {})}
+            for number in numbers
+        ],
+    }
+    return [group]
+
+
 def read_window(shots: list[pathlib.Path], prompt: str, short: str,
-                model: str) -> list[dict]:
+                model: str, first: int = 1, last: int = 40) -> list[dict]:
     """One window's groups, halving whenever the whole of it fails.
 
     The recursion is what stops the ladder being a cliff: three sheets that
@@ -885,6 +1005,47 @@ def read_window(shots: list[pathlib.Path], prompt: str, short: str,
                 except SystemExit:
                     continue
                 out += (page.get("groups") or []) if isinstance(page, dict) else []
+            if not out:
+                # Refused in every band too. The refusal is about the ASK
+                # rather than the page: the same bands, asked for a heading,
+                # an instruction line and a list of lines instead of for a
+                # task in a layout grammar, answer in full. Tried before the
+                # other provider, whose reading of a question page is
+                # markedly worse.
+                # Every band, merged into ONE answer before it is shaped.
+                # The bands overlap, so each sees part of the task and none
+                # need see all of it: the band with the headline had four of
+                # the six lines and the band with all six had no headline.
+                merged: dict = {"lines": [], "items": [], "options": []}
+                for band in halves(shots[0]):
+                    try:
+                        said = vision.ask_json(NARROW_PROMPT, [band],
+                                               model=model, max_tokens=4000)
+                    except SystemExit:
+                        continue
+                    if not isinstance(said, dict):
+                        continue
+                    for field in ("heading", "type", "instructions",
+                                  "title", "word_limit"):
+                        merged[field] = merged.get(field) or said.get(field)
+                    seen = {" ".join(str(l).split())
+                            for l in merged["lines"]}
+                    for line in said.get("lines") or []:
+                        if " ".join(str(line).split()) not in seen:
+                            merged["lines"].append(line)
+                    held = {int(one["number"]) for one in merged["items"]}
+                    for one in said.get("items") or []:
+                        if (isinstance(one, dict)
+                                and str(one.get("number", "")).isdigit()
+                                and int(one["number"]) not in held):
+                            merged["items"].append(one)
+                    for one in said.get("options") or []:
+                        if one not in merged["options"]:
+                            merged["options"].append(one)
+                out += from_narrow(merged, first, last)
+                if out:
+                    print(f"{'':<16} sheet refused; read field by field")
+                    return out
             if out or refused < SLICES:
                 print(f"{'':<16} sheet refused; read in halves")
                 return out
@@ -903,7 +1064,7 @@ def read_window(shots: list[pathlib.Path], prompt: str, short: str,
     out: list[dict] = []
     for part in (shots[:half], shots[half:]):
         if part:
-            out += read_window(part, prompt, short, model)
+            out += read_window(part, prompt, short, model, first, last)
     return out
 
 
@@ -933,7 +1094,8 @@ def read_questions(row, *, model: str,
         # printed across two sheets, asked one sheet at a time, came back as
         # a true/false set whose answers were letters. So the ladder gives up
         # as little as it has to.
-        read = {"groups": read_window(shots, prompt, short, model)}
+        read = {"groups": read_window(shots, prompt, short, model,
+                                      first, last)}
         for group in read.get("groups", []) if isinstance(read, dict) else []:
             if not isinstance(group, dict):
                 continue
@@ -1287,6 +1449,14 @@ def main() -> int:
             continue
         try:
             key = read_key(conn, row, model=args.model, force=args.force_key)
+            fixed = corrections(row["id"])
+            if fixed:
+                print(f"{'':<16} {len(fixed)} answer(s) corrected by hand"
+                      f" (work/{row['id']}/key.json)")
+                key = {n: v for n, v in key.items()
+                       if not any(str(one) in fixed
+                                  for one in re.findall(r"\d+", str(n)))}
+                key.update(fixed)
             first, last = band(row["passage_no"])
             answers, absent = slice_key(key, first, last)
             missing = [f"the key is missing {absent}"] if absent else []

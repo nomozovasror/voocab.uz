@@ -2175,32 +2175,49 @@ window rather than the page:
 
 ## Where the reading corpus stands
 
-**189 of 191 located passages are in the database and public**, beside the
-256 listening materials — 2,511 reading questions across fourteen question
-types, in fourteen courses of one book each. **64 of 64 tests have a complete
-reading key**, forty answers apiece, and none of them is the listening key.
+**191 of 191 located passages are in the database and public**, beside the
+256 listening materials — 2,537 reading questions across fourteen question
+types, in fourteen courses of one book each. **64 of 64 tests have a
+complete reading key**, forty answers apiece, and none of them is the
+listening key.
 
-The reading half cost **$5.56**: $0.56 to find the pages, $1.14 to read the
-passages, $3.86 to read the questions and the keys. Most of that last figure
+The 192nd passage of the fourteen books is not here and cannot be: the
+Official Guide's scan is missing printed pages 255 to 258, which hold the
+whole of its test 6 passage 2.
+
+The reading half cost **$5.6**: $0.56 to find the pages, $1.1 to read the
+passages, $3.9 to read the questions and the keys. Most of that last figure
 is re-reads — the corpus was read through four times as the checks found
 things, which is the same shape the listening half had and the reason this
 file keeps a ledger at all.
 
-### Two passages are refused, and each says why
+### The last two, and what they taught
 
-`cam11-t4-p2` — **the scan's key disagrees with its own question pages.**
-The paper is unambiguous across three sheets (14-18 multiple choice, 19-23
-TRUE/FALSE/NOT GIVEN, 24-26) and the key page prints 14-19 as letters, 20-24
-as TRUE/FALSE/NOT GIVEN, 25-26 as letters: one number apart from question 19
-on. Both were read repeatedly and both come back the same, so it is the book
-rather than the reading, and publishing half the answers against the wrong
-questions is worse than publishing none.
+Both were refused for a while, and each turned out to be a different kind of
+problem.
 
-`cam15-t3-p2` — **one sheet no provider will read.** Gemini answers
-`content_filter: RECITATION` for it whole, in halves and in three
-overlapping bands, every framing and every time; nvidia, the fallback, reads
-a question page too poorly to use. Questions 14-20 come off the other sheet
-correctly and 21-26 are on this one.
+**`cam15-t3-p2` — the refusal was about the ASK, not the page.** Gemini
+answers `content_filter: RECITATION` for its question sheet whole, in
+halves, and in three overlapping bands. The same bands, asked for a
+heading, an instruction line, a headline and a list of lines ONE FIELD AT A
+TIME, answer in full and verbatim. The main prompt asks for the task *in a
+layout grammar*, which is a request to reproduce it; the narrow one asks
+what is printed and applies the grammar afterwards, where the numbers are
+known anyway. That is the last rung of the ladder now, tried before the
+other provider, and the summary it recovered matches the book's own answer
+key word for word.
+
+**`cam11-t4-p2` — the book contradicts itself, and no reading fixes that.**
+Its question pages say 14-18 multiple choice, 19-23 TRUE/FALSE/NOT GIVEN,
+24-26 sentence endings, consistently across three sheets. Its key column
+prints an extra letter at 19, shifting every answer from there on and losing
+the last one. Both were read repeatedly and both come back the same.
+
+So there is one thing in this pipeline a person may write and a program may
+not: `work/<passage id>/key.json`, carrying the corrected answers, WHY the
+book's own key could not be used, and the source the judgement was made off.
+Kept beside the reading rather than folded into it, so a corrected answer can
+never be mistaken for one that was read.
 
 ### What the checks caught that nothing else would have
 
