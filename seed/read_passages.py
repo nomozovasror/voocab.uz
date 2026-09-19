@@ -184,6 +184,99 @@ def lettering(paragraphs: list[dict]) -> str | None:
     return None
 
 
+LETTERS_PROMPT = """\
+These images are consecutive pages of an IELTS Academic Reading passage whose \
+paragraphs are LETTERED in the margin -- A, B, C down the left-hand side.
+
+Read ONLY the letters and where each one starts. Do not transcribe the \
+passage.
+
+Return ONE JSON object, no prose and no code fence:
+
+{"paragraphs": [{"label": "<the letter, like A>",
+                 "opening": "<the first SIX words of that paragraph, verbatim>"}]}
+
+Every lettered paragraph on these pages, in the order they are printed, and \
+nothing else. Do not invent a letter for a paragraph that has none, and do \
+not renumber."""
+
+
+def opening(text: str, words: int = 5) -> str:
+    """The first few words of a paragraph, flattened for comparison."""
+    return " ".join(re.sub(r"[^a-z0-9 ]", " ", text.lower()).split()[:words])
+
+
+def relabel(passage: dict, row: sqlite3.Row, *, model: str) -> bool:
+    """Ask the page for its paragraph letters alone, and fit them to the text.
+
+    The one narrow question left after a passage has been read twice and
+    still comes back lettered partway down. Transcribing a page and reading
+    its margin are two jobs, and the margin is the one that gets dropped when
+    the first is long -- seventeen passages kept their prose and lost half
+    their letters.
+
+    Nothing is invented and nothing is positional: each letter comes back with
+    the first words of the paragraph it belongs to, and is fitted to the
+    paragraph that STARTS with those words. A letter whose opening matches no
+    paragraph, or matches two, is left off -- and if what comes back is not a
+    complete run of A, B, C over every paragraph, nothing is changed at all.
+    That is the whole point of these labels: a matching-information answer is
+    a letter, and one letter out is every answer after it wrong.
+
+    Returns whether the passage was relabelled.
+    """
+    pages = json.loads(row["pages"] or "[]")
+    work = WORK / row["id"]
+    found: dict[str, str] = {}
+    for start in range(0, max(1, len(pages) - 1), PAGES_PER_CALL - 1):
+        window = pages[start:start + PAGES_PER_CALL]
+        if not window:
+            continue
+        shots = vision.render(MATERIALS / row["pdf"], window, work / "pages",
+                              dpi=PASSAGE_DPI, jpeg=True)
+        replies = []
+        try:
+            replies = [vision.ask_json(LETTERS_PROMPT, shots, model=model,
+                                       max_tokens=2000)]
+        except vision.Refused:
+            # The same refusal the transcription hits, and the same answer:
+            # ask the other provider, one sheet at a time. Which is also why
+            # the letters have to be fitted by their own opening words --
+            # nvidia reads a sheet at a time and letters each one from A, so
+            # a ten-paragraph passage came back "ABCDEABCDE".
+            for one in shots:
+                try:
+                    replies.append(vision.ask_json(
+                        LETTERS_PROMPT, [one], provider=FALLBACK,
+                        max_tokens=2000))
+                except SystemExit:
+                    continue
+        except SystemExit:
+            continue
+        for said in replies:
+            for one in said.get("paragraphs") or []:
+                label = str(one.get("label") or "").strip().upper()
+                head = opening(str(one.get("opening") or ""))
+                if len(label) == 1 and label.isalpha() and head:
+                    found.setdefault(label, head)
+
+    if not found:
+        return False
+    labels: list[str | None] = []
+    for paragraph in passage["paragraphs"]:
+        head = opening(paragraph["text"])
+        hits = [label for label, said in found.items()
+                if head.startswith(said[:len(head)]) or said.startswith(head)]
+        labels.append(hits[0] if len(hits) == 1 else None)
+
+    want = [chr(ord("A") + i) for i in range(len(labels))]
+    if labels != want:
+        return False
+    for paragraph, label in zip(passage["paragraphs"], labels):
+        paragraph["label"] = label
+    return True
+
+
 def read_passage(row: sqlite3.Row, *, model: str) -> tuple[dict, list[str]]:
     """Read one passage off its pages, and say what looks wrong with it."""
     pages = json.loads(row["pages"] or "[]")
@@ -349,6 +442,13 @@ def main() -> int:
                 if attempt + 1 < READS:
                     print(f"{'':<16} {len(faults)} fault(s); reading again")
             passage, faults = best
+            # A passage read twice and still lettered partway down gets one
+            # narrow question about its margin alone -- see `relabel`.
+            if any("letter" in fault for fault in faults):
+                if relabel(passage, row, model=args.model):
+                    print(f"{'':<16} letters read off the margin")
+                    faults = [fault for fault in faults
+                              if "letter" not in fault]
         except (Exception, SystemExit) as failure:  # noqa: BLE001
             print(f"{row['id']:<16} FAILED  {failure}")
             failed.append(row["id"])
