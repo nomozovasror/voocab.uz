@@ -990,6 +990,12 @@ async def get_drill_tree(session: AsyncSession, group: QuestionGroup) -> list[di
             "title": part.title if part else "",
             "audio_start_ms": None,
             "audio_end_ms": None,
+            # The passage, which is the whole of what a READING drill is
+            # answered from. A listening drill carries a clip instead, and
+            # that travels separately; this is on the part itself, so a drill
+            # cut from a reading paper without it is a question paper with no
+            # text beside it -- unanswerable, and silently so.
+            "passage": part.passage if part else None,
             "first_number": first_number,
             "question_groups": [
                 {
