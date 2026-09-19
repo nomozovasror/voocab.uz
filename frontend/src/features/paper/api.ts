@@ -170,7 +170,10 @@ export const paperApi = {
     get: (id: string) => api.get<CollectionDetail>(`/api/collections/${id}`),
     /** The caller's own, published or not. */
     mine: () => api.get<AuthorCollection[]>("/api/studio/collections"),
-    create: (body: { title: string; summary?: string }) =>
+    /** `skill` is given here and nowhere else: a collection is a sequence
+     *  through ONE paper, so it is fixed at creation (see
+     *  `NewCollectionDialog`). */
+    create: (body: { title: string; summary?: string; skill?: string }) =>
       api.post<AuthorCollection>("/api/collections", { json: body }),
     update: (
       id: string,

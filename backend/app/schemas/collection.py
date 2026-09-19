@@ -22,6 +22,12 @@ from app.schemas.listening import (
 class CollectionCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     summary: str = Field(default="", max_length=300)
+    #: Which paper this is a course in, and it cannot change afterwards:
+    #: ``sequenced_material_ids`` and ``next_material_id`` both rest on one
+    #: exam's numbering, and the picker only ever offers that exam's
+    #: materials. Defaults to listening, which is what every collection
+    #: written before reading existed is.
+    skill: str = Field(default="listening", pattern="^(listening|reading)$")
 
     @field_validator("title", "summary")
     @classmethod

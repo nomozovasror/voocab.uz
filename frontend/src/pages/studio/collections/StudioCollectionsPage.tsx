@@ -41,9 +41,9 @@ export default function StudioCollectionsPage() {
   const navigate = useNavigate();
   const [naming, setNaming] = useState(false);
 
-  const createCollection = (title: string) =>
+  const createCollection = (title: string, skill: string) =>
     create.mutate(
-      { title },
+      { title, skill },
       {
         onSuccess: (collection) => {
           setNaming(false);
@@ -149,6 +149,7 @@ function StudioBook({ collection }: { collection: AuthorCollection }) {
         title={collection.title}
         count={collection.item_count}
         published={collection.visibility === "public"}
+        skill={collection.skill === "reading" ? "reading" : "listening"}
         className={cn(
           "transition-[translate,box-shadow] duration-base ease-out motion-reduce:transition-none",
           "group-hover/book:-translate-y-1 group-hover/book:shadow-[0_12px_22px_rgba(0,0,0,0.4)]",

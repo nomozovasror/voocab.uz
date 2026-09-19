@@ -150,8 +150,9 @@ function useCollectionWrite<TArgs, TResult>(
 }
 
 export function useCreateCollection() {
-  return useCollectionWrite((body: { title: string; summary?: string }) =>
-    listeningApi.collections.create(body),
+  return useCollectionWrite(
+    (body: { title: string; summary?: string; skill?: string }) =>
+      listeningApi.collections.create(body),
   );
 }
 

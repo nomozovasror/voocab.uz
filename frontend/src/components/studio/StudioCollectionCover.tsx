@@ -1,10 +1,19 @@
 import { cn } from "@/lib/utils";
 import { COVER_INK } from "@/features/paper/cover";
+import { LISTENING, READING } from "@/features/paper/skill";
 import { CollectionCover } from "@/features/listening/components/CollectionBook";
 
 /**
  * A collection as the studio prints it: the shared cover, with the author's
  * two facts across its foot — how much is in it, and whether it is out.
+ *
+ * The count is preceded by the exam's own glyph, because the shelf holds
+ * both and a course is a sequence through ONE of them. A word would not fit:
+ * the foot has to hold a count and a plate side by side on one row, and it
+ * is what fixes the column count at four (see `pages/studio/CLAUDE.md`). A
+ * glyph is the vocabulary the rest of the app already uses for the same
+ * distinction — the nav, the tabs and the practice cards all name these two
+ * papers this way.
  *
  * One implementation, two sizes. The shelf shows it at a book's width and
  * the editor shows the same book beside the title being typed, so an author
@@ -22,6 +31,7 @@ export function StudioCollectionCover({
   title,
   count,
   published,
+  skill,
   compact,
   className,
 }: {
@@ -30,9 +40,12 @@ export function StudioCollectionCover({
   /** Items the AUTHOR put in, drafts included — never the public count. */
   count: number;
   published: boolean;
+  /** Which paper it is a course in. */
+  skill: "listening" | "reading";
   compact?: boolean;
   className?: string;
 }) {
+  const Glyph = (skill === "reading" ? READING : LISTENING).icon;
   return (
     <div
       className={cn(
@@ -55,11 +68,15 @@ export function StudioCollectionCover({
             a line at all. */}
         <span
           className={cn(
-            "min-w-0 truncate whitespace-nowrap tabular-nums",
+            "flex min-w-0 items-center gap-1 truncate whitespace-nowrap tabular-nums",
             compact ? "text-[0.5625rem]" : "text-[0.6875rem]",
           )}
           style={{ color: COVER_INK.byline }}
         >
+          <Glyph
+            className={cn("shrink-0", compact ? "size-2.5" : "size-3")}
+            aria-hidden
+          />
           {/* "Empty" rather than "0 materials": a zero next to a word is a
               measurement, and this is a state — the one the author has to do
               something about. */}

@@ -56,9 +56,19 @@ async def get(
 
 
 async def create(
-    session: AsyncSession, author_id: uuid.UUID, *, title: str, summary: str = ""
+    session: AsyncSession, author_id: uuid.UUID, *, title: str,
+    summary: str = "", skill: str = "listening"
 ) -> Collection:
-    collection = Collection(author_id=author_id, title=title, summary=summary)
+    """A new, empty, private collection in one exam.
+
+    ``skill`` is given at creation and never after. A collection is a
+    SEQUENCE through one paper -- ``next_material_id`` is the first of its
+    items the learner has not sat, and the picker that fills it offers that
+    paper's catalogue -- so a course that changed exam would be a course
+    whose order had stopped meaning anything.
+    """
+    collection = Collection(author_id=author_id, title=title, summary=summary,
+                            skill=skill)
     session.add(collection)
     await session.commit()
     await session.refresh(collection)

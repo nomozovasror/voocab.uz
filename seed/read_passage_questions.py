@@ -296,8 +296,16 @@ def key_pages(conn: sqlite3.Connection, row: sqlite3.Row) -> list[int]:
     # forty more answers to the same question numbers, and no way for it to
     # know which forty were wanted. The keys are a list; the next one is where
     # this one ends.
+    #
+    # And the LAST test has no next key, so the cap is the only bound left --
+    # which walked straight off the end of the book. Trainer 2's test 6 key
+    # starts eight sheets from the back and came back "page 232 not in
+    # document", taking all three of its passages with it.
+    pages = conn.execute("SELECT pages FROM document WHERE id = ?",
+                         (row["document_id"],)).fetchone()
+    end = (pages["pages"] if pages and pages["pages"] else start + KEY_SPILL + 1)
     stop = next((index for index in keys if index > start), start + KEY_SPILL + 1)
-    return list(range(start, min(stop, start + KEY_SPILL + 1)))
+    return list(range(start, min(stop, start + KEY_SPILL + 1, end)))
 
 
 def read_key(conn, row, *, model: str, force: bool = False) -> dict:

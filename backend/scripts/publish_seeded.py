@@ -31,8 +31,11 @@ from app.models.material import Material
 from app.services import collections as collections_service
 from app.services import publishing as publishing_service
 
-#: Every seeded material is titled "<the book> - Test N, Part M".
-SEEDED = re.compile(r" — Test \d+, Part \d+$")
+#: Every seeded material is titled "<the book> — Test N, Part M" for a
+#: listening section and "<the book> — Test N, Reading Passage M" for a
+#: reading passage. Both, because this script is what decides the corpus is
+#: fit to be seen and there is one corpus.
+SEEDED = re.compile(r" — Test \d+, (Part|Reading Passage) \d+$")
 
 logger = logging.getLogger("publish")
 

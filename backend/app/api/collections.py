@@ -161,7 +161,8 @@ async def create_collection(
     its contents up front would be a form nobody could fill in.
     """
     collection = await collections_service.create(
-        session, user.id, title=data.title, summary=data.summary
+        session, user.id, title=data.title, summary=data.summary,
+        skill=data.skill,
     )
     return await _author_row(session, collection)
 
