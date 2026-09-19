@@ -6,7 +6,7 @@ import {
   DrillRows,
   DrillRowsSkeleton,
 } from "@/features/listening/components/DrillRows";
-import { DRILL_PAGE, useDrills } from "@/features/listening/queries";
+import { DRILL_PAGE, useDrills } from "@/features/paper/queries";
 import { useRememberedChoice } from "@/lib/preferences";
 import { getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -38,12 +38,16 @@ const VIEWS = ["list", "grid"] as const;
 type View = (typeof VIEWS)[number];
 
 export function DrillList({
+  skill,
   family,
   query,
   part,
   showDone,
   revealRef,
 }: {
+  /** Which paper's drills. The list is one query over two libraries and the
+   *  only difference is which — the same bargain the catalogue makes. */
+  skill: string;
   family: TaskFamily;
   /** Already settled — the page holds the typing, this holds a list. */
   query: string;
@@ -73,7 +77,7 @@ export function DrillList({
     hasNextPage,
     isFetchingNextPage,
     isPlaceholderData,
-  } = useDrills(params);
+  } = useDrills(skill, params);
 
   const rows = useMemo(
     () => data?.pages.flatMap((page) => page.items) ?? [],

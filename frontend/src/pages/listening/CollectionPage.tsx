@@ -8,6 +8,8 @@ import { cn } from "@/lib/utils";
 import { fmtClock } from "@/lib/time";
 import { useRememberedChoice } from "@/lib/preferences";
 import { useCollection } from "@/features/listening/queries";
+import { LISTENING, READING } from "@/features/paper/skill";
+import type { Skill } from "@/features/paper/skill";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useRevealOnScroll } from "@/hooks/use-reveal-on-scroll";
 import {
@@ -62,6 +64,11 @@ type View = (typeof VIEWS)[number];
 export default function CollectionPage() {
   const { id } = useParams<{ id: string }>();
   const { data, isLoading, isError, error, refetch } = useCollection(id);
+  // Which paper this course is in, read off the COLLECTION rather than off
+  // the route. One page serves both — it is the same object either way — and
+  // the collection is the only thing that knows, since a course is a
+  // sequence through one paper and says so in a column.
+  const skill = data?.skill === "reading" ? READING : LISTENING;
 
   const stillness = useMediaQuery("(prefers-reduced-motion: reduce)");
   const revealRef = useRevealOnScroll(!stillness);
@@ -83,11 +90,11 @@ export default function CollectionPage() {
           place should say so — the header's nav says "Listening" is a
           section, not that this is inside it. */}
       <Link
-        to="/listening"
+        to={skill.basePath}
         className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
       >
         <ArrowLeft className="size-3.5" aria-hidden />
-        All listening
+        All {skill.name}
       </Link>
 
       {isError ? (
@@ -110,7 +117,7 @@ export default function CollectionPage() {
         <div className="mt-4 grid gap-x-10 gap-y-8 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start">
           <div className="min-w-0">
             <Header collection={data} />
-            <ActionBar collection={data} />
+            <ActionBar collection={data} skill={skill} />
 
             {data.items.length === 0 ? (
               // Published with nothing a learner may see. Publishing an empty
@@ -134,11 +141,13 @@ export default function CollectionPage() {
 
                 {view === "grid" ? (
                   <LessonGrid
+                    basePath={skill.basePath}
                     items={data.items}
                     nextId={data.progress.next_material_id}
                   />
                 ) : (
                   <LessonList
+                    basePath={skill.basePath}
                     items={data.items}
                     nextId={data.progress.next_material_id}
                     revealRef={stillness ? undefined : revealRef}
@@ -202,7 +211,15 @@ function Header({ collection }: { collection: CollectionDetail }) {
 
 // --- The one action ---------------------------------------------------------
 
-function ActionBar({ collection }: { collection: CollectionDetail }) {
+function ActionBar({
+  collection,
+  skill,
+}: {
+  collection: CollectionDetail;
+  /** The paper this course is in — "Continue" has to open the right take
+   *  screen, and there are two. */
+  skill: Skill;
+}) {
   const { done, total, next_material_id } = collection.progress;
   const next = useMemo(
     () => collection.items.find((m) => m.id === next_material_id) ?? null,
@@ -235,7 +252,7 @@ function ActionBar({ collection }: { collection: CollectionDetail }) {
             )}
           </p>
           <Button asChild variant="outline" size="sm">
-            <Link to="/listening/statistics">
+            <Link to={`${skill.basePath}/statistics`}>
               See your results
               <ArrowRight className="size-3.5" aria-hidden />
             </Link>
@@ -244,7 +261,7 @@ function ActionBar({ collection }: { collection: CollectionDetail }) {
       ) : next ? (
         <>
           <Button asChild>
-            <Link to={`/listening/${next.id}`}>
+            <Link to={`${skill.basePath}/${next.id}`}>
               {done === 0 ? "Start" : "Continue"}
               <ArrowRight className="size-4" aria-hidden />
             </Link>
@@ -320,7 +337,11 @@ function ViewToggle({
 
 // --- The column beside it ---------------------------------------------------
 
-function Aside({ collection }: { collection: CollectionDetail }) {
+function Aside({
+  collection,
+}: {
+  collection: CollectionDetail;
+}) {
   const { done, total } = collection.progress;
   const { first_try_avg_pct, best_avg_pct, time_spent_ms } = collection.stats;
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;

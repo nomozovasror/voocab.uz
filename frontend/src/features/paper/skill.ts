@@ -50,10 +50,10 @@ export interface Skill {
   newBlurb: string;
   /** Which lists this paper has, in the order the tabs offer them.
    *
-   *  Reading has only its materials until its collections and drills are
-   *  built. A tab that is always empty is worse than no tab: it is an offer
-   *  the page cannot keep, and a reader who takes it up learns the section is
-   *  broken rather than unbuilt. */
+   *  A tab that is always empty is worse than no tab: it is an offer the page
+   *  cannot keep, and a reader who takes it up learns the section is broken
+   *  rather than unbuilt. So a mode goes in here when the thing behind it
+   *  exists, not when it is planned. */
   modes: ListMode[];
   /** Where the page's tab choice is remembered, per paper — the two are
    *  different questions and one key would answer both wrong. */
@@ -93,10 +93,11 @@ export const READING: Skill = {
   typesForPart: questionTypesForPassage,
   fullTestBlurb: "Seed all three passages — text and questions added per passage",
   newBlurb: "paste the passages, add questions",
-  // Materials only, for now. Reading's courses and drills are real work that
-  // has not been done — see the plan — and a Courses tab over an empty shelf
-  // would say they had.
-  modes: ["materials"],
+  // All three. Courses are the same object under a `skill` column, with the
+  // picker, the seeder and the shelf all filtered by it; drills are the same
+  // endpoint mounted twice, with matching as one family of five and a
+  // passage where a listening drill has a clip.
+  modes: ["materials", "courses", "drills"],
   tabKey: "voocab-reading-tab",
 };
 

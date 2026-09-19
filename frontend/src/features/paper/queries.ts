@@ -153,3 +153,92 @@ export function useNextUp(skill: string) {
     staleTime: 60_000,
   });
 }
+
+// --- Drills ------------------------------------------------------------------
+//
+// Moved here from `features/listening/` with the rest of what both papers
+// share. The endpoints were already `paperEndpoints(skill).drills`; only
+// these hooks still said listening, and they said it in the cache key, which
+// is the one place it would not have shown until a reading drill invalidated
+// a listening list.
+
+/** Skill-FIRST, like every other key here: invalidating one paper's drills
+ *  must not touch the other's, and a prefix match is what does that. */
+export const drillKey = (skill: string) => [skill, "drills"] as const;
+
+/** How many drill cards one fetch brings back. The server's own default,
+ *  written down here for the same reason `PRACTICE_PAGE` is. */
+export const DRILL_PAGE = 30;
+
+/** The Drills tab's cards — every kind of task, and what there is of it.
+ *
+ *  Eleven rows counted over the whole library, so it is one fetch and not a
+ *  paged one. Held longer than the catalogue: what exists of each type
+ *  changes when somebody publishes a material, not while you are reading. */
+export function useDrillTypes(
+  skill: string,
+  params: { part?: number } = {},
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: [...drillKey(skill), "types", params],
+    queryFn: () => paperEndpoints(skill).drills.types(params),
+    staleTime: 5 * 60_000,
+    enabled: options.enabled ?? true,
+  });
+}
+
+/** One kind of drill, a page at a time. Same shape as the catalogue's
+ *  infinite query, and for the same reasons — see `usePracticeCatalogue`. */
+export function useDrills(
+  skill: string,
+  params: { type: string[]; q?: string; part?: number; done?: boolean },
+  options: { enabled?: boolean } = {},
+) {
+  return useInfiniteQuery({
+    queryKey: [...drillKey(skill), "list", params],
+    queryFn: ({ pageParam }) =>
+      paperEndpoints(skill).drills.list({
+        ...params,
+        limit: DRILL_PAGE,
+        offset: pageParam,
+      }),
+    initialPageParam: 0,
+    placeholderData: keepPreviousData,
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((n, page) => n + page.items.length, 0);
+      return loaded < last.total ? loaded : undefined;
+    },
+    staleTime: 60_000,
+    enabled: options.enabled ?? true,
+  });
+}
+
+/** One drill's render payload. Never cached across drills — the key carries
+ *  the group — and never `keepPreviousData`: showing the previous drill's
+ *  paper while the next one loads would be showing the wrong questions. */
+export function useDrillTake(skill: string, groupId: string | undefined) {
+  return useQuery({
+    queryKey: [...drillKey(skill), "take", groupId],
+    queryFn: () => paperEndpoints(skill).drills.take(groupId!),
+    enabled: !!groupId,
+  });
+}
+
+/** Finishing a drill.
+ *
+ *  It invalidates far less than a sitting does, and that is the point rather
+ *  than an oversight: a drill is deliberately invisible to the catalogue, the
+ *  recommender, the courses and every ability figure, so refetching them would
+ *  be several requests to redraw numbers that cannot have moved. What it does
+ *  change is the drill lists and the tab's own counts. */
+export function useSubmitDrill(skill: string, groupId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: AttemptSubmit) =>
+      paperEndpoints(skill).drills.submit(groupId, data),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: drillKey(skill) });
+    },
+  });
+}

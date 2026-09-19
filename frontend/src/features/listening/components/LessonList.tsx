@@ -99,6 +99,7 @@ function Rail({
 }
 
 export function LessonRow({
+  basePath,
   material: m,
   index,
   status,
@@ -107,6 +108,8 @@ export function LessonRow({
   afterDone,
   revealRef,
 }: {
+  /** Where this paper's materials live. See `LessonList`. */
+  basePath: string;
   material: PracticeMaterial;
   index: number;
   status: Status;
@@ -135,7 +138,7 @@ export function LessonRow({
         afterDone={afterDone}
       />
       <Link
-        to={`/listening/${m.id}`}
+        to={`${basePath}/${m.id}`}
         className={cn(
           "my-0.5 flex min-w-0 flex-1 items-center gap-4 rounded-lg px-3 py-2.5 transition-colors duration-fast",
           "hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
@@ -216,10 +219,15 @@ export function LessonRow({
 }
 
 export function LessonList({
+  basePath,
   items,
   nextId,
   revealRef,
 }: {
+  /** Where this paper's materials live — `/listening`, `/reading`. A course
+   *  is a sequence through ONE paper, and a lesson row that linked to the
+   *  other one would open the wrong take screen. */
+  basePath: string;
   items: PracticeMaterial[];
   nextId: string | null;
   revealRef?: (el: HTMLLIElement | null) => void;
@@ -229,6 +237,7 @@ export function LessonList({
       {items.map((m, i) => (
         <LessonRow
           key={m.id}
+          basePath={basePath}
           material={m}
           index={i + 1}
           status={statusOf(m, nextId)}

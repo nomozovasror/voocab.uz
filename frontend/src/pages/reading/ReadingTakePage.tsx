@@ -8,7 +8,12 @@ import { getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { HeaderGround } from "@/components/layout/HeaderGround";
-import { useSubmitAttempt, useTakeMaterial } from "@/features/paper/queries";
+import {
+  useDrillTake,
+  useSubmitAttempt,
+  useSubmitDrill,
+  useTakeMaterial,
+} from "@/features/paper/queries";
 import { QuestionPaper } from "@/features/paper/components/QuestionPaper";
 import { PaperSkeleton } from "@/features/listening/components/PaperSkeleton";
 import { QuestionNav } from "@/features/paper/components/QuestionNav";
@@ -62,12 +67,29 @@ import { SplitPanes } from "@/features/reading/components/SplitPanes";
 const PANE_FOOT = 24;
 
 export default function ReadingTakePage() {
-  const { id } = useParams<{ id?: string }>();
+  // One page, two routes. `/reading/:id` is a whole paper;
+  // `/reading/drills/:groupId` is one question group cut out of one, and the
+  // payload it fetches is the same shape — a title and a list of parts, the
+  // passage among them — so everything below this point is the take screen
+  // it always was.
+  //
+  // A reading drill carries no clip, which is the whole of what it does not
+  // share with a listening one: there is nothing to play, and the passage is
+  // already on the part. The server sends `clip_start_ms` and `clip_end_ms`
+  // null for exactly this reason, and nothing here reads them.
+  const { id, groupId } = useParams<{ id?: string; groupId?: string }>();
+  const drilling = groupId !== undefined;
   const navigate = useNavigate();
-  const { data: material, isLoading, isError } = useTakeMaterial("reading", id);
-  const submitMut = useSubmitAttempt("reading", id ?? "");
+  const paper = useTakeMaterial("reading", drilling ? undefined : id);
+  const drill = useDrillTake("reading", groupId);
+  const { data: material, isLoading, isError } = drilling ? drill : paper;
+  const attemptMut = useSubmitAttempt("reading", id ?? "");
+  const drillMut = useSubmitDrill("reading", groupId ?? "");
+  const submitMut = drilling ? drillMut : attemptMut;
   const config = PRACTICE;
-  const sessionKey = id;
+  // A drill's draft is keyed by its group, or two drills cut from one paper
+  // would share one — and the paper's own key must not collide with either.
+  const sessionKey = drilling ? `drill:${groupId}` : id;
 
   const restored = useRef(sessionKey ? loadSession(sessionKey) : null);
   const [answers, setAnswers] = useState<Record<string, string>>(

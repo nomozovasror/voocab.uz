@@ -55,9 +55,14 @@ function describe(m: PracticeMaterial): string {
 }
 
 export function LessonGrid({
+  basePath,
   items,
   nextId,
 }: {
+  /** Where this paper's materials live — `/listening`, `/reading`. A course
+   *  is a sequence through ONE paper, and a lesson that linked to the other
+   *  one would open the wrong take screen. */
+  basePath: string;
   items: PracticeMaterial[];
   nextId: string | null;
 }) {
@@ -122,7 +127,7 @@ export function LessonGrid({
               // The accessible name is the whole story, because the number in
               // the cell is meaningless read aloud on its own.
               aria-label={`${i + 1}. ${m.title} — ${describe(m)}`}
-              onClick={() => navigate(`/listening/${m.id}`)}
+              onClick={() => navigate(`${basePath}/${m.id}`)}
               onMouseEnter={() => setAt(i)}
               onMouseLeave={() => setAt((was) => (was === i ? null : was))}
               onFocus={() => setAt(i)}

@@ -79,6 +79,19 @@ export const router = createBrowserRouter([
             ...page(() => import("@/pages/reading/ReadingResultsPage")),
           },
           {
+            // Above ``reading/:id``, like every other one of these: a path
+            // segment that is not a material id has to be matched before the
+            // route that would read it as one. It renders the take page,
+            // which serves a drill and a whole paper from one component
+            // rather than two that would drift apart.
+            path: "reading/drills/:groupId",
+            ...page(() => import("@/pages/reading/ReadingTakePage")),
+          },
+          {
+            path: "reading/collections/:id",
+            ...page(() => import("@/pages/listening/CollectionPage")),
+          },
+          {
             path: "reading/:id",
             ...page(() => import("@/pages/reading/ReadingTakePage")),
           },

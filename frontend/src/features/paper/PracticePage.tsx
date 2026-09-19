@@ -14,7 +14,8 @@ import { useRevealOnScroll } from "@/hooks/use-reveal-on-scroll";
 import { SkeletonBlock } from "@/components/ui/skeleton";
 import { getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { useCollections, useDrillTypes } from "@/features/listening/queries";
+import { useCollections } from "@/features/listening/queries";
+import { useDrillTypes } from "@/features/paper/queries";
 import {
   PRACTICE_PAGE,
   useNextUp,
@@ -249,6 +250,7 @@ export function PracticePage({ skill }: { skill: Skill }) {
   );
 
   const drillTypes = useDrillTypes(
+    skill.id,
     { ...(drillPart !== "all" ? { part: drillPart } : {}) },
     { enabled: mode === "drills" },
   );
@@ -671,6 +673,7 @@ export function PracticePage({ skill }: { skill: Skill }) {
                the mode switch does. */
             drillFamily ? (
               <DrillList
+                skill={skill.id}
                 family={drillFamily}
                 query={settledQuery}
                 part={drillPart}

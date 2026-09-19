@@ -11,7 +11,12 @@ import { PREFERENCES, usePreference } from "@/lib/preferences";
 import { useClaimHeaderCentre } from "@/components/layout/header-center";
 import { HeaderGround } from "@/components/layout/HeaderGround";
 import { mediaUrl } from "@/features/listening/api";
-import { useSubmitAttempt, useTakeMaterial } from "@/features/paper/queries";
+import {
+  useDrillTake,
+  useSubmitDrill,
+  useSubmitAttempt,
+  useTakeMaterial,
+} from "@/features/paper/queries";
 import { QuestionPaper } from "@/features/paper/components/QuestionPaper";
 import {
   PaperSkeleton,
@@ -33,8 +38,6 @@ import { goToQuestion, useQuestionSpy, Q_ANCHOR } from "@/features/paper/take-fo
 import { useAudioEngine, NUDGE_MS } from "@/features/listening/use-audio-engine";
 import { useWaveform } from "@/features/listening/use-waveform";
 import {
-  useDrillTake,
-  useSubmitDrill,
 } from "@/features/listening/queries";
 import { PRACTICE } from "@/features/paper/take-config";
 import {
@@ -89,10 +92,10 @@ export default function ListeningTakePage() {
   const drilling = groupId !== undefined;
   const navigate = useNavigate();
   const paper = useTakeMaterial("listening", drilling ? undefined : id);
-  const drill = useDrillTake(groupId);
+  const drill = useDrillTake("listening", groupId);
   const { data: material, isLoading, isError } = drilling ? drill : paper;
   const attemptMut = useSubmitAttempt("listening", id ?? "");
-  const drillMut = useSubmitDrill(groupId ?? "");
+  const drillMut = useSubmitDrill("listening", groupId ?? "");
   const submitMut = drilling ? drillMut : attemptMut;
   const config = PRACTICE;
   // The stretch of recording a drill is bounded to. `undefined` for a whole
