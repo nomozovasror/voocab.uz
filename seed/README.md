@@ -2446,10 +2446,27 @@ no full stop, and refused outright if it names the FORM rather than the
 subject -- "Part 3 discussion" and "a conversation between two students" are
 true of dozens of these and identify none of them.
 
-271 of the 272 sections re-imported with their new titles. The one that would
-not is `TR2 T1 P2`: the importer REPLACES a part's question groups, and a
-question somebody has already answered cannot be deleted -- `question_attempts`
-points at it. Its title was set directly. That is worth knowing beyond this
-one row: once learners have sat a seeded material, it can no longer be
-re-imported at all, and the fix is not to delete less but to decide what a
-re-import should mean for an answer already given.
+271 of the 272 sections re-imported with their new titles at the first
+attempt. The one that would not is `TR2 T1 P2`, and the reason was worth more
+than the row: the importer REPLACES a part's question groups, a question
+somebody has already answered cannot be deleted (`question_attempts` points
+at it, `ON DELETE NO ACTION`), and the IntegrityError rolled back the WHOLE
+import -- title, transcript, audio and all. Once learners have sat a seeded
+material, nothing about it could be updated ever again.
+
+The importer now asks before it deletes. Where a part's questions have been
+answered it leaves them exactly as they are, says so loudly, and lets
+everything else land:
+
+    trn2-t1-s2: questions NOT rewritten -- 8 of them have been answered.
+                Everything else was updated.
+    trn2-t1-s2 -> material 489a7354 (25 transcript lines,
+                questions left alone, already answered, private)
+
+That is a floor, not the answer. The answer -- decided, not yet built -- is
+that a corrected key should simply **re-grade** the attempts against it: the
+score changes, the attempt survives. Doing that means rewriting the question
+IN PLACE (match group by `order_index`, question by `number`) rather than
+replacing it, and re-grading the `question_attempts` that point at it. Note
+that this moves difficulty projections and learner stats too, since every
+ability figure counts first attempts.

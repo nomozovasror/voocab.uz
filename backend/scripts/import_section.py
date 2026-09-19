@@ -40,6 +40,7 @@ import sqlite3
 import sys
 import uuid
 
+from sqlalchemy import func
 from sqlmodel import select
 
 from app.core.database import async_session_factory
@@ -47,6 +48,7 @@ from app.models.audio_segment import AudioSegment
 from app.models.material import Material
 from app.models.part import Part
 from app.models.question import Question
+from app.models.question_attempt import QuestionAttempt
 from app.models.question_group import QuestionGroup
 from app.models.user import User
 from pydantic import TypeAdapter
@@ -201,6 +203,15 @@ def printed_name(section_id: str) -> str | None:
     return None
 
 
+async def answered_in(session, part_id: uuid.UUID) -> int:
+    """How many of this part's questions somebody has already answered."""
+    return int((await session.exec(
+        select(func.count(QuestionAttempt.id))
+        .join(Question, Question.id == QuestionAttempt.question_id)  # type: ignore[arg-type]
+        .join(QuestionGroup, QuestionGroup.id == Question.group_id)  # type: ignore[arg-type]
+        .where(QuestionGroup.part_id == part_id))).one())
+
+
 def derived_name(section_id: str) -> str | None:
     """What `seed/name_sections.py` decided the recording is about.
 
@@ -282,6 +293,30 @@ async def import_questions(session, part_id: uuid.UUID, section_id: str,
     # completion group refused the first choice section outright.
     adapter = TypeAdapter(QuestionGroupIn)
     groups = [adapter.validate_python(g) for g in payload["groups"]]
+
+    # A question somebody has already answered cannot be deleted -- the
+    # foreign key from `question_attempts` is ON DELETE NO ACTION, and
+    # Postgres refuses. Asked BEFORE the delete rather than caught after it,
+    # for two reasons: an IntegrityError poisons the session, so everything
+    # else this import had to say -- the title, the transcript, the audio --
+    # would be rolled back with it, which is exactly what happened to
+    # `TR2 T1 P2`; and a question that has been answered is a fact about a
+    # learner, which is worth more than a re-run's tidiness.
+    #
+    # So the questions are left exactly as they are and everything else still
+    # lands. Said loudly, because the thing the re-run was probably FOR was a
+    # corrected answer key, and this is the one material it did not reach.
+    #
+    # The real answer is to rewrite the question in place and re-grade the
+    # attempts that point at it -- a corrected key should simply change the
+    # score. That needs matching old groups to new ones, which they have no
+    # key for; until then, this at least stops one learner's answer from
+    # costing the material its title.
+    if answered := await answered_in(session, part_id):
+        logger.warning(
+            "%s: questions NOT rewritten -- %d of them have been answered. "
+            "Everything else was updated.", section_id, answered)
+        return 0
 
     existing = (await session.exec(
         select(QuestionGroup).where(QuestionGroup.part_id == part_id))).all()
@@ -510,8 +545,13 @@ async def import_section(section_id: str, owner_id: uuid.UUID) -> None:
                      "trimmed_ms": offset_ms}), section_id))
     conn.commit()
     conn.close()
+    # "0 questions" reads as a material with none, which is not what
+    # happened and is the wrong thing to leave in a log that somebody scans
+    # for failures.
+    said = (f"{written} questions" if written
+            else "questions left alone, already answered")
     print(f"{section_id} -> material {material_id} "
-          f"({len(segments)} transcript lines, {written} questions, private)")
+          f"({len(segments)} transcript lines, {said}, private)")
 
 
 def main() -> int:
