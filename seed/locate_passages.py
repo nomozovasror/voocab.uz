@@ -800,8 +800,24 @@ def read_document(conn, book: int, doc_id: int, rel_path: str,
                 return int(match.group(1))
         return None
 
-    papers = [fragment for block in blocks
-              for fragment in papers_in(block) if is_paper(fragment)]
+    # A split that leaves something which is not a paper was not a paper
+    # boundary. Trainer 2's test 2 has a sheet with no question numbers
+    # printed on it at all, read as "1-5" three times out of three -- a
+    # hallucination off the teaching list beside it -- and the numbers going
+    # down cut the paper in two. The tail held questions 36 to 40, and it
+    # went with it.
+    #
+    # Merged back rather than dropped, because within a block the pages
+    # either side of a bad split belong together. A leading fragment with
+    # nothing before it has nowhere to merge and is dropped as it was: that
+    # is Cambridge 20's PDFs, which open on the previous test's last sheet.
+    papers: list[list[dict]] = []
+    for block in blocks:
+        for fragment in papers_in(block):
+            if is_paper(fragment):
+                papers.append(fragment)
+            elif papers and fragment[0]["index"] > papers[-1][-1]["index"]:
+                papers[-1] += fragment
 
     # What the running head prints is the test's number IN ITS SERIES, not
     # its number in this book.

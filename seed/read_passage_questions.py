@@ -63,6 +63,11 @@ WORK = SEED / "work"
 PAGES_PER_CALL = 3
 QUESTION_DPI = 150
 
+#: How far past a passage's own last sheet to look for one carrying its
+#: questions. Two, which is the width of a misreading rather than of a
+#: paper: the next passage's own sheets begin within three.
+NEARBY = 2
+
 #: How many sheets past the one the key starts on it may run.
 #:
 #: Cambridge prints one sheet per test and the next test's key is two pages
@@ -268,12 +273,20 @@ ONE MORE THING, and it is the book's own answer key for these questions:
 
 {lines}
 
-A group cannot claim a question whose answer it could not produce. A \
-true/false or yes/no set answers ONLY with its three words; a matching task \
-answers ONLY with a letter or numeral from its box; a gap-fill, summary or \
-sentence completion answers with WORDS. Where the shapes change, a group \
-ends and the next begins -- that is the boundary, and it is not a matter of \
-opinion."""
+A group cannot claim a question whose answer it could not produce, and each \
+shape leaves only a few tasks it could be:
+
+  one of the three fixed words -> true_false_not_given or yes_no_not_given, \
+    and the instruction line says which
+  a roman numeral from a box   -> matching_headings, and nothing else. No \
+    other task in this exam is answered i, ii, iii.
+  a letter from a box          -> multiple_choice, or one of the matching \
+    tasks; the instruction line says which
+  words                        -> a completion task, a short answer, or a \
+    labelling task. NEVER a true/false set and NEVER a matching task.
+
+Where the shapes change, a group ends and the next begins -- that is the \
+boundary, and it is not a matter of opinion."""
 
 KEY_PROMPT = """\
 These images are answer-key pages from an IELTS book. Report ONLY the answers \
@@ -313,7 +326,14 @@ A TRUE/FALSE/NOT GIVEN answer is printed as those words, or as TRUE, FALSE, \
 NOT GIVEN / YES, NO, NOT GIVEN. Copy what is printed.
 
 THE BOOK MAY EXPLAIN AN ANSWER on the same line as it. The answer is only the \
-part a candidate would write. Stop at it.
+part a candidate would write, and it comes FIRST: "37 C: Austin is mentioned \
+in both paragraph three and ..." is answered C. Stop at it.
+
+**A line beginning "Distraction" names the WRONG options**, and it is printed \
+under the answer it is about. Never take an answer from one. Under "37 C" the \
+Trainer prints "Distraction A: This makes grammatical sense, but ...", and \
+read as the key it answers 37 with A -- which is the one letter the book has \
+just said is wrong.
 
 If the answers to {first}-{last} of the READING paper are not on these pages, \
 return {{"answers": {{}}}} rather than the listening ones."""
@@ -696,7 +716,25 @@ def question_pages(row) -> list[int]:
                 if isinstance(n, (int, float))]
         if any(first <= n <= last for n in seen):
             numbered.add(reply["index"])
-    return [index for index in pages if index in numbered] or pages
+    mine = [index for index in pages if index in numbered]
+
+    # A sheet just past the passage that carries this band's numbers.
+    #
+    # The grouper bounds a passage at a contiguous run, and one misread sheet
+    # inside that run ends it early: Trainer 2's test 2 has a page with no
+    # question numbers printed on it, read as "1-5" off the teaching list
+    # beside it, and the passage stops there -- taking questions 36 to 40,
+    # which are on the sheet after, with it.
+    #
+    # This function is named for the sheets that carry this passage's
+    # QUESTIONS, and that is what it looks for: a page close by whose own
+    # numbers are in this band. Evidence, not a guess -- and bounded, so it
+    # can never wander into the next test.
+    if pages:
+        for index in range(max(pages) + 1, max(pages) + 1 + NEARBY):
+            if index in numbered:
+                mine.append(index)
+    return mine or pages
 
 
 #: What to ask the FALLBACK provider, which is not the same question.
@@ -767,6 +805,45 @@ def shape_lines(answers: dict[int, str]) -> str:
     return SHAPE_PROMPT.format(lines=said)
 
 
+#: How many pieces a refused sheet is cut into, and how much of it each
+#: carries. Three at four tenths overlaps generously, so a task printed
+#: across a cut is whole in at least one piece -- and, since each piece is a
+#: different IMAGE, three is three chances at a filter that judges images.
+SLICES = 3
+SLICE = 0.4
+
+
+def halves(shot: pathlib.Path) -> list[pathlib.Path]:
+    """A rendered sheet cut into overlapping bands, top to bottom.
+
+    The last rung of the refusal ladder. `content_filter: RECITATION` is a
+    property of the IMAGE, so an image the provider has not seen before is a
+    different question -- Cambridge 15's test 3 sheet is refused three times
+    out of three whole, and a band of it is answered at once.
+
+    Cut with a generous overlap, because a task printed across a cut would
+    otherwise be part of a task in each. What comes back is stitched on the
+    numbers a group covers, like every other window here, so a group read
+    twice costs nothing and a group read partly is dropped by the band check.
+    """
+    import pymupdf
+
+    out: list[pathlib.Path] = []
+    with pymupdf.open(shot) as sheet:
+        page = sheet[0]
+        width, height = page.rect.width, page.rect.height
+        step = (1 - SLICE) / (SLICES - 1)
+        for i in range(SLICES):
+            top = height * step * i
+            rect = pymupdf.Rect(0, top, width, min(height, top + height * SLICE))
+            path = shot.with_name(f"{shot.stem}-band{i}.jpg")
+            if not path.exists():
+                pixmap = page.get_pixmap(clip=rect, dpi=QUESTION_DPI)
+                path.write_bytes(pixmap.tobytes("jpeg", jpg_quality=85))
+            out.append(path)
+    return out
+
+
 def read_window(shots: list[pathlib.Path], prompt: str, short: str,
                 model: str) -> list[dict]:
     """One window's groups, halving whenever the whole of it fails.
@@ -789,7 +866,30 @@ def read_window(shots: list[pathlib.Path], prompt: str, short: str,
         return (read.get("groups") or []) if isinstance(read, dict) else []
     except vision.Refused:
         if len(shots) == 1:
-            print(f"{'':<16} sheet refused; asking {FALLBACK}")
+            # The sheet itself. Cut it in half first -- a different image is
+            # a different question to the filter -- and only if both halves
+            # are refused too does it go to the other provider, whose reading
+            # of a question page is markedly worse.
+            out: list[dict] = []
+            refused = 0
+            for half in halves(shots[0]):
+                try:
+                    page = vision.ask_json(prompt + "\n\nThis image is a BAND "
+                                           "cut out of a page, not the whole "
+                                           "of it. Read what is on it and "
+                                           "ignore what is cut off.",
+                                           [half], model=model, max_tokens=8000)
+                except vision.Refused:
+                    refused += 1
+                    continue
+                except SystemExit:
+                    continue
+                out += (page.get("groups") or []) if isinstance(page, dict) else []
+            if out or refused < SLICES:
+                print(f"{'':<16} sheet refused; read in halves")
+                return out
+            print(f"{'':<16} sheet refused whole and in halves;"
+                  f" asking {FALLBACK}")
             try:
                 page = vision.ask_json(short, shots, provider=FALLBACK,
                                        max_tokens=4000)
