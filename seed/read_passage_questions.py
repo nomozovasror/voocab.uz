@@ -225,7 +225,35 @@ one.
 
 Transcribe the words exactly as printed. Ignore page headers, footers, page \
 numbers, and any watermark (tailieutienganh.net, giasuIELTS.vn, "Edit by:") \
--- none of that is part of the task."""
+-- none of that is part of the task.
+{shape}"""
+
+#: What the answer key already says about each question, handed to the reader.
+#:
+#: The book prints the answers, and the SHAPE of an answer says a great deal
+#: about the task that asks it: a question answered "YES" is in a
+#: yes/no/not-given set, one answered "plant pots" is not, and one answered
+#: "vii" is matching headings. The reader was guessing at the boundary
+#: between two groups and getting it wrong in exactly the place the key is
+#: unambiguous -- IELTS Trainer's test 1 passage 3 came back with a
+#: yes/no/not-given set running to 32, where the key answers 31 and 32 "(the)
+#: Atlantic (Ocean)" and "(luxury) food (source)".
+#:
+#: Evidence, not a hint: it is what the book itself prints, the same thing
+#: the check below measures the reading against. Telling the reader what the
+#: check will ask is not making the check easier to pass -- it is asking the
+#: question with the evidence in view.
+SHAPE_PROMPT = """
+ONE MORE THING, and it is the book's own answer key for these questions:
+
+{lines}
+
+A group cannot claim a question whose answer it could not produce. A \
+true/false or yes/no set answers ONLY with its three words; a matching task \
+answers ONLY with a letter or numeral from its box; a gap-fill, summary or \
+sentence completion answers with WORDS. Where the shapes change, a group \
+ends and the next begins -- that is the boundary, and it is not a matter of \
+opinion."""
 
 KEY_PROMPT = """\
 These images are answer-key pages from an IELTS book. Report ONLY the answers \
@@ -395,6 +423,52 @@ def key_pages(conn: sqlite3.Connection, row: sqlite3.Row) -> list[int]:
     return list(range(start, min(stop, start + KEY_SPILL + 1, end)))
 
 
+WHICH_PAPER_PROMPT = """\
+This is one page of the answer key at the back of an IELTS book.
+
+Answer with JSON and nothing else:
+
+{"papers": ["listening" and/or "reading" and/or "writing" and/or "speaking",
+            for every paper this page gives ANSWERS for"]}
+
+A heading that names a paper counts only if answers for it are printed \
+underneath on THIS page. A page that only names the test, or only carries \
+writing model answers, gives no reading answers."""
+
+
+def reading_sheets(shots: list[pathlib.Path], *, model: str
+                   ) -> list[pathlib.Path]:
+    """The sheets of a key window that actually carry READING answers.
+
+    Both papers number 1 to 40 and both are printed under one "Test 1 Key",
+    so a window that holds the whole spread offers the model two answers to
+    every question and the prompt is the only thing keeping them apart. It
+    was not enough: eleven of IELTS Trainer test 1's forty reading answers
+    came back as its LISTENING answers, and the four at 33 to 36 turned a
+    multiple-choice group into a completion task that could never be marked
+    right.
+
+    So each sheet is asked which paper's answers are on it -- one small
+    question with one short answer -- and the band reads only see the ones
+    that say reading. A page that is silent is kept: the cost of dropping a
+    sheet that did carry the answers is a test with none.
+    """
+    if len(shots) < 2:
+        return shots
+    kept = []
+    for shot in shots:
+        try:
+            said = vision.ask_json(WHICH_PAPER_PROMPT, [shot], model=model,
+                                   max_tokens=300)
+        except SystemExit:
+            kept.append(shot)
+            continue
+        papers = [str(one).lower() for one in (said.get("papers") or [])]
+        if not papers or any("read" in one for one in papers):
+            kept.append(shot)
+    return kept or shots
+
+
 def read_key(conn, row, *, model: str, force: bool = False) -> dict:
     """This test's forty reading answers, read once and kept.
 
@@ -416,6 +490,7 @@ def read_key(conn, row, *, model: str, force: bool = False) -> dict:
                           WORK / f"readingkey-book{row['book_number']}"
                                  f"-t{row['test_no']}",
                           dpi=QUESTION_DPI, jpeg=True)
+    shots = reading_sheets(shots, model=model)
     answers: dict[str, str] = {}
     # One BAND at a time, and this is not a preference.
     #
@@ -553,6 +628,43 @@ def question_pages(row) -> list[int]:
     return [index for index in pages if index in numbered] or pages
 
 
+#: A roman numeral, which is what a matching-headings box is numbered with.
+ROMAN_ANSWER = re.compile(r"^\s*[ivxl]+\s*$", re.I)
+#: One letter, which is what every other matching box and multiple choice is
+#: answered with. A pair -- "B/C" -- is still letters.
+LETTER_ANSWER = re.compile(r"^\s*[A-K](\s*[/,&]\s*[A-K])*\s*$", re.I)
+
+
+def shape_of(answer: str) -> str:
+    """What KIND of thing this answer is, as the prompt says it."""
+    if FIXED_CHOICE_ANSWER.match(answer or ""):
+        return "one of the three fixed words"
+    if ROMAN_ANSWER.match(answer or ""):
+        return "a roman numeral from a box"
+    if LETTER_ANSWER.match(answer or ""):
+        return "a letter from a box"
+    return "words"
+
+
+def shape_lines(answers: dict[int, str]) -> str:
+    """The key's shapes as runs -- "27-30: one of the three fixed words"."""
+    if not answers:
+        return ""
+    runs: list[list] = []
+    for number in sorted(answers):
+        kind = shape_of(answers[number])
+        if runs and runs[-1][2] == kind and number == runs[-1][1] + 1:
+            runs[-1][1] = number
+        else:
+            runs.append([number, number, kind])
+    said = "\n".join(
+        f"  Question{'s' if lo != hi else ''} {lo}{f'-{hi}' if lo != hi else ''}"
+        f": answered with {kind}"
+        for lo, hi, kind in runs
+    )
+    return SHAPE_PROMPT.format(lines=said)
+
+
 def read_window(shots: list[pathlib.Path], prompt: str, model: str) -> list[dict]:
     """One window's groups, halving again if the reply still will not parse.
 
@@ -575,12 +687,15 @@ def read_window(shots: list[pathlib.Path], prompt: str, model: str) -> list[dict
         return out
 
 
-def read_questions(row, *, model: str) -> tuple[list[dict], list[str]]:
+def read_questions(row, *, model: str,
+                   answers: dict[int, str] | None = None
+                   ) -> tuple[list[dict], list[str]]:
     """Read this passage's question groups off the sheets that carry them."""
     pages = question_pages(row)
     first, last = band(row["passage_no"])
     prompt = QUESTION_PROMPT.format(first=first, last=last,
-                                    passage=row["passage_no"])
+                                    passage=row["passage_no"],
+                                    shape=shape_lines(answers or {}))
     work = WORK / row["id"]
     windows = [pages[i:i + PAGES_PER_CALL]
                for i in range(0, max(1, len(pages) - 1), PAGES_PER_CALL - 1)] or [pages]
@@ -879,7 +994,8 @@ def main() -> int:
             # keeps the first, because nothing has been learned.
             best = None
             for attempt in range(READS):
-                groups, found = read_questions(row, model=args.model)
+                groups, found = read_questions(row, model=args.model,
+                                               answers=answers)
                 built = assemble(groups, answers)
                 problems = missing + found + check(built)
                 if best is None or len(problems) < len(best[1]):
