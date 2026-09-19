@@ -455,18 +455,32 @@ def reading_sheets(shots: list[pathlib.Path], *, model: str
     """
     if len(shots) < 2:
         return shots
-    kept = []
+    only, mixed = [], []
     for shot in shots:
         try:
             said = vision.ask_json(WHICH_PAPER_PROMPT, [shot], model=model,
                                    max_tokens=300)
         except SystemExit:
-            kept.append(shot)
+            mixed.append(shot)
             continue
-        papers = [str(one).lower() for one in (said.get("papers") or [])]
-        if not papers or any("read" in one for one in papers):
-            kept.append(shot)
-    return kept or shots
+        papers = {str(one).lower() for one in (said.get("papers") or [])}
+        reads = any("read" in one for one in papers)
+        hears = any("listen" in one for one in papers)
+        if reads and not hears:
+            only.append(shot)
+        elif reads or not papers:
+            mixed.append(shot)
+    # Pure sheets FIRST, not instead of. A sheet can carry the end of the
+    # listening key and the start of the reading one -- IELTS Trainer 2's
+    # page 186 does -- and dropping it would lose whichever reading answers
+    # are only there. Read after the pure ones it cannot do any harm: the
+    # merge below keeps the first answer it finds for each number, so the
+    # sheet that is unambiguously reading has already answered.
+    #
+    # Read FIRST was the whole of the bug. Page 186 opened the window, its
+    # listening half answered questions 1 to 13, and Trainer 2's test 1 came
+    # back with "islands, seals, fossil" against a true/false set.
+    return (only + mixed) or shots
 
 
 def read_key(conn, row, *, model: str, force: bool = False) -> dict:
