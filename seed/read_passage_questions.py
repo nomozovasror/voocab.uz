@@ -863,6 +863,28 @@ def assemble(groups: list[dict], answers: dict[int, str]) -> list[dict]:
             template, mended = repair(template, questions)
             for note in mended:
                 print(f"{'':<16} repaired: {note}")
+        # A "choose TWO letters" is ONE question worth two marks, and the
+        # page prints it against both numbers. The key answers it once,
+        # under the pair -- "23/24  B/D" -- so the second number comes back
+        # with an empty key, which the build refuses as a question with no
+        # answer. Folded here, where what the group ASKS FOR is known; the
+        # listening reader folds in the same place for the same reason.
+        span = int(group.get("pick") or 1)
+        if span > 1 and len(questions) > 1:
+            kept: list[dict] = []
+            skip: set[int] = set()
+            for question in questions:
+                number = question.get("paper_number")
+                if number in skip:
+                    continue
+                kept.append(question)
+                if answers.get(number):
+                    skip.update(range(int(number) + 1, int(number) + span))
+            if len(kept) != len(questions):
+                print(f"{'':<16} {len(questions) - len(kept)} question(s)"
+                      f" folded into the pick-{span} they share a mark with")
+                questions = kept
+
         built = {
             "type": kind,
             "instructions": group.get("instructions", ""),
