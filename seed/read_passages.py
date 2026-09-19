@@ -75,6 +75,16 @@ PASSAGE_DPI = 130
 #: check below are what say whether it did.
 FALLBACK = "nvidia"
 
+#: How many times a passage may be read before its faults are reported
+#: rather than chased.
+#:
+#: Two, and the second is worth making because the faults here are
+#: MEASURABLE rather than matters of taste: a passage is 350 to 1400 words
+#: and a lettered one is lettered throughout, so "fewer faults" is a fact
+#: about the reading and not a preference. A third read would be sampling
+#: until the check goes quiet, which is a different thing from being right.
+READS = 2
+
 #: What an Academic Reading passage runs to. Cambridge's own specification is
 #: 2,150 to 2,750 words across the three passages of a paper, so one passage
 #: is roughly 700 to 950 -- and a transcription that comes back at 200 has
@@ -329,7 +339,16 @@ def main() -> int:
         # passages long. Nothing is written for a passage that failed, so the
         # next run simply picks it up again.
         try:
-            passage, faults = read_passage(row, model=args.model)
+            best = None
+            for attempt in range(READS):
+                passage, faults = read_passage(row, model=args.model)
+                if best is None or len(faults) < len(best[1]):
+                    best = (passage, faults)
+                if not faults:
+                    break
+                if attempt + 1 < READS:
+                    print(f"{'':<16} {len(faults)} fault(s); reading again")
+            passage, faults = best
         except (Exception, SystemExit) as failure:  # noqa: BLE001
             print(f"{row['id']:<16} FAILED  {failure}")
             failed.append(row["id"])
