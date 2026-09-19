@@ -265,6 +265,13 @@ Both papers number their questions 1 to 40, so the numbers alone cannot tell \
 them apart; the heading can, and taking the wrong half answers every question \
 with somebody else's answer.
 
+**The headings are the only thing that separates them, and the page is \
+printed in COLUMNS.** A sheet can carry "Listening Section 4" and "Reading \
+Passage 1" side by side, or one above the other, or a listening section at \
+the foot of one column and a reading passage at the head of the next. Find \
+the heading that says Reading and read what is under IT, down its own \
+column, stopping where the next heading begins. Never read across the page.
+
 Return ONE JSON object, no prose and no code fence:
 
 {{"answers": {{"<number, or a pair like 23/24>": "<the answer EXACTLY as printed>"}}}}
