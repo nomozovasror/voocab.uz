@@ -48,6 +48,24 @@ logger = logging.getLogger("scripts.import_passage")
 REPO = pathlib.Path(__file__).resolve().parent.parent.parent
 SEED = REPO / "seed"
 
+#: The tasks a paragraph's LETTER is the answer to.
+#:
+#: A book letters its paragraphs when, and only when, something asks the
+#: candidate to name one. So the questions say whether the letters on a
+#: passage are the book's -- and four of this corpus's 191 carry letters no
+#: question uses, every one of them invented by a reader that was told not
+#: to: "The psychology of innovation" came back lettered A to K off a page
+#: whose margin is empty.
+#:
+#: Dropped rather than kept, because a letter nothing is answered with is
+#: either decoration or a lie, and there is no way to tell which from here.
+#: A passage the book really does letter and never asks about loses nothing
+#: a learner can act on.
+#: Matching FEATURES is not one of them: its answers are letters from its
+#: own box -- "A Dr Helmut Fischer, B Anthony Berwick" -- naming a person or
+#: a study rather than a paragraph.
+BY_LETTER = {"matching_information", "matching_headings"}
+
 #: The number this passage's first question carries on the whole paper. An
 #: Academic Reading paper runs 1 to 40 straight through its three passages,
 #: in a shape the exam fixes rather than the book -- so a seeded Passage 2
@@ -75,6 +93,15 @@ def read_passage(passage_id: str) -> tuple[dict, dict, str]:
     if not held.get("paragraphs"):
         raise SystemExit(f"{passage_id}: the passage text is empty")
 
+    # Whether anything on this paper is answered by naming a paragraph. See
+    # BY_LETTER.
+    built = SEED / "work" / passage_id / "questions.json"
+    asks_by_letter = False
+    if built.exists():
+        asks_by_letter = any(
+            group.get("type") in BY_LETTER
+            for group in json.loads(built.read_text()).get("groups", []))
+
     # Exactly the shape `Part.passage` documents, and nothing else: the
     # faults the reader recorded are its own bookkeeping and have no business
     # in the app's database.
@@ -82,8 +109,11 @@ def read_passage(passage_id: str) -> tuple[dict, dict, str]:
         "title": held.get("title"),
         "subtitle": held.get("subtitle"),
         "source": held.get("source"),
-        "paragraphs": [{"label": one.get("label"), "text": one["text"]}
-                       for one in held["paragraphs"]],
+        "paragraphs": [
+            {"label": one.get("label") if asks_by_letter else None,
+             "text": one["text"]}
+            for one in held["paragraphs"]
+        ],
     }
     # "An Introduction to Film Sound — C11 T4 P2".
     #
