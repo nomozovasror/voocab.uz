@@ -271,6 +271,14 @@ Both papers number their questions 1 to 40, so the numbers alone cannot tell \
 them apart; the heading can, and taking the wrong half answers every question \
 with somebody else's answer.
 
+**Only what is under a READING PASSAGE heading counts.** These books print \
+teaching material on the same sheets -- "Review", "Action plan reminder", \
+"Table completion" -- and every one of those lists is numbered from 1 in its \
+own right. They are not the exam's answers. IELTS Trainer's test 2 key has \
+"1 How many words to write / 2 What kinds of words to look for / 3 Yes" \
+under "Action plan reminder", directly above the real answers, and read as \
+the key it answers a true/false set with "13 or 14".
+
 **The headings are the only thing that separates them, and the page is \
 printed in COLUMNS.** A sheet can carry "Listening Section 4" and "Reading \
 Passage 1" side by side, or one above the other, or a listening section at \
@@ -483,17 +491,20 @@ def reading_sheets(shots: list[pathlib.Path], *, model: str
             only.append(shot)
         elif reads or not papers:
             mixed.append(shot)
-    # Pure sheets FIRST, not instead of. A sheet can carry the end of the
-    # listening key and the start of the reading one -- IELTS Trainer 2's
-    # page 186 does -- and dropping it would lose whichever reading answers
-    # are only there. Read after the pure ones it cannot do any harm: the
-    # merge below keeps the first answer it finds for each number, so the
-    # sheet that is unambiguously reading has already answered.
+    # Kept in PAGE ORDER, mixed sheets included.
     #
-    # Read FIRST was the whole of the bug. Page 186 opened the window, its
-    # listening half answered questions 1 to 13, and Trainer 2's test 1 came
-    # back with "islands, seals, fossil" against a true/false set.
-    return (only + mixed) or shots
+    # Dropping a mixed sheet would lose whatever reading answers are only on
+    # it, and reordering them behind the pure ones is worse still: a key runs
+    # across a page break, so the sheet carrying answers 1 to 3 comes before
+    # the one whose top is their tail. Read out of order, Trainer 2's test 4
+    # answered questions 1 to 3 from the run-on paragraph at the head of the
+    # NEXT sheet -- "he had investigated Roman settlements in other
+    # locations" against a true/false set.
+    #
+    # What keeps a mixed sheet honest is the prompt, which names the layout:
+    # find the Reading heading, read down its own column, stop at the next
+    # heading. That is what the ordering was standing in for.
+    return sorted(only + mixed, key=lambda shot: shot.name) or shots
 
 
 def read_key(conn, row, *, model: str, force: bool = False) -> dict:
