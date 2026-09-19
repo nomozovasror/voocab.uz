@@ -157,7 +157,12 @@ def read_alignment(
     # book per paper -- so repeating it on every one of its sixteen materials
     # is thirty-odd characters a card that say the same thing sixteen times.
     reference = f"{book_code(row['book_number'])} T{test} P{section}"
-    return dict(row), segments, reference, printed_name(section_id) or reference
+    # The book first, ours second, the code last. Three sources in the order
+    # of how much they are worth.
+    title = (printed_name(section_id)
+             or derived_name(section_id)
+             or reference)
+    return dict(row), segments, reference, title
 
 
 def printed_name(section_id: str) -> str | None:
@@ -194,6 +199,26 @@ def printed_name(section_id: str) -> str | None:
             if line.startswith("#") and line[1:].strip():
                 return line[1:].strip()
     return None
+
+
+def derived_name(section_id: str) -> str | None:
+    """What `seed/name_sections.py` decided the recording is about.
+
+    Read only after :func:`printed_name` comes back empty, and kept in its own
+    file for exactly that reason: this title is OURS, not the book's, and the
+    two must not be able to be confused six months from now. `name.json`
+    records the model that wrote it and the day it did.
+
+    110 of the 272 sections need it -- the Part 2s and Part 3s answered by
+    multiple choice and matching, which print questions and no heading at all.
+    Leaving them named by their reference put "C10 T1 P2" on a shelf between
+    "Joining the leisure club" and "THE SPIRIT BEAR", which is a row a learner
+    cannot tell apart from the three under it.
+    """
+    path = SEED / "work" / section_id / "name.json"
+    if not path.exists():
+        return None
+    return (json.loads(path.read_text()).get("title") or "").strip() or None
 
 
 #: What each book is called in a material's title, short.

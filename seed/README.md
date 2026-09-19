@@ -2410,3 +2410,46 @@ The corpus went from 447 materials and 446 content-complete to **475 and
 474**. The one refusal is still `GD T3 · Part 1`, whose question 4 has never
 had a moment to point at. 30 book collections; Cambridge 21's two hold
 sixteen and twelve.
+
+## Naming the parts the book did not name
+
+A listening paper prints a heading over its first task -- "Oyster Bay Sailing
+Club Courses" above the table, "SELF-DRIVE TOURS IN THE USA" above the notes
+-- and `import_section.printed_name` reads it straight out of the layout
+grammar, where it has been stored all along. 162 of the 272 sections have
+one.
+
+The other 110 do not. They are the Part 2s and Part 3s answered by multiple
+choice and matching, which print questions and no heading at all, and they
+were left carrying their reference as a name: "C10 T1 P2" on a shelf between
+"Joining the leisure club" and "THE SPIRIT BEAR", which is a row nobody can
+tell from the three under it.
+
+`name_sections.py` reads the transcript instead and writes down what the
+recording is about. It is the cheapest stage here by a distance -- one text
+request over eight hundred words, no images, no audio -- and it came back
+107 named, 0 refused, in the same register as the printed ones:
+
+    cam10-t1-s3      Global Design Competition dishwasher project
+    cam10-t2-s2      Brackenside Pool and Central Park Playground
+    cam16-t3-s2      Careers in agriculture and horticulture
+    gd-t6-s3         Biofuel production and environmental issues
+
+**The name is ours, and the pipeline keeps knowing that.** It goes to
+`work/<id>/name.json`, never near `questions.json`, so `printed_name` keeps
+meaning "what the book printed" and `derived_name` is reached only after it
+comes back empty. The file records the model that wrote it and the day it
+did, because that is the only way anybody will be able to tell later.
+
+The title is checked before it is kept: two to eight words, sixty characters,
+no full stop, and refused outright if it names the FORM rather than the
+subject -- "Part 3 discussion" and "a conversation between two students" are
+true of dozens of these and identify none of them.
+
+271 of the 272 sections re-imported with their new titles. The one that would
+not is `TR2 T1 P2`: the importer REPLACES a part's question groups, and a
+question somebody has already answered cannot be deleted -- `question_attempts`
+points at it. Its title was set directly. That is worth knowing beyond this
+one row: once learners have sat a seeded material, it can no longer be
+re-imported at all, and the fix is not to delete less but to decide what a
+re-import should mean for an answer already given.
