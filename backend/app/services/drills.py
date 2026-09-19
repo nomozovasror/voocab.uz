@@ -107,21 +107,31 @@ def _in_part(part_number: int | None, skill: str = "listening"):
     ) == lo
 
 
-def _drillable():
+def _drillable(skill: str = "listening"):
     """Whether a group can be drilled at all, as one SQL expression.
 
-    A group is drillable when it has questions and every one of them carries a
-    replay mark — because the clip is derived from those marks, and a group
-    missing one cannot be given a clip that contains all its answers.
-    ``group_clip`` returns ``None`` for exactly this case; this is the same
-    judgement in SQL, so the count, the list and the take guard cannot come to
-    disagree about what there is to drill. One expression, four callers: "add
-    a filter in two places or not at all".
+    A LISTENING group is drillable when it has questions and every one of
+    them carries a replay mark — because the clip is derived from those
+    marks, and a group missing one cannot be given a clip that contains all
+    its answers. ``group_clip`` returns ``None`` for exactly this case; this
+    is the same judgement in SQL, so the count, the list and the take guard
+    cannot come to disagree about what there is to drill. One expression,
+    five callers: "add a filter in two places or not at all".
 
     A mark counts if it is in the columns OR in ``config["option_replay"]`` —
     a multiple-choice question keeps its per-option spans in the JSON, and
     reading only the columns would call a whole type undrillable.
+
+    A READING group needs questions and nothing else. There is no clip: the
+    drill is the group and the passage it is answered from, both already on
+    the part. Asked for a replay mark, every reading group in the library
+    fails — no reading question has one or ever will — so the reading drills
+    tab would have been permanently and silently empty.
     """
+    if skill == "reading":
+        return select(Question.id).where(
+            Question.group_id == QuestionGroup.id
+        ).exists()
     has_questions = (
         select(Question.id).where(Question.group_id == QuestionGroup.id).exists()
     )
@@ -164,7 +174,7 @@ async def type_summary(
             .select_from(QuestionGroup)
             .join(Part, Part.id == QuestionGroup.part_id)  # type: ignore[arg-type]
             .join(Material, Material.id == Part.material_id)  # type: ignore[arg-type]
-            .where(*_public(skill), _drillable(), _in_part(part, skill))
+            .where(*_public(skill), _drillable(skill), _in_part(part, skill))
             .group_by(QuestionGroup.type)  # type: ignore[arg-type]
         )
     ).all()
@@ -260,7 +270,7 @@ async def list_drills(
     )
     where = [
         *_public(skill),
-        _drillable(),
+        _drillable(skill),
         QuestionGroup.type.in_(group_types),  # type: ignore[attr-defined]
         _in_part(part, skill),
     ]
@@ -420,7 +430,7 @@ async def next_after(
             .join(Material, Material.id == Part.material_id)  # type: ignore[arg-type]
             .where(
                 *_public(skill),
-                _drillable(),
+                _drillable(skill),
                 QuestionGroup.type.in_(kin),  # type: ignore[attr-defined]
                 Part.material_id != (part.material_id if part else None),
                 ~drilled,
@@ -500,7 +510,7 @@ async def in_progress_for(
         )
         .exists()
     )
-    in_family = [*_public(skill), _drillable(), QuestionGroup.type.in_(kin)]  # type: ignore[attr-defined]
+    in_family = [*_public(skill), _drillable(skill), QuestionGroup.type.in_(kin)]  # type: ignore[attr-defined]
 
     def count(*extra):
         return (

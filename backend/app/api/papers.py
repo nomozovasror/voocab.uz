@@ -58,14 +58,20 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
 async def _load_drillable_group(
-    session: SessionDep, group_id: uuid.UUID, user_id: uuid.UUID
+    session: SessionDep, group_id: uuid.UUID, user_id: uuid.UUID, *, skill: str
 ) -> tuple[QuestionGroup, Part, Material]:
     """A group the caller may drill, with the part and material behind it.
 
     Same visibility rule as ``/take`` — anyone who may take the material may
-    drill a group of it — plus the group actually being drillable. A group
-    whose questions are not all marked has no clip that contains all its
-    answers, and a drill that cannot be answered is a 404, not a partial.
+    drill a group of it — plus the group actually being drillable. For
+    listening that means every question marked: a group whose questions are
+    not all marked has no clip that contains all its answers, and a drill
+    that cannot be answered is a 404, not a partial.
+
+    For reading it means having questions, and nothing else. There is no clip
+    to contain anything — the passage is on the part and is read whole
+    whether the material is sat entire or one group at a time — so asking a
+    reading group for replay marks refuses every one of them.
     """
     group = await session.get(QuestionGroup, group_id)
     if group is None:
@@ -74,7 +80,11 @@ async def _load_drillable_group(
     if part is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Question group not found")
     material = await _load_owned_or_public(session, part.material_id, user_id)
-    if await listening_service.group_clip(session, group) is None:
+    if skill == "reading":
+        if not await listening_service.get_group_questions(session, group.id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND,
+                                "This group cannot be drilled")
+    elif await listening_service.group_clip(session, group) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "This group cannot be drilled")
     return group, part, material
 
@@ -269,10 +279,15 @@ def paper_router(skill: str) -> APIRouter:
         ``Question.correct_answers``) and validated against a schema whose nested
         question type has no such field at all.
         """
-        group, part, material = await _load_drillable_group(session, group_id, user.id)
+        group, part, material = await _load_drillable_group(
+            session, group_id, user.id, skill=skill
+        )
         audio = await _resolve_audio(session, material)
-        clip = await listening_service.group_clip(
-            session, group, duration_ms=audio["duration_ms"]
+        clip = (
+            None if skill == "reading"
+            else await listening_service.group_clip(
+                session, group, duration_ms=audio["duration_ms"]
+            )
         )
         parts = await listening_service.get_drill_tree(session, group)
         done = await grading_service.last_submitted_attempt(
@@ -284,8 +299,8 @@ def paper_router(skill: str) -> APIRouter:
             audio_url=audio["audio_url"],
             duration_ms=audio["duration_ms"],
             parts=parts,
-            clip_start_ms=clip["start_ms"],
-            clip_end_ms=clip["end_ms"],
+            clip_start_ms=clip["start_ms"] if clip else None,
+            clip_end_ms=clip["end_ms"] if clip else None,
             drill=await drills_service.drill_row(
                 session, user.id, group, material, part
             ),
@@ -317,7 +332,9 @@ def paper_router(skill: str) -> APIRouter:
         would be a write that recomputes the same number. This line gets copied,
         so it says why it is missing.
         """
-        group, part, material = await _load_drillable_group(session, group_id, user.id)
+        group, part, material = await _load_drillable_group(
+            session, group_id, user.id, skill=skill
+        )
         attempt = await grading_service.submit_drill(
             session,
             user_id=user.id,

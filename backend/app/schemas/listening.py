@@ -1521,8 +1521,14 @@ class DrillTakeOut(BaseModel):
     #: from the replay marks, which themselves never cross the wire before a
     #: submit — the envelope bounds a couple of minutes about to be heard in
     #: full, and says nothing about where inside it any one answer falls.
-    clip_start_ms: int
-    clip_end_ms: int
+    #:
+    #: NULL for a reading drill, which has nothing to play. The passage it is
+    #: answered from is already on the part, where the take screen reads it
+    #: from whether the material is sat whole or one group at a time — so a
+    #: reading drill needs no field of its own here, only the absence of
+    #: these two.
+    clip_start_ms: int | None = None
+    clip_end_ms: int | None = None
     drill: DrillOut
 
 
