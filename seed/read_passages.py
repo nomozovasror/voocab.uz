@@ -277,6 +277,89 @@ def relabel(passage: dict, row: sqlite3.Row, *, model: str) -> bool:
     return True
 
 
+#: How far back a passage short of its own length may reach for the rest of
+#: it. Three, which is more than a passage is long and less than the gap to
+#: the paper before.
+BEFORE = 3
+
+
+TITLE_PROMPT = """\
+This image is a page of an IELTS Academic Reading paper. A new Reading \
+Passage may BEGIN partway down it, under a heading like "READING PASSAGE 3".
+
+JSON only: {"title": "<the title of the passage that BEGINS on this page, in \
+large bold type -- not a running header and not 'READING PASSAGE 3'; null if \
+no passage begins here>"}"""
+
+
+def title_before(row: sqlite3.Row, first: int, *, model: str) -> str | None:
+    """The passage's title, off the sheet BEFORE the one it is located on.
+
+    Cambridge 20's re-typeset packs several things onto one sheet -- already
+    a finding -- so a passage can begin halfway down the page its predecessor
+    ends on. The grouper gives that sheet to the passage whose QUESTIONS are
+    on it, which is the right call for the questions and takes the next
+    passage's title with it: three of the four untitled passages in the
+    corpus are Cambridge 20's, and each one's text begins mid-sentence.
+
+    One page and one question. A title is the only thing taken from it --
+    the prose is already whole, since the reader was given the sheet the
+    passage continues on.
+    """
+    if first <= 0:
+        return None
+    shots = vision.render(MATERIALS / row["pdf"], [first - 1],
+                          WORK / row["id"] / "pages", dpi=PASSAGE_DPI,
+                          jpeg=True)
+    try:
+        said = vision.ask_json(TITLE_PROMPT, shots, model=model,
+                               max_tokens=300)
+    except SystemExit:
+        return None
+    title = str(said.get("title") or "").strip()
+    return title or None
+
+
+def opening_before(row: sqlite3.Row, first: int, prompt: str, *, model: str
+                   ) -> tuple[list[dict], str | None]:
+    """The pages before a SHORT passage that are the rest of it.
+
+    A passage is three hundred and fifty words at least. One that comes back
+    at two hundred and forty, in two paragraphs, beginning mid-sentence, did
+    not begin where the grouper thinks it did: Cambridge 12's test 2 opens on
+    a sheet the page map called `other`, four pages before the one the
+    passage was bounded to, so its first two pages of prose and its title
+    were never read.
+
+    Walked back a page at a time, and it STOPS AT THE TITLE -- a passage
+    begins where its own heading is printed, so the sheet carrying one is
+    the last one taken. A sheet that is not this paper's prose ends the walk
+    with nothing taken from it, which is what keeps the passage before this
+    one out.
+    """
+    out: list[dict] = []
+    title: str | None = None
+    for back in range(1, BEFORE + 1):
+        index = first - back
+        if index < 0:
+            break
+        shots = vision.render(MATERIALS / row["pdf"], [index],
+                              WORK / row["id"] / "pages", dpi=PASSAGE_DPI,
+                              jpeg=True)
+        try:
+            said = vision.ask_json(prompt, shots, model=model, max_tokens=8000)
+        except SystemExit:
+            break
+        got = clean(said.get("paragraphs") or [])
+        if not got:
+            break
+        out = got + out
+        title = (str(said.get("title") or "").strip() or None) or title
+        if title:
+            break
+    return out, title
+
+
 def read_passage(row: sqlite3.Row, *, model: str) -> tuple[dict, list[str]]:
     """Read one passage off its pages, and say what looks wrong with it."""
     pages = json.loads(row["pages"] or "[]")
@@ -344,6 +427,28 @@ def read_passage(row: sqlite3.Row, *, model: str) -> tuple[dict, list[str]]:
 
     passage = {"title": title, "subtitle": subtitle, "source": source,
                "paragraphs": paragraphs}
+
+    # A passage shorter than any real one did not begin where it was bounded
+    # to -- see `opening_before`. Done before the title is chased, because
+    # the sheet that carries the opening usually carries the title too.
+    words = sum(len(one["text"].split()) for one in paragraphs)
+    if pages and words < WORDS[0]:
+        earlier, found = opening_before(row, min(pages), prompt, model=model)
+        if earlier:
+            print(f"{'':<16} {len(earlier)} paragraph(s) read off the"
+                  f" {len(earlier) and 'sheets'} before")
+            paragraphs = earlier + paragraphs
+            passage["paragraphs"] = paragraphs
+            title = title or found
+            passage["title"] = title
+
+    # A passage with no title of its own may have left it on the sheet
+    # before -- see `title_before`.
+    if not title and pages:
+        title = title_before(row, min(pages), model=model)
+        if title:
+            print(f"{'':<16} title read off the sheet before: {title!r}")
+            passage["title"] = title
 
     words = sum(len(one["text"].split()) for one in paragraphs)
     faults = []
