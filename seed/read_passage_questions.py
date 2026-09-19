@@ -216,6 +216,20 @@ matching: the candidate writes a word into a blank and the box only says \
 which words are allowed. Put the summary in "template" and the box in \
 "options".
 
+SHORT ANSWER is a list of QUESTIONS, and each one is a line with its gap at \
+the END -- the blank the candidate writes into is the answer to that \
+question. The printed number is not part of the line, exactly as in rule 1 \
+below.
+
+     page:      10  How far under the ground was the boat found?
+                11  What natural material covered the boat?
+     correct:   - How far under the ground was the boat found? {{{{1}}}}
+                - What natural material covered the boat? {{{{2}}}}
+     WRONG:     10 How far under the ground was the boat found?
+                11 What natural material covered the boat?
+
+   A template with no gap token in it at all is never right for shape (A).
+
 TWO RULES THAT ARE EASY TO GET WRONG.
 
 1. The printed question number is NOT part of the template. The page prints \
@@ -584,9 +598,28 @@ def slice_key(answers: dict, first: int, last: int) -> tuple[dict, list[int]]:
         if not numbers:
             continue
         if len(numbers) > 1:
-            if any(first <= n <= last for n in numbers):
+            if not any(first <= n <= last for n in numbers):
+                continue
+            if LETTER_ANSWER.match(answer or ""):
+                # A pair of LETTERS is one question worth two marks -- the
+                # page prints "23 and 24  Choose TWO letters" and the
+                # candidate picks two. The second number is the second mark,
+                # not a question of its own.
                 mine[min(numbers)] = answer
                 paired.update(numbers)
+            else:
+                # A pair of WORDS is two blanks. "4 and 5 IN EITHER ORDER
+                # traffic, crime" is a note completion the candidate writes a
+                # word into twice, and either word is right in either blank.
+                # Folded the way a pick-two is, question 5 disappears -- which
+                # the build says out loud as "key '' expands to nothing".
+                #
+                # Told apart by the ANSWER and not by the group, because the
+                # label looks identical either way. The same rule the
+                # listening reader draws.
+                for number in numbers:
+                    if first <= number <= last:
+                        mine[number] = answer
             continue
         if first <= numbers[0] <= last:
             mine[numbers[0]] = answer
