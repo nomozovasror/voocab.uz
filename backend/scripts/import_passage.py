@@ -41,7 +41,7 @@ from app.models.material import Material
 from app.models.part import Part
 from app.models.user import User
 
-from scripts.import_section import import_questions
+from scripts.import_section import book_code, import_questions
 
 logger = logging.getLogger("scripts.import_passage")
 
@@ -85,12 +85,22 @@ def read_passage(passage_id: str) -> tuple[dict, dict, str]:
         "paragraphs": [{"label": one.get("label"), "text": one["text"]}
                        for one in held["paragraphs"]],
     }
-    # The book's own title, as the listening importer uses, and for the same
-    # reason: it is the key this script dedups on, so a title built from the
-    # book NUMBER would call IELTS Trainer "Cambridge IELTS 101" and a change
-    # to it later would seed a second copy instead of updating the first.
-    title = (f"{row['book_title']} — Test {row['test_no']},"
-             f" Reading Passage {row['passage_no']}")
+    # "An Introduction to Film Sound — C11 T4 P2".
+    #
+    # The passage's OWN name first, because that is what a reader picks by
+    # and what survives truncation in a list of a hundred and ninety-one.
+    # The book and the test after it, short: the book's full name is in the
+    # collection, one course per book, and repeating it on every card is
+    # thirty-odd characters saying the same thing twelve times over.
+    #
+    # Where a passage has no title of its own the code stands alone rather
+    # than a blank leading a dash. Every passage in this corpus has one --
+    # `read_passages.py` goes to the sheet before to find it -- so this is
+    # for a book that has not been read yet, not for one of these.
+    where = (f"{book_code(row['book_number'])} T{row['test_no']}"
+             f" P{row['passage_no']}")
+    named = (passage.get("title") or "").strip()
+    title = f"{named} — {where}" if named else where
     return dict(row), passage, title
 
 
@@ -152,11 +162,17 @@ async def import_passage(passage_id: str, owner_id: uuid.UUID) -> None:
 
         await session.commit()
         material_id = str(material.id)
+        # What it IS, not what a fresh one would be. Re-importing does not
+        # withdraw a published material -- publishing is publish_seeded's
+        # decision and this script does not take it back -- so saying
+        # "private" unconditionally was a line that told the operator the
+        # opposite of what had happened.
+        seen = material.visibility
 
     words = sum(len(one["text"].split()) for one in passage["paragraphs"])
     print(f"{passage_id} -> material {material_id} "
           f"({len(passage['paragraphs'])} paragraphs, {words} words, "
-          f"{written} questions, private)")
+          f"{written} questions, {seen})")
 
 
 def main() -> int:

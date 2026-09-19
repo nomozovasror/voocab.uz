@@ -31,11 +31,12 @@ from app.models.material import Material
 from app.services import collections as collections_service
 from app.services import publishing as publishing_service
 
-#: Every seeded material is titled "<the book> — Test N, Part M" for a
-#: listening section and "<the book> — Test N, Reading Passage M" for a
-#: reading passage. Both, because this script is what decides the corpus is
-#: fit to be seen and there is one corpus.
-SEEDED = re.compile(r" — Test \d+, (Part|Reading Passage) \d+$")
+#: Every seeded material's title ENDS with the code its
+#: importer generates -- "C11 T4 · Part 2" for a listening
+#: section, "… — C11 T4 P2" for a reading passage, whose own
+#: passage title comes first. Anchored at the end for exactly
+#: that reason.
+SEEDED = re.compile(r"(?:^| — )(C\d{1,2}|TR2?|GD|#\d+) T\d+ (?:· Part |P)\d+$")
 
 logger = logging.getLogger("publish")
 

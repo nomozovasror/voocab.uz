@@ -44,6 +44,7 @@ from app.core.database import async_session_factory
 from app.models.collection import Collection, CollectionItem
 from app.models.material import Material
 from app.services import collections as collections_service
+from scripts.import_section import book_code
 
 CATALOGUE = pathlib.Path(__file__).resolve().parent.parent.parent / "seed" / "catalogue.db"
 #: The same owner every seeded material is imported under.
@@ -58,10 +59,10 @@ logger = logging.getLogger("seed_collections")
 #: papers in these four strings and nowhere else.
 PAPERS = {
     "listening": {"table": "section", "number": "section_no",
-                  "piece": "Part", "per_test": 4, "noun": "listening sections",
+                  "per_test": 4, "noun": "listening sections",
                   "each": "four parts each", "suffix": ""},
     "reading": {"table": "passage", "number": "passage_no",
-                "piece": "Reading Passage", "per_test": 3,
+                "per_test": 3,
                 "noun": "reading passages", "each": "three passages each",
                 "suffix": " — Reading"},
 }
@@ -110,11 +111,21 @@ async def main() -> int:
         for skill, paper in PAPERS.items():
             for book in books(skill):
                 title = f"{book['title']}{paper['suffix']}"
-                wanted = [
-                    titles.get(f"{book['title']} — Test {test},"
-                               f" {paper['piece']} {piece}")
-                    for test, piece in book["pieces"]
-                ]
+                # A material is found by the string its importer generates.
+                # A listening one is exactly that string; a reading one ends
+                # with it, because its own passage title comes first -- which
+                # is why this matches on the SUFFIX rather than on equality.
+                code = book_code(book["number"])
+                if skill == "listening":
+                    wanted = [titles.get(f"{code} T{test} · Part {piece}")
+                              for test, piece in book["pieces"]]
+                else:
+                    ends = {}
+                    for name, material in titles.items():
+                        if " — " in name:
+                            ends[name.rsplit(" — ", 1)[1]] = material
+                    wanted = [ends.get(f"{code} T{test} P{piece}")
+                              for test, piece in book["pieces"]]
                 found = [m for m in wanted if m is not None]
                 missing = len(wanted) - len(found)
 

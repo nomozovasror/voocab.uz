@@ -150,8 +150,44 @@ def read_alignment(section_id: str, offset_ms: int = 0) -> tuple[dict, list[Tran
     # moves. That matters beyond tidiness: the title is the key this script
     # dedups on, and a changed one seeds a second copy instead of updating
     # the first.
-    title = f"{row['book_title']} — Test {test}, Part {section}"
+    # "C11 T4 · Part 2". The book's own name is in the COLLECTION -- one
+    # course per book per paper -- so repeating it on every one of its
+    # sixteen materials is thirty-odd characters a card that say the same
+    # thing sixteen times. What a material has to carry is which test and
+    # which part, because nothing else does.
+    title = f"{book_code(row['book_number'])} T{test} · Part {section}"
     return dict(row), segments, title
+
+
+#: What each book is called in a material's title, short.
+#:
+#: The full name is too long to repeat on every card in a list of 447 --
+#: "The Official Cambridge Guide to IELTS" is 37 characters before the test
+#: number -- and the distinctive part of a reading title is the passage's own
+#: name, which has to come first and survive truncation.
+#:
+#: Keyed by the catalogue's book NUMBER and not derived from the title,
+#: because three of these books have no number in their name and the reading
+#: ids call them 101, 102 and 103 -- which read as "Cambridge 101" and are
+#: not that at all. A table says what each one is; a regex over the title
+#: would have to guess.
+BOOK_CODE = {
+    10: "C10", 11: "C11", 12: "C12", 13: "C13", 14: "C14", 15: "C15",
+    16: "C16", 17: "C17", 18: "C18", 19: "C19", 20: "C20",
+    101: "TR",    # IELTS Trainer
+    102: "GD",    # The Official Cambridge Guide to IELTS
+    103: "TR2",   # IELTS Trainer 2
+}
+
+
+def book_code(number: int) -> str:
+    """This book's short code, or its number where it has none.
+
+    A number is a poor label and a wrong one is worse: falling back to
+    ``#21`` for a book nobody has coded yet is visibly unfinished, where
+    guessing "C21" would quietly claim it is a Cambridge volume.
+    """
+    return BOOK_CODE.get(number, f"#{number}")
 
 
 def paper_first(section_no: int) -> int:

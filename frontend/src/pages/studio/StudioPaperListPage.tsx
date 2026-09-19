@@ -21,9 +21,11 @@ const DASH = "—"; // "no data yet" marker — never a fabricated 0
  *
  * Every whitespace-separated term has to appear somewhere in the title, and
  * anywhere in a word rather than at its start. That is what makes a library
- * of two hundred and sixty papers reachable by typing "14 part 3" — the
- * titles are "Cambridge IELTS 14 — Test 2, Part 3", so a search that wanted
- * one contiguous string would need the em dash and the comma typed exactly.
+ * of four hundred and forty-seven papers reachable by typing "14 part 3" —
+ * the titles are "C14 T2 · Part 3" and "An Introduction to Film Sound — C11
+ * T4 P2", so a search that wanted one contiguous string would need the
+ * separators typed exactly, and the same box would not find a reading
+ * passage by its own name.
  *
  * Client-side, and deliberately. The learner's catalogue searches in SQL
  * because it is unbounded — everybody's public material — and an author's own

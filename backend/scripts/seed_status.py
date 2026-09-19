@@ -31,12 +31,12 @@ from app.models.question import Question
 from app.models.question_group import QuestionGroup
 from app.services.publishing import publish_blockers
 
-#: Every seeded material is titled "<the book> - Test N, Part M", and it is
-#: the tail that identifies it rather than the head: the books are no longer
-#: all called "Cambridge IELTS <number>". Matching the head missed IELTS
-#: Trainer's twenty-four entirely, and reported a corpus of 176 as complete
-#: while 24 sections sat in the database unexamined.
-SEEDED = re.compile(r" — Test \d+, Part \d+$")
+#: Every seeded material's title ENDS with the code its
+#: importer generates -- "C11 T4 · Part 2" for a listening
+#: section, "… — C11 T4 P2" for a reading passage, whose own
+#: passage title comes first. Anchored at the end for exactly
+#: that reason.
+SEEDED = re.compile(r"(?:^| — )(C\d{1,2}|TR2?|GD|#\d+) T\d+ (?:· Part |P)\d+$")
 
 
 async def report(show_blocked: bool) -> None:
@@ -48,7 +48,12 @@ async def report(show_blocked: bool) -> None:
         # One query for every seeded question, not one per material: the join
         # from a question up to its material runs group -> part -> material,
         # and walking that 143 times is 143 round trips for a count.
-        wanted = {m.id for m in materials}
+        # Only a paper that is HEARD can have a replay span, so only those
+        # count toward the figure. Counted over everything, the arrival of
+        # 2,509 reading questions -- none of which has one or ever will --
+        # turned a corpus at 100% into one at 49%, which is a number that
+        # reports the shape of the library rather than the state of it.
+        wanted = {m.id for m in materials if m.type != "reading"}
         spans = collections.Counter()
         rows = await session.exec(
             select(Part.material_id, Question.replay_start_ms)
@@ -70,7 +75,8 @@ async def report(show_blocked: bool) -> None:
                 complete += 1
 
     pct = 100 * spans["with"] / spans["total"] if spans["total"] else 0
-    print(f"{len(materials)} materials | {spans['with']}/{spans['total']} replay ({pct:.0f}%)")
+    print(f"{len(materials)} materials | {spans['with']}/{spans['total']}"
+          f" replay ({pct:.0f}%, of the papers that are heard)")
     print(f"{complete}/{len(materials)} content-complete")
     for reason, count in reasons.most_common():
         print(f"  {count:3}x {reason}")
