@@ -119,6 +119,9 @@ DEFAULT_MODEL = os.environ.get("SEED_VISION_MODEL") or PROVIDERS[PROVIDER]["mode
 THINK = re.compile(r"<think>.*?</think>\s*", re.S)
 #: Models fence JSON even when asked not to.
 FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.M)
+#: A comma before the brace or bracket that closes the thing it is in. Legal
+#: in every language a model learned from and illegal in JSON.
+TRAILING_COMMA = re.compile(r",\s*([}\]])")
 
 
 def api_key(provider: str = "") -> str:
@@ -449,12 +452,25 @@ def ask_json(prompt: str, images: list[pathlib.Path],
         try:
             return json.loads(text)
         except json.JSONDecodeError as exc:
-            # The model wrote prose around the object often enough to be worth
-            # one rescue attempt before asking again.
-            start, end = text.find("{"), text.rfind("}")
-            if start >= 0 and end > start:
+            # Two rescues before asking again, both for slips a model makes
+            # in the SHAPE of a reply it otherwise got right.
+            #
+            # Prose around the object: common enough to be worth a look.
+            #
+            # A trailing comma before a closing brace or bracket: JSON does
+            # not allow one and every language the model learned from does,
+            # so it writes `{"a": 1,}` and `[1, 2,]`. Six of the reading
+            # question pages failed three times each on exactly this, at a
+            # character offset two and a half thousand in -- a whole page
+            # correctly read and thrown away over one comma. Repaired here
+            # rather than asked again, because asking again gets the same
+            # reply: it is a habit, not a slip of the moment.
+            for candidate in (text, TRAILING_COMMA.sub(r"\1", text)):
+                start, end = candidate.find("{"), candidate.rfind("}")
+                if start < 0 or end <= start:
+                    continue
                 try:
-                    return json.loads(text[start:end + 1])
+                    return json.loads(candidate[start:end + 1])
                 except json.JSONDecodeError:
                     pass
             last = f"{exc}"

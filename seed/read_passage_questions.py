@@ -71,6 +71,10 @@ QUESTION_DPI = 150
 #: and at three the reading key was never in the window at all.
 KEY_SPILL = 8
 
+#: Who to ask when the first provider will not reproduce a page. The same
+#: fallback, and the same reasoning, as `read_passages.FALLBACK`.
+FALLBACK = "nvidia"
+
 #: The two types whose options are their NAME. Named here as well as on the
 #: server because this is where a group is first called one, and a group of
 #: these that came back carrying options would be graded as letters.
@@ -333,10 +337,21 @@ def read_key(conn, row, *, model: str, force: bool = False) -> dict:
     for passage_no in (1, 2, 3):
         first, last = band(passage_no)
         for start in range(0, len(shots), PAGES_PER_CALL):
-            said = vision.ask_json(
-                KEY_PROMPT.format(label=label, first=first, last=last),
-                shots[start:start + PAGES_PER_CALL],
-                model=model, max_tokens=3000)
+            window = shots[start:start + PAGES_PER_CALL]
+            asked = KEY_PROMPT.format(label=label, first=first, last=last)
+            try:
+                said = vision.ask_json(asked, window, model=model,
+                                       max_tokens=3000)
+            except vision.Refused:
+                # Already the narrowest this prompt goes -- thirteen answers
+                # of one paper. What is left is to ask elsewhere.
+                print(f"    key {first}-{last} refused; asking {FALLBACK}")
+                said = {"answers": {}}
+                for one in window:
+                    page = vision.ask_json(asked, [one], provider=FALLBACK,
+                                           max_tokens=3000)
+                    got = page.get("answers") if isinstance(page, dict) else {}
+                    said["answers"].update(got or {})
             got = said.get("answers") if isinstance(said, dict) else said
             if isinstance(got, list):
                 got = {str(one.get("number")): one.get("answer")
@@ -458,7 +473,20 @@ def read_questions(row, *, model: str) -> tuple[list[dict], list[str]]:
     for window in windows:
         shots = vision.render(MATERIALS / row["pdf"], window, work / "pages",
                               dpi=QUESTION_DPI, jpeg=True)
-        read = vision.ask_json(prompt, shots, model=model, max_tokens=8000)
+        try:
+            read = vision.ask_json(prompt, shots, model=model, max_tokens=8000)
+        except vision.Refused:
+            # The provider recognised the page and declined to reproduce it.
+            # Narrowing is what rescues a key page and does nothing for a
+            # whole task, so this goes straight to the other provider -- the
+            # same answer `read_passages.py` reached.
+            print(f"{'':<16} refused; asking {FALLBACK}")
+            read = {"groups": []}
+            for one in shots:
+                page = vision.ask_json(prompt, [one], provider=FALLBACK,
+                                       max_tokens=6000)
+                read["groups"] += (page.get("groups") or []) if isinstance(
+                    page, dict) else []
         for group in read.get("groups", []) if isinstance(read, dict) else []:
             if not isinstance(group, dict):
                 continue
