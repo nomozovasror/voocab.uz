@@ -287,12 +287,37 @@ export interface TaskFamily {
   blurb: string;
 }
 
-/** The one family that is more than its type. */
+/** The two families that are more than their type. */
 const LABELLING: TaskFamily = {
   key: "labelling",
   types: ["map_labelling", "diagram_labelling"],
   label: "Map & diagram labelling",
   blurb: "Places or parts named on a picture",
+};
+
+/**
+ * Matching is one task under five names, exactly as the nine completion
+ * types are one document under nine. What differs between matching headings
+ * and matching features is the instruction line and how the box is lettered
+ * — and a learner practising matching wants all of it, which is what a drill
+ * is practice AT.
+ *
+ * `MATCHING_TYPES` on the server says the same thing, and `family_of` there
+ * returns the same set. The two tables have to agree: this one decides what
+ * the card asks for and that one decides what "the next one of the same
+ * kind" means.
+ */
+const MATCHING: TaskFamily = {
+  key: "matching",
+  types: [
+    "matching",
+    "matching_headings",
+    "matching_information",
+    "matching_features",
+    "matching_sentence_endings",
+  ],
+  label: "Matching",
+  blurb: "Items answered from a lettered box",
 };
 
 /**
@@ -310,10 +335,20 @@ const LABELLING: TaskFamily = {
  */
 export type DrillPart = "all" | 1 | 2 | 3 | 4;
 
-export const DRILL_PART_ORDER: DrillPart[] = [1, 2, 3, 4];
+/** The parts this paper has, in order. Four for listening and three for
+ *  reading, so the menu can never offer a Passage 4. The same two props the
+ *  scope menu beside it takes — a count and a word — rather than the whole
+ *  descriptor, because that is what the controls are already handed. */
+export function drillParts(parts: number): DrillPart[] {
+  return ([1, 2, 3, 4] as DrillPart[]).slice(0, parts);
+}
 
-export function drillPartLabel(part: DrillPart): string {
-  return part === "all" ? "Any part" : `Part ${part}`;
+/** What this paper calls one of them: "Part 2", "Passage 2", "Any passage".
+ *  Read off the same word `scopeLabel` uses, because a reading drill headed
+ *  "Part 2" is the app calling the thing something the page beside it does
+ *  not. */
+export function drillPartLabel(part: DrillPart, word = "Part"): string {
+  return part === "all" ? `Any ${word.toLowerCase()}` : `${word} ${part}`;
 }
 
 /**
@@ -507,8 +542,11 @@ export const QUESTION_TYPE_ORDER = Object.keys(
 export const TASK_FAMILIES: TaskFamily[] = (() => {
   const families: TaskFamily[] = [];
   for (const type of QUESTION_TYPE_ORDER) {
-    if (LABELLING.types.includes(type)) {
-      if (!families.includes(LABELLING)) families.push(LABELLING);
+    const grouped = [LABELLING, MATCHING].find((family) =>
+      family.types.includes(type),
+    );
+    if (grouped) {
+      if (!families.includes(grouped)) families.push(grouped);
       continue;
     }
     families.push({

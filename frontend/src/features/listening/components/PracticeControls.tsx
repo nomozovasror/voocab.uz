@@ -22,7 +22,7 @@ import {
   COURSE_LENGTH_ORDER,
   COURSE_STATUS_LABEL,
   COURSE_STATUS_ORDER,
-  DRILL_PART_ORDER,
+  drillParts,
   drillPartLabel,
   LIST_MODE_LABEL,
   scopeOptions,
@@ -778,7 +778,12 @@ export function FilterChips({
               every map in the library is Part 2 and every form completion
               Part 1 — so the cards for a chosen part are the tasks that
               actually appear in it. */}
-          <DrillPartMenu part={drillPart} onChange={onDrillPart} />
+          <DrillPartMenu
+            part={drillPart}
+            onChange={onDrillPart}
+            partWord={partWord}
+            parts={parts}
+          />
           {drillFamily && (
             <>
               <Chip active onClick={() => onDrillFamily(null)}>
@@ -860,9 +865,16 @@ function ScopeMenu({
 function DrillPartMenu({
   part,
   onChange,
+  partWord,
+  parts,
 }: {
   part: DrillPart;
   onChange: (part: DrillPart) => void;
+  /** What this paper calls one part, and how many it has — the same two the
+   *  scope menu takes, so the two rows can never name the same thing
+   *  differently. */
+  partWord: string;
+  parts: number;
 }) {
   const narrowed = part !== "all";
   return (
@@ -874,7 +886,7 @@ function DrillPartMenu({
           size="sm"
           className={cn(PILL, narrowed ? PILL_ON : PILL_OFF)}
         >
-          {drillPartLabel(part)}
+          {drillPartLabel(part, partWord)}
           <ChevronDown className="size-3" aria-hidden />
         </Button>
       </DropdownMenuTrigger>
@@ -886,11 +898,11 @@ function DrillPartMenu({
           }
         >
           <DropdownMenuRadioItem value="all">
-            {drillPartLabel("all")}
+            {drillPartLabel("all", partWord)}
           </DropdownMenuRadioItem>
-          {DRILL_PART_ORDER.map((option) => (
+          {drillParts(parts).map((option) => (
             <DropdownMenuRadioItem key={option} value={String(option)}>
-              {drillPartLabel(option)}
+              {drillPartLabel(option, partWord)}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
