@@ -150,15 +150,23 @@ MAX_ATTEMPTS = 5
 
 
 def ask(prompt: str, images: list[pathlib.Path], *, model: str = DEFAULT_MODEL,
-        max_tokens: int = 4000, temperature: float = 0.0) -> str:
-    """One question about one or more page images. Returns the reply text."""
+        max_tokens: int = 4000, temperature: float = 0.0,
+        provider: str = "") -> str:
+    """One question about one or more page images. Returns the reply text.
+
+    `provider` and `model` travel together: a model name belongs to the
+    provider that serves it, so asking a second provider means naming both.
+    """
+    if provider and model == DEFAULT_MODEL:
+        model = PROVIDERS[provider]["model"]
     content: list[dict] = [{"type": "text", "text": prompt}]
     for path in images:
         data = base64.b64encode(path.read_bytes()).decode()
         mime = "image/jpeg" if path.suffix == ".jpg" else "image/png"
         content.append({"type": "image_url",
                         "image_url": {"url": f"data:{mime};base64,{data}"}})
-    return _send(content, model, max_tokens, temperature, len(images), audio=False)
+    return _send(content, model, max_tokens, temperature, len(images),
+                 audio=False, provider=provider)
 
 
 def listen(prompt: str, recording: pathlib.Path, *, model: str = DEFAULT_MODEL,
@@ -229,8 +237,18 @@ def transcribe(recording: pathlib.Path, *, provider: str = "") -> list[dict]:
     return reply["segments"]
 
 
+class Refused(SystemExit):
+    """The provider would not reproduce what was on the page.
+
+    Distinct from every other failure here because the answer is different:
+    a rate limit is waited out, a bad JSON reply is asked again, and this one
+    is asked NARROWER -- the same image with a smaller question. Retrying it
+    unchanged spends a request to be refused again.
+    """
+
+
 def _send(content: list[dict], model: str, max_tokens: int, temperature: float,
-          parts: int, *, audio: bool) -> str:
+          parts: int, *, audio: bool, provider: str = "") -> str:
     """The retry, the ledger and the unwrapping, shared by every caller.
 
     Waits and retries on a rate limit rather than failing: a batch that dies
@@ -239,7 +257,7 @@ def _send(content: list[dict], model: str, max_tokens: int, temperature: float,
             "messages": [{"role": "user", "content": content}],
             **({"reasoning_effort": EFFORT} if EFFORT else {})}
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        reply = unwrap(_post(body))
+        reply = unwrap(_post(body, provider))
         if retry_later(reply):
             # Providers say this differently -- Groq with a code and a number
             # of seconds, Gemini with a 429 inside a one-element array -- and the
@@ -255,14 +273,32 @@ def _send(content: list[dict], model: str, max_tokens: int, temperature: float,
             # An endpoint that answers with a JSON array -- an error payload,
             # usually. Said plainly here rather than as an AttributeError on
             # the next line, which names neither the provider nor the page.
-            raise SystemExit(f"{PROVIDER} answered with a "
+            raise SystemExit(f"{provider or PROVIDER} answered with a "
                              f"{type(reply).__name__}: {json.dumps(reply)[:300]}")
         break
-    record(reply.get("usage") or {}, model, parts, audio=audio)
+    record(reply.get("usage") or {}, model, parts, audio=audio,
+           provider=provider)
     if "choices" not in reply:
         raise SystemExit(f"API said: {json.dumps(reply)[:400]}")
-    message = reply["choices"][0].get("message") or {}
+    choice = reply["choices"][0]
+    message = choice.get("message") or {}
     said = message.get("content")
+    if not said and "content_filter" in str(choice.get("finish_reason") or ""):
+        # The provider recognised the page and would not reproduce it.
+        #
+        # Gemini answers `content_filter: RECITATION` with an empty message
+        # and zero completion tokens, and it is deterministic per image and
+        # per ask: four requests for all forty answers of Cambridge 11's key
+        # page 124 were refused four times, and a request for questions 1 to
+        # 13 of the same image was answered at once. So a retry is wasted and
+        # a NARROWER question is not -- which only the caller knows how to
+        # ask, hence a named exception rather than a message to read.
+        #
+        # SystemExit, so that every caller written before this behaves
+        # exactly as it did: this was one of the shapes "returned no content"
+        # took.
+        raise Refused(f"{model} refused to reproduce this page "
+                      f"({choice.get('finish_reason')}); ask for less of it")
     if not said:
         # A reasoning model that spent the whole budget thinking. Its thoughts
         # come back in `reasoning_content` and are billed as output, so the
@@ -277,7 +313,8 @@ def _send(content: list[dict], model: str, max_tokens: int, temperature: float,
     return said
 
 
-def record(usage: dict, model: str, images: int, *, audio: bool = False) -> None:
+def record(usage: dict, model: str, images: int, *, audio: bool = False,
+           provider: str = "") -> None:
     """Append one request's token counts to the ledger.
 
     Written from `sys.argv` rather than passed down through nine callers: what
@@ -285,7 +322,8 @@ def record(usage: dict, model: str, images: int, *, audio: bool = False) -> None
     Never raises -- a ledger that can stop a batch is worse than no ledger."""
     if not usage:
         return
-    price = BY_MODEL.get(model) or PRICES.get(PROVIDER, {"in": 0.0, "out": 0.0})
+    provider = provider or PROVIDER
+    price = BY_MODEL.get(model) or PRICES.get(provider, {"in": 0.0, "out": 0.0})
     rate_in = price.get("audio", price["in"]) if audio else price["in"]
     got, made = usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
     try:
@@ -295,7 +333,7 @@ def record(usage: dict, model: str, images: int, *, audio: bool = False) -> None
                 "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                 "by": pathlib.Path(sys.argv[0]).stem,
                 "for": sys.argv[1] if len(sys.argv) > 1 else None,
-                "provider": PROVIDER, "model": model, "images": images,
+                "provider": provider, "model": model, "images": images,
                 "audio": audio, "in": got, "out": made,
                 "usd": round(got / 1e6 * rate_in + made / 1e6 * price["out"], 6),
             }, fh)
@@ -340,8 +378,16 @@ def retry_later(reply) -> bool:
     return any(mark in json.dumps(said).lower() for mark in LATER)
 
 
-def _post(body: dict) -> dict:
-    """One request. Split out so the retry above reads as a retry."""
+def _post(body: dict, provider: str = "") -> dict:
+    """One request. Split out so the retry above reads as a retry.
+
+    `provider` names which of the three to send to, defaulting to the one
+    SEED_VISION chose. It is a parameter rather than a global because a
+    caller sometimes has to ask a SECOND provider the same question -- see
+    `Refused` -- and swapping the module's globals to do that would race any
+    other call in flight.
+    """
+    provider = provider or PROVIDER
     # The payload carries base64 pages and is far past a comfortable argv.
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
         json.dump(body, fh)
@@ -350,19 +396,20 @@ def _post(body: dict) -> dict:
     # by anything that can list processes -- and where it turned up verbatim
     # in a TimeoutExpired traceback, which is how this was noticed.
     with tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False) as fh:
-        fh.write(f'header = "Authorization: Bearer {api_key()}"\n'
+        fh.write(f'header = "Authorization: Bearer {api_key(provider)}"\n'
                  'header = "Content-Type: application/json"\n')
         config = fh.name
     pathlib.Path(config).chmod(0o600)
     try:
         out = subprocess.run(
-            ["curl", "-sS", "-X", "POST", URL, "--config", config,
+            ["curl", "-sS", "-X", "POST", PROVIDERS[provider]["url"],
+             "--config", config,
              "--data-binary", f"@{payload}"],
             capture_output=True, text=True, timeout=300)
     except subprocess.TimeoutExpired:
         # Raised with the whole command in it, payload path and all. Said
         # plainly instead, since the caller only needs to know it timed out.
-        raise SystemExit(f"{PROVIDER} did not answer within 300s")
+        raise SystemExit(f"{provider} did not answer within 300s")
     finally:
         pathlib.Path(payload).unlink(missing_ok=True)
         pathlib.Path(config).unlink(missing_ok=True)

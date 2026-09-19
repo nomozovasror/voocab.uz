@@ -59,6 +59,22 @@ WORK = SEED / "work"
 PAGES_PER_CALL = 3
 PASSAGE_DPI = 130
 
+#: Who to ask when the first provider will not reproduce a page.
+#:
+#: `content_filter: RECITATION` is Gemini recognising a published passage,
+#: and it is a property of the IMAGE rather than of the question: narrowing
+#: the ask to three paragraphs, to one column, and cropping the sheet in half
+#: were all refused on Cambridge 10's page 25, where narrowing worked for the
+#: answer key. What is left is to ask somebody else, and nvidia's free tier
+#: reads the same sheet at once.
+#:
+#: Second choice on purpose. It takes one image a request against gemini's
+#: three, and the README records it being measured twice and not adopted --
+#: for the NARROW question, which this is not: transcribing prose is the one
+#: thing every vision model does well, and the word count and the lettering
+#: check below are what say whether it did.
+FALLBACK = "nvidia"
+
 #: What an Academic Reading passage runs to. Cambridge's own specification is
 #: 2,150 to 2,750 words across the three passages of a paper, so one passage
 #: is roughly 700 to 950 -- and a transcription that comes back at 200 has
@@ -171,12 +187,47 @@ def read_passage(row: sqlite3.Row, *, model: str) -> tuple[dict, list[str]]:
     windows = [pages[i:i + PAGES_PER_CALL]
                for i in range(0, max(1, len(pages) - 1), PAGES_PER_CALL - 1)] or [pages]
 
+    # A refused window is asked one sheet at a time.
+    #
+    # `content_filter: RECITATION` is the provider recognising a published
+    # passage and declining to reproduce it, and it is deterministic for the
+    # same images and the same ask -- so retrying unchanged spends a request
+    # to be refused again. What works is asking for LESS of it, which the
+    # answer-key reader found independently: all forty answers of a key page
+    # were refused four times out of four, and each band of thirteen was
+    # answered at once.
+    #
+    # A single sheet refused on its own is genuinely out of reach, and the
+    # passage then fails rather than being written short -- which is what the
+    # word count exists to prevent.
     title = subtitle = source = None
     paragraphs: list[dict] = []
     for window in windows:
         shots = vision.render(MATERIALS / row["pdf"], window, work / "pages",
                               dpi=PASSAGE_DPI, jpeg=True)
-        read = vision.ask_json(prompt, shots, model=model, max_tokens=8000)
+        try:
+            read = vision.ask_json(prompt, shots, model=model, max_tokens=8000)
+        except vision.Refused:
+            if len(shots) == 1:
+                raise
+            print(f"{'':<16} refused {len(shots)} sheets together;"
+                  " asking one at a time")
+            read = {"paragraphs": []}
+            for one in shots:
+                try:
+                    page = vision.ask_json(prompt, [one], model=model,
+                                           max_tokens=8000)
+                except vision.Refused:
+                    # The sheet itself is what it will not reproduce, so
+                    # there is nothing left to narrow. Asked of somebody
+                    # else, it is an ordinary page.
+                    print(f"{'':<16} sheet refused; asking {FALLBACK}")
+                    page = vision.ask_json(prompt, [one], provider=FALLBACK,
+                                           max_tokens=8000)
+                for field in ("title", "subtitle", "source"):
+                    read[field] = read.get(field) or page.get(field)
+                read["paragraphs"] = (read.get("paragraphs") or []) + (
+                    page.get("paragraphs") or [])
         title = title or (read.get("title") or "").strip() or None
         subtitle = subtitle or (read.get("subtitle") or "").strip() or None
         source = source or (read.get("source") or "").strip() or None
