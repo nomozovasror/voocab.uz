@@ -2172,3 +2172,56 @@ window rather than the page:
   foot of the page the last reading questions end on.
 
 **64 of 64 tests have a complete reading key**, forty answers each.
+
+## Where the reading corpus stands
+
+**189 of 191 located passages are in the database and public**, beside the
+256 listening materials — 2,511 reading questions across fourteen question
+types, in fourteen courses of one book each. **64 of 64 tests have a complete
+reading key**, forty answers apiece, and none of them is the listening key.
+
+The reading half cost **$5.56**: $0.56 to find the pages, $1.14 to read the
+passages, $3.86 to read the questions and the keys. Most of that last figure
+is re-reads — the corpus was read through four times as the checks found
+things, which is the same shape the listening half had and the reason this
+file keeps a ledger at all.
+
+### Two passages are refused, and each says why
+
+`cam11-t4-p2` — **the scan's key disagrees with its own question pages.**
+The paper is unambiguous across three sheets (14-18 multiple choice, 19-23
+TRUE/FALSE/NOT GIVEN, 24-26) and the key page prints 14-19 as letters, 20-24
+as TRUE/FALSE/NOT GIVEN, 25-26 as letters: one number apart from question 19
+on. Both were read repeatedly and both come back the same, so it is the book
+rather than the reading, and publishing half the answers against the wrong
+questions is worse than publishing none.
+
+`cam15-t3-p2` — **one sheet no provider will read.** Gemini answers
+`content_filter: RECITATION` for it whole, in halves and in three
+overlapping bands, every framing and every time; nvidia, the fallback, reads
+a question page too poorly to use. Questions 14-20 come off the other sheet
+correctly and 21-26 are on this one.
+
+### What the checks caught that nothing else would have
+
+Every one of these produced a material that looked complete:
+
+* **A reading key that was the listening key.** Both papers number 1 to 40
+  under one "Test 1 Key", and eleven of IELTS Trainer test 1's forty answers
+  came from the wrong half — four of them consecutive words where the page
+  prints multiple choice. Caught by the shape rule: a true/false set whose
+  answers are words is not a hard question, it is the wrong key.
+* **An answer taken from a "Distraction" line.** The Trainers explain each
+  answer and then name the wrong options under it. "37 C: Austin is
+  mentioned in both paragraph three and ... *Distraction* A: This makes
+  grammatical sense, but ..." was read as 37 A — the one letter the book has
+  just said is wrong. Caught by publishing, which refused a matching group
+  where two questions shared a letter.
+* **A summary with a box of words above it.** Twenty-seven passages had
+  their template thrown away because the group carried options, and reached
+  the build as "template gaps [] != question numbers".
+* **A gap in a table's first row.** The layout grammar reads that row as the
+  header and draws no gap in it — and `check_template.mjs` had been importing
+  `form-syntax.ts` from a directory it left in a refactor, so the one check
+  that runs the grammar rather than guessing at it had been silently off
+  since.
