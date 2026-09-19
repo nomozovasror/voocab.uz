@@ -347,6 +347,45 @@ def band(work_id: str) -> tuple[int, int]:
     return {1: (1, 13), 2: (14, 26), 3: (27, 40)}[number]
 
 
+def heard(section_id: str) -> dict[int, tuple[int, int]]:
+    """Where a person heard an answer that neither the page nor the words fix.
+
+    `work/<section id>/spans.json`, written by hand and never by this program,
+    the same bargain `read_passage_questions.corrections` makes with a key the
+    book got wrong:
+
+        {"source": "<who listened, and to what>",
+         "why": "<why neither of the two machines could settle it>",
+         "spans": {"4": [198480, 203900]}}
+
+    Keyed by PAPER number, in milliseconds, and applied after everything else
+    so it wins.
+
+    It exists because the two automatic sources can BOTH be silent and both
+    be right to be. The Official Guide's test 3 part 1 numbers only seven of
+    its ten answers in the audioscript, so question 4 has no marker; and its
+    answer, "swimming", is said twice in the recording -- once by the
+    receptionist listing what the club has ("a gym, a swimming pool, tennis")
+    at 176s and once by Harry saying what he will do at 199s. `locate` gives
+    nothing rather than guess between them, which is the right refusal: a
+    replay that opens on the wrong sentence teaches somebody they misheard a
+    line they never heard.
+
+    What settles it is not more machinery but reading the two occurrences:
+    one is the receptionist listing what the building contains, the other is
+    the candidate answering the question the form asks. `source` says how it
+    was established and by whom, in a file this program only ever reads --
+    which is what keeps "the machine could not tell" and "somebody decided"
+    two different things on disk.
+    """
+    path = WORK / section_id / "spans.json"
+    if not path.exists():
+        return {}
+    said = json.loads(path.read_text()).get("spans") or {}
+    return {int(number): (int(pair[0]), int(pair[1]))
+            for number, pair in said.items()}
+
+
 def build(section_id: str) -> int:
     work = WORK / section_id
     src = json.loads((work / "questions.src.json").read_text())
@@ -369,6 +408,13 @@ def build(section_id: str) -> int:
             if words:
                 for n in wanted:
                     spans[n] = (words[0]["start_ms"], words[-1]["end_ms"])
+    #: The spans a person settled by hand -- see `heard`. Held apart from
+    #: `spans` deliberately. `spans` is the MARKER map, and the windows that
+    #: rescue an unmarked answer are measured off its neighbours: dropping a
+    #: hand-fixed span into it moved question 3's window forward past its own
+    #: answer, and fixing question 4 broke question 3. A correction overrides
+    #: the RESULT, never the machinery that produces it.
+    by_hand = heard(section_id)
 
     # A section's questions are its own. The question pages of Section 1 and
     # Section 2 sit on the same sheets, so the reader hands back groups for
@@ -376,6 +422,8 @@ def build(section_id: str) -> int:
     # the other one's keys empty. Dropping them here rather than failing on an
     # empty key is the same rule the audioscript reader applies to a marker
     # outside its range: out of range is proof it belongs to the neighbour.
+    by_hand_used = 0
+
     lo, hi = band(section_id)
     kept = []
     for group in src["groups"]:
@@ -662,6 +710,11 @@ def build(section_id: str) -> int:
             # is the correct option -- so that turn is what every correct
             # letter points at. Where a "choose two" shares one marker both
             # letters get the same span, which is what the book itself says.
+            # Applied last, over everything the marker and the words said.
+            if (settled := by_hand.get(q.get("paper_number"))) is not None:
+                span = settled
+                by_hand_used += 1
+
             option_replay = ({letter: [span[0], span[1]] for letter in answers}
                              if span and group["type"] == "multiple_choice" else {})
             questions.append({
