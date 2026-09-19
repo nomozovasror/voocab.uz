@@ -743,7 +743,17 @@ def check(groups: list[dict]) -> list[str]:
     for group in groups:
         kind = group["type"]
         numbers = [q["paper_number"] for q in group["questions"]]
-        blank = [q["paper_number"] for q in group["questions"] if not q["key"]]
+        # A "choose TWO letters" is ONE question worth two marks, and the key
+        # prints it once, against the pair: "10/11  B/D". So the second
+        # number has no line of its own, which is not a missing answer --
+        # build_questions.py folds the two into one question there. Counting
+        # it as missing made every correctly read pick-two group report a
+        # blank.
+        span = int(group.get("pick") or 1)
+        answered = {q["paper_number"] for q in group["questions"] if q["key"]}
+        folded = {n + offset for n in answered for offset in range(1, span)}
+        blank = [q["paper_number"] for q in group["questions"]
+                 if not q["key"] and q["paper_number"] not in folded]
         if blank:
             problems.append(f"{kind} {numbers[0]}-{numbers[-1]}:"
                             f" no answer for {blank}")

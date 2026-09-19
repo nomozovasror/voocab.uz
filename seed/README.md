@@ -2060,3 +2060,115 @@ is printed page 254, and the next sheet is printed page **259**. Pages 255 to
 `cam102-t6-p2` and the report prints it beside the gap rather than
 subtracting it from the count, because a report that quietly stops counting
 what it has an excuse for is a report agreeing with itself.
+
+## Reading: the rest of the pipeline
+
+Four stages after the pages are found, and three of listening's are simply
+absent — there is no recording, so nothing to align, nothing to trim and no
+replay span to find.
+
+```bash
+seed/.venv/bin/python seed/run_reading.py --book 11 --owner <uuid>
+seed/.venv/bin/python seed/run_reading.py --report
+```
+
+| stage | program | leaves |
+|---|---|---|
+| text | `read_passages.py` | `passage.json` |
+| questions | `read_passage_questions.py` | `questions.src.json` |
+| build | `build_questions.py` | `questions.json` |
+| picture | `extract_image.py` | `image-group<N>.png` |
+| import | `scripts.import_passage` | a private Material |
+
+`run_reading.py` is its own runner rather than an arm of `run_pipeline.py`,
+because `run_pipeline` is a loop over the `stage` table and that table holds
+one row per SECTION. A passage is a sibling of a section, not one of them.
+This carries no bookkeeping at all: what a passage has done is what is on
+disk beside it, which is also what makes it resumable.
+
+`build_questions.py` and `extract_image.py` are the same programs listening
+uses. Both took a section id and did arithmetic on it; both now ask the id
+which it is. A passage has no `aligned.json`, so every question comes out
+with no replay span, which is what a paper you read rather than hear should
+have.
+
+### The letters are part of the answer key
+
+Two of Reading's own tasks are answered BY a paragraph's letter — "which
+paragraph contains the following information" has options A to G — so the
+lettering is not layout. A passage stored as prose and re-split later, one
+paragraph out, would mark every one of those answers wrong. The letters are
+read off the page with the paragraphs, and a passage that comes back
+half-lettered or lettered A, B, C, E is read again.
+
+### Three answer shapes where listening has two
+
+Matching is one task under five names, exactly as the nine completion types
+are one document under nine. Matching headings is numbered **i, ii, iii**
+because its items are the passage's lettered paragraphs — an answer of "C"
+naming both a heading and a paragraph would be two questions at once — and
+the key prints the pair together, "B vii" against question 15, of which only
+the numeral is the answer. Scanned for `[A-K]` the way a lettered answer is,
+"vii" yields nothing at all.
+
+A **true/false set is neither lettered nor a gap-fill**. Its answer is a word
+the candidate writes, so grading compares it as one; it has no template, so
+the gap checks cannot apply; and its config is empty and stays empty, because
+the three words are the TYPE. A key that abbreviates them — "T", "NG" — is
+expanded to what the page offers, since a stored "T" is an answer nobody can
+submit.
+
+### What the pages refused
+
+**`content_filter: RECITATION`.** Gemini recognises a published page and
+returns an empty message with zero completion tokens. It arrived as "returned
+no content", which is also what a reasoning model that spent its budget
+thinking returns — two failures with opposite answers under one message.
+
+The answer depends on which page. For an **answer key**, ask narrower: all
+forty answers of Cambridge 11's page 124 were refused four times out of four,
+and each band of thirteen was answered at once. For a **passage**, narrowing
+does nothing — three paragraphs, one column, and the sheet cropped in half
+were all refused, because the filter is on the image rather than on the
+question — so it goes to a second provider, and nvidia's free tier reads the
+same sheet immediately.
+
+**A reply that will not parse.** A trailing comma before a closing brace is
+legal in every language a model learned from and illegal in JSON; it is
+repaired. Mismatched brackets are not: a repair that parses is one that has
+quietly dropped the groups after the fault, and a partial read with no error
+is the one failure this pipeline is built not to have. Those get a narrower
+question instead — the window is halved, and halved again — because context
+is what makes a group read correctly. A task printed across two sheets, asked
+one sheet at a time, came back as a true/false set whose answers were letters.
+
+And a **retry at temperature 0 is not a retry**. Everything here asks at 0.0,
+which is right — a page has one correct reading and sampling from it is a way
+to be wrong — but it meant three attempts at a malformed reply were three
+copies of it, failing at the same character offset every time.
+
+### The key is evidence; the reading is an interpretation
+
+A true/false set whose answers are letters is not a hard question — it is a
+group the page named something else. So a reading the key contradicts is made
+once more and the better of the two kept. Twice, not until the check goes
+quiet: sampling until nothing objects is a different thing from being right.
+
+Finding the keys themselves took four corrections, and every one was the
+window rather than the page:
+
+* **The bound is the next TEST's key, not the next key sheet.** Cambridge
+  prints a test's key across a spread — listening on one sheet, reading on
+  the facing one — and both are classified as key pages, so the window was
+  cut in half exactly where the reading answers begin. Tests 1 to 3 survived
+  because the next test's key happened to be two pages on.
+* **Where the sheets say which test they are, they decide.** IELTS Trainer
+  heads every one "Test 4 Key" and prints three of them.
+* **A page called the reading key only wins in a one-test document.** That
+  branch was written for Cambridge 20, one PDF per test; applied to a
+  four-test volume it answered Cambridge 13's test 2 from test 1's key.
+* **In a one-test document the window opens on the last READING sheet.**
+  Cambridge 20 packs several things onto one sheet, and its key starts at the
+  foot of the page the last reading questions end on.
+
+**64 of 64 tests have a complete reading key**, forty answers each.
