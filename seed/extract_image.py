@@ -375,17 +375,37 @@ def find_box(page: pymupdf.Page) -> tuple[float, float, float, float] | None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("section_id")
+    ap.add_argument("section_id", help="a section (cam11-t1-s2) or a passage "
+                                       "(cam11-t1-p2)")
     args = ap.parse_args()
 
+    # A reading passage is answered on a picture exactly as a listening part
+    # is -- Cambridge 11's Falkirk Wheel is a diagram with seven blanks drawn
+    # on it -- and everything below this line is about a page rather than
+    # about a paper. So the only difference is which table says which pages,
+    # and the id says which table to ask.
     conn = sqlite3.connect(SEED / "catalogue.db")
     conn.row_factory = sqlite3.Row
+    passage = "-p" in args.section_id
     row = conn.execute(
-        "SELECT s.*, d.rel_path pdf FROM section s JOIN document d ON d.id = s.document_id "
-        "WHERE s.id = ?", (args.section_id,)).fetchone()
+        ("SELECT p.*, d.rel_path pdf FROM passage p "
+         "JOIN document d ON d.id = p.document_id WHERE p.id = ?") if passage else
+        ("SELECT s.*, d.rel_path pdf FROM section s "
+         "JOIN document d ON d.id = s.document_id WHERE s.id = ?"),
+        (args.section_id,)).fetchone()
     conn.close()
     if row is None:
         raise SystemExit(f"{args.section_id} is not in the catalogue")
+    if passage:
+        # The passage's own sheets, NOT all of them. `passage.pages` is the
+        # text and the questions together, and the ink-mass fallback --
+        # written for a figure standing alone on a page of prose -- takes the
+        # tallest unbroken mass it can find. On a page of a reading passage
+        # that mass is the passage: Cambridge 11's Falkirk Wheel came back as
+        # two columns of body text, which is a picture nobody can label.
+        from read_passage_questions import question_pages
+        row = dict(row)
+        row["question_pages"] = json.dumps(question_pages(row))
 
     work = WORK / args.section_id
     built = work / "questions.json"
