@@ -2242,3 +2242,171 @@ Every one of these produced a material that looked complete:
   `form-syntax.ts` from a directory it left in a refactor, so the one check
   that runs the grammar rather than guessing at it had been silently off
   since.
+
+## A test off a web page, and what that removes
+
+Cambridge 21 arrived without a PDF. ieltstrainingonline.com publishes it as
+WordPress pages, and the important thing about those pages is what is already
+TEXT on them:
+
+* the passage prose, one `<p>` per paragraph, with the margin letters A, B, C
+  as `<p>` of their own between them;
+* every question with its layout intact — a table completion is a `<table>`,
+  a set of notes is a run of bulleted `<p>`, a word box is a run of
+  `<b>A</b> …` pairs;
+* the answer key, 1 to 40, in a collapsed `<div class="et_pb_toggle_content">`;
+* the four part recordings as `<audio>` elements;
+* an audioscript that **underlines the answer and prints `(Q7)` beside it**.
+
+That last one is the surprise. Every other book in this corpus needed a vision
+model to find its margin markers, and half of what `build_questions.py` does
+about replay spans exists because those readings are approximate. Here both
+the marker and the underlined answer are markup.
+
+So `read_html_test.py` replaces three stages — `locate_passages.py`,
+`read_passages.py`, `read_passage_questions.py` — and `read_audioscript.py`
+besides, and costs nothing. It writes exactly the files they write
+(`passage.json`, `questions.src.json`, `turns.json`) and registers the
+catalogue rows those hang off; `build_questions.py` and `align.py` run on
+them unchanged, and the importers needed one line between them — `BOOK_CODE`
+had no entry for 21.
+
+```bash
+seed/.venv/bin/python seed/read_html_test.py 21 1
+seed/.venv/bin/python seed/build_questions.py cam21-t1-p1     # ×7
+seed/.venv/bin/python seed/align.py cam21-t1-s1               # ×4
+cd backend && uv run --no-sync python -m scripts.import_passage cam21-t1-p1 --owner …
+```
+
+**Bold is the page's own structure.** The site sets its prose with an explicit
+`font-weight: 400` and everything structural in `<b>`: a gap's number, an
+option's letter, a section heading, a speaker's name. So `<b>7</b>` followed
+by a row of dots is a gap and a bold `18` in the prose is a date, and nothing
+has to guess which.
+
+**A book has no `kind` for this.** `book.kind` is one of four values and the
+only one anything reads is `guide`; 21 is catalogued `cambridge` with a note
+saying where it came from. A section's `convention` is `HTML` and its
+`question_source` is the page URL — there is no `document` row, because there
+is no document.
+
+### Never trust a heading on these pages
+
+The Cambridge 21 listening page heads its answer key **"Answer Cam 20
+Listening Test 01"** and the link beside it **"Audioscript Cam 20 Listening
+Test 01"**. Both links point at `cam-21`; the audioscript page titles itself
+*Audioscripts Cam 21*; and checked against the Cam 20 Test 1 already in
+`seed/work`, not one of the forty answers matches — Cam 20 Test 1 Part 1 is
+*fish, roof, Spanish*, this is *10/ten, weather, safety*. A copy-paste error
+on their side, and one that would have seeded a duplicate quietly.
+
+Two rules came out of it. Nothing is keyed off a heading or off a URL: the
+audioscript's address is read from the `<a href>` on the listening page, and
+the MP3s from the `<audio>` elements. And every run ends by fingerprinting
+what it has just read, answer for answer, against every item already in
+`seed/work/` — and stops rather than importing a test the corpus has.
+
+### Three bugs the first pass had, and what each cost
+
+* **Gaps numbered in the order they were MET.** A table cell holding three
+  lines is written as three `+` rows, so the page is walked column by column
+  and Part 1's sixth gap was met third. The template and the questions agreed
+  with each other — both said gap three — so nothing downstream objected, and
+  the material went in with question 3 holding question 6's answer. The token
+  now carries the PAPER's number until the whole group has been read, and is
+  renumbered 1..N by `renumbered()`.
+* **One paragraph read as one turn.** The markers are INLINE, one after each
+  underlined answer, so Part 4's second paragraph carries Q32, Q33, Q34 and
+  Q35 in a single speech. Taken whole it left three unmarked and gave the
+  fourth a 95-second span. The turn is broken at every marker instead, which
+  is what `read_audioscript.py` asks a model to do and what the site's markup
+  says for free.
+* **"You may use any letter more than once" is not always printed.** Part 2's
+  abilities are three, its duties are four, and its key answers two of them
+  C. Publishing refused it twice over. The box and the key are now asked as
+  well as the rubric: fewer options than items, or a letter used twice, is the
+  page saying the same thing the missing NB line would have.
+
+### The picture, and the one rule that finds it
+
+Cambridge 21 has exactly one labelling task in the whole book: Listening
+Test 2, Questions 15-20, "Label the map below", the Melby Coal Mine plan
+lettered A to I. The map is on the page as a real `<img>`, 836x652, their
+own scan rather than a stock illustration.
+
+**A labelling group's picture is the `<img>` between its rubric and its
+first question.** That is where the book prints it and where the page puts
+it, and it needs no filename to be recognised: `Artboard-194.png` appears on
+all eight pages and is the site's own decoration, and a positional rule
+excludes it without ever naming it. A blocklist would hand a candidate a
+logo as a map the first time they redecorated.
+
+The file is written as `image-group<N>.png` beside the questions -- exactly
+what `extract_image.py` leaves for a scanned book, so `import_section` picks
+it up unchanged. The two stages find a picture in completely different ways
+and hand back the same file under the same name; `build_questions.py` now
+prefers the one in the SOURCE over the one carried forward, because on this
+path the reader had it before the build ran.
+
+A labelling group with no `<img>` in that span keeps none, and
+`publish_blockers` then refuses the material by name -- "attach the picture
+the labels go on". Reaching further up the page for the nearest image would
+be worse than failing.
+
+### A letter range nobody was reading
+
+`build_questions.LETTER_RANGE` was `letters?\s+([A-Z])-([A-Z])`, and the
+paper writes "Write the correct letter, **A-I**, next to Questions 15-20"
+far more often than it writes it bare. The comma meant the printed range
+almost never matched, so the fallback ran instead and counted the letters
+the ANSWERS happen to use. Melby Coal Mine is lettered A to I and answered
+F, B, D, A, H, E: eight letters counted for nine drawn, and a box missing
+the letter the map calls I. The comma is optional now. The 25 labelling
+groups already in the corpus keep what they were built with until they are
+rebuilt.
+
+### Two more, from tests 2 to 4
+
+Each one passed every check below it and was wrong:
+
+* **A rubric anchored at its end.** "Question 40" is printed alone under its
+  own heading in Reading Test 2, and `^Questions?\s+(\d+)\s*$` does not match
+  "Question 40 Choose the correct letter". That paper came out with
+  thirty-nine questions and a true/false group answered "B".
+* **The page's own navigation read as content.** A group now runs to the
+  next rubric rather than to the next block -- Test 2's flow chart is its
+  box and then its chart -- and the footer tiles have no rubric after them,
+  so "Cam 21 Listening Test 03" and its three neighbours became four
+  headings of a set of notes about cruise ships. A block that is nothing but
+  a link is navigation, by the markup rather than by the wording.
+
+Three more were merely ugly: a gap written "2 £ ............" put its token
+in front of the currency sign instead of behind it, a sub-bullet set with an
+en dash read as prose, and a block with two headings in it got two titles
+where the second is a heading inside the first.
+
+And `read_html_test.py` now commits each catalogue row as it makes it
+-- the default held one write transaction open across twenty minutes of
+downloading, so `build_questions.py` in another shell could not record a
+stage and said "database is locked" after it had already written the file.
+
+### Where it landed
+
+All four tests, end to end: **28 materials**, `cam21-t1..t4` × three
+passages and four parts. 160 reading questions and 160 listening marks, as
+306 rows -- a "choose TWO letters" is one question worth two, and this book
+prints eleven of them.
+
+Passage 2 of Tests 1 and 2 carries its lettering A-G because a
+matching-information group is answered by it; the other ten carry none,
+which is what the book prints. Every one of the 160 listening answers has a
+replay span, median 14 seconds, off the site's own inline markers. Alignment
+confidence came back at a median of 0.97 to 0.99 per part, and every span
+whose answer is a word rather than a letter was checked to contain that word
+in the alignment -- 78 of 78, with two dates spoken in words against a key
+printed in digits confirmed by hand.
+
+The corpus went from 447 materials and 446 content-complete to **475 and
+474**. The one refusal is still `GD T3 · Part 1`, whose question 4 has never
+had a moment to point at. 30 book collections; Cambridge 21's two hold
+sixteen and twelve.

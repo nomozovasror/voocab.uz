@@ -230,7 +230,15 @@ LETTERS = re.compile(r"^[A-K](?:\s*[,/&]?\s*[A-K])*$", re.I)
 #: "Write the correct letter A-I" -- how many letters are drawn on the picture.
 #: Printed on the page, so read rather than counted from the answers: the key
 #: only names the ones that happen to be right.
-LETTER_RANGE = re.compile(r"letters?\s+([A-Z])\s*[-–—]\s*([A-Z])", re.I)
+#:
+#: The comma is optional and was not, which made the printed range almost
+#: unreadable: the paper writes "Write the correct letter, A-I, next to
+#: Questions 15-20" far more often than it writes it bare, so the fallback
+#: below ran instead and counted the letters the ANSWERS use. Cambridge 21's
+#: Melby Coal Mine map is lettered A to I and answered F, B, D, A, H, E --
+#: eight letters counted for nine drawn, and the learner is offered a box
+#: that is missing the one the map calls I.
+LETTER_RANGE = re.compile(r"letters?,?\s+([A-Z])\s*[-–—]\s*([A-Z])", re.I)
 #: The key prints "A, E  IN EITHER ORDER" against a pair. The phrase is a note
 #: to the marker, not part of the answer.
 KEY_NOTE = re.compile(r"\b(in either order|in any order)\b", re.I)
@@ -744,7 +752,17 @@ def build(section_id: str) -> int:
                 f"{group['type']} group takes ({sorted(allowed)}) -- the server would "
                 "drop them without a word")
         out_groups.append({
-            **({"picture": pictures[gi]} if gi in pictures else {}),
+            # The SOURCE's picture first, then the one carried forward. Two
+            # stages find a picture and they run on opposite sides of this
+            # one: `extract_image.py` cuts a region out of a scanned page
+            # AFTER the build and stamps it into questions.json, which is
+            # what `pictures` above carries; `read_html_test.py` downloads a
+            # file named by the page and has it BEFORE, so it puts it in the
+            # source with everything else it read. Source wins, because a
+            # re-read is the thing that would have corrected it.
+            **({"picture": group["picture"] if group.get("picture")
+                else pictures[gi]}
+               if group.get("picture") or gi in pictures else {}),
             "type": group["type"],
             "instructions": group["instructions"],
             # Never on a lettered group: how long an answer may be is not a
