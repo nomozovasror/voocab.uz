@@ -699,6 +699,37 @@ def question_pages(row) -> list[int]:
     return [index for index in pages if index in numbered] or pages
 
 
+#: What to ask the FALLBACK provider, which is not the same question.
+#:
+#: The main prompt is seven thousand characters of rules, examples and the
+#: layout grammar, and the fallback model answers it in PROSE -- "The image
+#: presents a page from an IELTS Academic Reading test..." -- however plainly
+#: it is told to return JSON. Asked the short version it returns the object.
+#:
+#: Short enough to be obeyed, and honest about what it gives up: no layout
+#: grammar, so a gap-fill read this way comes back as plain lines and the
+#: build refuses it by name. That is the right failure. What this rescues is
+#: the pages the first provider will not reproduce at all, where the choice
+#: is between a partial reading and none.
+FALLBACK_PROMPT = """\
+This image is one page of an IELTS Academic Reading paper. Read the question \
+groups numbered {first} to {last}.
+
+Reply with JSON and nothing else -- no prose, no explanation, no code fence:
+
+{{"groups": [{{"type": "<one of: true_false_not_given, yes_no_not_given, \
+matching_headings, matching_information, matching_features, \
+matching_sentence_endings, multiple_choice, summary_completion, \
+sentence_completion, note_completion, table_completion, short_answer, \
+diagram_labelling>",
+ "instructions": "<the italic lines above the task>",
+ "template": "<for a gap-fill: the task with each blank written {{{{N}}}}, \
+N counting from 1 within this group; otherwise empty>",
+ "options": ["<the lettered box above the task, if there is one>"],
+ "questions": [{{"number": <1 within this group>, "paper_number": <as \
+printed>, "prompt": "<the statement or question, without its number>"}}]}}]}}"""
+
+
 #: A roman numeral, which is what a matching-headings box is numbered with.
 ROMAN_ANSWER = re.compile(r"^\s*[ivxl]+\s*$", re.I)
 #: One letter, which is what every other matching box and multiple choice is
@@ -736,26 +767,44 @@ def shape_lines(answers: dict[int, str]) -> str:
     return SHAPE_PROMPT.format(lines=said)
 
 
-def read_window(shots: list[pathlib.Path], prompt: str, model: str) -> list[dict]:
-    """One window's groups, halving again if the reply still will not parse.
+def read_window(shots: list[pathlib.Path], prompt: str, short: str,
+                model: str) -> list[dict]:
+    """One window's groups, halving whenever the whole of it fails.
 
     The recursion is what stops the ladder being a cliff: three sheets that
     fail become two and one, and only a single sheet that fails is a failure.
+
+    A REFUSAL halves too, and that is not obvious. `content_filter:
+    RECITATION` is a property of one image, and a window is refused if any
+    sheet in it is -- so sending the whole window to the other provider threw
+    away the two sheets the first one would have read perfectly. Cambridge
+    13's test 1 passage 3 is three sheets of which ONE is refused, and it came
+    back with nothing at all.
+
+    Only a single refused sheet goes to the fallback, and it goes with the
+    SHORT prompt: see FALLBACK_PROMPT.
     """
     try:
         read = vision.ask_json(prompt, shots, model=model, max_tokens=8000)
         return (read.get("groups") or []) if isinstance(read, dict) else []
     except vision.Refused:
-        raise
+        if len(shots) == 1:
+            print(f"{'':<16} sheet refused; asking {FALLBACK}")
+            try:
+                page = vision.ask_json(short, shots, provider=FALLBACK,
+                                       max_tokens=4000)
+                return (page.get("groups") or []) if isinstance(page, dict) else []
+            except SystemExit:
+                return []
     except SystemExit:
         if len(shots) == 1:
             raise
-        half = (len(shots) + 1) // 2
-        out: list[dict] = []
-        for part in (shots[:half], shots[half:]):
-            if part:
-                out += read_window(part, prompt, model)
-        return out
+    half = (len(shots) + 1) // 2
+    out: list[dict] = []
+    for part in (shots[:half], shots[half:]):
+        if part:
+            out += read_window(part, prompt, short, model)
+    return out
 
 
 def read_questions(row, *, model: str,
@@ -767,6 +816,7 @@ def read_questions(row, *, model: str,
     prompt = QUESTION_PROMPT.format(first=first, last=last,
                                     passage=row["passage_no"],
                                     shape=shape_lines(answers or {}))
+    short = FALLBACK_PROMPT.format(first=first, last=last)
     work = WORK / row["id"]
     windows = [pages[i:i + PAGES_PER_CALL]
                for i in range(0, max(1, len(pages) - 1), PAGES_PER_CALL - 1)] or [pages]
@@ -776,42 +826,14 @@ def read_questions(row, *, model: str,
     for window in windows:
         shots = vision.render(MATERIALS / row["pdf"], window, work / "pages",
                               dpi=QUESTION_DPI, jpeg=True)
-        try:
-            read = vision.ask_json(prompt, shots, model=model, max_tokens=8000)
-        except vision.Refused:
-            # The provider recognised the page and declined to reproduce it.
-            # Narrowing does not help there -- see read_passages.FALLBACK --
-            # so this goes straight to the other provider.
-            print(f"{'':<16} refused; asking {FALLBACK}")
-            read = {"groups": []}
-            for one in shots:
-                page = vision.ask_json(prompt, [one], provider=FALLBACK,
-                                       max_tokens=6000)
-                read["groups"] += (page.get("groups") or []) if isinstance(
-                    page, dict) else []
-        except SystemExit as unparseable:
-            # A reply that will not parse after three tries, which on a
-            # question page means one closer written wrong three thousand
-            # characters in. Nothing repairs that safely: a repair that
-            # parses is one that has dropped the groups after the fault, and
-            # a partial read with no error is worse than none.
-            #
-            # A shorter reply has fewer places to go wrong, so the window is
-            # HALVED rather than taken apart. Context is what makes a group
-            # read correctly -- a task printed across two sheets, asked one
-            # sheet at a time, came back as a true/false set whose answers
-            # were letters -- so the ladder gives up as little of it as it
-            # has to, and only reaches single sheets if halving was not
-            # enough.
-            if len(shots) == 1:
-                raise
-            print(f"{'':<16} {unparseable}; halving the window")
-            half = (len(shots) + 1) // 2
-            read = {"groups": []}
-            for part in (shots[:half], shots[half:]):
-                if not part:
-                    continue
-                read["groups"] += read_window(part, prompt, model)
+        # One ladder for both ways a window fails -- a reply that will not
+        # parse, and a sheet the provider will not reproduce. Both are
+        # answered by halving, because both are properties of PART of the
+        # window, and context is what makes a group read correctly: a task
+        # printed across two sheets, asked one sheet at a time, came back as
+        # a true/false set whose answers were letters. So the ladder gives up
+        # as little as it has to.
+        read = {"groups": read_window(shots, prompt, short, model)}
         for group in read.get("groups", []) if isinstance(read, dict) else []:
             if not isinstance(group, dict):
                 continue
