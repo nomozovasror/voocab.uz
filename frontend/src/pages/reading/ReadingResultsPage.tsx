@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
@@ -18,6 +18,11 @@ import {
 } from "@/features/paper/components/ReviewFilter";
 import { ReviewMistakes } from "@/features/paper/components/ReviewMistakes";
 import { ReviewScore } from "@/features/paper/components/ReviewScore";
+import {
+  PassagePane,
+  paragraphId,
+} from "@/features/reading/components/PassagePane";
+import type { QuoteSource } from "@/features/paper/review";
 import type { AttemptResult } from "@/features/paper/types";
 
 /**
@@ -64,18 +69,60 @@ export default function ReadingResultsPage() {
   const wrong = useMemo(() => rows.filter((r) => !r.result.is_correct), [rows]);
 
   const [chosen, setChosen] = useState<ReviewScope>("mistakes");
+  // The passages are closed until somebody wants them, and "Paragraph C"
+  // is somebody wanting them. Controlled rather than a bare <details>, or
+  // the link would scroll to a paragraph inside a panel that is shut.
+  const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState<{
+    where: QuoteSource;
+    nth: number;
+  } | null>(null);
+
+  const goToParagraph = useCallback((where: QuoteSource) => {
+    setOpen(true);
+    // Parked, not scrolled to. A closed <details> does not lay its contents
+    // out, so the paragraph has no position until React has committed the
+    // open panel — and a `requestAnimationFrame` is not that moment: it can
+    // run before the commit, which is why the first version of this opened
+    // the panel and left the page exactly where it was. The counter is what
+    // makes clicking the same paragraph twice work; the value alone would
+    // not change, so the effect would not run again.
+    setHighlight((prev) => ({ where, nth: (prev?.nth ?? 0) + 1 }));
+  }, []);
+
+  useEffect(() => {
+    if (!highlight || !open) return;
+    document
+      .getElementById(
+        paragraphId(highlight.where.partId, highlight.where.label),
+      )
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [highlight, open]);
   const scope: ReviewScope = wrong.length === 0 ? "all" : chosen;
   const shown = scope === "mistakes" ? wrong : rows;
 
   /** Jumping to a question the filter is hiding has to open the view holding
-   *  it, or the click lands on nothing and the page appears not to work. */
-  const pending = useRef<string | null>(null);
+   *  it, or the click lands on nothing and the page appears not to work.
+   *
+   *  Two steps rather than one, exactly as the listening review does it:
+   *  switching the view and scrolling in the same breath scrolls to a row
+   *  React has not rendered yet. So the id is parked and the effect below
+   *  runs it once the list it belongs to is on the page. Parked in STATE and
+   *  not in a ref — a ref nothing reads is a jump that silently never
+   *  happens, which is what this was. */
+  const [pending, setPending] = useState<string | null>(null);
+  useEffect(() => {
+    if (pending == null) return;
+    scrollToQuestion(pending);
+    setPending(null);
+  }, [pending]);
+
   const jumpTo = useCallback(
     (questionId: string) => {
       const row = rows.find((r) => r.result.question_id === questionId);
       if (row && row.result.is_correct && scope === "mistakes") {
         setChosen("all");
-        pending.current = questionId;
+        setPending(questionId);
         return;
       }
       scrollToQuestion(questionId);
@@ -146,7 +193,10 @@ export default function ReadingResultsPage() {
             row={row}
             anchor={{ [Q_ANCHOR]: row.result.question_id }}
             // No onPlay: a passage has nothing to play, and ReviewItem draws
-            // the button only where one is handed to it.
+            // the button only where one is handed to it. What reading has
+            // instead is the paragraph, and the same rule applies — the
+            // control exists only where there is one to go to.
+            onGoTo={goToParagraph}
           />
         ))}
       </div>
@@ -162,17 +212,28 @@ export default function ReadingResultsPage() {
           the text, and sending them back to the take screen to find it would
           start a second attempt. */}
       {passages.length > 0 && (
-        <details className="mt-10 rounded-xl border border-border">
+        <details
+          open={open}
+          onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+          className="mt-10 rounded-xl border border-border"
+        >
           <summary className="cursor-pointer px-5 py-3 text-sm text-muted-foreground transition-colors hover:text-foreground">
             Read the {passages.length === 1 ? "passage" : "passages"} again
           </summary>
           <div className="space-y-10 border-t border-border px-5 py-5">
             {passages.map((part, index) =>
               part.passage ? (
-                <PassageBlock
+                <PassagePane
                   key={part.id}
+                  partId={part.id}
                   title={part.title || `Reading Passage ${index + 1}`}
-                  paragraphs={part.passage.paragraphs}
+                  passage={part.passage}
+                  highlight={
+                    highlight?.where.partId === part.id
+                      ? highlight.where.label
+                      : null
+                  }
+                  className="max-w-none"
                 />
               ) : null,
             )}
@@ -180,37 +241,6 @@ export default function ReadingResultsPage() {
         </details>
       )}
     </div>
-  );
-}
-
-function PassageBlock({
-  title,
-  paragraphs,
-}: {
-  title: string;
-  paragraphs: { label: string | null; text: string }[];
-}) {
-  return (
-    <article>
-      <h2 className="mb-3 text-base font-semibold text-foreground">{title}</h2>
-      <div className="space-y-3">
-        {paragraphs.map((paragraph, index) => (
-          <div key={index} className="flex gap-3">
-            {paragraph.label && (
-              <span
-                aria-hidden
-                className="w-4 shrink-0 pt-0.5 text-sm font-semibold text-muted-foreground"
-              >
-                {paragraph.label}
-              </span>
-            )}
-            <p className="min-w-0 flex-1 text-[0.95rem] leading-7 text-foreground">
-              {paragraph.text}
-            </p>
-          </div>
-        ))}
-      </div>
-    </article>
   );
 }
 

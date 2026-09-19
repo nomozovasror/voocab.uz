@@ -35,8 +35,11 @@ import {
   toSubmit,
   type TakeSession,
 } from "@/features/paper/take-session";
-import { PassagePane } from "@/features/reading/components/PassagePane";
-import { SplitPanes } from "@/features/reading/components/SplitPanes";
+import {
+  PassagePane,
+  passageId,
+} from "@/features/reading/components/PassagePane";
+import { LEFT_PANE, SplitPanes } from "@/features/reading/components/SplitPanes";
 
 /**
  * Practice: the passages, the questions, and the reader between them.
@@ -117,6 +120,50 @@ export default function ReadingTakePage() {
   const blank = total - answered;
 
   const current = useQuestionSpy(questionIds);
+
+  // --- The passage pane follows the question --------------------------------
+  //
+  // A paper is three passages of nine hundred words stacked in one scroll, so
+  // a candidate on question 30 was being asked to scroll past two thousand
+  // words they have finished with to reach the passage they are being asked
+  // about. Two panes exist so that the text and the question in hand are in
+  // view at the same time; side by side is only half of that.
+  //
+  // It moves when the reader crosses into another PASSAGE, and never between
+  // questions of the same one. Inside a passage the reader is moving around
+  // the text deliberately — that is what reading back IS — and a pane that
+  // re-scrolled under them there would take away the paragraph they were in
+  // the middle of.
+  const wanted = useRef<string | null>(null);
+
+  const showPassage = useCallback(() => {
+    const partId = wanted.current;
+    if (!partId) return;
+    const pane = document.querySelector<HTMLElement>(`[${LEFT_PANE}]`);
+    const passage = document.getElementById(passageId(partId));
+    // `offsetParent` is null for the pane the tabs are hiding. Everything
+    // about an element that is not laid out measures zero, and scrolling by
+    // those numbers lands on the first passage — exactly the wrong place.
+    if (!pane || !passage || pane.offsetParent === null) return;
+    pane.scrollTo({
+      top:
+        passage.getBoundingClientRect().top -
+        pane.getBoundingClientRect().top +
+        pane.scrollTop,
+      behavior: "smooth",
+    });
+  }, []);
+
+  useEffect(() => {
+    const partId = rows.find((row) => row.id === current)?.partId;
+    if (!partId || partId === wanted.current) return;
+    const opening = wanted.current === null;
+    wanted.current = partId;
+    // Not on the first paint. The reader has just opened the paper, the pane
+    // is at the top of passage 1, and that is where they want it — a smooth
+    // scroll on arrival would be the page moving for no reason.
+    if (!opening && parts.length > 1) showPassage();
+  }, [current, rows, parts.length, showPassage]);
 
   // --- Keeping the draft ----------------------------------------------------
 
@@ -401,12 +448,19 @@ export default function ReadingTakePage() {
         split={wide}
         leftLabel={sorted.length > 1 ? "Passages" : "Passage"}
         rightLabel="Questions"
+        // Switching to the passage on a narrow screen is somebody looking
+        // something up about the question they are on, so it opens at that
+        // question's passage rather than wherever it was left.
+        onShowing={(side) => {
+          if (side === "left") showPassage();
+        }}
         left={
           <div className="space-y-10">
             {sorted.map((part, index) =>
               part.passage ? (
                 <PassagePane
                   key={part.id}
+                  partId={part.id}
                   title={part.title || `Reading Passage ${index + 1}`}
                   passage={part.passage}
                 />

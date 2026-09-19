@@ -22,6 +22,14 @@ import { cn } from "@/lib/utils";
  * same content addressed the only other way it can be.
  */
 
+/** How the take screen finds the pane holding the passages, in either
+ *  arrangement, so it can bring the right one into view as the reader moves
+ *  down the questions. A DOM query rather than a ref threaded out through an
+ *  imperative handle, for the reason `take-focus.ts` gives: the page already
+ *  asks the document where the reader is, and one mechanism for "find the
+ *  thing on screen" is better than two. */
+export const LEFT_PANE = "data-left-pane";
+
 const MIN_PERCENT = 25;
 const MAX_PERCENT = 75;
 const STORE_KEY = "voocab-reading-split";
@@ -46,6 +54,12 @@ interface SplitPanesProps {
   rightLabel: string;
   /** False below the breakpoint, where the two become tabs instead. */
   split: boolean;
+  /** Which side the tabs just put on screen. Only ever called in the tab
+   *  arrangement — with a split there is no "showing", both are. Called
+   *  AFTER the change has been painted, because a caller that wants to
+   *  scroll the pane it has just revealed cannot measure it while it is
+   *  still hidden. */
+  onShowing?: (side: "left" | "right") => void;
   /** How tall the pair is, measured by the page from where they start. Null
    *  until the first measurement, which is one frame. */
   height: number | null;
@@ -54,7 +68,7 @@ interface SplitPanesProps {
 
 export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
   function SplitPanes(
-    { left, right, leftLabel, rightLabel, split, height, className },
+    { left, right, leftLabel, rightLabel, split, onShowing, height, className },
     outerRef,
   ) {
   const [percent, setPercent] = useState(remembered);
@@ -71,6 +85,14 @@ export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
       /* nothing to do about it, and nothing depends on it */
     }
   }, []);
+
+  // After the paint, not in the click handler: the pane being revealed is
+  // still `hidden` at the moment the tab is pressed, and a hidden element
+  // measures as nothing.
+  useEffect(() => {
+    if (split) return;
+    onShowing?.(showing);
+  }, [split, showing, onShowing]);
 
   useEffect(() => {
     if (!split) return;
@@ -134,7 +156,11 @@ export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
             answers and the focus timing that measures them, and unmounting
             the pane to look something up in the passage would throw both
             away — see take-session. */}
-        <div className="min-h-0 flex-1 overflow-y-auto" hidden={showing !== "left"}>
+        <div
+          {...{ [LEFT_PANE]: "" }}
+          className="min-h-0 flex-1 overflow-y-auto"
+          hidden={showing !== "left"}
+        >
           {left}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto" hidden={showing !== "right"}>
@@ -155,6 +181,7 @@ export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
       className={cn("flex min-h-0", className)}
     >
       <div
+        {...{ [LEFT_PANE]: "" }}
         className="min-w-0 overflow-y-auto pr-5"
         style={{ width: `${percent}%` }}
       >

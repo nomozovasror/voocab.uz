@@ -2,7 +2,12 @@ import { Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fmtClock } from "@/lib/time";
 import { MISTAKE_LABEL } from "@/features/listening/practice";
-import { markAnswer, sayAnswer, type ReviewRow } from "@/features/paper/review";
+import {
+  markAnswer,
+  sayAnswer,
+  type QuoteSource,
+  type ReviewRow,
+} from "@/features/paper/review";
 import { questionNumbersShort } from "@/features/paper/numbering";
 
 /**
@@ -37,12 +42,19 @@ import { questionNumbersShort } from "@/features/paper/numbering";
 export function ReviewItem({
   row,
   onPlay,
+  onGoTo,
   anchor,
 }: {
   row: ReviewRow;
   /** Seeks to the moment and plays only it. Absent when the recording failed
    *  to load — the text still stands, so the row is drawn either way. */
   onPlay?: (startMs: number | null, endMs: number | null) => void;
+  /** Takes the reader to the paragraph the quote came from. Reading's
+   *  counterpart to the play button, and it is the same argument: the quote
+   *  says what the line was, and this is how you go and read around it —
+   *  which is exactly what somebody who answered NOT GIVEN wrongly needs to
+   *  do. Absent for listening, where there is no paragraph to go to. */
+  onGoTo?: (where: QuoteSource) => void;
   anchor: Record<string, string>;
 }) {
   const { result } = row;
@@ -142,11 +154,24 @@ export function ReviewItem({
           </button>
           )}
           <div className="min-w-0 flex-1">
+            {/* Where the quote is, in whatever the paper measures place in.
+                A recording measures it in time and a page measures it in
+                paragraphs, and a row never has both — so they share the
+                line rather than reserving two. */}
             {row.startMs != null && (
               <p className="text-xs tabular-nums text-muted-foreground">
                 {fmtClock(row.startMs)}
                 {row.endMs != null && ` — ${fmtClock(row.endMs)}`}
               </p>
+            )}
+            {row.where && onGoTo && (
+              <button
+                type="button"
+                onClick={() => onGoTo(row.where!)}
+                className="text-xs text-primary transition-colors hover:text-primary/80 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                Paragraph {row.where.label}
+              </button>
             )}
             <p className="text-base leading-relaxed text-foreground/80">
               {markAnswer(row.transcript, result.correct_answers).map(

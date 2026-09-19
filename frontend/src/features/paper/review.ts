@@ -319,6 +319,11 @@ export interface ReviewRow {
    *  actually said rather than the storage format. */
   options: string[];
   transcript: string;
+  /** Which paragraph the quote was taken from, where the paper has lettered
+   *  paragraphs and the quote was found in one. Null for listening, whose
+   *  quote is placed by a clock instead, and null for a passage the book
+   *  does not letter. */
+  where: QuoteSource | null;
   startMs: number | null;
   endMs: number | null;
 }
@@ -331,6 +336,19 @@ export interface ReviewRow {
  * server's own `number` where it could not — the two agree, since the server
  * walks the tree the same way, but only one of them exists in both cases.
  */
+/** A quoted line, and — where the page letters its paragraphs — which one it
+ *  came from, so the review can offer to go and look at it. */
+export interface Quote {
+  text: string;
+  where: QuoteSource | null;
+}
+
+/** A paragraph, named the way the passage pane's anchors name it. */
+export interface QuoteSource {
+  partId: string;
+  label: string;
+}
+
 /**
  * Where an answer is found in the material, as a line to quote.
  *
@@ -345,14 +363,24 @@ export interface ReviewRow {
 export function passageQuote(
   material: MaterialTake | undefined,
   result: QuestionResult,
-): string {
+): Quote {
   const wanted = result.correct_answers
     .map((a) => a.trim())
     .filter((a) => a.length > 1);
-  if (!wanted.length) return "";
+  if (!wanted.length) return NOTHING;
 
-  const paragraphs = (material?.parts ?? []).flatMap(
-    (part) => part.passage?.paragraphs ?? [],
+  // The paragraph is carried with the part it belongs to, not flattened away
+  // with it. Which paragraph an answer was in is half of what the reader
+  // wants to know — "paragraph C" is where they go to check whether NOT
+  // GIVEN really was not given — and a passage's letters only mean anything
+  // beside the passage they were printed in: three passages each letter from
+  // A, so a bare "C" names three paragraphs.
+  const paragraphs = (material?.parts ?? []).flatMap((part) =>
+    (part.passage?.paragraphs ?? []).map((one) => ({
+      partId: part.id,
+      label: one.label,
+      text: one.text,
+    })),
   );
   for (const answer of wanted) {
     const needle = answer.toLowerCase();
@@ -360,23 +388,32 @@ export function passageQuote(
       p.text.toLowerCase().includes(needle),
     );
     if (hits.length !== 1) continue;
+    const [hit] = hits;
     // The SENTENCE, not the paragraph. A paragraph is eighty words and the
     // point of the quote is to put the reader back in front of the line they
     // misread — the same argument `spoken` makes about widening a marked
     // moment to its sentence rather than quoting the whole turn.
-    const sentences = hits[0].text.split(/(?<=[.!?])\s+/);
+    const sentences = hit.text.split(/(?<=[.!?])\s+/);
     const line = sentences.find((one) => one.toLowerCase().includes(needle));
-    return (line ?? hits[0].text).trim();
+    return {
+      text: (line ?? hit.text).trim(),
+      where: hit.label ? { partId: hit.partId, label: hit.label } : null,
+    };
   }
-  return "";
+  return NOTHING;
 }
+
+/** No line worth quoting. One value rather than a fresh object each time it
+ *  fails, because a row is drawn from this and a new object every render is a
+ *  row that re-renders for no reason. */
+const NOTHING: Quote = { text: "", where: null };
 
 export function reviewRows(
   results: QuestionResult[],
   material: MaterialTake | undefined,
   /** Where to find the line to quote. Absent means the recording's
    *  transcript, which is what the server sends with a listening attempt. */
-  quote?: (result: QuestionResult) => string,
+  quote?: (result: QuestionResult) => Quote,
 ): ReviewRow[] {
   const context = questionContexts(material);
   const groups = questionOptions(material);
@@ -399,6 +436,9 @@ export function reviewRows(
         result.transcript,
       );
       const options = found?.options ?? [];
+      const quoted = quote
+        ? quote(result)
+        : { text: transcriptText(result.transcript), where: null };
       // The server already knows which it is and says so; the group is only
       // consulted where the material came back at all.
       const byLetter =
@@ -413,9 +453,8 @@ export function reviewRows(
         context: context.get(result.question_id) ?? null,
         byLetter,
         options,
-        transcript: quote
-          ? quote(result)
-          : transcriptText(result.transcript),
+        transcript: quoted.text,
+        where: quoted.where,
         startMs,
         endMs,
       };

@@ -21,6 +21,11 @@ import type { Passage } from "@/features/paper/types";
 interface PassagePaneProps {
   title: string;
   passage: Passage;
+  /** Which part this passage belongs to. Part of every anchor it prints,
+   *  because a paper has three passages and each one letters its paragraphs
+   *  from A: without it a page carries three elements called `p-C` and every
+   *  jump lands on the first of them. */
+  partId: string;
   /** A paragraph to draw attention to — the review page points at the one an
    *  answer came from. Null while the paper is being sat: there is nothing to
    *  point at yet, and pointing would be telling. */
@@ -34,14 +39,22 @@ export function paragraphId(partId: string, label: string): string {
   return `passage-${partId}-${label}`;
 }
 
+/** The id the whole passage can be scrolled to by. The take screen brings
+ *  the passage pane to it when the reader crosses into the questions that
+ *  are answered from it. */
+export function passageId(partId: string): string {
+  return `passage-${partId}`;
+}
+
 export function PassagePane({
   title,
   passage,
+  partId,
   highlight,
   className,
 }: PassagePaneProps) {
   return (
-    <article className={cn("max-w-prose", className)}>
+    <article id={passageId(partId)} className={cn("max-w-prose", className)}>
       <header className="mb-5">
         <h2 className="text-lg font-semibold text-foreground">{title}</h2>
         {passage.subtitle && (
@@ -55,7 +68,11 @@ export function PassagePane({
         {passage.paragraphs.map((paragraph, index) => (
           <div
             key={index}
-            id={paragraph.label ? `p-${paragraph.label}` : undefined}
+            id={
+              paragraph.label
+                ? paragraphId(partId, paragraph.label)
+                : undefined
+            }
             className={cn(
               "flex gap-3 rounded-md transition-colors duration-slow",
               highlight &&
