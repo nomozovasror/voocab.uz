@@ -111,6 +111,13 @@ FINDINGS: list[tuple[str, str, str, str]] = [
      "'SECTION 3  Questions 21-30' and 15 onwards print 'PART 3'. A heading regex that "
      "knows only the older word finds nothing in half the corpus -- five books came "
      "back 0/16 before it accepted both."),
+    ("cam102-t6-p2", "blocker",
+     "The Guide's test 6 is missing four sheets, and passage 2 with them",
+     "Printed pages 255-258 are not in the PDF: pdf index 254 is printed page 254 and "
+     "the next sheet is printed page 259. Those four hold the whole of Reading Passage "
+     "2 of test 6 -- its text and questions 14 to 30 -- so the paper can be read as two "
+     "passages or not at all. This is the one gap in 192 that locate_passages.py cannot "
+     "close, and it is a gap in the source rather than in the pipeline."),
     ("12", "info",
      "Cambridge 12 numbers its tests 5 to 8",
      "It continues from Cambridge 11 rather than starting again, so a book's own test "

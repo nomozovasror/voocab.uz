@@ -63,6 +63,98 @@ GENERAL_TRAINING = re.compile(r"General\s+Training", re.I)
 #: Training" is a paper, not a lesson.
 TEACHING = re.compile(r"(?<!general )\btraining\b", re.I)
 
+#: The kinds of page that END a reading paper rather than interrupt it.
+#:
+#: These books print the papers in the order they are sat — listening,
+#: reading, writing, speaking — so a reading paper cannot resume after the
+#: writing task. What CAN sit inside one is a page the classifier called
+#: something harmless, or, in the Trainers, a teaching page between the
+#: passages of a test.
+#:
+#: This is what tells the two apart. Book 102's test 8 ends at sheet 312 with
+#: writing and speaking after it, and the General Training paper begins three
+#: sheets later; the Trainers put one `intro` page between their passages.
+#: A gap measured in sheets cannot separate those two — three either way —
+#: and what is IN the gap separates them exactly.
+ENDS_THE_PAPER = {"writing", "speaking", "listening_questions", "audioscript",
+                  "listening_answer_key", "reading_answer_key", "answer_list"}
+
+#: How far apart two sheets can be and still be one paper.
+#:
+#: The Trainers print a page between the passages of a test — a tip, a
+#: worked example — so a paper arrives as three blocks of four or five
+#: sheets, none of which reaches question 27 on its own and none of which is
+#: long enough to be a paper. Both of the rules below then threw all three
+#: away, and the two Trainers lost eight tests between them.
+#:
+#: Three, because that is what those books actually print, and because the
+#: nearest thing it could wrongly join is four pages away: book 10's General
+#: Training paper begins four sheets after its last academic test.
+BLOCK_GAP = 3
+
+#: The fewest sheets a whole Academic Reading paper can be printed on. Three
+#: passages of two pages each is six; five is below anything real and above
+#: the strays.
+#:
+#: A stray page reaching question 27 is not a paper, and the cost of treating
+#: it as one is not that page — it is the NUMBERING. Book 17 has four tests
+#: and six accepted blocks, two of them single sheets, so its real test 4 was
+#: numbered 5 and refused as a test the book does not have. The two passages
+#: that vanished were never misread; they were correctly read and filed under
+#: a test that does not exist.
+MIN_BLOCK_PAGES = 5
+
+#: The kinds of page that cannot be a misread reading sheet, whatever sits
+#: either side of them.
+#:
+#: These books print the papers in the order they are sat, so the writing
+#: task is where the reading paper stops — and it is the one thing a widened
+#: bridge could swallow. Everything else in ENDS_THE_PAPER is a page the
+#: classifier might have got wrong; these two are the paper after this one.
+HARD_END = {"writing", "speaking"}
+
+#: How long a run of non-reading pages inside a reading paper can be and
+#: still be a misreading rather than the end of it.
+#:
+#: One was not enough. Cambridge 17 prints its third passage over five
+#: sheets and the page map called three of them `listening_questions` and
+#: `other` — pages 61 and 62 back to back — so the passage came out as page
+#: 60 alone, and the questions to 40 with it. Book 12's test 2 lost the
+#: other end the same way: the sheet carrying "Questions 4-9" of passage 1
+#: was filed as a listening page, and passage 1 was located as one sheet.
+#:
+#: Three, because that is the longest such run in the corpus, and because
+#: the bridged pages are then READ: a page the model says is listening is
+#: dropped again in the block. The bridge widens what gets asked; it does
+#: not widen what is believed.
+BRIDGE_RUN = 3
+
+#: What a bridge may not cross at the EDGE of a reading run, on top of
+#: HARD_END.
+#:
+#: Inside a run of reading sheets anything can be a misreading -- there is
+#: reading printed either side of it. Outside one there is not, so the stop
+#: has to name every page this corpus prints near a reading paper and could
+#: mistake for one. An answer key is the dangerous one: it carries the
+#: numbers 1 to 40 and is about reading, so a model asked what paper it
+#: belongs to says reading, and it would arrive as a fourth sheet of passage
+#: 3. What is left bridgeable at an edge is what is actually confusable --
+#: `other`, `intro`, and the listening question pages the classifier reached
+#: for when a reading sheet carried no heading it recognised.
+EDGE_STOP = {"writing", "speaking", "audioscript", "listening_answer_key",
+             "reading_answer_key", "answer_list"}
+
+#: What the report will believe of a located passage, in sheets. The corpus
+#: as it stands runs 3 to 6; the band is wider than that on purpose, because
+#: this is the check that says a grouping came out wrong and it should fire
+#: on a real fault rather than on the next book being printed differently.
+#:
+#: Written down once, so the number in the message cannot drift from the
+#: number in the test -- it said "2 to 5" while checking 2 to 8 for a while,
+#: which is a report contradicting itself in the one line whose whole job is
+#: to be doubted.
+PLAUSIBLE = (2, 8)
+
 #: The most sheets a reading passage runs to. Three of text and two of
 #: questions is the usual shape; five and a bit is the longest real one in
 #: fourteen books.
@@ -110,25 +202,94 @@ def academic_reading(pages: list[dict]) -> list[dict]:
     """
     by_index = {page["index"]: page for page in pages}
 
-    def is_reading(page: dict | None) -> bool:
-        if page is None or page.get("kind") != "reading":
-            return False
-        said = f"{page.get('header') or ''} {page.get('heading') or ''}"
-        return not (GENERAL_TRAINING.search(said) or TEACHING.search(said))
+    def said(page: dict) -> str:
+        return f"{page.get('header') or ''} {page.get('heading') or ''}"
 
-    kept = []
-    for index in sorted(by_index):
-        page = by_index[index]
-        if is_reading(page):
-            kept.append(page)
-        elif is_reading(by_index.get(index - 1)) and is_reading(
-            by_index.get(index + 1)
-        ):
-            # Bridged. It keeps whatever the page map said it was, so the
-            # misreading stays visible; what changes is only that the passage
-            # it sits in no longer has a hole in it.
-            kept.append(page)
-    return kept
+    def general_training(page: dict | None) -> bool:
+        """The OTHER EXAM, named on the page."""
+        return page is not None and bool(GENERAL_TRAINING.search(said(page)))
+
+    def teaching(page: dict | None) -> bool:
+        """A lesson in this book, named on the page."""
+        return page is not None and bool(TEACHING.search(said(page)))
+
+    def is_reading(page: dict | None) -> bool:
+        return page is not None and page.get("kind") == "reading"
+
+    # The two named exams are not one rule, and running them as one cost
+    # four whole tests.
+    #
+    # GENERAL TRAINING is another paper, printed as its own run of sheets,
+    # and only half of them carry the name. Dropping the named half left the
+    # silent half looking like academic reading, close enough to the test
+    # beside it to be read as one paper -- book 102's test 8 came out
+    # eighteen sheets long, holding the GT paper printed three pages after
+    # it. So its sheets stay in the stream and the BLOCK drops them: one
+    # named sheet marks the whole run for what it is.
+    #
+    # A TRAINER'S LESSON is a single sheet printed BETWEEN the passages of
+    # the test beside it, and it is always named -- "Training Test 1"
+    # against "Exam Practice Test 1". It is not a run and it cannot be
+    # judged as one: book 103's test 1 is twenty sheets of which six are
+    # lessons, so condemning that block left the book showing four tests of
+    # six. It drops as a PAGE, and the hole it leaves is what BLOCK_GAP is
+    # for -- the passages either side of it stay contiguous.
+    #
+    # Both are statements about READING sheets. A page the classifier called
+    # writing is not in this paper whatever its running head says, and
+    # admitting it on the strength of the word "Training" put thirty-five of
+    # Trainer 1's writing and speaking sheets into the stream to be read one
+    # API call at a time.
+    order = sorted(by_index)
+    reading = [index for index in order if is_reading(by_index[index])]
+
+    # A short run of non-reading pages with reading on BOTH sides is a
+    # misreading, not the end of the paper. Bridged, it keeps whatever the
+    # page map said it was -- so the misreading stays visible; what changes
+    # is only that the passage it sits in no longer has a hole in it.
+    bridged: set[int] = set()
+    for before, after in zip(reading, reading[1:]):
+        span = range(before + 1, after)
+        if not len(span) or len(span) > BRIDGE_RUN:
+            continue
+        inside = [by_index.get(index) for index in span]
+        if any(page is None
+               or page.get("kind") in HARD_END
+               or general_training(page)
+               or teaching(page)
+               for page in inside):
+            continue
+        bridged.update(span)
+
+    # The same misreading at the EDGE of a run, where there is no reading
+    # page on the far side to vouch for it.
+    #
+    # A paper's last passage ends in the writing task, so its final sheets
+    # have reading before them and nothing after. Cambridge 17's test 1 put
+    # three of them there — `other`, then two `listening_questions`, one of
+    # them headed "Questions 36-40" — and the passage was located as the
+    # single sheet that still said READING PASSAGE 3. Book 12's test 2 lost
+    # the leading edge the same way, the sheet headed "Questions 4-9".
+    #
+    # Reaching outward asks those pages rather than believing either answer:
+    # what comes back "listening" is dropped again by the block.
+    inside = sorted(set(reading) | bridged)
+    for index in inside:
+        for step in (-1, 1):
+            if (index + step) in inside:
+                continue  # not an edge in this direction
+            for distance in range(1, BRIDGE_RUN + 1):
+                at = index + step * distance
+                page = by_index.get(at)
+                if (page is None or at in inside
+                        or page.get("kind") in EDGE_STOP
+                        or general_training(page) or teaching(page)):
+                    break
+                bridged.add(at)
+
+    return [by_index[index] for index in order
+            if (is_reading(by_index[index]) or index in bridged)
+            and not teaching(by_index[index])]
 
 
 def group(pages: list[dict], first_test: int = 1) -> list[dict]:
@@ -230,12 +391,20 @@ def test_count(conn: sqlite3.Connection, book: int) -> int:
 
 def write(conn: sqlite3.Connection, book: int, passages: list[dict],
           how: str = "heading") -> tuple[int, list[str]]:
-    """Upsert what was found, and name what was refused.
+    """Write what was found for this book, and name what was refused.
 
-    Nothing is deleted: a passage located by hand, or by a re-read, is not
-    undone by a run that could not see it.
+    A run for a book REPLACES that book. It is not an upsert: the run
+    computes the whole paper from the book's own pages, so anything it did
+    not find this time it does not believe any more.
     """
     tests = test_count(conn, book)
+    # A run for a book REPLACES that book, because that is what it computes:
+    # the whole paper, from its own pages. Upserting and leaving the rest
+    # behind meant rows from earlier, buggier runs survived — book 17 wrote
+    # ten passages and the report showed twelve, two of them from a grouping
+    # that had since been fixed. A report that improves when the code gets
+    # worse is worse than no report.
+    conn.execute("DELETE FROM passage WHERE book_number = ?", (book,))
     written = 0
     refused: list[str] = []
     for one in passages:
@@ -343,10 +512,11 @@ def report(conn: sqlite3.Connection) -> None:
     odd = [
         (row["id"], len(json.loads(row["pages"] or "[]")))
         for row in conn.execute("SELECT id, pages FROM passage ORDER BY id")
-        if not 2 <= len(json.loads(row["pages"] or "[]")) <= 8
+        if not PLAUSIBLE[0] <= len(json.loads(row["pages"] or "[]")) <= PLAUSIBLE[1]
     ]
     if odd:
-        print(f"\n{len(odd)} located but not plausible — a passage is 2 to 5 pages:")
+        print(f"\n{len(odd)} located but not plausible — a passage is"
+              f" {PLAUSIBLE[0]} to {PLAUSIBLE[1]} pages:")
         for passage_id, count in odd:
             print(f"  {passage_id:<16} {count} page{'' if count == 1 else 's'}")
 
@@ -363,11 +533,27 @@ def report(conn: sqlite3.Connection) -> None:
         for (book, test), numbers in held.items()
         if numbers and len(numbers) < 3
     )
+    # A gap somebody has already been to the page about. The catalogue's
+    # `finding` table is where this pipeline keeps what it learned and could
+    # not fix, and one of them is addressed at a passage: the Guide's test 6
+    # is four sheets short in the scan, so its passage 2 is not missing from
+    # the grouping -- it is missing from the book.
+    #
+    # Printed BESIDE the gap rather than subtracted from it. A report that
+    # quietly stopped counting what it had an excuse for would be the report
+    # agreeing with itself, which is the one thing this file is for.
+    accounted = {
+        row["subject"]: row["summary"]
+        for row in conn.execute(
+            "SELECT subject, summary FROM finding WHERE severity != 'resolved'")
+    }
     if gaps:
         print(f"\n{len(gaps)} test(s) located with a passage missing:")
         for book, test, absent in gaps:
-            which = ", ".join(f"p{n}" for n in absent)
-            print(f"  book {book} test {test}: {which}")
+            for number in absent:
+                known = accounted.get(f"cam{book}-t{test}-p{number}")
+                print(f"  book {book} test {test}: p{number}"
+                      + (f" — {known}" if known else ""))
 
 
 # --- Asking the page itself -------------------------------------------------
@@ -408,6 +594,12 @@ Rules:
   PASSAGE 2" and not a running header."""
 
 
+#: The last question of each passage. An Academic Reading paper numbers 1 to
+#: 40 straight through in a fixed shape, so these three numbers are the exam
+#: rather than a property of any book.
+BAND_END = {1: 13, 2: 26, 3: 40}
+
+
 def passage_of(numbers: list[int]) -> int | None:
     """Which passage a page's question numbers put it in.
 
@@ -438,21 +630,39 @@ def read_document(conn, book: int, doc_id: int, rel_path: str,
     as one page and gets a twelfth of the detail, and on twelve pages it
     classified five correctly and invented two.
     """
-    # Cached, like every other reading in this pipeline. The grouping below
-    # got its rule wrong on the first run — the text pages come BEFORE the
-    # questions, not after — and fixing it should not cost the pages again.
+    # Cached BY PAGE, not by document, and the difference cost a whole test.
+    #
+    # The cache was one file per document, taken as the answer for that
+    # document. Then `academic_reading` learned to keep the other exam's
+    # sheets and to bridge a misread one, so book 101's reading went from 79
+    # pages to 112 — and the run kept answering off the 79. The first block
+    # of the book, sixteen sheets holding a complete test, was never in the
+    # cache and therefore never in the grouping: the book showed five tests
+    # and its test 1 began at page 69.
+    #
+    # Keyed by index, the two can no longer disagree. A page that has been
+    # asked is not asked again; a page that has not is asked now and joins
+    # the file. It is also what makes an interrupted batch resume at the page
+    # it stopped on rather than at the document.
     cache = WORK / f"passages-book{book}-doc{doc_id}.json"
+    known: dict[int, dict] = {}
     if cache.exists():
-        answers = json.loads(cache.read_text())
-        print(f"    {len(answers)} pages (cached)")
+        for reply in json.loads(cache.read_text()):
+            if isinstance(reply.get("index"), int):
+                known[reply["index"]] = reply
+    missing = [index for index in indices if index not in known]
+    if not missing:
+        print(f"    {len(indices)} pages (cached)")
     else:
+        if known:
+            print(f"    {len(indices) - len(missing)} pages (cached),"
+                  f" {len(missing)} to read")
         pdf = MATERIALS / rel_path
-        images = vision.render(pdf, indices, WORK / f"passages-book{book}-doc{doc_id}")
+        images = vision.render(pdf, missing, WORK / f"passages-book{book}-doc{doc_id}")
         headers = {page["index"]: page.get("header")
                    for page in academic_reading(
                        [p for _, pages in page_maps(book) for p in pages])}
-        answers = []
-        for index, image in zip(indices, images):
+        for index, image in zip(missing, images):
             reply = vision.ask_json(ASK, [image])
             reply["index"] = index
             # What the BOOK prints in its running head, carried through from
@@ -460,83 +670,232 @@ def read_document(conn, book: int, doc_id: int, rel_path: str,
             # number it returns the first question number, which is the same
             # slip `locate_pages` records for listening.
             reply["header"] = headers.get(index)
-            answers.append(reply)
+            known[index] = reply
             shown = reply.get("numbers") or []
             print(f"    {index:>4}  {str(reply.get('paper')):<9}"
                   f" {('q' + str(min(shown)) + '-' + str(max(shown))) if shown else '—':<10}"
                   f" {reply.get('title') or ''}")
-        cache.write_text(json.dumps(answers, indent=2, ensure_ascii=False))
+            # Written after every page, so a batch that dies eight hours in
+            # keeps everything it paid for.
+            cache.write_text(json.dumps(
+                [known[i] for i in sorted(known)], indent=2, ensure_ascii=False))
+    answers = [known[index] for index in indices if index in known]
 
-    # Group what came back. The rule is the shape of the paper, and the first
-    # run got it backwards.
+    # Group what came back, one BLOCK of pages at a time.
     #
-    # A reading passage is printed TEXT FIRST, questions after — three or four
-    # sheets of prose with nothing numbered on them, then two of questions. So
-    # a page with no question numbers belongs to the passage whose questions
-    # come NEXT, not to the one whose questions came last. Read the other way,
-    # every passage took the following passage's text and passage 1 lost its
-    # own.
+    # A block is a run of contiguous reading sheets, and a real Academic
+    # Reading paper is exactly that: three passages printed back to back,
+    # numbered 1 to 40 straight through. So a block whose questions never
+    # reach past 13 is not a paper — it is a teaching exercise numbered from
+    # 1 in its own right, and the Official Guide prints eighty pages of them
+    # before its eight tests. Read as one stream they all claimed passage 1,
+    # and the Guide's test 1 came out as a single forty-page entry that
+    # looked complete.
     #
-    # So number-less pages are held and handed to whichever passage claims
-    # them. What is left holding at the end of a document is the tail — a
-    # page after the last question — and goes to the passage it followed.
-    found: list[dict] = []
-    by_passage: dict[tuple[int, int], dict] = {}
-    waiting: list[dict] = []
-    test = test_hint or 1
-    last: int | None = None
-    current: dict | None = None
+    # The rule is what the exam IS rather than what the page looks like,
+    # which is why it also settles the Trainers without knowing anything
+    # about them.
+    # Which of this book's pages name the other EXAM, off the page map — the
+    # cached answers predate the header being carried through, and this is
+    # the book's own word either way. Teaching pages are not here: they were
+    # dropped one at a time upstream, where they belong (`academic_reading`).
+    other = {
+        page["index"]
+        for _, pages in page_maps(book)
+        for page in pages
+        if GENERAL_TRAINING.search(
+            f"{page.get('header') or ''} {page.get('heading') or ''}"
+        )
+    }
 
+    kinds = {
+        page["index"]: page.get("kind")
+        for _, pages in page_maps(book)
+        for page in pages
+    }
+
+    blocks: list[list[dict]] = []
     for reply in answers:
         if reply.get("paper") not in (None, "reading"):
             continue
-        # The test, where the book prints it. Counting runs is inference and
-        # can only be fooled — one page whose numbers were misread starts a
-        # test that does not exist, which is what put thirteen of Trainer 2's
-        # passages under six wrong headings. "Exam Practice Test 3" is not
-        # inference.
-        printed = TEST_IN_HEADER.search(reply.get("header") or "")
-        if printed:
-            said = int(printed.group(1))
-            if said != test:
-                test = said
-                last = None
-                current = None
+        joins = False
+        if blocks:
+            previous = blocks[-1][-1]["index"]
+            span = range(previous + 1, reply["index"])
+            joins = len(span) <= BLOCK_GAP and not any(
+                kinds.get(index) in ENDS_THE_PAPER for index in span
+            )
+        if joins:
+            blocks[-1].append(reply)
+        else:
+            blocks.append([reply])
 
-        number = passage_of([int(n) for n in reply.get("numbers") or []
-                             if isinstance(n, (int, float))])
-        if number is None:
-            waiting.append(reply)
-            continue
+    def numbers_of(reply: dict) -> list[int]:
+        return [int(n) for n in reply.get("numbers") or []
+                if isinstance(n, (int, float))]
 
-        if number != last:
-            # Numbers that do not go up are the next test beginning. Only
-            # where the page prints no test of its own — inference is the
-            # fallback, not the rule.
-            if last is not None and number <= last and not printed:
-                test += 1
-            key = (test, number)
-            current = by_passage.get(key)
+    # A block can hold the END of the paper before it.
+    #
+    # Reaching outward at the edges is what put it there: Cambridge 20 prints
+    # one test per PDF and each file opens on the back of the previous test's
+    # last reading sheet, and Cambridge 11's test 1 ends three sheets before
+    # test 2 begins. Those pages ARE reading, so they are kept -- but they
+    # are another paper, and read as part of this one their questions 34-40
+    # opened a passage 3 that the real passage 3 was then appended to. Eleven
+    # passages came out one page long.
+    #
+    # Split where the numbers go DOWN, which is the same arithmetic the
+    # heading pass uses on passage numbers and `locate_pages` uses on
+    # listening sections: a paper runs 1 to 40 once, so a number lower than
+    # the one before it is the next paper starting. Pages with no numbers on
+    # them follow the split rather than lead it, because a passage is printed
+    # text first.
+    def papers_in(block: list[dict]) -> list[list[dict]]:
+        fragments: list[list[dict]] = []
+        current: list[dict] = []
+        waiting: list[dict] = []
+        last = 0
+        for reply in block:
+            number = passage_of(numbers_of(reply))
+            if number is None:
+                waiting.append(reply)
+                continue
+            if number < last:
+                fragments.append(current)
+                current = []
+            current += waiting + [reply]
+            waiting = []
+            last = number
+        current += waiting
+        if current:
+            fragments.append(current)
+        return [fragment for fragment in fragments if fragment]
+
+    def is_paper(fragment: list[dict]) -> bool:
+        """A whole Academic Reading paper, rather than a run of sheets.
+
+        A General Training paper is judged WHOLE. Half its sheets carry the
+        name and half do not, so asking each one on its own keeps the half
+        that is silent -- which is how six GT passages arrived as the Guide's
+        test 8, complete with plausible titles: "Some places to visit", "The
+        benefits of having a business mentor". One named sheet in a run of
+        sheets is the run saying what it is.
+
+        What is left has to reach its third passage and be printed on more
+        than a handful of sheets. Nothing else in these books is both -- not
+        a teaching exercise numbered from 1, and not the four sheets of
+        another test's ending.
+        """
+        if any(reply["index"] in other for reply in fragment):
+            return False
+        numbers = [n for reply in fragment for n in numbers_of(reply)]
+        return (bool(numbers) and max(numbers) >= 27
+                and len(fragment) >= MIN_BLOCK_PAGES)
+
+    def printed_test(fragment: list[dict]) -> int | None:
+        """The test number in this paper's running head, if it prints one."""
+        for reply in fragment:
+            match = TEST_IN_HEADER.search(reply.get("header") or "")
+            if match:
+                return int(match.group(1))
+        return None
+
+    papers = [fragment for block in blocks
+              for fragment in papers_in(block) if is_paper(fragment)]
+
+    # What the running head prints is the test's number IN ITS SERIES, not
+    # its number in this book.
+    #
+    # Cambridge 12 carries on from Cambridge 11 and heads its four tests
+    # "Test 5" to "Test 8" -- a fact the catalogue already records as a
+    # finding, because the answer keys have to be matched to tests by order
+    # for the same reason. Believed literally, every one of book 12's twelve
+    # passages claimed a test the book does not have and all twelve were
+    # refused.
+    #
+    # So the printed numbers are shifted to start at one, and only when they
+    # have to be: a book whose heads already fit is left exactly as it is.
+    # If they do not fit after shifting either, nothing is shifted and the
+    # refusals stand -- a run of numbers too long for the book is not a
+    # series that starts somewhere else, it is a misreading, and inventing an
+    # offset for it would file passages under tests nobody can name.
+    tests = test_count(conn, book)
+    heads = [number for number in map(printed_test, papers) if number]
+    offset = 0
+    if tests and heads and max(heads) > tests and max(heads) - min(heads) < tests:
+        offset = min(heads) - 1
+
+    found: list[dict] = []
+    test = test_hint or 1
+    seen_test = False
+
+    for paper in papers:
+        # The test, where the book prints it in the running head. Failing
+        # that, one paper is one test and they come in order -- which is the
+        # same arithmetic the heading pass uses, applied to whole papers
+        # rather than to pages, so a single misread page can no longer start
+        # a test that does not exist.
+        printed = printed_test(paper)
+        if printed is not None:
+            test = printed - offset
+        elif seen_test:
+            test += 1
+        seen_test = True
+
+        by_passage: dict[int, dict] = {}
+        waiting: list[dict] = []
+        current: dict | None = None
+        #: Passages whose last question has been seen. A passage does not
+        #: resume after it.
+        finished: set[int] = set()
+
+        for reply in paper:
+            numbers = numbers_of(reply)
+            number = passage_of(numbers)
+            # The lowest number on the page settles which passage it is in
+            # -- unless that passage has already printed its last question,
+            # in which case the low number is a misreading and the high one
+            # is the page.
+            #
+            # Cambridge 11's test 4 has a sheet of passage 2's questions 14
+            # to 18 that came back "7-16". Passage 1 had ended at 13 two
+            # sheets earlier, so believing the 7 gave passage 1 seven pages
+            # -- three of them passage 2's text and questions -- and left
+            # passage 2 as the two sheets that were left. Four more passages
+            # across Cambridge 20 had the same shape.
+            if (number is not None and number in finished
+                    and (higher := passage_of([max(numbers)])) is not None
+                    and higher > number):
+                number = higher
+            if number is None:
+                # A passage is printed TEXT FIRST and questions after, so a
+                # page with no numbers belongs to the passage whose questions
+                # come NEXT. Read the other way, every passage took the
+                # following one's text and passage 1 lost its own.
+                waiting.append(reply)
+                continue
+
+            current = by_passage.get(number)
             if current is None:
                 current = {"test": test, "passage": number, "pages": [],
                            "title": None, "doc_id": doc_id}
-                by_passage[key] = current
+                by_passage[number] = current
                 found.append(current)
-            last = number
 
-        assert current is not None
-        for held in waiting:
-            current["pages"].append(held["index"])
-            if not current["title"] and held.get("title"):
-                current["title"] = held["title"]
-        waiting = []
-        current["pages"].append(reply["index"])
-        if not current["title"] and reply.get("title"):
-            current["title"] = reply["title"]
+            for held in waiting:
+                current["pages"].append(held["index"])
+                if not current["title"] and held.get("title"):
+                    current["title"] = held["title"]
+            waiting = []
+            current["pages"].append(reply["index"])
+            if not current["title"] and reply.get("title"):
+                current["title"] = reply["title"]
+            if numbers and max(numbers) >= BAND_END[number]:
+                finished.add(number)
 
-    # Anything still held followed the last question of the document.
-    if waiting and current is not None:
-        current["pages"] += [held["index"] for held in waiting]
+        # Anything still held followed the last question of the paper.
+        if waiting and current is not None:
+            current["pages"] += [held["index"] for held in waiting]
 
     for one in found:
         one["pages"].sort()

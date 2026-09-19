@@ -253,11 +253,12 @@ migration every time a stage changed its mind, and would mix "what we know
 about a scanned book" with "what a learner can practise". One file, no server,
 and it reaches the office machine by being copied.
 
-Five tables, and the split between them is the point:
+Six tables, and the split between them is the point:
 
 | | |
 |---|---|
 | `book`, `document`, `section` | facts about files — **rebuildable** from `Materials/` |
+| `passage` | where a reading passage is printed — rebuildable, at a price |
 | `stage`, `finding` | work done and judgement formed — **not** rebuildable |
 
 `init` upserts the first three by their natural keys, so re-running it after
@@ -1949,3 +1950,113 @@ and whose recording says "swimming" twice, 23 seconds apart, with no marker to
 say which. `locate()` refuses an ambiguous match on purpose: a replay at the
 wrong moment teaches a learner they misheard something they never heard. One
 question of 2,457 is the right price for that rule.
+
+## Reading: finding the passages
+
+The reading corpus comes out of the same fourteen books and the same scans,
+and three of the listening stages simply do not exist for it — no audio, no
+forced alignment, no replay spans. What is left starts where listening
+started: which pages is it printed on.
+
+```bash
+seed/.venv/bin/python seed/locate_passages.py --book 11
+seed/.venv/bin/python seed/locate_passages.py --book 11 --read   # ask the pages
+seed/.venv/bin/python seed/locate_passages.py --report
+```
+
+**191 of 192 passages located.** Every one is three to six sheets, no sheet is
+claimed by two passages, and no test's passages are out of page order. The
+192nd is not a failure of the pipeline — see below.
+
+`locate_pages.py` had already classified all 829 reading pages during the
+listening run, so the first pass spends nothing: it reads the page maps in
+`work/` and groups them on the `READING PASSAGE 2` headings the books print.
+That got 134 for free. The other 58 are in books that print no such heading,
+and they went to a narrowed re-read — one request a page, the same lesson
+every stage here learned. The whole locate pass cost **$0.56**.
+
+### Grouping is backwards from listening
+
+A listening section is questions and nothing else. A reading passage is TEXT
+first and questions after, so a page with no question numbers on it belongs
+to the passage whose questions come **next**. Read the other way — the way
+the audioscript grouper works — every passage took the following one's text
+and passage 1 lost its own.
+
+### Six rules, each bought with a specific wrong answer
+
+The first version of this found "191 of 192" too, and most of them were
+wrong. What made the number honest was a run for a book **replacing** that
+book rather than upserting into it: rows from earlier, buggier runs were
+surviving, so the report improved as the code got worse. The honest number
+was 183, and these closed the gap.
+
+**A passage ends; it does not run until the next one begins.** "No heading
+continues the last passage" is right inside a paper and wrong at the end of
+it — after passage 3 comes the writing task, and the next `READING PASSAGE 1`
+may be forty pages away. Left unbounded, every third passage swallowed the
+rest of the book; one came out at 61 pages. Each passage keeps its leading
+contiguous run and no more.
+
+**A book has as many tests as it has.** Two books print a General Training
+paper beside the Academic one — a different exam, laid out identically — and
+it arrived as tests 5 and 6. The Guide prints eighty pages of short exercises
+before its eight tests, each numbered from 1, and they all claimed passage 1;
+one came out at 40 pages. Both are refused by the same line, because both
+claim a test the book does not have. `test_count` is the book's listening
+sections ÷ 4, which is a fact already inventoried from the files.
+
+**General Training is judged by the run; a lesson is judged by the page.**
+These were one rule for a while and it cost four whole tests. Only half of a
+GT paper's sheets carry the name, so dropping them one at a time left the
+silent half looking like academic reading and the Guide's test 8 came out
+eighteen sheets long with the GT paper inside it — it has to be condemned as
+a run. But a Trainer's lesson is a single sheet printed *between* the
+passages of the test beside it, always named ("Training Test 1" against "Exam
+Practice Test 1"), and book 103's test 1 is twenty sheets of which six are
+lessons. Condemning that run left the book showing four tests of six.
+
+**A misread sheet is bridged; the writing task is not.** Cambridge 17 prints
+its third passage over five sheets and the page map called three of them
+`listening_questions` and `other` — two of them back to back — so the passage
+was located as the single sheet that still said `READING PASSAGE 3`, and the
+questions to 40 with it. A run of up to three non-reading sheets with reading
+either side is a misreading, and at the *edge* of a paper, where there is no
+reading on the far side, the same reach outward applies with a narrower stop:
+anything that could be confused for a reading sheet is asked, and an answer
+key — which carries the numbers 1 to 40 and is about reading — is not.
+
+**The printed test number is a position in a series, not a number in a
+book.** Cambridge 12 carries on from Cambridge 11 and heads its four tests
+"Test 5" to "Test 8" — the same fact that makes answer keys match by order.
+Believed literally, all twelve of its passages claimed a test the book does
+not have and all twelve were refused. The heads are shifted to start at one,
+and only when they have to be; a series still too long for the book after
+shifting is a misreading and the refusals stand.
+
+**Numbers that go down start the next paper.** Reaching outward at the edges
+admitted the *previous* paper's last sheet at the front of the next block —
+Cambridge 20 prints one test per PDF and each file opens on the back of the
+previous test's last reading sheet. Those pages are genuinely reading, and
+read as part of this paper their questions 34-40 opened a passage 3 that the
+real passage 3 was then appended to. Eleven passages came out one page long.
+A paper runs 1 to 40 once, so a number lower than the one before it is the
+next paper starting.
+
+**A passage does not resume after its last question.** The lowest number on a
+sheet settles which passage it is in — unless that passage has already
+printed question 13, or 26, or 40, in which case the low number is the
+misreading and the high one is the page. Cambridge 11's test 4 has a sheet of
+passage 2's questions 14-18 that came back "7-16"; believing the 7 gave
+passage 1 seven pages, three of them passage 2's, and left passage 2 as what
+was over. Four more across Cambridge 20 had the same shape.
+
+### The one that is missing is missing from the book
+
+The Official Guide's test 6 is four sheets short in the scan: pdf index 254
+is printed page 254, and the next sheet is printed page **259**. Pages 255 to
+258 hold the whole of its Reading Passage 2 — the text and questions 14 to 30
+— and they are not in the file. It is recorded as a `finding` against
+`cam102-t6-p2` and the report prints it beside the gap rather than
+subtracting it from the count, because a report that quietly stops counting
+what it has an excuse for is a report agreeing with itself.
