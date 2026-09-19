@@ -20,7 +20,6 @@ public collection whose materials are private is a shelf of locked doors.
 import argparse
 import asyncio
 import logging
-import re
 import uuid
 
 from sqlalchemy import select
@@ -31,12 +30,17 @@ from app.models.material import Material
 from app.services import collections as collections_service
 from app.services import publishing as publishing_service
 
-#: Every seeded material's title ENDS with the code its
-#: importer generates -- "C11 T4 · Part 2" for a listening
-#: section, "… — C11 T4 P2" for a reading passage, whose own
-#: passage title comes first. Anchored at the end for exactly
-#: that reason.
-SEEDED = re.compile(r"(?:^| — )(C\d{1,2}|TR2?|GD|#\d+) T\d+ (?:· Part |P)\d+$")
+
+#: A seeded material, asked of the material rather than of its name.
+#:
+#: This was a regular expression over the title until `materials.reference`
+#: existed, and it had been wrong once: it missed every listening material
+#: for a month because the code it was matching read "· Part 1" where
+#: reading's read "P1", and a space is invisible in a pattern. The column
+#: says what the regex was trying to work out.
+def seeded(material) -> bool:
+    return material.reference is not None
+
 
 logger = logging.getLogger("publish")
 
@@ -55,7 +59,7 @@ async def main() -> int:
     async with async_session_factory() as session:
         materials = [m for m in (await session.scalars(select(Material).where(
             Material.author_id == owner).order_by(Material.title))).all()
-            if SEEDED.search(m.title or "")]
+            if seeded(m)]
 
         if args.unpublish:
             for material in materials:

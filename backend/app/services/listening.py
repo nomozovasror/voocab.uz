@@ -932,6 +932,25 @@ def part_number(part: Part | None) -> int:
     return part.order_index + 1
 
 
+def part_number_sql():
+    """:func:`part_number`, as something a WHERE clause can compare against.
+
+    Beside it rather than written out wherever it is needed, because the two
+    have to agree and the first time they were apart they did not: SQLAlchemy
+    renders ``/`` as TRUE division, so the filter computed 2.3 for a reading
+    passage where Python's ``//`` computes 2, and the Part 3 chip returned
+    nothing over a library of 475. ``//`` here, the same operator, which
+    SQLAlchemy renders as FLOOR.
+    """
+    return case(
+        (
+            Part.first_number.is_not(None),  # type: ignore[union-attr]
+            (Part.first_number - 1) // 10 + 1,
+        ),
+        else_=Part.order_index + 1,
+    )
+
+
 async def group_first_number(
     session: AsyncSession, group: QuestionGroup
 ) -> int:
@@ -1182,14 +1201,19 @@ def _catalogue_where(
     elif scope.isdigit():
         # A part chip matches a material that HOLDS that part, whole paper
         # included: somebody practising their weakest section wants material
-        # with that part in it, not material that is only that part. The
-        # editor titles a part `Part {order_index + 1}`, so the index carries
-        # the number.
+        # with that part in it, not material that is only that part.
+        #
+        # Matched the way `part_number` computes it, and it has to be: the
+        # seeded corpus is one part per material at index 0, so an index
+        # comparison called every one of them Part 1 and the chips for Parts
+        # 2 to 4 came back empty over a library of 475. A seeded part knows
+        # which it is from `first_number` — ten numbers per part on a
+        # listening paper, and reading's 1/14/27 falls the same way.
         where.append(
             select(Part.id)
             .where(
                 Part.material_id == Material.id,
-                Part.order_index == int(scope) - 1,
+                part_number_sql() == int(scope),
             )
             .exists()
         )
@@ -1223,7 +1247,8 @@ def _catalogue_where(
             .exists()
         )
 
-    # Title, author, and the name of a collection the material is in. The
+    # Title, reference, author, and the name of a collection the material is
+    # in. The
     # client-side version also matched question-type labels and "Part 3",
     # which were free when every row was already in hand; in SQL they would
     # be a subquery per term to search for something the chips above the
@@ -1240,6 +1265,7 @@ def _catalogue_where(
     for term in query.split():
         where.append(
             _hit(Material.title, term)
+            | _hit(Material.reference, term)
             | select(User.id)
             .where(
                 User.id == Material.author_id,
@@ -1626,18 +1652,24 @@ async def _catalogue_rows(
     # Which parts, not how many. "Part 2" is the single most useful thing on
     # a row — it is what a candidate practising their weakest section filters
     # by — and a count can't say it: a material with one part is Part 1 or
-    # Part 4 depending on the index it was seeded at (the editor titles a part
-    # ``Part {order_index + 1}``, so the index carries the number even when
-    # there is only one).
+    # Part 4 depending on which part of the paper it was cut from.
+    #
+    # Through `part_number`, not off the index. The seed importers write one
+    # part per material at index 0 whatever part it really is, so every one of
+    # the 475 seeded materials called itself Part 1: the card printed "Part 1"
+    # beside a reference reading "C10 T1 P4", and the part chips returned
+    # nothing at all for Parts 2, 3 and 4. `first_number` is the field that
+    # carries the truth, and `part_number` is where that is already written
+    # down — the drill rows have been reading it correctly all along.
     part_numbers: dict[uuid.UUID, list[int]] = {}
-    for material_id, order_index in (
+    for part in (
         await session.exec(
-            select(Part.material_id, Part.order_index)
+            select(Part)
             .where(Part.material_id.in_(ids))  # type: ignore[attr-defined]
             .order_by(Part.material_id, Part.order_index)  # type: ignore[arg-type]
         )
     ).all():
-        part_numbers.setdefault(material_id, []).append(int(order_index) + 1)
+        part_numbers.setdefault(part.material_id, []).append(part_number(part))
 
     # The kinds of question each material asks, in the order they are asked
     # and without repeating one. A row names its type where there is one to
@@ -1774,6 +1806,7 @@ async def _catalogue_rows(
             {
                 "id": m.id,
                 "title": m.title,
+                "reference": m.reference,
                 "part_count": len(parts),
                 "part_numbers": parts,
                 "question_types": types_by_material.get(m.id, []),

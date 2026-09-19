@@ -397,9 +397,18 @@ export default function ReadingTakePage() {
           </h1>
           <p className="shrink-0 text-xs tabular-nums text-muted-foreground">
             {[
+              // Which test this was cut from, where the title used to carry
+              // it. The title is the name the book gives the passage; this
+              // is a fact about where it came from, which is what the rest
+              // of this line is made of.
+              material.reference !== material.title
+                ? material.reference
+                : null,
               `${sorted.length} ${sorted.length === 1 ? "passage" : "passages"}`,
               `${total} ${total === 1 ? "question" : "questions"}`,
-            ].join(" · ")}
+            ]
+              .filter(Boolean)
+              .join(" · ")}
           </p>
         </div>
       </div>

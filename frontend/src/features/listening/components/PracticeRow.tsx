@@ -48,6 +48,17 @@ function MetaLine({
   const part = partLabel(m, partWord);
   if (part) segments.push(part);
 
+  // Which test it was cut from. Second, after the part: both say where this
+  // sits, and the part is the one the filters above the list are phrased in.
+  //
+  // Withheld where it IS the title. A listening part the book printed no
+  // heading over — most Part 3s — is named by its reference for want of
+  // anything else the book said, and printing it again underneath would be
+  // the row saying one thing twice.
+  if (m.reference && m.reference !== m.title) {
+    segments.push(<span className="tabular-nums">{m.reference}</span>);
+  }
+
   if (task) {
     const { Icon, label } = task;
     segments.push(

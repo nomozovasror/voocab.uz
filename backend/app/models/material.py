@@ -29,6 +29,22 @@ class Material(SQLModel, table=True):
     author_id: uuid.UUID = Field(foreign_key="users.id", index=True)
     type: str = Field(default="dictation")
     title: str
+    #: Where this material came from in a printed book -- "C21 T1 P3" for
+    #: Cambridge 21's first test, third passage. Null for anything an author
+    #: wrote themselves, which is most of what this table will eventually
+    #: hold.
+    #:
+    #: Its own column rather than a suffix on the title, for three reasons
+    #: that turned out to be the same reason. The card wants to PRINT it
+    #: separately -- the name of the passage is what a learner reads, and
+    #: which test it is is a fact about where it came from, which belongs on
+    #: the meta line with the part and the question count. The seed importers
+    #: want it as their dedup key, and a key that lives inside a display
+    #: string is a key that moves whenever somebody edits the display. And
+    #: `seed_status` and `publish_seeded` want to ask "is this one of the
+    #: seeded ones", which they were doing with a regular expression over the
+    #: title. All three want the same thing: the reference as data.
+    reference: str | None = Field(default=None, max_length=40, index=True)
     # Optional because non-audio material types (grammar/vocab/reading) won't
     # have a clip. Readiness (pending/processing/ready) is NOT stored here —
     # it's derived from audio_asset -> audio_blob.transcript_status at read

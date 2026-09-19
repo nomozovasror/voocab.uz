@@ -959,6 +959,11 @@ class LastAttemptOut(BaseModel):
 class MaterialTakeOut(BaseModel):
     id: uuid.UUID
     title: str
+    #: Which test in which book this came from -- "C21 T1 P3" -- or null for
+    #: a material somebody wrote themselves. Printed beside the question
+    #: count rather than in the title: the title is the name the book gives
+    #: the paper, and this is where it came from.
+    reference: str | None = None
     audio_url: str | None
     duration_ms: int | None
     parts: list[TakePartOut]
@@ -1023,6 +1028,12 @@ class PracticeMaterialOut(BaseModel):
 
     id: uuid.UUID
     title: str
+    #: Which test in which book this came from -- "C21 T1 P3" -- or null for
+    #: a material somebody wrote themselves. The row PRINTS it, beside the
+    #: part and the question count: it is a fact about where the paper came
+    #: from, which is the kind of thing the meta line carries, and the title
+    #: is left to be the name a learner recognises.
+    reference: str | None = None
     part_count: int
     #: WHICH parts, ascending — ``[2]`` for a Part 2 material, ``[1,2,3,4]``
     #: for a full test. The list is filtered by this, and a count cannot say
@@ -1458,6 +1469,8 @@ class DrillOut(BaseModel):
     type: str
     material_id: uuid.UUID
     material_title: str
+    #: See MaterialTakeOut.reference.
+    material_reference: str | None = None
     #: Which of the paper's four parts it was cut from.
     part_number: int
     #: The numbers it carries on the printed paper — "Questions 15-20". Not
@@ -1513,6 +1526,8 @@ class DrillTakeOut(BaseModel):
 
     id: uuid.UUID
     title: str
+    #: See MaterialTakeOut.reference.
+    reference: str | None = None
     audio_url: str | None
     duration_ms: int | None
     parts: list[TakePartOut]
@@ -1541,6 +1556,8 @@ class AttemptResultOut(BaseModel):
     attempt_id: uuid.UUID
     material_id: uuid.UUID
     material_title: str
+    #: See MaterialTakeOut.reference.
+    material_reference: str | None = None
     #: The recording, so the review can play the moment an answer was said
     #: without also fetching the whole take payload for one string. There are
     #: no clips: "hear it" is the same file, seeked.

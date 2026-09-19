@@ -73,8 +73,8 @@ BY_LETTER = {"matching_information", "matching_headings"}
 FIRST_NUMBER = {1: 1, 2: 14, 3: 27}
 
 
-def read_passage(passage_id: str) -> tuple[dict, dict, str]:
-    """The catalogue row, the passage text, and the material's title."""
+def read_passage(passage_id: str) -> tuple[dict, dict, str, str]:
+    """The catalogue row, the passage text, its reference and its title."""
     conn = sqlite3.connect(SEED / "catalogue.db")
     conn.row_factory = sqlite3.Row
     row = conn.execute(
@@ -127,30 +127,48 @@ def read_passage(passage_id: str) -> tuple[dict, dict, str]:
     # than a blank leading a dash. Every passage in this corpus has one --
     # `read_passages.py` goes to the sheet before to find it -- so this is
     # for a book that has not been read yet, not for one of these.
-    where = (f"{book_code(row['book_number'])} T{row['test_no']}"
-             f" P{row['passage_no']}")
-    named = (passage.get("title") or "").strip()
-    title = f"{named} — {where}" if named else where
-    return dict(row), passage, title
+    # Two things, in two columns. The reference says which test in which
+    # book; the title is what the book calls the passage. They used to be run
+    # together -- "An Introduction to Film Sound — C11 T4 P2" -- and the card
+    # printed the pair as one heading, the importers used the pair as a key,
+    # and `seed_status` picked the reference back out with a regular
+    # expression. See the `b3e91a7c40d2` migration.
+    reference = (f"{book_code(row['book_number'])} T{row['test_no']}"
+                 f" P{row['passage_no']}")
+    # Every passage in this corpus prints a title. A book that did not would
+    # leave the reference standing as the name, which is honest: it is the
+    # only thing anybody knows to call it.
+    title = (passage.get("title") or "").strip() or reference
+    return dict(row), passage, reference, title
 
 
 async def import_passage(passage_id: str, owner_id: uuid.UUID) -> None:
-    row, passage, title = read_passage(passage_id)
+    row, passage, reference, title = read_passage(passage_id)
     first_number = FIRST_NUMBER[row["passage_no"]]
 
     async with async_session_factory() as session:
         if await session.get(User, owner_id) is None:
             raise SystemExit(f"no user {owner_id}")
 
-        # Re-running must not leave a second copy behind. There is no natural
-        # key on a material, so the title this script generates is the key it
-        # looks itself up by -- the same bargain import_section makes.
+        # Re-running must not leave a second copy behind, and the REFERENCE is
+        # what it looks itself up by -- the same bargain import_section makes.
+        # It used to be the title, which meant the key was a display string:
+        # renaming the corpus had to be done as a migration rather than a
+        # re-import, twice, because a re-import would not have recognised its
+        # own work.
+        # WITH the type. "C10 T1 P1" is Cambridge 10's first test, first
+        # paper -- and every test has two of those, a listening Part 1 and a
+        # reading Passage 1. The reference names a place in a book; which of
+        # the two papers is the material's own type, and looking one up
+        # without saying which finds the other one half the time.
         material = (await session.exec(
             select(Material).where(Material.author_id == owner_id,
-                                   Material.title == title))).first()
+                                   Material.type == "reading",
+                                   Material.reference == reference))).first()
         if material is None:
             material = Material(
                 author_id=owner_id, type="reading", title=title,
+                reference=reference,
                 audio_asset_id=None,
                 visibility="private",  # copyrighted source; never public from here
             )
@@ -178,6 +196,12 @@ async def import_passage(passage_id: str, owner_id: uuid.UUID) -> None:
         # the material already existed is how a corrected passage silently
         # fails to reach the page. Same rule as the listening importer's
         # transcript.
+        # The title too, for the same reason: a passage re-read with its
+        # opening recovered is a passage whose printed title has only just
+        # been found.
+        material.title = title
+        session.add(material)
+
         part.passage = passage
         part.title = f"Reading Passage {row['passage_no']}"
         part.first_number = first_number

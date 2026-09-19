@@ -302,6 +302,7 @@ async def take_material(
     return MaterialTakeOut(
         id=material.id,
         title=material.title,
+        reference=material.reference,
         audio_url=audio["audio_url"],
         duration_ms=audio["duration_ms"],
         parts=parts,

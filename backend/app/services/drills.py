@@ -379,6 +379,7 @@ async def drill_row(
         "type": group.type,
         "material_id": material.id,
         "material_title": material.title,
+        "material_reference": material.reference,
         "part_number": listening_service.part_number(part),
         "first_number": first_number,
         "last_number": first_number + len(questions) * marks - 1,

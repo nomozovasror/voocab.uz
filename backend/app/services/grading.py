@@ -619,6 +619,7 @@ async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
         "attempt_id": attempt.id,
         "material_id": attempt.material_id,
         "material_title": material.title if material else "",
+        "material_reference": material.reference if material else None,
         **(await material_audio(session, material)),
         "score": int(attempt.score or 0),
         "total_questions": attempt.total_questions or 0,

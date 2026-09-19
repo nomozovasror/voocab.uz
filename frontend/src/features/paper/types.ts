@@ -452,6 +452,10 @@ export interface LastAttempt {
 export interface MaterialTake {
   id: string;
   title: string;
+  /** Which test in which book it was cut from — "C21 T1 P3" — or null for a
+   *  material somebody wrote themselves. Printed beside the question count,
+   *  not in the title: see PracticeMaterial.reference. */
+  reference: string | null;
   audio_url: string | null;
   duration_ms: number | null;
   parts: TakePart[];
@@ -499,6 +503,12 @@ export interface Difficulty {
 export interface PracticeMaterial {
   id: string;
   title: string;
+  /** Which test in which book it was cut from — "C21 T1 P3" — or null for
+   *  anything an author wrote themselves. Printed on the meta line rather
+   *  than in the title: the title is the name the book gives the passage,
+   *  which is what a learner recognises, and where it came from is a fact
+   *  about it, like the part number and the question count beside it. */
+  reference: string | null;
   part_count: number;
   /** WHICH parts, ascending — `[2]` for a Part 2 material, `[1,2,3,4]` for a
    *  full test. The filter chips read this; a count can't say it, because one
@@ -534,6 +544,8 @@ export interface PracticeDrill {
   type: QuestionGroupType;
   material_id: string;
   material_title: string;
+  /** See `MaterialTake.reference`. */
+  material_reference: string | null;
   /** Which of the paper's four parts it came from. */
   part_number: number;
   /** The numbers it carries on the printed paper — "Questions 15–20". Not
@@ -574,6 +586,10 @@ export interface DrillType {
 export interface DrillTake {
   id: string;
   title: string;
+  /** Which test in which book it was cut from — "C21 T1 P3" — or null for a
+   *  material somebody wrote themselves. Printed beside the question count,
+   *  not in the title: see PracticeMaterial.reference. */
+  reference: string | null;
   audio_url: string | null;
   duration_ms: number | null;
   parts: TakePart[];
@@ -978,6 +994,8 @@ export interface AttemptResult {
   attempt_id: string;
   material_id: string;
   material_title: string;
+  /** See `MaterialTake.reference`. */
+  material_reference: string | null;
   /** The recording, so the review can replay a moment without also fetching
    *  the take payload for one string. */
   audio_url: string | null;

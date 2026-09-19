@@ -247,6 +247,13 @@ export default function ListeningResultsPage() {
         <h1 className="min-w-0 flex-1 truncate text-2xl font-semibold text-foreground">
           {data.material_title}
         </h1>
+        {/* Which paper this was, where the title used to carry it. */}
+        {data.material_reference &&
+          data.material_reference !== data.material_title && (
+            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+              {data.material_reference}
+            </span>
+          )}
       </div>
 
       {src && (

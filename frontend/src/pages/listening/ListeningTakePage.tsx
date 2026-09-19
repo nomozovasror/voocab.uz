@@ -498,6 +498,13 @@ export default function ListeningTakePage() {
           </h1>
           <p className="shrink-0 text-xs tabular-nums text-muted-foreground">
             {[
+              // Which test this was cut from — see the reading take screen.
+              // Withheld where it IS the title: a Part 3 the book printed no
+              // heading over is named by its reference for want of anything
+              // else, and the page would be saying it twice.
+              material.reference !== material.title
+                ? material.reference
+                : null,
               // A drill is one group cut out of a part, so saying "1 part"
               // about it is describing the paper it came from rather than
               // the thing on screen. Which part it was is in the heading

@@ -71,8 +71,10 @@ SEED = REPO / "seed"
 MATERIALS = REPO / "Materials"
 
 
-def read_alignment(section_id: str, offset_ms: int = 0) -> tuple[dict, list[TranscriptSegment], str]:
-    """The catalogue row, the turns as transcript segments, and a title.
+def read_alignment(
+    section_id: str, offset_ms: int = 0
+) -> tuple[dict, list[TranscriptSegment], str, str]:
+    """The catalogue row, the turns as segments, the reference and the title.
 
     ``offset_ms`` is how much was cut off the front of the recording. Every
     timestamp here was measured against the untrimmed file, so all of them
@@ -150,13 +152,48 @@ def read_alignment(section_id: str, offset_ms: int = 0) -> tuple[dict, list[Tran
     # moves. That matters beyond tidiness: the title is the key this script
     # dedups on, and a changed one seeds a second copy instead of updating
     # the first.
-    # "C11 T4 · Part 2". The book's own name is in the COLLECTION -- one
-    # course per book per paper -- so repeating it on every one of its
-    # sixteen materials is thirty-odd characters a card that say the same
-    # thing sixteen times. What a material has to carry is which test and
-    # which part, because nothing else does.
-    title = f"{book_code(row['book_number'])} T{test} · Part {section}"
-    return dict(row), segments, title
+    # Two things, in two columns -- see import_passage for the argument.
+    # "C11 T4 P2". The book's own name is in the COLLECTION -- one course per
+    # book per paper -- so repeating it on every one of its sixteen materials
+    # is thirty-odd characters a card that say the same thing sixteen times.
+    reference = f"{book_code(row['book_number'])} T{test} P{section}"
+    return dict(row), segments, reference, printed_name(section_id) or reference
+
+
+def printed_name(section_id: str) -> str | None:
+    """What the book calls this section, or nothing.
+
+    A reading passage prints its title at the top of the page and a listening
+    part does not -- the book prints "Part 3" and plays a recording. So every
+    listening material was called "C11 T4 · Part 2" and nothing else, a code
+    where its reading neighbour on the same shelf has a name.
+
+    But the name IS printed, over the first task on the sheet: "Oyster Bay
+    Sailing Club Courses" above the table, "SELF-DRIVE TOURS IN THE USA"
+    above the notes. It is a heading in the layout grammar, so it is already
+    built and already exactly what the book printed. 156 of 266 sections have
+    one.
+
+    The rest are almost all Part 3 -- multiple choice and matching, which
+    print questions and no heading at all -- and they keep the reference as
+    their name. That is the honest answer and not a gap: the book did not
+    name them, and a name taken from the transcript would be this app
+    telling a learner the book said something it did not.
+
+    The FIRST heading. A sheet's own title is printed above its first task; a
+    later one belongs to a later task on the same sheet ("General
+    information" over questions 7-10).
+    """
+    path = SEED / "work" / section_id / "questions.json"
+    if not path.exists():
+        return None
+    for group in json.loads(path.read_text()).get("groups", []):
+        # Inside `config`, where the group's layout lives -- not beside it.
+        template = (group.get("config") or {}).get("template") or ""
+        for line in template.splitlines():
+            if line.startswith("#") and line[1:].strip():
+                return line[1:].strip()
+    return None
 
 
 #: What each book is called in a material's title, short.
@@ -173,7 +210,7 @@ def read_alignment(section_id: str, offset_ms: int = 0) -> tuple[dict, list[Tran
 #: would have to guess.
 BOOK_CODE = {
     10: "C10", 11: "C11", 12: "C12", 13: "C13", 14: "C14", 15: "C15",
-    16: "C16", 17: "C17", 18: "C18", 19: "C19", 20: "C20",
+    16: "C16", 17: "C17", 18: "C18", 19: "C19", 20: "C20", 21: "C21",
     101: "TR",    # IELTS Trainer
     102: "GD",    # The Official Cambridge Guide to IELTS
     103: "TR2",   # IELTS Trainer 2
@@ -184,8 +221,8 @@ def book_code(number: int) -> str:
     """This book's short code, or its number where it has none.
 
     A number is a poor label and a wrong one is worse: falling back to
-    ``#21`` for a book nobody has coded yet is visibly unfinished, where
-    guessing "C21" would quietly claim it is a Cambridge volume.
+    ``#22`` for a book nobody has coded yet is visibly unfinished, where
+    guessing "C22" would quietly claim it is a Cambridge volume.
     """
     return BOOK_CODE.get(number, f"#{number}")
 
@@ -303,7 +340,7 @@ async def import_section(section_id: str, owner_id: uuid.UUID) -> None:
     trim = json.loads(trim_path.read_text()) if trim_path.exists() else None
     offset_ms = trim["offset_ms"] if trim else 0
 
-    row, segments, title = read_alignment(section_id, offset_ms)
+    row, segments, reference, title = read_alignment(section_id, offset_ms)
 
     # The source is checked even when a trimmed copy is what gets stored: a
     # changed source means the alignment, and therefore the cut, was measured
@@ -358,19 +395,29 @@ async def import_section(section_id: str, owner_id: uuid.UUID) -> None:
         asset = await audio_service.get_or_create_asset(
             session, owner_id, blob.id, title=title)
 
-        # Re-running must not leave a second copy behind. There is no natural
-        # key on a material, so the title this script generates is the key it
-        # looks itself up by.
+        # Re-running must not leave a second copy behind, and the REFERENCE is
+        # what it looks itself up by. It used to be the title, which meant the
+        # key was a display string: renaming the corpus had to be done as a
+        # migration rather than a re-import, twice, because a re-import would
+        # not have recognised its own work.
+        # WITH the type. "C10 T1 P1" is Cambridge 10's first test, first
+        # paper -- and every test has two of those, a listening Part 1 and a
+        # reading Passage 1. The reference names a place in a book; which of
+        # the two papers is the material's own type, and looking one up
+        # without saying which finds the other one half the time.
         material = (
             await session.exec(
                 select(Material).where(
-                    Material.author_id == owner_id, Material.title == title
+                    Material.author_id == owner_id,
+                    Material.type == "listening",
+                    Material.reference == reference,
                 )
             )
         ).first()
         if material is None:
             material = Material(
                 author_id=owner_id, type="listening", title=title,
+                reference=reference,
                 audio_asset_id=asset.id,
                 visibility="private",  # copyrighted source; never public from here
             )
@@ -389,6 +436,10 @@ async def import_section(section_id: str, owner_id: uuid.UUID) -> None:
             logger.info("created material %s", material.id)
         else:
             material.audio_asset_id = asset.id
+            # The title too, for the same reason the transcript is rewritten
+            # below: a section rebuilt after its first task was read properly
+            # is a section whose printed heading has only just been found.
+            material.title = title
             session.add(material)
             part = (await session.exec(
                 select(Part).where(Part.material_id == material.id)

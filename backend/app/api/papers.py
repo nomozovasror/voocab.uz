@@ -296,6 +296,7 @@ def paper_router(skill: str) -> APIRouter:
         return DrillTakeOut(
             id=group.id,
             title=material.title,
+            reference=material.reference,
             audio_url=audio["audio_url"],
             duration_ms=audio["duration_ms"],
             parts=parts,
