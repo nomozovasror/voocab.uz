@@ -50,7 +50,7 @@ import sqlite3
 import sys
 
 import vision
-from locate_passages import page_maps
+from locate_passages import TEST_IN_HEADER, page_maps
 
 SEED = pathlib.Path(__file__).resolve().parent
 REPO = SEED.parent
@@ -286,32 +286,112 @@ def key_pages(conn: sqlite3.Connection, row: sqlite3.Row) -> list[int]:
         for page in pages
         if page.get("kind") == "reading_answer_key"
     ]
-    if named:
+    # A page the classifier called the READING key wins -- but only where
+    # this document holds one test, because then there is no other test's
+    # key it could be. Cambridge 20 is one PDF per test and that is what the
+    # branch was written for; applied to a four-test volume it takes the
+    # FIRST such page in the book whichever test is being asked about, so
+    # Cambridge 13's test 2 was answered from page 116, which is test 1's.
+    tests = conn.execute(
+        "SELECT COUNT(DISTINCT test_no) AS n FROM passage WHERE document_id = ?",
+        (row["document_id"],)).fetchone()
+    one_test = bool(tests and tests["n"] == 1)
+    if one_test:
+        # A document that is one test and has no key page classified at all.
+        # Cambridge 20's four PDFs are one test each and its key sits on the
+        # sheet immediately after the reading -- which is where doc 11's IS,
+        # classified; in docs 13 and 14 the same sheet came back `writing`
+        # and both tests had no answers at all.
+        #
+        # So the window opens at this document's LAST reading sheet, not
+        # after it. That book's re-typeset packs several things onto one
+        # sheet -- a fact the catalogue already records as a finding -- and
+        # its key starts on the same page the last reading questions end
+        # on: test 1's answers 1 to 10 are at the foot of page 20 and 11 to
+        # 40 are on 21. Starting after, the first thirteen were missing from
+        # every test.
+        #
+        # Nothing is assumed about what is on those pages: the prompt says
+        # to return nothing if the answers are not there, and the check
+        # below says when that happened.
+        reading = [page["index"]
+                   for doc_id, pages in page_maps(row["book_number"])
+                   if doc_id == row["document_id"]
+                   for page in pages if page.get("kind") == "reading"]
+        # Whichever comes first: a key page the classifier found, or the
+        # last reading sheet the key spills back onto. Doc 11 has both --
+        # page 21 named, answers 1 to 10 at the foot of page 20 -- and
+        # taking the named one alone lost the first thirteen.
+        if reading:
+            named = [min(named + [max(reading)])] if named else [max(reading)]
+    if named and one_test:
         start = min(named)
     else:
         found = conn.execute(
-            "SELECT key_page FROM section WHERE book_number = ? AND test_no = ?"
-            " AND key_page IS NOT NULL LIMIT 1",
+            "SELECT MIN(key_page) AS key_page FROM section"
+            " WHERE book_number = ? AND test_no = ? AND key_page IS NOT NULL",
             (row["book_number"], row["test_no"])).fetchone()
-        if not found:
+        if not found or found["key_page"] is None:
             return []
         start = found["key_page"]
-    # Stop at the NEXT test's key, not at a fixed number of sheets.
+    # Stop at the next ANOTHER TEST's key, not at the next key sheet.
     #
     # Cambridge 11 prints one key sheet per test at 123, 125, 127 and 129, so
     # spilling three pages past test 1's handed the model test 2's as well --
     # forty more answers to the same question numbers, and no way for it to
-    # know which forty were wanted. The keys are a list; the next one is where
-    # this one ends.
+    # know which forty were wanted.
+    #
+    # But a test's key can run over several sheets, and stopping at the next
+    # one then stops inside this test's own. IELTS Trainer heads every key
+    # sheet "Test 4 Key" and prints three of them; bounded at the next sheet,
+    # the window was one page, the reading half was on the second, and six of
+    # its eighteen passages came back with no answers at all. Where the sheets
+    # say which test they are, that is the bound.
     #
     # And the LAST test has no next key, so the cap is the only bound left --
     # which walked straight off the end of the book. Trainer 2's test 6 key
     # starts eight sheets from the back and came back "page 232 not in
     # document", taking all three of its passages with it.
-    pages = conn.execute("SELECT pages FROM document WHERE id = ?",
-                         (row["document_id"],)).fetchone()
-    end = (pages["pages"] if pages and pages["pages"] else start + KEY_SPILL + 1)
-    stop = next((index for index in keys if index > start), start + KEY_SPILL + 1)
+    # Where the NEXT TEST's key starts, which the catalogue already knows:
+    # `section.key_page` is one page per test, found by locate_pages. That
+    # is the boundary, and the next KEY SHEET is not.
+    #
+    # Cambridge prints a test's key across a spread -- listening on one
+    # sheet, reading on the facing one -- and both come back classified as
+    # key pages. Bounded at the next key sheet, every test's window was cut
+    # in half at exactly the point the reading answers begin; tests 1 to 3
+    # survived only because the next TEST's key happened to be two pages on.
+    # Book 12's test 4 ends at 121 with its reading key on 122, and came
+    # back with none of its forty answers.
+    later = sorted(
+        page["key_page"]
+        for page in conn.execute(
+            "SELECT DISTINCT key_page FROM section WHERE book_number = ?"
+            " AND key_page IS NOT NULL AND key_page > ?",
+            (row["book_number"], start)).fetchall()
+    )
+    # A test's key sheets can also say which test they are -- IELTS Trainer
+    # heads every one "Test 4 Key" -- and where they do that is finer
+    # evidence than a page number from another table.
+    headed = {}
+    for doc_id, pages in page_maps(row["book_number"]):
+        if doc_id != row["document_id"]:
+            continue
+        for page in pages:
+            if page["index"] in keys:
+                match = TEST_IN_HEADER.search(page.get("header") or "")
+                if match:
+                    headed[page["index"]] = int(match.group(1))
+    mine = headed.get(start)
+    if mine is not None:
+        later = [index for index in keys
+                 if index > start and headed.get(index, mine) != mine] or later
+
+    document = conn.execute("SELECT pages FROM document WHERE id = ?",
+                            (row["document_id"],)).fetchone()
+    end = (document["pages"] if document and document["pages"]
+           else start + KEY_SPILL + 1)
+    stop = later[0] if later else start + KEY_SPILL + 1
     return list(range(start, min(stop, start + KEY_SPILL + 1, end)))
 
 
