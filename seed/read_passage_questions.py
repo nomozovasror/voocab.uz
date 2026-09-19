@@ -915,6 +915,74 @@ def check(groups: list[dict]) -> list[str]:
     return problems
 
 
+#: How much of a reading key may coincide with the listening key of the same
+#: test before it is the wrong half rather than a coincidence.
+#:
+#: Some overlap is real: both papers answer some questions "TRUE" and some
+#: with a letter, and over forty numbers a handful will agree by chance. A
+#: quarter is far past that. IELTS Trainer test 1 came back with eleven of
+#: forty identical, four of them consecutive words in a run where the page
+#: prints multiple choice.
+KEY_OVERLAP = 0.25
+
+
+def listening_key(conn: sqlite3.Connection, book: int, test: int) -> dict[int, str]:
+    """The LISTENING answers for the same test, as the pipeline already read
+    them. On disk from the other half of this pipeline, so checking against
+    it costs nothing and is a genuinely independent reading."""
+    out: dict[int, str] = {}
+    for row in conn.execute(
+            "SELECT id FROM section WHERE book_number = ? AND test_no = ?",
+            (book, test)):
+        path = WORK / row["id"] / "questions.json"
+        if not path.exists():
+            continue
+        for group in json.loads(path.read_text()).get("groups", []):
+            for question in group.get("questions", []):
+                number = question.get("paper_number")
+                if number:
+                    out[int(number)] = str(question.get("key") or "")
+    return out
+
+
+def key_report(conn: sqlite3.Connection) -> None:
+    """Every test's reading key: complete, and not the listening one."""
+    tests = conn.execute(
+        "SELECT DISTINCT book_number, test_no FROM passage"
+        " ORDER BY book_number, test_no").fetchall()
+    short: list[str] = []
+    borrowed: list[str] = []
+    for row in tests:
+        book, test = row["book_number"], row["test_no"]
+        path = WORK / f"readingkey-book{book}-t{test}.json"
+        if not path.exists():
+            short.append(f"book {book} test {test}: not read")
+            continue
+        key = json.loads(path.read_text())
+        held: set[int] = set()
+        for label in key:
+            held.update(int(n) for n in re.findall(r"\d+", str(label)))
+        absent = [n for n in range(1, 41) if n not in held]
+        if absent:
+            short.append(f"book {book} test {test}: missing {len(absent)}"
+                         f" of forty ({absent[0]}...)")
+        heard = listening_key(conn, book, test)
+        if heard:
+            same = [n for n in heard
+                    if str(n) in key
+                    and heard[n].strip().lower() == key[str(n)].strip().lower()]
+            if len(same) > KEY_OVERLAP * len(heard):
+                borrowed.append(
+                    f"book {book} test {test}: {len(same)} of {len(heard)}"
+                    " answers are the LISTENING key's")
+    print(f"{len(tests)} tests with located passages")
+    print(f"  {len(tests) - len(short)} have a complete reading key")
+    for line in short:
+        print(f"  ! {line}")
+    for line in borrowed:
+        print(f"  ! {line}")
+
+
 def report(conn: sqlite3.Connection) -> None:
     rows = conn.execute("SELECT id FROM passage ORDER BY id").fetchall()
     read = 0
@@ -941,6 +1009,8 @@ def main() -> int:
     ap.add_argument("passage_id", nargs="?")
     ap.add_argument("--book", type=int)
     ap.add_argument("--report", action="store_true")
+    ap.add_argument("--keys", action="store_true",
+                    help="check every test's reading key and stop")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--force-key", action="store_true",
                     help="read this test's key again as well")
@@ -950,6 +1020,9 @@ def main() -> int:
     conn = sqlite3.connect(SEED / "catalogue.db")
     conn.row_factory = sqlite3.Row
 
+    if args.keys:
+        key_report(conn)
+        return 0
     if args.report:
         report(conn)
         return 0
