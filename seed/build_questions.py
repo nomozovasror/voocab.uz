@@ -42,13 +42,52 @@ GAP = re.compile(r"\{\{(\d+)\}\}")
 CONFIG_KEYS = {
     "multiple_choice": {"answers_per_question"},
     "matching": {"options", "allow_reuse"},
+    "matching_headings": {"options", "allow_reuse", "label_style"},
+    "matching_information": {"options", "allow_reuse", "label_style"},
+    "matching_features": {"options", "allow_reuse", "label_style"},
+    "matching_sentence_endings": {"options", "allow_reuse", "label_style"},
+    # Nothing, and that is the point -- the three words are the TYPE. A
+    # true/false group carrying options in its config is a LETTERED group to
+    # `answers_are_letters`, which would grade it by matching letters against
+    # the word "TRUE".
+    "true_false_not_given": set(),
+    "yes_no_not_given": set(),
 }
 DEFAULT_CONFIG_KEYS = {"template", "options", "image_letters", "image", "image_adapt"}
 
-#: The two that are answered by picking a letter rather than writing words.
-#: They carry no template, so the gap checks below do not apply to them and
-#: their answer key is a letter rather than a list of accepted phrasings.
-LETTERED = {"multiple_choice", "matching"}
+#: The types answered by picking a LABEL out of a box rather than writing
+#: words. They carry no template, so the gap checks below do not apply to
+#: them and their answer key is a label rather than a list of accepted
+#: phrasings.
+#:
+#: Matching is one task under five names, exactly as the nine completion
+#: types are one document under nine. What differs is the instruction line
+#: and how the box is labelled.
+MATCHING_TYPES = {"matching", "matching_headings", "matching_information",
+                  "matching_features", "matching_sentence_endings"}
+LETTERED = {"multiple_choice"} | MATCHING_TYPES
+
+#: The box's other alphabet. Matching headings is numbered i, ii, iii because
+#: its ITEMS are the passage's lettered paragraphs, so its box cannot be
+#: lettered too -- an answer of "C" would name a heading and a paragraph at
+#: once. The same tuple the server labels the box with
+#: (`OPTION_ROMAN` in app/schemas/listening.py); written twice because these
+#: two halves share no code, and the check below is what would notice.
+ROMAN = ("i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x",
+         "xi", "xii", "xiii", "xiv", "xv", "xvi", "xvii", "xviii", "xix", "xx")
+
+#: Answered with one of three words that come from the TYPE. Not lettered --
+#: the candidate writes TRUE, and `grade_answer` compares it as a word -- and
+#: not a gap-fill either, since there is no template and nothing to expand.
+FIXED_CHOICE = {"true_false_not_given", "yes_no_not_given"}
+FIXED_CHOICE_WORDS = {
+    "true_false_not_given": ("TRUE", "FALSE", "NOT GIVEN"),
+    "yes_no_not_given": ("YES", "NO", "NOT GIVEN"),
+}
+#: How a key abbreviates them. "NG" is the only one worth spelling out; T/F
+#: and Y/N are initials of the word above them.
+FIXED_CHOICE_SHORT = {"T": "TRUE", "F": "FALSE", "NG": "NOT GIVEN",
+                      "Y": "YES", "N": "NO"}
 #: A map or diagram task is answered EITHER way, and the page decides which.
 #: Blanks drawn on the picture are written into, and take a template like any
 #: gap-fill; a box of lettered places beside it is picked from, and takes no
@@ -276,6 +315,30 @@ def run_start(numbers: list[int]) -> int | None:
     return low
 
 
+#: A work id names a listening section (`cam11-t1-s1`) or a reading passage
+#: (`cam11-t1-p2`), and the only difference to this file is which numbers of
+#: the paper it is allowed to hold.
+PAPER_BAND = re.compile(r"-([sp])(\d)$")
+
+
+def band(work_id: str) -> tuple[int, int]:
+    """The numbers this section or passage carries on its own paper.
+
+    A Listening paper is ten questions to a part; a Reading paper is roughly
+    thirteen to a passage and the boundaries are fixed by the exam, not by
+    the book. Both are arithmetic on the id rather than anything read off a
+    page, which is why a group belonging to the neighbour can be recognised
+    and dropped below.
+    """
+    match = PAPER_BAND.search(work_id)
+    if not match:
+        raise SystemExit(f"{work_id} is neither a section nor a passage")
+    kind, number = match.group(1), int(match.group(2))
+    if kind == "s":
+        return (number - 1) * 10 + 1, number * 10
+    return {1: (1, 13), 2: (14, 26), 3: (27, 40)}[number]
+
+
 def build(section_id: str) -> int:
     work = WORK / section_id
     src = json.loads((work / "questions.src.json").read_text())
@@ -305,8 +368,7 @@ def build(section_id: str) -> int:
     # the other one's keys empty. Dropping them here rather than failing on an
     # empty key is the same rule the audioscript reader applies to a marker
     # outside its range: out of range is proof it belongs to the neighbour.
-    section_no = int(section_id.split("-s")[1])
-    lo, hi = (section_no - 1) * 10 + 1, section_no * 10
+    lo, hi = band(section_id)
     kept = []
     for group in src["groups"]:
         papers = [q.get("paper_number") for q in group.get("questions", [])
@@ -437,6 +499,14 @@ def build(section_id: str) -> int:
         lettered = (group["type"] in LETTERED
                     or (group["type"] in LABELLING and bool(from_a_box(group)
                                                             or group.get("options"))))
+        # A third kind, and it is neither of the other two. Its answer is a
+        # WORD the candidate writes -- TRUE, NOT GIVEN -- so it is not
+        # lettered; and it has no template, so the gap checks cannot apply.
+        # Treated as lettered it would be scanned for the letters in "FALSE";
+        # treated as a gap-fill it would be refused for having no template.
+        fixed = group["type"] in FIXED_CHOICE
+        labels = (ROMAN if (group.get("label_style") == "roman")
+                  else tuple("abcdefghijklmnopqrstuvwxyz"))
         if not group.get("questions"):
             # An empty group is never what the page says. It reached the
             # database as a part carrying a group with nothing in it, which
@@ -450,7 +520,7 @@ def build(section_id: str) -> int:
                   "renumbered to start at 1", file=sys.stderr)
         numbers = [q["number"] for q in group["questions"]]
 
-        if not lettered:
+        if not lettered and not fixed:
             gaps = [int(n) for n in GAP.findall(group.get("template") or "")]
             # The template and the questions are two readings of the same page,
             # and a disagreement means one of them was misread. The backend
@@ -479,7 +549,7 @@ def build(section_id: str) -> int:
         questions = []
         for q in group["questions"]:
             printed = KEY_NOTE.sub("", q["key"]).strip(" ,;")
-            if lettered:
+            if lettered and labels is not ROMAN:
                 printed = just_the_letters(printed)
             if lettered and not printed:
                 # The key line was the note and nothing else, which means the
@@ -489,7 +559,33 @@ def build(section_id: str) -> int:
                     f"group {gi} q{q['number']}: the key line was {q['key']!r} with no "
                     "letters -- they are printed on the lines below it")
                 continue
-            if lettered:
+            if fixed:
+                # One of three words, and which three is the TYPE's business.
+                # The key abbreviates them as often as not -- "T", "NG" --
+                # and a stored "T" is an answer the candidate has no way to
+                # submit, so it is expanded to what the page offers.
+                said = printed.strip().upper()
+                said = FIXED_CHOICE_SHORT.get(said.replace(" ", ""), said)
+                said = re.sub(r"\s+", " ", said)
+                answers = [said] if said else []
+                if said and said not in FIXED_CHOICE_WORDS[group["type"]]:
+                    problems.append(
+                        f"group {gi} q{q['number']}: {printed!r} is not one of "
+                        f"{', '.join(FIXED_CHOICE_WORDS[group['type']])}, but this "
+                        f"is a {group['type']} group")
+            elif lettered and labels is ROMAN:
+                # A roman box is answered with a numeral, and the numerals
+                # are made of letters -- scanning "vii" for [A-K] finds
+                # nothing at all, which is how a whole matching-headings
+                # group came back with no answers.
+                found = re.findall(r"\b[ivxl]+\b", printed, re.I)
+                answers = [one.lower() for one in found
+                           if one.lower() in ROMAN]
+                if not answers:
+                    problems.append(
+                        f"group {gi} q{q['number']}: {printed!r} is not a roman "
+                        f"numeral, but this box is numbered i, ii, iii")
+            elif lettered:
                 # A lettered answer is the KEY, not a list of phrasings: the
                 # letters must be picked exactly, and expanding "A" the way a
                 # gap-fill answer is expanded would be nonsense.
@@ -590,12 +686,29 @@ def build(section_id: str) -> int:
             # asking for one answer while its question held two and the schema
             # refused it with a message about neither.
             config = {"answers_per_question": picked}
-        elif group["type"] == "matching":
+        elif group["type"] in MATCHING_TYPES:
             config = {"options": unlettered(group.get("options") or []),
                       "allow_reuse": bool(group.get("reuse"))}
+            # Only where the box really is numbered that way. Sent as
+            # "letters" on a headings group the server would label the box
+            # A, B, C and then refuse every answer for naming an option that
+            # does not exist.
+            if group["type"] != "matching":
+                config["label_style"] = ("roman" if labels is ROMAN
+                                         else "letters")
+        elif fixed:
+            # Empty, and it stays empty. See CONFIG_KEYS above.
+            config = {}
         else:
             drawn = 0
-            if group["type"] in ("map_labelling", "diagram_labelling"):
+            # Only where the answers really are letters. A labelling task is
+            # answered EITHER by picking a letter off the picture or by
+            # writing words into blanks drawn on it, and the second kind has
+            # no letters at all -- Cambridge 11's Falkirk Wheel diagram is
+            # questions 8 to 13 written into the drawing. The fallback below
+            # counts letters found in the answer key, which on a key of words
+            # finds the letters inside them: "A-X", from an X in "axle".
+            if lettered and group["type"] in ("map_labelling", "diagram_labelling"):
                 span = LETTER_RANGE.search(group.get("instructions") or "")
                 if span:
                     drawn = ord(span.group(2).upper()) - ord(span.group(1).upper()) + 1
@@ -636,7 +749,7 @@ def build(section_id: str) -> int:
             "instructions": group["instructions"],
             # Never on a lettered group: how long an answer may be is not a
             # question you can ask about a letter, and the schema refuses it.
-            "word_limit": None if lettered else group.get("word_limit"),
+            "word_limit": None if (lettered or fixed) else group.get("word_limit"),
             "config": config,
             "questions": questions,
         })
@@ -665,16 +778,25 @@ def build(section_id: str) -> int:
     # Both stages in one go: the questions and their key come off the same
     # pages and are checked against each other above, so one succeeding
     # without the other is not a state this can reach.
+    # A passage has no `stage` rows: `stage` is one row per SECTION per
+    # stage, and a reading passage is a sibling of a section rather than one.
+    # The UPDATE would match nothing and say nothing, which is the same
+    # silence as a bug.
     conn = sqlite3.connect(SEED / "catalogue.db")
-    for name, meta in (("questions", {"groups": len(out_groups),
-                                      "questions": sum(len(g["questions"]) for g in out_groups)}),
-                       ("answer_key", {"accepted_answers": sum(
-                           len(q["correct_answers"]) for g in out_groups for q in g["questions"])})):
-        conn.execute(
-            """UPDATE stage SET status = 'done', attempts = attempts + 1, error = NULL,
-                   output_path = ?, meta = ?, updated_at = datetime('now')
-               WHERE section_id = ? AND name = ?""",
-            (f"seed/work/{section_id}/questions.json", json.dumps(meta), section_id, name))
+    if "-s" in section_id:
+        done = (
+            ("questions", {"groups": len(out_groups),
+                           "questions": sum(len(g["questions"]) for g in out_groups)}),
+            ("answer_key", {"accepted_answers": sum(
+                len(q["correct_answers"]) for g in out_groups for q in g["questions"])}),
+        )
+        for name, meta in done:
+            conn.execute(
+                """UPDATE stage SET status = 'done', attempts = attempts + 1, error = NULL,
+                       output_path = ?, meta = ?, updated_at = datetime('now')
+                   WHERE section_id = ? AND name = ?""",
+                (f"seed/work/{section_id}/questions.json", json.dumps(meta),
+                 section_id, name))
     conn.commit()
     conn.close()
 
