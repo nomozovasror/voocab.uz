@@ -52,6 +52,28 @@ ROMAN = {"I": 1, "II": 2, "III": 3}
 #: than by which pages somebody counted.
 GENERAL_TRAINING = re.compile(r"General\s+Training", re.I)
 
+#: A page that shows how a task works rather than setting it. The two Trainers
+#: print their teaching pages beside the real tests and number their exercises
+#: from 1 — so a teaching sheet reading "Questions 1-6" is indistinguishable
+#: from a test's passage 1 by its numbers alone, and thirteen of Trainer 2's
+#: eighteen passages came out grouped around them. The header says which it
+#: is: "Training Test 1" against "Exam Practice Test 1".
+#:
+#: The same expression `locate_pages` uses, lookbehind included — "General
+#: Training" is a paper, not a lesson.
+TEACHING = re.compile(r"(?<!general )\btraining\b", re.I)
+
+#: The most sheets a reading passage runs to. Three of text and two of
+#: questions is the usual shape; five and a bit is the longest real one in
+#: fourteen books.
+MAX_PAGES = 8
+
+#: The test, where the page prints it: "Test 1 READING", "Exam Practice Test
+#: 3", "Test1-reading-passage1". Printed evidence beats the run-counting
+#: below, which can only infer a boundary and is fooled by any page whose
+#: numbers were misread.
+TEST_IN_HEADER = re.compile(r"\bTest\s*(\d{1,2})\b", re.I)
+
 
 def passage_number(text: str | None) -> int | None:
     """Which passage this page's heading names, or None where it names none."""
@@ -91,9 +113,8 @@ def academic_reading(pages: list[dict]) -> list[dict]:
     def is_reading(page: dict | None) -> bool:
         if page is None or page.get("kind") != "reading":
             return False
-        return not GENERAL_TRAINING.search(
-            f"{page.get('header') or ''} {page.get('heading') or ''}"
-        )
+        said = f"{page.get('header') or ''} {page.get('heading') or ''}"
+        return not (GENERAL_TRAINING.search(said) or TEACHING.search(said))
 
     kept = []
     for index in sorted(by_index):
@@ -137,18 +158,26 @@ def group(pages: list[dict], first_test: int = 1) -> list[dict]:
         if current is not None:
             current["pages"].append(page["index"])
 
-    # A passage ENDS; it does not run until the next one begins.
+    return bound(found)
+
+
+def bound(found: list[dict]) -> list[dict]:
+    """Each passage keeps its leading CONTIGUOUS run of pages, and no more.
+
+    A passage ENDS; it does not run until the next one begins.
     #
-    # "No heading continues the last passage" is right inside the paper and
-    # wrong at the end of it: after passage 3 comes the writing task, and the
-    # next READING PASSAGE 1 heading may be forty pages away, in the next
-    # test. Left unbounded, every third passage swallowed the rest of the
-    # book — one came out at sixty-one pages.
-    #
-    # So each keeps its leading CONTIGUOUS run and no more. The reading paper
-    # is a continuous block of sheets, so a jump is another test's pages that
-    # happen to be reading too, and they belong to whichever passage the
-    # heading hunt finds them under -- not to this one.
+    "No heading continues the last passage" is right inside the paper and
+    wrong at the end of it: after passage 3 comes the writing task, and the
+    next READING PASSAGE 1 heading may be forty pages away, in the next test.
+    Left unbounded, every third passage swallowed the rest of the book — one
+    came out at sixty-one pages.
+
+    The reading path needs it for a different reason and gets it from the same
+    rule: there, pages are assigned by the question numbers printed on them,
+    so ONE misread page lands in a passage it is nowhere near. Trainer 2's
+    test 2 came out holding pages 75-79, 84 and 88. Dropping the strays leaves
+    a passage short rather than wrong, and the report says which.
+    """
     for one in found:
         pages = one["pages"]
         end = 1
@@ -228,6 +257,23 @@ def write(conn: sqlite3.Connection, book: int, passages: list[dict],
         # Both are caught by the same line, because both claim a test the book
         # does not have. Refused and named — a count that silently dropped
         # them would be the report agreeing with itself.
+        # A passage is a handful of sheets. Forty is not one passage read
+        # long; it is a block of pages that all claimed to be passage 1 and
+        # never progressed — which is what the Official Guide's teaching
+        # section looks like from here. It prints eighty pages of short
+        # exercises before its eight tests, each numbered from 1 in its own
+        # right, and they carry no running header to be told apart by.
+        #
+        # Refused for the same reason a test the book does not have is: it
+        # would put into the corpus something nobody can sit. The report then
+        # says the test is short a passage, which is true and visible, rather
+        # than showing it complete and wrong.
+        if len(one["pages"]) > MAX_PAGES:
+            refused.append(
+                f"cam{book}-t{one['test']}-p{one['passage']}"
+                f" ({len(one['pages'])} pages)"
+            )
+            continue
         if tests and one["test"] > tests:
             refused.append(
                 f"cam{book}-t{one['test']}-p{one['passage']}"
@@ -303,6 +349,25 @@ def report(conn: sqlite3.Connection) -> None:
         print(f"\n{len(odd)} located but not plausible — a passage is 2 to 5 pages:")
         for passage_id, count in odd:
             print(f"  {passage_id:<16} {count} page{'' if count == 1 else 's'}")
+
+    # A test missing one of its three, with the other two present. Different
+    # from a book nothing was found in: here the paper IS located and one
+    # passage of it is not, which is either a grouping that dropped it or a
+    # sheet the scanner never took. The two look identical from here and only
+    # the pages can tell them apart, so this names it rather than deciding.
+    held: dict[tuple[int, int], set[int]] = defaultdict(set)
+    for row in conn.execute("SELECT book_number, test_no, passage_no FROM passage"):
+        held[(row["book_number"], row["test_no"])].add(row["passage_no"])
+    gaps = sorted(
+        (book, test, sorted({1, 2, 3} - numbers))
+        for (book, test), numbers in held.items()
+        if numbers and len(numbers) < 3
+    )
+    if gaps:
+        print(f"\n{len(gaps)} test(s) located with a passage missing:")
+        for book, test, absent in gaps:
+            which = ", ".join(f"p{n}" for n in absent)
+            print(f"  book {book} test {test}: {which}")
 
 
 # --- Asking the page itself -------------------------------------------------
@@ -383,10 +448,18 @@ def read_document(conn, book: int, doc_id: int, rel_path: str,
     else:
         pdf = MATERIALS / rel_path
         images = vision.render(pdf, indices, WORK / f"passages-book{book}-doc{doc_id}")
+        headers = {page["index"]: page.get("header")
+                   for page in academic_reading(
+                       [p for _, pages in page_maps(book) for p in pages])}
         answers = []
         for index, image in zip(indices, images):
             reply = vision.ask_json(ASK, [image])
             reply["index"] = index
+            # What the BOOK prints in its running head, carried through from
+            # the page map. Not what the model concluded: asked for the test
+            # number it returns the first question number, which is the same
+            # slip `locate_pages` records for listening.
+            reply["header"] = headers.get(index)
             answers.append(reply)
             shown = reply.get("numbers") or []
             print(f"    {index:>4}  {str(reply.get('paper')):<9}"
@@ -417,6 +490,19 @@ def read_document(conn, book: int, doc_id: int, rel_path: str,
     for reply in answers:
         if reply.get("paper") not in (None, "reading"):
             continue
+        # The test, where the book prints it. Counting runs is inference and
+        # can only be fooled — one page whose numbers were misread starts a
+        # test that does not exist, which is what put thirteen of Trainer 2's
+        # passages under six wrong headings. "Exam Practice Test 3" is not
+        # inference.
+        printed = TEST_IN_HEADER.search(reply.get("header") or "")
+        if printed:
+            said = int(printed.group(1))
+            if said != test:
+                test = said
+                last = None
+                current = None
+
         number = passage_of([int(n) for n in reply.get("numbers") or []
                              if isinstance(n, (int, float))])
         if number is None:
@@ -424,10 +510,10 @@ def read_document(conn, book: int, doc_id: int, rel_path: str,
             continue
 
         if number != last:
-            # Numbers that do not go up are the next test beginning — the same
-            # arithmetic the heading pass uses, and the only thing that says
-            # so, since every test numbers its reading questions 1 to 40.
-            if last is not None and number <= last:
+            # Numbers that do not go up are the next test beginning. Only
+            # where the page prints no test of its own — inference is the
+            # fallback, not the rule.
+            if last is not None and number <= last and not printed:
                 test += 1
             key = (test, number)
             current = by_passage.get(key)
@@ -454,7 +540,7 @@ def read_document(conn, book: int, doc_id: int, rel_path: str,
 
     for one in found:
         one["pages"].sort()
-    return found
+    return bound(found)
 
 
 def reread(conn: sqlite3.Connection, book: int) -> list[dict]:
