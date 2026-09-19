@@ -122,6 +122,9 @@ FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.M)
 #: A comma before the brace or bracket that closes the thing it is in. Legal
 #: in every language a model learned from and illegal in JSON.
 TRAILING_COMMA = re.compile(r",\s*([}\]])")
+#: What to ask at on a second attempt. See `ask_json`.
+RETRY_TEMPERATURE = 0.3
+
 
 
 def api_key(provider: str = "") -> str:
@@ -446,6 +449,20 @@ def ask_json(prompt: str, images: list[pathlib.Path],
     """
     last = ""
     for attempt in range(JSON_TRIES):
+        # A retry at temperature 0 is not a retry.
+        #
+        # Everything here asks at 0.0, which is right: a page has one correct
+        # reading and sampling from it is a way to be wrong. But it also
+        # means the same request gets the same reply, so three attempts at a
+        # malformed one were three copies of the same malformed one -- six
+        # reading question pages failed identically three times each, at the
+        # same character offset every time, and the ledger paid for all
+        # eighteen requests.
+        #
+        # Only on the retries, and only a little: enough to take a different
+        # path through the same answer, not enough to invent a different one.
+        if attempt:
+            kwargs = {**kwargs, "temperature": RETRY_TEMPERATURE}
         reply = (listen(prompt, recording, **kwargs) if recording is not None
                  else ask(prompt, images, **kwargs))
         text = FENCE.sub("", THINK.sub("", reply).strip()).strip()
@@ -465,7 +482,19 @@ def ask_json(prompt: str, images: list[pathlib.Path],
             # correctly read and thrown away over one comma. Repaired here
             # rather than asked again, because asking again gets the same
             # reply: it is a habit, not a slip of the moment.
-            for candidate in (text, TRAILING_COMMA.sub(r"\1", text)):
+            #
+            # Nothing tries to make MISMATCHED brackets match. It was
+            # written and thrown away: a closer replaced by the one the
+            # stack expects turns `"options": ["a", "b"}]}` into three
+            # closers where two belong, and the shapes that repair does
+            # parse are the ones where it has quietly dropped the groups
+            # that came after the fault. A partial read with no error is the
+            # one failure this pipeline is built not to have. What a reply
+            # that will not parse gets instead is a NARROWER question --
+            # `read_passage_questions.py` asks one sheet at a time -- which
+            # is the same medicine every other stage here takes.
+            repaired = TRAILING_COMMA.sub(r"\1", text)
+            for candidate in (text, repaired):
                 start, end = candidate.find("{"), candidate.rfind("}")
                 if start < 0 or end <= start:
                     continue

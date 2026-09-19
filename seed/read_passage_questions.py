@@ -75,6 +75,13 @@ KEY_SPILL = 8
 #: fallback, and the same reasoning, as `read_passages.FALLBACK`.
 FALLBACK = "nvidia"
 
+#: How many times a passage's questions may be read before the problems are
+#: reported rather than chased. Two: the second read is worth making because
+#: the answer key is evidence the first can be measured against, and a third
+#: would be sampling until the check goes quiet, which is a different thing
+#: from being right.
+READS = 2
+
 #: The two types whose options are their NAME. Named here as well as on the
 #: server because this is where a group is first called one, and a group of
 #: these that came back carrying options would be graded as letters.
@@ -466,6 +473,28 @@ def question_pages(row) -> list[int]:
     return [index for index in pages if index in numbered] or pages
 
 
+def read_window(shots: list[pathlib.Path], prompt: str, model: str) -> list[dict]:
+    """One window's groups, halving again if the reply still will not parse.
+
+    The recursion is what stops the ladder being a cliff: three sheets that
+    fail become two and one, and only a single sheet that fails is a failure.
+    """
+    try:
+        read = vision.ask_json(prompt, shots, model=model, max_tokens=8000)
+        return (read.get("groups") or []) if isinstance(read, dict) else []
+    except vision.Refused:
+        raise
+    except SystemExit:
+        if len(shots) == 1:
+            raise
+        half = (len(shots) + 1) // 2
+        out: list[dict] = []
+        for part in (shots[:half], shots[half:]):
+            if part:
+                out += read_window(part, prompt, model)
+        return out
+
+
 def read_questions(row, *, model: str) -> tuple[list[dict], list[str]]:
     """Read this passage's question groups off the sheets that carry them."""
     pages = question_pages(row)
@@ -485,9 +514,8 @@ def read_questions(row, *, model: str) -> tuple[list[dict], list[str]]:
             read = vision.ask_json(prompt, shots, model=model, max_tokens=8000)
         except vision.Refused:
             # The provider recognised the page and declined to reproduce it.
-            # Narrowing is what rescues a key page and does nothing for a
-            # whole task, so this goes straight to the other provider -- the
-            # same answer `read_passages.py` reached.
+            # Narrowing does not help there -- see read_passages.FALLBACK --
+            # so this goes straight to the other provider.
             print(f"{'':<16} refused; asking {FALLBACK}")
             read = {"groups": []}
             for one in shots:
@@ -495,6 +523,29 @@ def read_questions(row, *, model: str) -> tuple[list[dict], list[str]]:
                                        max_tokens=6000)
                 read["groups"] += (page.get("groups") or []) if isinstance(
                     page, dict) else []
+        except SystemExit as unparseable:
+            # A reply that will not parse after three tries, which on a
+            # question page means one closer written wrong three thousand
+            # characters in. Nothing repairs that safely: a repair that
+            # parses is one that has dropped the groups after the fault, and
+            # a partial read with no error is worse than none.
+            #
+            # A shorter reply has fewer places to go wrong, so the window is
+            # HALVED rather than taken apart. Context is what makes a group
+            # read correctly -- a task printed across two sheets, asked one
+            # sheet at a time, came back as a true/false set whose answers
+            # were letters -- so the ladder gives up as little of it as it
+            # has to, and only reaches single sheets if halving was not
+            # enough.
+            if len(shots) == 1:
+                raise
+            print(f"{'':<16} {unparseable}; halving the window")
+            half = (len(shots) + 1) // 2
+            read = {"groups": []}
+            for part in (shots[:half], shots[half:]):
+                if not part:
+                    continue
+                read["groups"] += read_window(part, prompt, model)
         for group in read.get("groups", []) if isinstance(read, dict) else []:
             if not isinstance(group, dict):
                 continue
@@ -507,27 +558,45 @@ def read_questions(row, *, model: str) -> tuple[list[dict], list[str]]:
             # way off the last sheet.
             if not numbers or not all(first <= n <= last for n in numbers):
                 continue
-            # Stitched on the numbers a group covers, because that is what
-            # identifies it: the overlap means one group is read twice, and
-            # the two readings can differ in wording without being two groups.
-            held = {tuple(sorted(int(q["paper_number"])
-                                 for q in one["questions"]))
-                    for one in groups}
-            if tuple(sorted(numbers)) in held:
-                continue
             groups.append(group)
 
-    groups.sort(key=lambda g: min(int(q["paper_number"])
-                                  for q in g["questions"]))
-    covered = sorted({int(q["paper_number"])
-                      for g in groups for q in g["questions"]})
-    if covered != list(range(first, last + 1)):
-        absent = [n for n in range(first, last + 1) if n not in covered]
-        twice = sorted({n for n in covered if covered.count(n) > 1})
-        if absent:
-            problems.append(f"no group covers {absent}")
-        if twice:
-            problems.append(f"{twice} are in two groups")
+    # One claim per question, and the widest claim wins.
+    #
+    # Windows overlap by a sheet, so a group is read twice and the two
+    # readings can differ in wording without being two groups. Narrowing an
+    # unparseable window to single sheets makes that worse: a task printed
+    # across two sheets comes back as two partial groups, and Cambridge 17's
+    # test 3 produced seven groups for thirteen questions, with 14-17
+    # claimed by a matching_headings and by a matching_information at once.
+    #
+    # So the candidates are sorted by how much of a task each saw and taken
+    # greedily, skipping any that overlaps one already taken. The reading
+    # that saw the whole group beats the one that saw half of it, which is
+    # the same reason the windows overlap in the first place.
+    chosen: list[dict] = []
+    claimed: set[int] = set()
+    for group in sorted(groups, key=lambda g: -len(g["questions"])):
+        numbers = {int(q["paper_number"]) for q in group["questions"]}
+        if numbers & claimed:
+            continue
+        claimed |= numbers
+        chosen.append(group)
+    groups = sorted(chosen, key=lambda g: min(int(q["paper_number"])
+                                              for q in g["questions"]))
+    # A "choose TWO letters" is ONE question worth two marks, and the paper
+    # prints it against both numbers -- "21 and 22". Counting only the
+    # number it starts at made a correctly read passage look like it was
+    # missing every second question. The same arithmetic build_questions.py
+    # does, for the same reason.
+    covered: set[int] = set()
+    for group in groups:
+        span = int(group.get("pick") or 1)
+        for question in group["questions"]:
+            covered.update(range(int(question["paper_number"]),
+                                 int(question["paper_number"]) + span))
+    absent = [n for n in range(first, last + 1) if n not in covered]
+    if absent:
+        problems.append(f"no group covers {absent}")
     return groups, problems
 
 
@@ -704,10 +773,32 @@ def main() -> int:
             key = read_key(conn, row, model=args.model, force=args.force_key)
             first, last = band(row["passage_no"])
             answers, absent = slice_key(key, first, last)
-            groups, problems = read_questions(row, model=args.model)
-            built = assemble(groups, answers)
-            problems += ([f"the key is missing {absent}"] if absent else [])
-            problems += check(built)
+            missing = [f"the key is missing {absent}"] if absent else []
+
+            # Read, checked, and read AGAIN if the key contradicts it.
+            #
+            # The answer key is evidence and the reading is an
+            # interpretation, so a true/false set whose answers are letters
+            # is not a hard question -- it is a group the page named
+            # something else. Cambridge 17's test 3 read correctly once and
+            # then, on the same images, called the same four questions a
+            # true/false set: the model varies and the key does not.
+            #
+            # One extra read, and the better of the two is kept. The reading
+            # with fewer contradictions is the one closer to the page; a tie
+            # keeps the first, because nothing has been learned.
+            best = None
+            for attempt in range(READS):
+                groups, found = read_questions(row, model=args.model)
+                built = assemble(groups, answers)
+                problems = missing + found + check(built)
+                if best is None or len(problems) < len(best[1]):
+                    best = (built, problems)
+                if not problems:
+                    break
+                if attempt + 1 < READS:
+                    print(f"{'':<16} {len(problems)} problem(s); reading again")
+            built, problems = best
         except (Exception, SystemExit) as failure:  # noqa: BLE001
             print(f"{row['id']:<16} FAILED  {failure}")
             failed.append(row["id"])
