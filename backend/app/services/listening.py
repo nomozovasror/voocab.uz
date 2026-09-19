@@ -20,6 +20,7 @@ from sqlmodel import select
 from app.core.database import AsyncSession
 from app.models.attempt import Attempt, AttemptStatus
 from app.models.audio_asset import AudioAsset
+from app.models.collection import Collection, CollectionItem
 from app.models.audio_blob import AudioBlob
 from app.models.material import Material
 from app.models.material_difficulty import MaterialDifficulty
@@ -1222,24 +1223,66 @@ def _catalogue_where(
             .exists()
         )
 
-    # Title and author, and nothing else. The client-side version also matched
-    # question-type labels and "Part 3", which were free when every row was
-    # already in hand; in SQL they would be a subquery per term to search for
-    # something the chips above the field select exactly. Every term must hit
-    # (AND, not OR), so "nodira park" narrows rather than widens.
+    # Title, author, and the name of a collection the material is in. The
+    # client-side version also matched question-type labels and "Part 3",
+    # which were free when every row was already in hand; in SQL they would
+    # be a subquery per term to search for something the chips above the
+    # field select exactly. Every term must hit (AND, not OR), so "nodira
+    # park" narrows rather than widens.
+    #
+    # The collection is in because the book's name is ONLY there. A seeded
+    # material is titled "Why we need silence -- C21 T1 P2": the code says
+    # which test, and the thirty characters of "Cambridge IELTS 21" live once
+    # on the course rather than sixteen times on its materials
+    # (`scripts/import_section.py` says so where it builds the title). The
+    # cost of that was a search for "Cambridge 21" finding nothing at all,
+    # which is the first thing somebody types.
     for term in query.split():
-        pattern = f"%{term}%"
         where.append(
-            func.lower(Material.title).like(pattern.lower())
+            _hit(Material.title, term)
             | select(User.id)
             .where(
                 User.id == Material.author_id,
-                func.lower(User.display_name).like(pattern.lower()),
+                _hit(User.display_name, term),
+            )
+            .exists()
+            | select(CollectionItem.material_id)
+            .where(
+                CollectionItem.material_id == Material.id,
+                CollectionItem.collection_id == Collection.id,
+                Collection.visibility == "public",
+                _hit(Collection.title, term),
             )
             .exists()
         )
 
     return where
+
+
+def _hit(column, term: str):
+    """One search term against one piece of text -- as a WORD if it is a number.
+
+    Everything else is a substring match, which is what this search should
+    be: "silence" finds "Why we need silence" and "sail" finds the Cutty
+    Sark. But a bare number is a substring of every code on the shelf, and
+    the codes are made of numbers. "C21 T1 Part 2" came back with all FOUR of
+    that test's parts, because the "2" the reader typed to mean part two also
+    sits inside "C21" -- so the one search a learner actually performs, the
+    one that names the paper they want, could not narrow to it.
+
+    A word boundary fixes exactly that and nothing else: `2` matches "Part 2"
+    and not "C21", while `C21`, `T1` and `P2` stay substrings, which is what
+    makes them typeable without the separators the title prints.
+
+    Every field it is matched against, not only the title. The collection's
+    name was added here to make "Cambridge 21" find something, and with a
+    plain LIKE it quietly handed the number back its old behaviour: "2" hit
+    "Cambridge IELTS 21" and all four parts came back again, through a
+    different door.
+    """
+    if term.isdigit():
+        return column.op("~*")(rf"\m{term}\M")
+    return func.lower(column).like(f"%{term.lower()}%")
 
 
 def _catalogue_order(sort: str) -> list:
