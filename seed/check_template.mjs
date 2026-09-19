@@ -9,7 +9,7 @@
 //   node --experimental-strip-types seed/check_template.mjs <<< "<template>"
 //
 // Prints the gap numbers that survive, one per line.
-import { parseTemplateLayout } from "../frontend/src/features/listening/form-syntax.ts";
+import { parseTemplateLayout } from "../frontend/src/features/paper/form-syntax.ts";
 
 const template = await new Promise((resolve) => {
   let buf = "";
