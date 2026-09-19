@@ -32,7 +32,11 @@ from app.models.attempt import Attempt, AttemptStatus
 from app.models.material import Material
 from app.models.part import Part
 from app.models.question import Question
-from app.models.question_group import LABELLING_TYPES, QuestionGroup
+from app.models.question_group import (
+    LABELLING_TYPES,
+    MATCHING_TYPES,
+    QuestionGroup,
+)
 from app.services import listening as listening_service
 
 DRILL_PAGE = 30
@@ -48,34 +52,55 @@ def _public(skill: str) -> list:
 def family_of(group_type: str) -> list[str]:
     """The types a card covers, given one of them.
 
-    Only labelling is more than itself: map and diagram labelling are the same
-    task on two kinds of picture, the library holds twenty-three maps and two
-    diagrams, and the tab draws them as one card. Everything else is a family
-    of one.
+    Two families are more than themselves. Map and diagram labelling are the
+    same task on two kinds of picture, the library holds twenty-three maps
+    and two diagrams, and the tab draws them as one card. And matching is one
+    task under five names — headings, information, features, sentence endings
+    and listening's own — where what differs is the instruction line and how
+    the box is lettered, which is exactly what a drill is practice AT.
 
     One definition, because two readers ask the question and they must agree —
     what "the next one of the same kind" means (:func:`next_after`) and what
     somebody is part-way through (:func:`in_progress_for`). The client has the
     same table; this is the half of it the server needs, and it is derived
-    from the same ``LABELLING_TYPES`` the models already declare.
+    from the same ``LABELLING_TYPES`` and ``MATCHING_TYPES`` the models
+    already declare.
     """
-    return sorted(LABELLING_TYPES) if group_type in LABELLING_TYPES else [group_type]
+    for family in (LABELLING_TYPES, MATCHING_TYPES):
+        if group_type in family:
+            return sorted(family)
+    return [group_type]
 
 
-def _in_part(part_number: int | None):
-    """Only drills cut from one of the paper's four parts.
+#: The number each part's first question carries, by paper. A listening
+#: paper is ten to a part; a reading paper is roughly thirteen to a passage
+#: and the boundaries are fixed by the exam rather than by the book. Both are
+#: the same table the importers write ``first_number`` from.
+FIRST_NUMBER = {
+    "listening": (1, 11, 21, 31),
+    "reading": (1, 14, 27),
+}
+
+
+def _in_part(part_number: int | None, skill: str = "listening"):
+    """Only drills cut from one named part of the paper.
 
     Matched on ``first_number``, never on ``parts.order_index``. The importer
     writes one part per material at index 0 whatever part it really is, so
-    every seeded material looks like Part 1 by its index — ten numbers per
-    part is what actually says which one it is (11 is Part 2, 31 is Part 4).
-    An author-written part, which has no ``first_number``, falls back to the
-    index, where the editor's ``Part {order_index + 1}`` titling does make the
-    index carry the number.
+    every seeded material looks like Part 1 by its index — the number its
+    first question carries is what actually says which one it is (11 is
+    listening Part 2, 27 is Reading Passage 3). An author-written part, which
+    has no ``first_number``, falls back to the index, where the editor's
+    ``Part {order_index + 1}`` titling does make the index carry the number.
+
+    The arithmetic is per paper. Ten a part is listening's; applied to
+    reading it asks for a Passage 2 starting at question 11, which no reading
+    material has, so every reading part filter came back empty.
     """
-    if part_number is None:
+    numbers = FIRST_NUMBER.get(skill, FIRST_NUMBER["listening"])
+    if part_number is None or not 1 <= part_number <= len(numbers):
         return sa_true()
-    lo = (part_number - 1) * 10 + 1
+    lo = numbers[part_number - 1]
     return case(
         (Part.first_number.is_not(None), Part.first_number),  # type: ignore[attr-defined]
         else_=Part.order_index * 10 + 1,
@@ -139,7 +164,7 @@ async def type_summary(
             .select_from(QuestionGroup)
             .join(Part, Part.id == QuestionGroup.part_id)  # type: ignore[arg-type]
             .join(Material, Material.id == Part.material_id)  # type: ignore[arg-type]
-            .where(*_public(skill), _drillable(), _in_part(part))
+            .where(*_public(skill), _drillable(), _in_part(part, skill))
             .group_by(QuestionGroup.type)  # type: ignore[arg-type]
         )
     ).all()
@@ -156,7 +181,7 @@ async def type_summary(
                     Attempt.status == AttemptStatus.DRILLED,
                     # Narrowed the same way as the total above, or a card
                     # could read "3 done" over "2 drills".
-                    _in_part(part),
+                    _in_part(part, skill),
                 )
                 .group_by(QuestionGroup.type)  # type: ignore[arg-type]
             )
@@ -237,7 +262,7 @@ async def list_drills(
         *_public(skill),
         _drillable(),
         QuestionGroup.type.in_(group_types),  # type: ignore[attr-defined]
-        _in_part(part),
+        _in_part(part, skill),
     ]
 
     if query:
