@@ -186,16 +186,53 @@ def locate(book: int) -> tuple[list[dict], list[dict]]:
     return passages, barren
 
 
+def test_count(conn: sqlite3.Connection, book: int) -> int:
+    """How many tests this book has, off what is already catalogued.
+
+    Every test is four listening sections, and all 256 of those were
+    inventoried from the files themselves — so this is a fact about the book
+    rather than a number anybody typed.
+    """
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM section WHERE book_number = ?", (book,)
+    ).fetchone()
+    return (row["n"] or 0) // 4
+
+
 def write(conn: sqlite3.Connection, book: int, passages: list[dict],
-          how: str = "heading") -> int:
-    """Upsert what was found. Nothing is deleted: a passage located by hand,
-    or by a re-read, is not undone by a run that could not see it."""
+          how: str = "heading") -> tuple[int, list[str]]:
+    """Upsert what was found, and name what was refused.
+
+    Nothing is deleted: a passage located by hand, or by a re-read, is not
+    undone by a run that could not see it.
+    """
+    tests = test_count(conn, book)
     written = 0
+    refused: list[str] = []
     for one in passages:
         # Three to a paper. A fourth is a misread, and writing it would put a
         # passage nobody can sit into the corpus rather than a line in the
         # report saying the book was read wrong.
         if not 1 <= one["passage"] <= 3:
+            continue
+        # A book has as many tests as it has, and the grouping cannot discover
+        # more. "Numbers that do not go up are the next test" is the only
+        # thing that says where a test ends, and it is fooled twice over:
+        #
+        #  * Book 10 prints a GENERAL TRAINING reading paper after its four
+        #    academic tests. It is a different exam, it is laid out exactly
+        #    like the real ones, and it arrived as tests 5 and 6.
+        #  * The Trainer's teaching pages carry question numbers of their own,
+        #    and four stray single pages arrived as tests 7 and 8.
+        #
+        # Both are caught by the same line, because both claim a test the book
+        # does not have. Refused and named — a count that silently dropped
+        # them would be the report agreeing with itself.
+        if tests and one["test"] > tests:
+            refused.append(
+                f"cam{book}-t{one['test']}-p{one['passage']}"
+                f" ({len(one['pages'])} page{'' if len(one['pages']) == 1 else 's'})"
+            )
             continue
         conn.execute(
             """INSERT INTO passage
@@ -219,7 +256,7 @@ def write(conn: sqlite3.Connection, book: int, passages: list[dict],
             ),
         )
         written += 1
-    return written
+    return written, refused
 
 
 def report(conn: sqlite3.Connection) -> None:
@@ -483,12 +520,15 @@ def main() -> None:
         if args.read:
             print(f"book {book}:")
             passages = reread(conn, book)
-            written = write(conn, book, passages, how="read")
+            written, refused = write(conn, book, passages, how="read")
             conn.commit()
             print(f"book {book:<4} {written:>3} passages, read off the page")
+            if refused:
+                print(f"    {len(refused)} refused — this book has"
+                      f" {test_count(conn, book)} tests: {', '.join(refused)}")
             continue
         passages, barren = locate(book)
-        written = write(conn, book, passages)
+        written, refused = write(conn, book, passages)
         conn.commit()
         by_test: dict[int, int] = defaultdict(int)
         for one in passages:
@@ -497,6 +537,9 @@ def main() -> None:
         note = f"  tests with not-three: {odd}" if odd else ""
         print(f"book {book:<4} {written:>3} passages"
               f"{'  (nothing found)' if not written else ''}{note}")
+        if refused:
+            print(f"    {len(refused)} refused — this book has"
+                  f" {test_count(conn, book)} tests: {', '.join(refused)}")
         if barren:
             barren_books.append(book)
             for one in barren:
