@@ -7,7 +7,6 @@ import { timeAgo } from "@/lib/time";
 import { getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { HeaderGround } from "@/components/layout/HeaderGround";
 import { HeaderSlot, useHeaderTask } from "@/components/layout/header-task";
 import {
   useDrillTake,
@@ -78,9 +77,15 @@ import {
  * optional (see AttemptSubmit).
  */
 
-/** What the strip along the bottom leaves under the panes: its own height is
- *  measured, this is the air around it. */
-const PANE_FOOT = 24;
+/** What the strip along the bottom leaves under the panes, on top of its own
+ *  measured height.
+ *
+ *  Nothing. There was 24px of it, and what it bought was a band of empty
+ *  page where the prose stopped short of the strip and simply disappeared —
+ *  a line vanishing a centimetre above the thing it should have slid under.
+ *  The panes now run flush to the strip, which has its own background and
+ *  covers what goes beneath it. */
+const PANE_FOOT = 0;
 
 export default function ReadingTakePage() {
   // One page, two routes. `/reading/:id` is a whole paper;
@@ -498,8 +503,19 @@ export default function ReadingTakePage() {
     //
     // Done here rather than in `Layout` because this is the only page that
     // wants it. The day a second one does, it moves up a level.
-    <div className="-my-8 mx-[calc(50%-50vw)] flex w-auto flex-col overflow-hidden px-4 sm:px-6">
-      <HeaderGround />
+    // -mt-23 is main's own `py-8` (32px) plus the header's 60, so the panes
+    // begin at the very top of the window and the paper scrolls UNDER the
+    // islands rather than stopping below them. Each pane carries the header's
+    // height back as padding, so at rest the first line sits clear of the
+    // pills and only goes behind them once the reader has moved it there.
+    //
+    // No `HeaderGround` on this page, and that is the same decision: the
+    // ground is a solid band whose whole job is to stop the page showing
+    // through the gaps between the islands. Here the showing through is the
+    // point — the pills are frosted, and prose sliding under frosted glass
+    // is the one place in this app where that reads as depth rather than as
+    // a rendering fault.
+    <div className="-mt-23 -mb-8 mx-[calc(50%-50vw)] flex w-auto flex-col overflow-hidden px-4 sm:px-6">
 
       {/* Nothing above the paper at all.
 
@@ -543,10 +559,41 @@ export default function ReadingTakePage() {
         </HeaderSlot>
       )}
 
+      <SplitPanes
+        ref={paneRef}
+        // On both panes, because it is the paper's size and not the prose's.
+        // Set on the passage alone, the control made nine hundred words
+        // bigger and left the questions beside them at the size somebody
+        // had already said was too small.
+        style={{ fontSize: `${textSize}%` }}
+        height={paneH}
+        split={wide}
+        leftLabel={sorted.length > 1 ? "Passages" : "Passage"}
+        rightLabel="Questions"
+        // Switching to the passage on a narrow screen is somebody looking
+        // something up about the question they are on, so it opens at that
+        // question's passage rather than wherever it was left.
+        onShowing={(side) => {
+          if (side === "left") showPassage();
+        }}
+        left={
+          <div
+            className="space-y-10 pt-15"
+            onMouseOver={(e) => look(e.target)}
+            onFocusCapture={(e) => look(e.target)}
+            onMouseLeave={() => setLit(null)}
+          >
+            {/* Over the passage, because that is what it names. One line:
+                what the book calls it, and which test it came from. */}
+            {/* An arrival note, not chrome. Both of these used to sit in the
+                layout above the panes, where they cost every reader forty
+                pixels of passage for something that is read once. Inside the
+                pane they scroll away with the paragraph they are next to,
+                which is what a note read once should do. */}
       {material.last_attempt && (
         <Link
           to={`/reading/attempts/${material.last_attempt.attempt_id}`}
-          className="mt-3 flex shrink-0 flex-wrap items-baseline gap-x-3 gap-y-1 rounded-lg border border-border bg-card px-4 py-2.5 transition-colors duration-fast hover:border-border-strong focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          className="mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-lg border border-border bg-card px-4 py-2.5 transition-colors duration-fast hover:border-border-strong focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
           <span className="text-sm text-foreground">You have sat this</span>
           <span className="text-sm tabular-nums text-muted-foreground">
@@ -562,7 +609,7 @@ export default function ReadingTakePage() {
       )}
 
       {resumed && (
-        <p className="mt-3 flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+        <p className="mb-4 flex items-center gap-2 text-xs text-muted-foreground">
           Picked up where you left off.
           <button
             type="button"
@@ -580,34 +627,14 @@ export default function ReadingTakePage() {
         </p>
       )}
 
-      <SplitPanes
-        ref={paneRef}
-        className="mt-4"
-        height={paneH}
-        split={wide}
-        leftLabel={sorted.length > 1 ? "Passages" : "Passage"}
-        rightLabel="Questions"
-        // Switching to the passage on a narrow screen is somebody looking
-        // something up about the question they are on, so it opens at that
-        // question's passage rather than wherever it was left.
-        onShowing={(side) => {
-          if (side === "left") showPassage();
-        }}
-        left={
-          <div
-            className="space-y-10"
-            style={{ fontSize: `${textSize}%` }}
-            onMouseOver={(e) => look(e.target)}
-            onFocusCapture={(e) => look(e.target)}
-            onMouseLeave={() => setLit(null)}
-          >
-            {/* Over the passage, because that is what it names. One line:
-                what the book calls it, and which test it came from. */}
-            <div className="-mt-1">
-              <h1 className="text-base font-semibold text-foreground">
+            {/* Centred over the column it names, and larger than the prose
+                under it — it is the passage's heading, and a heading set at
+                the body's own size is a first line rather than a title. */}
+            <div className="-mt-1 text-center">
+              <h1 className="text-[1.35em] font-semibold text-balance text-foreground">
                 {material.title}
               </h1>
-              <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">
+              <p className="mt-1 text-[0.8em] tabular-nums text-muted-foreground">
                 {[
                   material.reference !== material.title
                     ? material.reference
@@ -639,6 +666,7 @@ export default function ReadingTakePage() {
         }
         right={
           <div
+            className="pt-15"
             onKeyDown={onPaperKeyDown}
             onMouseOver={(e) => look(e.target)}
             onMouseLeave={() => setLit(null)}
@@ -709,51 +737,39 @@ function TakeSkeleton() {
   return (
     <SkeletonBlock
       label="Loading passage"
-      className="mx-auto w-full max-w-[1500px] pb-32"
+      className="-mt-23 -mb-8 mx-[calc(50%-50vw)] flex w-auto flex-col overflow-hidden px-4 sm:px-6"
     >
-      <HeaderGround />
-      <div className="pt-1">
-        <Link
-          to="/reading"
-          className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <ArrowLeft className="size-3.5" aria-hidden />
-          Reading
-        </Link>
-        <div className="mt-1.5 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-          <h1 className="text-2xl font-semibold">
-            <Skeleton className="inline-block h-[0.8em] w-80 max-w-full" />
-          </h1>
-          <p className="shrink-0 text-xs">
-            <Skeleton className="inline-block h-[0.9em] w-40" />
-          </p>
-        </div>
-      </div>
-
-      <div className="mt-4 flex gap-5">
-        {/* The passage: a heading and its paragraphs, at the real leading so
+      {/* The real container, the real breakout, the real header clearance —
+          so the page does not jump sideways or upwards when the paper
+          lands. No back link and no title bar, because the real one has
+          neither: they are in the header's islands, which are the app's own
+          and are already there. */}
+      <div className="flex gap-5 pt-15">
+        {/* The passage: a title and its paragraphs, at the real leading so
             the column is the height it will be. */}
-        <div className="w-1/2 space-y-4 pr-5">
-          <h2 className="text-lg font-semibold">
-            <Skeleton className="inline-block h-[0.8em] w-56" />
-          </h2>
-          {[0, 1, 2].map((block) => (
-            <div key={block} className="space-y-2">
-              {[0, 1, 2, 3].map((line) => (
-                <p key={line} className="text-[0.95rem] leading-7">
-                  <Skeleton
-                    className={cn(
-                      "inline-block h-[0.8em]",
-                      // The last line of a paragraph is short, and a block of
-                      // four full-width bars reads as a table rather than as
-                      // prose about to arrive.
-                      line === 3 ? "w-3/5" : "w-full",
-                    )}
-                  />
-                </p>
-              ))}
-            </div>
-          ))}
+        <div className="w-1/2 space-y-4 pr-5 text-center">
+          <h1 className="text-[1.35em] font-semibold">
+            <Skeleton className="inline-block h-[0.8em] w-72 max-w-full" />
+          </h1>
+          <div className="space-y-4 text-left">
+            {[0, 1, 2].map((block) => (
+              <div key={block} className="space-y-2">
+                {[0, 1, 2, 3].map((line) => (
+                  <p key={line} className="text-[0.95em] leading-[1.72]">
+                    <Skeleton
+                      className={cn(
+                        "inline-block h-[0.8em]",
+                        // The last line of a paragraph is short, and a block
+                        // of four full-width bars reads as a table rather
+                        // than as prose about to arrive.
+                        line === 3 ? "w-3/5" : "w-full",
+                      )}
+                    />
+                  </p>
+                ))}
+              </div>
+            ))}
+          </div>
         </div>
         <div className="w-px shrink-0 bg-border" />
         <div className="min-w-0 flex-1 pl-5">

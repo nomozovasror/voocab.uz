@@ -65,8 +65,8 @@ export function FormCompletionGroup({
 
   return (
     <div className="space-y-3">
-      <p className="text-sm text-foreground">{group.instructions}</p>
-      {rubric && <p className="text-xs text-muted-foreground">{rubric}</p>}
+      <p className="text-[0.875em] text-foreground">{group.instructions}</p>
+      {rubric && <p className="text-[0.75em] text-muted-foreground">{rubric}</p>}
 
       <div className="rounded-xl border border-border bg-card p-5">
         {/* Above the labels, where the paper prints it. Its size is known
@@ -127,7 +127,7 @@ export function FormCompletionGroup({
                 {numbered && (
                   <span
                     aria-hidden
-                    className="text-xs font-semibold text-muted-foreground"
+                    className="text-[0.75em] font-semibold text-muted-foreground"
                   >
                     {shown}
                   </span>
@@ -139,7 +139,7 @@ export function FormCompletionGroup({
                   <select
                     data-question={question.id}
                     className={cn(
-                      "rounded-md border bg-transparent px-2 py-0.5 font-mono text-base text-foreground transition-colors duration-fast focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                      "rounded-md border bg-transparent px-2 py-0.5 font-mono text-[1em] text-foreground transition-colors duration-fast focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
                       fieldTone,
                     )}
                     value={answers[question.id] ?? ""}
@@ -170,7 +170,7 @@ export function FormCompletionGroup({
                     // No ring: the underline IS the focus state, and a ring
                     // around a borderless field draws a box the design spent
                     // the rest of this rule removing.
-                    "w-36 border-0 border-b-2 bg-transparent px-1 pb-0.5 font-mono text-base text-foreground transition-colors duration-fast placeholder:text-muted-foreground focus-visible:border-primary focus-visible:outline-none",
+                    "w-36 border-0 border-b-2 bg-transparent px-1 pb-0.5 font-mono text-[1em] text-foreground transition-colors duration-fast placeholder:text-muted-foreground focus-visible:border-primary focus-visible:outline-none",
                     fieldTone,
                   )}
                   value={answers[question.id] ?? ""}
@@ -186,7 +186,7 @@ export function FormCompletionGroup({
                 {/* -ml-1 cancels the flex gap: a full stop sits flush. */}
                 {tail && <span className="-ml-1">{tail}</span>}
                 {graded && !result.is_correct && (
-                  <span className="text-xs text-muted-foreground">
+                  <span className="text-[0.75em] text-muted-foreground">
                     (
                     {letters > 0
                       ? result.correct_answers
@@ -214,7 +214,7 @@ export function FormCompletionGroup({
                     }
                     title="Hear where this answer is said"
                     aria-label={`Hear where answer ${shown} is said`}
-                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-primary"
+                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.75em] text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-primary"
                   >
                     <Volume2 className="size-3.5" aria-hidden />
                     hear it
@@ -233,10 +233,10 @@ export function FormCompletionGroup({
         <>
           <ul className="space-y-1 rounded-lg border border-border bg-background p-3">
             {box.map((text, index) => (
-              <li key={index} className="flex items-baseline gap-2 text-sm">
+              <li key={index} className="flex items-baseline gap-2 text-[0.875em]">
                 <span
                   aria-hidden
-                  className="flex size-5 shrink-0 items-center justify-center self-center rounded-full border border-border text-xs font-semibold text-muted-foreground"
+                  className="flex size-5 shrink-0 items-center justify-center self-center rounded-full border border-border text-[0.75em] font-semibold text-muted-foreground"
                 >
                   {matchLetter(index).toUpperCase()}
                 </span>
@@ -245,7 +245,7 @@ export function FormCompletionGroup({
             ))}
           </ul>
           {group.config.allow_reuse && (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-[0.75em] text-muted-foreground">
               NB You may use any letter more than once.
             </p>
           )}

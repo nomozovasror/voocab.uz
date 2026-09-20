@@ -67,7 +67,7 @@ export function ChoiceGroup({
 }: ChoiceGroupProps) {
   return (
     <div className="space-y-4">
-      <p className="text-sm text-foreground">{group.instructions}</p>
+      <p className="text-[0.875em] text-foreground">{group.instructions}</p>
 
       {group.questions
         .slice()
@@ -151,7 +151,7 @@ function ChoiceQuestion({
       className="space-y-1.5"
       aria-invalid={graded && !result.is_correct}
     >
-      <legend className="mb-1 flex w-full items-baseline gap-2 text-base text-foreground">
+      <legend className="mb-1 flex w-full items-baseline gap-2 text-[1em] text-foreground">
         <span className="shrink-0 font-semibold tabular-nums text-muted-foreground">
           {questionNumbers(number, selectCount)}
         </span>
@@ -166,7 +166,7 @@ function ChoiceQuestion({
       </legend>
 
       {several && (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-[0.75em] text-muted-foreground">
           Choose {selectCount} letters — {chosen.size} of {selectCount} chosen
           {full && !graded && ". Unpick one to change your answer."}
         </p>
@@ -184,7 +184,7 @@ function ChoiceQuestion({
           <label
             key={letter}
             className={cn(
-              "flex w-full cursor-pointer items-baseline gap-3 rounded-md border px-3 py-2 text-base transition-colors duration-fast",
+              "flex w-full cursor-pointer items-baseline gap-3 rounded-md border px-3 py-2 text-[1em] transition-colors duration-fast",
               // The real input is sr-only, so the focus ring has to be put on
               // what is actually visible. `has-[:focus-visible]` and not
               // `peer-focus-visible`: the input is a CHILD of this label, not
@@ -223,7 +223,7 @@ function ChoiceQuestion({
             <span
               aria-hidden
               className={cn(
-                "flex size-5 shrink-0 items-center justify-center self-center border text-xs font-semibold",
+                "flex size-5 shrink-0 items-center justify-center self-center border text-[0.75em] font-semibold",
                 several ? "rounded-[4px]" : "rounded-full",
                 graded && isKey
                   ? "border-success"
@@ -261,7 +261,7 @@ function ChoiceQuestion({
                 onClick={() => onReplay(span[0], span[1])}
                 title={`Hear where ${letter.toUpperCase()} is given`}
                 aria-label={`Hear where option ${letter.toUpperCase()} of question ${number} is given`}
-                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-primary"
+                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.75em] text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-primary"
               >
                 <Volume2 className="size-3.5" aria-hidden />
                 hear {letter.toUpperCase()}

@@ -54,7 +54,7 @@ export function FixedChoiceGroup({
 
   return (
     <div className="space-y-3">
-      <p className="text-sm text-foreground">{group.instructions}</p>
+      <p className="text-[0.875em] text-foreground">{group.instructions}</p>
 
       <div>
         {group.questions
@@ -123,11 +123,11 @@ function Statement({
       <div className="flex items-baseline gap-3">
         <span
           aria-hidden
-          className="w-6 shrink-0 text-right text-sm font-semibold tabular-nums text-muted-foreground"
+          className="w-6 shrink-0 text-right text-[0.875em] font-semibold tabular-nums text-muted-foreground"
         >
           {number}
         </span>
-        <span className="min-w-0 flex-1 text-base leading-snug text-foreground">
+        <span className="min-w-0 flex-1 text-[1em] leading-snug text-foreground">
           {question.prompt}
         </span>
         {onFlag && (
@@ -158,7 +158,7 @@ function Statement({
             <label
               key={word}
               className={cn(
-                "flex h-7 cursor-pointer items-center justify-center rounded-md px-3 text-xs font-semibold tracking-caps transition-colors",
+                "flex h-7 cursor-pointer items-center justify-center rounded-md px-3 text-[0.75em] font-semibold tracking-caps transition-colors",
                 "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
                 // Before grading only the pick is coloured; after it the
                 // answer leads, whether or not they found it — the same four

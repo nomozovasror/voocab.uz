@@ -102,7 +102,7 @@ export function FormLayout({
   className,
 }: FormLayoutProps) {
   return (
-    <div className={cn("text-sm text-foreground", className)}>
+    <div className={cn("text-[0.875em] text-foreground", className)}>
       {blocks.map((block, i) => {
         if (block.kind === "space") {
           return <div key={i} className="h-3" aria-hidden />;
@@ -118,7 +118,7 @@ export function FormLayout({
           return (
             <h3
               key={i}
-              className="mb-3 text-center text-sm font-semibold tracking-wide text-foreground uppercase"
+              className="mb-3 text-center text-[0.875em] font-semibold tracking-wide text-foreground uppercase"
             >
               {block.text}
             </h3>
@@ -264,7 +264,7 @@ export function FormLayout({
                         starts is part of it, and a line that starts a column
                         further left is something else. */}
                     {hasMargin && (
-                      <span className="w-6 shrink-0 pt-0.5 text-right text-xs font-semibold tabular-nums text-muted-foreground">
+                      <span className="w-6 shrink-0 pt-0.5 text-right text-[0.75em] font-semibold tabular-nums text-muted-foreground">
                         {inMargin && renderNumber?.(gaps[0].number)}
                       </span>
                     )}

@@ -102,12 +102,12 @@ export function MatchingGroup({
 
   return (
     <div className="space-y-3">
-      <p className="text-sm text-foreground">{group.instructions}</p>
+      <p className="text-[0.875em] text-foreground">{group.instructions}</p>
       {/* The paper's own NB line, and only when it is true — printed on a set
           where each letter is used once, it would be a lie the candidate
           plans around. */}
       {group.config.allow_reuse && (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-[0.75em] text-muted-foreground">
           NB You may use any letter more than once.
         </p>
       )}
@@ -124,13 +124,13 @@ export function MatchingGroup({
             <li
               key={index}
               className={cn(
-                "flex items-baseline gap-2 text-sm transition-opacity duration-fast",
+                "flex items-baseline gap-2 text-[0.875em] transition-opacity duration-fast",
                 spent && "opacity-40",
               )}
             >
               <span
                 aria-hidden
-                className="flex size-5 shrink-0 items-center justify-center self-center rounded-full border border-border text-xs font-semibold text-muted-foreground"
+                className="flex size-5 shrink-0 items-center justify-center self-center rounded-full border border-border text-[0.75em] font-semibold text-muted-foreground"
               >
                 {cased(label)}
               </span>
@@ -225,11 +225,11 @@ function MatchingItem({
       <legend className="sr-only">Question {number}</legend>
       <span
         aria-hidden
-        className="w-6 shrink-0 text-sm font-semibold tabular-nums text-muted-foreground"
+        className="w-6 shrink-0 text-[0.875em] font-semibold tabular-nums text-muted-foreground"
       >
         {number}
       </span>
-      <span className="min-w-0 flex-1 text-base text-foreground">
+      <span className="min-w-0 flex-1 text-[1em] text-foreground">
         {question.prompt}
       </span>
       {onFlag && (
@@ -264,7 +264,7 @@ function MatchingItem({
             <label
               key={letter}
               className={cn(
-                "flex h-7 min-w-7 cursor-pointer items-center justify-center rounded-full border px-1.5 text-xs font-semibold transition-colors",
+                "flex h-7 min-w-7 cursor-pointer items-center justify-center rounded-full border px-1.5 text-[0.75em] font-semibold transition-colors",
                 // The real input is sr-only, so the ring goes on the visible
                 // letter. `has-[:focus-visible]` because the input is a child
                 // of this label, not a preceding sibling — there is no peer.
@@ -313,7 +313,7 @@ function MatchingItem({
           onClick={() => onReplay(result.replay_start_ms, result.replay_end_ms)}
           title="Hear where this answer is given"
           aria-label={`Hear where the answer to question ${number} is given`}
-          className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-primary"
+          className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.75em] text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-primary"
         >
           <Volume2 className="size-3.5" aria-hidden />
           hear it
@@ -388,7 +388,7 @@ function Picker({
       <span
         aria-hidden
         className={cn(
-          "flex h-8 min-w-[6.5rem] items-center justify-between gap-2 rounded-lg border bg-surface-sunken px-2.5 text-xs font-semibold transition-colors",
+          "flex h-8 min-w-[6.5rem] items-center justify-between gap-2 rounded-lg border bg-surface-sunken px-2.5 text-[0.75em] font-semibold transition-colors",
           // The same four states the circles draw, so a candidate who works
           // through a matching-information group and then a headings group
           // is reading one colour language.
@@ -407,7 +407,7 @@ function Picker({
       {/* After grading, what it should have been — beside the pick rather
           than replacing it, so the candidate can see both at once. */}
       {graded && !right && answer && (
-        <span className="ml-2 shrink-0 text-xs font-semibold text-correct">
+        <span className="ml-2 shrink-0 text-[0.75em] font-semibold text-correct">
           {cased(answer)}
         </span>
       )}

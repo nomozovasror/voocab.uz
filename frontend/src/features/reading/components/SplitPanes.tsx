@@ -30,6 +30,23 @@ import { cn } from "@/lib/utils";
  *  thing on screen" is better than two. */
 export const LEFT_PANE = "data-left-pane";
 
+/** What every pane wears, and why.
+ *
+ *  `scrollbar-quiet` is the app's own treatment for a scroller it keeps —
+ *  invisible at rest, fading in on hover, the gutter reserved either way so
+ *  the text does not reflow when the pointer arrives.
+ *
+ *  The mask is the top of the window. These panes begin at y=0 and run under
+ *  the header, so the paper goes BEHIND the islands rather than stopping
+ *  below them — which is the point, and which left a line of prose sliced
+ *  through the middle at the very top of the screen. Sixty pixels of fade,
+ *  the header's own height: at rest the pane's `pt-15` means nothing is in
+ *  that band, and once the reader scrolls, the text dissolves into the
+ *  chrome instead of being guillotined by it.
+ */
+const FADE =
+  "[mask-image:linear-gradient(to_bottom,transparent_0,black_3.75rem)] scrollbar-quiet relative";
+
 /** Why every pane wears `scrollbar-quiet`.
  *
  *  It is the app's own treatment for a scroller it keeps — invisible at
@@ -90,11 +107,24 @@ interface SplitPanesProps {
    *  until the first measurement, which is one frame. */
   height: number | null;
   className?: string;
+  /** Applied to the pair. The take screen sets the paper's font size here so
+   *  both panes scale together — see the note where it is passed. */
+  style?: React.CSSProperties;
 }
 
 export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
   function SplitPanes(
-    { left, right, leftLabel, rightLabel, split, onShowing, height, className },
+    {
+      left,
+      right,
+      leftLabel,
+      rightLabel,
+      split,
+      onShowing,
+      height,
+      className,
+      style,
+    },
     outerRef,
   ) {
   const [percent, setPercent] = useState(remembered);
@@ -144,7 +174,7 @@ export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
     return (
       <div
         ref={outerRef}
-        style={height ? { height } : undefined}
+        style={{ ...style, ...(height ? { height } : {}) }}
         className={cn("flex min-h-0 flex-col", className)}
       >
         {/* Tabs rather than a stack, and rather than a split nobody can read.
@@ -184,13 +214,13 @@ export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
             away — see take-session. */}
         <div
           {...{ [LEFT_PANE]: "" }}
-          className="scrollbar-quiet relative min-h-0 flex-1 overflow-y-auto"
+          className={cn(FADE, "min-h-0 flex-1 overflow-y-auto")}
           hidden={showing !== "left"}
         >
           {left}
         </div>
         <div
-          className="scrollbar-quiet relative min-h-0 flex-1 overflow-y-auto"
+          className={cn(FADE, "min-h-0 flex-1 overflow-y-auto")}
           hidden={showing !== "right"}
         >
           {right}
@@ -206,12 +236,12 @@ export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
         if (typeof outerRef === "function") outerRef(el);
         else if (outerRef) outerRef.current = el;
       }}
-      style={height ? { height } : undefined}
+      style={{ ...style, ...(height ? { height } : {}) }}
       className={cn("flex min-h-0", className)}
     >
       <div
         {...{ [LEFT_PANE]: "" }}
-        className="scrollbar-quiet relative min-w-0 overflow-y-auto pr-5"
+        className={cn(FADE, "min-w-0 overflow-y-auto pr-5")}
         style={{ width: `${percent}%` }}
       >
         {left}
@@ -251,7 +281,7 @@ export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
         />
       </div>
 
-      <div className="scrollbar-quiet relative min-w-0 flex-1 overflow-y-auto pl-5">{right}</div>
+      <div className={cn(FADE, "min-w-0 flex-1 overflow-y-auto pl-5")}>{right}</div>
     </div>
   );
   },

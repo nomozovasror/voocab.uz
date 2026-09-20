@@ -149,17 +149,17 @@ export function QuestionPaper({
               numbers. */}
           {parts.length > 1 && (
           <h2 className="mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-border pt-4">
-            <span className="text-sm font-medium text-foreground">
+            <span className="text-[0.875em] font-medium text-foreground">
               {partWord} {number}
             </span>
             {spans[i] && spans[i].rows.length > 0 && (
-              <span className="text-xs tabular-nums text-muted-foreground">
+              <span className="text-[0.75em] tabular-nums text-muted-foreground">
                 Questions {spans[i].from}
                 {spans[i].to > spans[i].from ? `\u2013${spans[i].to}` : ""}
               </span>
             )}
             {!restates(part.title, partWord, number) && (
-              <span className="text-xs text-muted-foreground">{part.title}</span>
+              <span className="text-[0.75em] text-muted-foreground">{part.title}</span>
             )}
             {/* Where the author marked the part's boundaries, the learner can
                 hear it from the top. That marking already existed and did
@@ -169,7 +169,7 @@ export function QuestionPaper({
                 type="button"
                 onClick={() => onPlayPart(part.audio_start_ms, part.audio_end_ms)}
                 title={`Play part ${number} from the start`}
-                className="ml-auto flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs text-muted-foreground transition-colors duration-fast hover:bg-surface-hover hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                className="ml-auto flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[0.75em] text-muted-foreground transition-colors duration-fast hover:bg-surface-hover hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
               >
                 <Play className="size-3" aria-hidden />
                 Play this part
@@ -212,10 +212,10 @@ export function QuestionPaper({
                       said any of that, which is the same sentence for all
                       three groups under it. */}
                   <h3 className="mb-2.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-                    <span className="text-xs font-medium tabular-nums text-primary">
+                    <span className="text-[0.75em] font-medium tabular-nums text-primary">
                       {numbersOf(group, shared.startNumber)}
                     </span>
-                    <span className="text-xs text-muted-foreground">
+                    <span className="text-[0.75em] text-muted-foreground">
                       {QUESTION_TYPE_LABEL[group.type as QuestionGroupType] ??
                         group.type}
                     </span>

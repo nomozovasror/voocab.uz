@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
  *
  * ## Counting up is a measurement
  *
- * `14:20 / ~20:00` — what this has taken, and what it is worth. Past the
+ * `14:20 / 20:00` — what this has taken, and what it is worth. Past the
  * second number the first turns amber and stops there: no red, no flashing,
  * no banner. Practice is where somebody finds out they read slowly, and a
  * page that panics at them for it has changed what practice is for. The
@@ -94,7 +94,7 @@ export function TakeTimer({
     >
       <span className={cn(away && "opacity-50")}>{clock(ms)}</span>
       {targetMs != null && (
-        <span className="text-muted-foreground"> / ~{clock(targetMs)}</span>
+        <span className="text-muted-foreground"> / {clock(targetMs)}</span>
       )}
     </p>
   );
