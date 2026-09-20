@@ -56,7 +56,7 @@ export function FixedChoiceGroup({
     <div className="space-y-3">
       <p className="text-sm text-foreground">{group.instructions}</p>
 
-      <div className="space-y-1.5">
+      <div>
         {group.questions
           .slice()
           .sort((a, b) => a.number - b.number)
@@ -108,42 +108,49 @@ function Statement({
   return (
     <fieldset
       {...{ [Q_ANCHOR]: question.id }}
-      className="flex flex-wrap items-center gap-x-2 gap-y-1 py-0.5"
+      className="border-b border-border py-2.5 last:border-b-0"
       aria-invalid={graded && !result.is_correct}
     >
       <legend className="sr-only">Question {number}</legend>
-      <span
-        aria-hidden
-        className="w-6 shrink-0 text-sm font-semibold tabular-nums text-muted-foreground"
+
+      {/* The statement, across the width it needs. The three words used to
+          sit beside it and take about two hundred pixels of a six-hundred
+          pixel pane, so the QUESTION was squeezed into a third of the row
+          and wrapped to three cramped lines — while the multiple-choice
+          group directly below gave its options the full width for the same
+          act of picking one of several. Question first, answer under it, the
+          way every other group on this paper reads. */}
+      <div className="flex items-baseline gap-3">
+        <span
+          aria-hidden
+          className="w-6 shrink-0 text-right text-sm font-semibold tabular-nums text-muted-foreground"
+        >
+          {number}
+        </span>
+        <span className="min-w-0 flex-1 text-base leading-snug text-foreground">
+          {question.prompt}
+        </span>
+        {onFlag && (
+          <FlagQuestion
+            number={String(number)}
+            flagged={!!flagged}
+            onToggle={onFlag}
+          />
+        )}
+      </div>
+
+      {/* One control rather than three loose pills, and the columns are
+          EQUAL: "NOT GIVEN" is twice the width of "NO", and left to size
+          themselves the three made a ragged edge down a list of six
+          statements. Indented to the statement's own left edge, so the
+          answer sits under the question it belongs to rather than under its
+          number. */}
+      <div
+        className="mt-2 ml-9 inline-grid gap-0.5 rounded-lg bg-surface-sunken p-0.5"
+        style={{
+          gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`,
+        }}
       >
-        {number}
-      </span>
-      {/* A floor under the statement, not `min-w-0`.
-          The three words are `shrink-0` and take about two hundred pixels,
-          and with the statement free to shrink to nothing the row kept them
-          company by squeezing the QUESTION into a third of the pane — three
-          cramped lines beside one comfortable row of buttons, while the
-          multiple-choice group next to it gives its options the full width
-          for the same act of picking one of several.
-
-          With a floor, the row wraps instead: wide enough and the words sit
-          beside the statement as before; too narrow and they drop to their
-          own line and the sentence gets all of it. */}
-      <span className="min-w-[20rem] flex-1 text-base text-foreground">
-        {question.prompt}
-      </span>
-      {onFlag && (
-        <FlagQuestion
-          number={String(number)}
-          flagged={!!flagged}
-          onToggle={onFlag}
-        />
-      )}
-
-      {/* The words themselves, not initials. "T / F / NG" is shorthand a
-          candidate has to expand in their head, and the sheet they will sit
-          the real test on prints the words. */}
-      <div className="flex shrink-0 flex-wrap items-center gap-1">
         {options.map((word) => {
           const picked = chosen === word;
           const isKey = graded && key === word;
@@ -151,18 +158,18 @@ function Statement({
             <label
               key={word}
               className={cn(
-                "flex h-7 cursor-pointer items-center justify-center rounded-full border px-2.5 text-xs font-semibold tracking-caps transition-colors",
+                "flex h-7 cursor-pointer items-center justify-center rounded-md px-3 text-xs font-semibold tracking-caps transition-colors",
                 "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
                 // Before grading only the pick is coloured; after it the
                 // answer leads, whether or not they found it — the same four
                 // states matching draws.
                 isKey
-                  ? "border-success bg-success/10 text-success"
+                  ? "bg-correct/15 text-correct"
                   : graded && picked
-                    ? "border-destructive bg-destructive/10 text-destructive"
+                    ? "bg-incorrect/15 text-incorrect"
                     : picked
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border text-muted-foreground hover:border-border-strong",
+                      ? "bg-primary/15 text-primary"
+                      : "text-muted-foreground hover:text-foreground",
                 disabled && "cursor-default",
               )}
             >

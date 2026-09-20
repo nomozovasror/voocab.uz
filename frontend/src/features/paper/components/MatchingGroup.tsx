@@ -1,4 +1,4 @@
-import { Volume2 } from "lucide-react";
+import { ChevronDown, Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FlagQuestion } from "@/features/listening/components/FlagQuestion";
 import { Q_ANCHOR } from "@/features/paper/take-focus";
@@ -69,6 +69,33 @@ export function MatchingGroup({
   const cased = (label: string) =>
     style === "roman" ? label : label.toUpperCase();
 
+  // Whether the box says anything beyond its own labels.
+  //
+  // Matching information's options ARE the paragraph letters — "A", "B",
+  // "C" — and a row of small circles is the right control for them: the
+  // letter on the button is the whole of the option, so there is nothing to
+  // hold in your head while you aim at it.
+  //
+  // Matching headings is the opposite. Each of its ten options is a
+  // sentence, and the roman numeral is only a handle for one. Printed as ten
+  // small circles it became seventy identical targets down the page, each
+  // standing for something the candidate had to have memorised from a list
+  // further up. So a box that SPEAKS gets a bank and a dropdown, and a box
+  // that is only its own alphabet keeps the circles.
+  const wordy = options.some(
+    (text, index) =>
+      text.trim().toLowerCase() !== matchLabel(index, style).toLowerCase(),
+  );
+  // Which options have been spent, for dimming them in the bank. Not where
+  // the paper says a letter may be used again — there, "used" means nothing.
+  const used = new Set(
+    group.config.allow_reuse
+      ? []
+      : group.questions
+          .map((q) => (answers[q.id] ?? "").trim().toLowerCase())
+          .filter(Boolean),
+  );
+
   return (
     <div className="space-y-3">
       <p className="text-sm text-foreground">{group.instructions}</p>
@@ -82,17 +109,31 @@ export function MatchingGroup({
       )}
 
       <ul className="space-y-1 rounded-lg border border-border bg-background p-3">
-        {options.map((text, index) => (
-          <li key={index} className="flex items-baseline gap-2 text-sm">
-            <span
-              aria-hidden
-              className="flex size-5 shrink-0 items-center justify-center self-center rounded-full border border-border text-xs font-semibold text-muted-foreground"
+        {options.map((text, index) => {
+          const label = matchLabel(index, style);
+          // Spent options fade rather than disappear. What is left is the
+          // thing a candidate is actually reasoning about by the fifth
+          // heading, and a list that shortened as they worked would move
+          // every remaining line under their eye each time they answered.
+          const spent = wordy && used.has(label);
+          return (
+            <li
+              key={index}
+              className={cn(
+                "flex items-baseline gap-2 text-sm transition-opacity duration-fast",
+                spent && "opacity-40",
+              )}
             >
-              {cased(matchLabel(index, style))}
-            </span>
-            <span className="text-foreground">{text}</span>
-          </li>
-        ))}
+              <span
+                aria-hidden
+                className="flex size-5 shrink-0 items-center justify-center self-center rounded-full border border-border text-xs font-semibold text-muted-foreground"
+              >
+                {cased(label)}
+              </span>
+              <span className="text-foreground">{text}</span>
+            </li>
+          );
+        })}
       </ul>
 
       <div className="space-y-1.5">
@@ -108,6 +149,7 @@ export function MatchingGroup({
               number={startNumber + index}
               options={options}
               style={style}
+              wordy={wordy}
               chosen={(answers[question.id] ?? "").trim().toLowerCase()}
               onChange={(letter) => onChange(question.id, letter)}
               result={results?.[question.id]}
@@ -127,6 +169,7 @@ function MatchingItem({
   number,
   options,
   style,
+  wordy,
   chosen,
   onChange,
   result,
@@ -139,6 +182,8 @@ function MatchingItem({
   number: number;
   options: string[];
   style: LabelStyle;
+  /** Whether the box says anything beyond its own labels — see the group. */
+  wordy: boolean;
   chosen: string;
   onChange: (letter: string) => void;
   result?: QuestionResult;
@@ -177,6 +222,20 @@ function MatchingItem({
         />
       )}
 
+      {wordy ? (
+        <Picker
+          number={number}
+          options={options}
+          style={style}
+          chosen={chosen}
+          onChange={onChange}
+          questionId={question.id}
+          graded={graded}
+          right={graded ? result.is_correct : undefined}
+          answer={key}
+          disabled={disabled}
+        />
+      ) : (
       <div className="flex shrink-0 flex-wrap items-center gap-1">
         {options.map((_text, index) => {
           const letter = matchLabel(index, style);
@@ -225,6 +284,7 @@ function MatchingItem({
           );
         })}
       </div>
+      )}
 
       {/* Only where the author marked it — a review that offered replay on
           every item and played the wrong moment on half of them would be
@@ -242,5 +302,97 @@ function MatchingItem({
         </button>
       )}
     </fieldset>
+  );
+}
+
+/**
+ * One item's answer, where the box is ten sentences rather than ten letters.
+ *
+ * A real `<select>`, and it is the control underneath rather than beside:
+ * it is stretched invisibly over the face below it, so the thing the reader
+ * sees is the mock's compact `iii ▾` while the thing the browser operates is
+ * a native picker. That matters more than it sounds. A listbox built out of
+ * divs has to reimplement type-ahead, Home and End, page up, the escape key
+ * and every screen reader's idea of what a choice is — and IELTS candidates
+ * are exactly the population most likely to be working by keyboard on an
+ * unfamiliar machine.
+ *
+ * The LIST reads "iii — Evidence from brain scans"; the closed control shows
+ * only the numeral, because the sentence is already printed once in the bank
+ * above and a second copy inside every row is the same page twice.
+ */
+function Picker({
+  number,
+  options,
+  style,
+  chosen,
+  onChange,
+  questionId,
+  graded,
+  right,
+  answer,
+  disabled,
+}: {
+  number: number;
+  options: string[];
+  style: LabelStyle;
+  chosen: string;
+  onChange: (letter: string) => void;
+  questionId: string;
+  graded: boolean;
+  right?: boolean;
+  answer?: string;
+  disabled?: boolean;
+}) {
+  const cased = (label: string) =>
+    style === "roman" ? label : label.toUpperCase();
+  return (
+    <span className="relative inline-flex shrink-0 items-center">
+      <select
+        data-question={questionId}
+        value={chosen}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        aria-label={`Answer ${number}`}
+        aria-invalid={graded && !right}
+        className="absolute inset-0 cursor-pointer opacity-0 disabled:cursor-default"
+      >
+        <option value="">Choose</option>
+        {options.map((text, index) => {
+          const label = matchLabel(index, style);
+          return (
+            <option key={label} value={label}>
+              {cased(label)} — {text}
+            </option>
+          );
+        })}
+      </select>
+      <span
+        aria-hidden
+        className={cn(
+          "flex h-8 min-w-[6.5rem] items-center justify-between gap-2 rounded-lg border bg-surface-sunken px-2.5 text-xs font-semibold transition-colors",
+          // The same four states the circles draw, so a candidate who works
+          // through a matching-information group and then a headings group
+          // is reading one colour language.
+          graded && right
+            ? "border-correct/40 text-correct"
+            : graded
+              ? "border-incorrect/40 text-incorrect"
+              : chosen
+                ? "border-primary/40 text-primary"
+                : "border-border text-muted-foreground",
+        )}
+      >
+        <span>{chosen ? cased(chosen) : "Choose"}</span>
+        <ChevronDown className="size-3 opacity-60" />
+      </span>
+      {/* After grading, what it should have been — beside the pick rather
+          than replacing it, so the candidate can see both at once. */}
+      {graded && !right && answer && (
+        <span className="ml-2 shrink-0 text-xs font-semibold text-correct">
+          {cased(answer)}
+        </span>
+      )}
+    </span>
   );
 }
