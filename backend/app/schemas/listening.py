@@ -1014,9 +1014,10 @@ class DifficultyOut(BaseModel):
 
     Computed, never stored — see :mod:`app.services.difficulty` for why that
     is the design and not an implementation detail. ``correct_pct`` is
-    ``None`` exactly when ``band`` is ``new``: below the evidence threshold
-    there is no percentage to report, and reporting one anyway is how a paper
-    two people have tried comes to be labelled "Hard".
+    ``None`` whenever the band did not come from a proportion correct: below
+    the evidence threshold there is no percentage to report, and reporting
+    one anyway is how a paper two people have tried comes to be labelled
+    "Hard".
     """
 
     band: Literal["new", "easy", "medium", "hard"]
@@ -1024,6 +1025,16 @@ class DifficultyOut(BaseModel):
     #: How many answers the band rests on. What makes ``new`` legible as "not
     #: enough evidence yet" rather than "nobody has been here".
     answered: int = 0
+    #: The band came from this passage's VOCABULARY rather than from
+    #: anybody's answers — a material nobody has sat enough of, judged by how
+    #: much of its text is outside the frequency lists.
+    #:
+    #: Sent because the two are not the same claim and a page that printed
+    #: them identically would be passing off a guess as a measurement. The
+    #: guess is worth showing: it cannot see the questions, but it can see
+    #: the words, and "we have not measured this yet" is a worse answer than
+    #: "its vocabulary is about average for these papers".
+    estimated: bool = False
 
 
 class PracticeMaterialOut(BaseModel):

@@ -1,6 +1,10 @@
 import { AudioLines, Layers } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { QUESTION_TYPE_BLURB, QUESTION_TYPE_ICON, QUESTION_TYPE_LABEL } from "@/features/paper/question-types";
+import {
+  QUESTION_TYPE_BLURB,
+  QUESTION_TYPE_ICON,
+  QUESTION_TYPE_LABEL,
+} from "@/features/paper/question-types";
 import type {
   CatalogueAuthor,
   DifficultyBand,
@@ -82,7 +86,17 @@ export const DIFFICULTY_ORDER: DifficultyBand[] = [
 /** What a difficulty chip means, spelled out — the band alone is a claim with
  *  no working shown, and the number behind it is the working. */
 export function difficultyTitle(m: PracticeMaterial): string {
-  const { band, correct_pct, answered } = m.difficulty;
+  const { band, correct_pct, answered, estimated } = m.difficulty;
+  // An estimate and a measurement are not the same claim, and the tooltip is
+  // where the difference is told. The chip itself cannot carry it — a word
+  // that long in a column four characters wide is not a chip — and printing
+  // the two identically with no explanation anywhere would be passing off a
+  // guess as a result.
+  if (estimated) {
+    return answered === 0
+      ? "Nobody has sat this yet — rated by how much of its vocabulary is uncommon"
+      : `Only ${answered} answers so far — rated by its vocabulary until there are enough`;
+  }
   if (band === "new" || correct_pct === null) {
     return answered === 0
       ? "Nobody has answered this yet"
@@ -121,9 +135,7 @@ export function describeTask(m: PracticeMaterial): TaskDescription | null {
     return {
       Icon: AudioLines,
       label:
-        m.part_count >= FULL_TEST_PARTS
-          ? "Full test"
-          : `${m.part_count} parts`,
+        m.part_count >= FULL_TEST_PARTS ? "Full test" : `${m.part_count} parts`,
     };
   }
   if (m.question_types.length === 1) {
@@ -619,7 +631,6 @@ export function formatSpent(ms: number): string {
   return `${(ms / 3_600_000).toFixed(1)}h`;
 }
 
-
 // --- Order ------------------------------------------------------------------
 
 /**
@@ -634,7 +645,12 @@ export function formatSpent(ms: number): string {
  */
 export type SortKey = "newest" | "easiest" | "hardest" | "shortest";
 
-export const SORT_ORDER: SortKey[] = ["newest", "easiest", "hardest", "shortest"];
+export const SORT_ORDER: SortKey[] = [
+  "newest",
+  "easiest",
+  "hardest",
+  "shortest",
+];
 
 export const SORT_LABEL: Record<SortKey, string> = {
   newest: "Newest first",

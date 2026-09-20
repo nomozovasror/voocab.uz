@@ -180,6 +180,9 @@ async def test_the_tally_survives_the_round_trip() -> None:
             "band": "easy",
             "correct_pct": 75,
             "answered": 40,
+            # Measured, not guessed: forty answers is well past the
+            # threshold, so the vocabulary estimate is not consulted.
+            "estimated": False,
         }
     finally:
         await _cleanup(material_id)
@@ -218,7 +221,12 @@ async def test_a_material_with_no_row_reads_as_new() -> None:
         async with async_session_factory() as session:
             row = await difficulty_service.material_difficulty(session, [material_id])
 
-        assert row[material_id] == {"band": "new", "correct_pct": None, "answered": 0}
+        assert row[material_id] == {
+            "band": "new",
+            "correct_pct": None,
+            "answered": 0,
+            "estimated": False,
+        }
     finally:
         await _cleanup(material_id)
 
@@ -419,5 +427,96 @@ async def test_a_material_never_seen_before_is_refreshed() -> None:
             stored = await session.get(MaterialDifficulty, material_id)
         assert stored is not None
         assert stored.answered == 4
+    finally:
+        await _cleanup(material_id)
+
+
+@pytest.mark.asyncio
+async def test_a_passage_nobody_has_sat_is_judged_by_its_vocabulary() -> None:
+    """The cold-start fix, and the one property that makes it safe.
+
+    A material with no answers has no measurement — but it has its TEXT, and
+    how much of that text is outside the frequency lists is a real, identical
+    measurement across the whole catalogue. So it gets a band instead of
+    ``New``, marked as an estimate.
+
+    And it loses that band the moment there is a better one. That is the
+    property worth pinning: an estimate that outlived the evidence would be a
+    guess quietly overruling what actually happened to twenty people.
+    """
+    material_id, question_ids, user_id = await _material("Cold start")
+    try:
+        async with async_session_factory() as session:
+            # p67 of the measured corpus is 0.127; above it is `hard`.
+            await difficulty_service.set_vocabulary_load(
+                session, material_id, 0.18
+            )
+            await session.commit()
+            await difficulty_service.recompute(session, [material_id])
+            row = (
+                await difficulty_service.material_difficulty(
+                    session, [material_id]
+                )
+            )[material_id]
+
+        assert row["band"] == "hard"
+        assert row["estimated"] is True
+        # No percentage: there is no proportion correct behind this, and
+        # printing one would be inventing the evidence.
+        assert row["correct_pct"] is None
+        assert row["answered"] == 0
+
+        # Now the real thing arrives, and every answer is right.
+        await _answer(
+            user_id, material_id, question_ids,
+            answers=MIN_ANSWERS, correct=MIN_ANSWERS,
+        )
+        async with async_session_factory() as session:
+            await difficulty_service.recompute(session, [material_id])
+            row = (
+                await difficulty_service.material_difficulty(
+                    session, [material_id]
+                )
+            )[material_id]
+
+        assert row["band"] == "easy"
+        assert row["estimated"] is False
+        assert row["correct_pct"] == 100
+
+        # And the worker's next pass does not blank the measurement it is
+        # not responsible for: `vocabulary_load` is read by `recompute` and
+        # never written by it.
+        async with async_session_factory() as session:
+            stored = await session.get(MaterialDifficulty, material_id)
+            assert stored is not None
+            assert stored.vocabulary_load == pytest.approx(0.18)
+    finally:
+        await _cleanup(material_id)
+
+
+@pytest.mark.asyncio
+async def test_an_import_never_talks_over_a_measured_band() -> None:
+    """Re-importing a passage records its vocabulary again. It must not
+    thereby relabel a paper that a class of twenty has already sat."""
+    material_id, question_ids, user_id = await _material("Already answered")
+    try:
+        await _answer(
+            user_id, material_id, question_ids,
+            answers=MIN_ANSWERS, correct=MIN_ANSWERS,
+        )
+        async with async_session_factory() as session:
+            await difficulty_service.recompute(session, [material_id])
+            await difficulty_service.set_vocabulary_load(
+                session, material_id, 0.18
+            )
+            await session.commit()
+            stored = await session.get(MaterialDifficulty, material_id)
+
+        assert stored is not None
+        assert stored.band == "easy"
+        # The input is not recorded either, and that is the honest outcome
+        # of one upsert guarded by one condition: past the threshold the row
+        # is a measurement, and the import leaves it entirely alone.
+        assert stored.answered >= MIN_ANSWERS
     finally:
         await _cleanup(material_id)

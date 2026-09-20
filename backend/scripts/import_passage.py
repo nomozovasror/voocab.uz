@@ -40,6 +40,7 @@ from app.core.database import async_session_factory
 from app.models.material import Material
 from app.models.part import Part
 from app.models.user import User
+from app.services import difficulty as difficulty_service
 from app.services import vocabulary as vocabulary_service
 
 from scripts.import_section import book_code, import_questions
@@ -161,11 +162,22 @@ async def import_vocabulary(session, material_id: uuid.UUID,
     path = SEED / "work" / passage_id / "vocabulary.json"
     if not path.exists():
         return 0
-    entries = json.loads(path.read_text()).get("entries") or []
+    read = json.loads(path.read_text())
     written, kept = await vocabulary_service.replace_extracted(
-        session, material_id=material_id, part_id=part_id, rows=entries)
+        session, material_id=material_id, part_id=part_id,
+        rows=read.get("entries") or [])
     if kept:
         logger.info("kept %d author-edited entries", kept)
+
+    # How much of the passage is outside the frequency lists. Measured while
+    # the text was being read and recoverable from nowhere else -- the lists
+    # live in the seed venv, not the backend's -- so this is the one chance
+    # to record it. It gives a material nobody has sat a difficulty band
+    # instead of "New", until twenty answers replace the guess.
+    share = (read.get("profile") or {}).get("off_list_share")
+    if share is not None:
+        await difficulty_service.set_vocabulary_load(
+            session, material_id, float(share))
     return written
 
 

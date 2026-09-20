@@ -520,6 +520,15 @@ export interface Difficulty {
   correct_pct: number | null;
   /** How many answers the band rests on. */
   answered: number;
+  /** The band came from the passage's VOCABULARY rather than from anybody's
+   *  answers — how much of its text is outside the frequency lists, measured
+   *  once when the passage was read.
+   *
+   *  What it fixes is cold start: a paper nobody has sat used to read `New`,
+   *  which is honest and useless — it cannot be sorted, chosen by, or
+   *  recommended. It cannot see the questions, so it says so wherever it is
+   *  shown, and twenty answers replace it with what actually happened. */
+  estimated?: boolean;
 }
 
 export interface PracticeMaterial {

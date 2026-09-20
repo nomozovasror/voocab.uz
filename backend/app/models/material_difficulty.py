@@ -48,6 +48,22 @@ class MaterialDifficulty(SQLModel, table=True):
     #: ``new`` / ``easy`` / ``medium`` / ``hard`` — indexed because a filter
     #: chip and a sort order are what it is for.
     band: str = Field(default="new", index=True)
+    #: How much of this material's text is outside the frequency lists --
+    #: the share of its running words that neither the NGSL nor the NAWL
+    #: knows. Null for a material nothing has measured, which is every
+    #: listening paper and any reading one the extraction has not reached.
+    #:
+    #: The one thing in this table that is NOT a function of the attempts,
+    #: and therefore the one thing ``recompute`` does not write. It is a
+    #: function of the TEXT, measured once by `seed/vocabulary.py` and put
+    #: here by the passage importer.
+    #:
+    #: Why it lives in the projection rather than beside the passage: this
+    #: table is what the catalogue filters and sorts by. A band estimated
+    #: from vocabulary is only useful if a learner can find the material by
+    #: it, and that means the estimate has to end up in ``band``, which means
+    #: the number behind it has to be readable where ``band`` is written.
+    vocabulary_load: float | None = Field(default=None)
 
     #: When this row was last worked out. Not decoration: it is how anybody
     #: asking "why does this say New" can tell a material nobody has answered

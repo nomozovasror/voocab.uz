@@ -77,17 +77,68 @@ MIN_ANSWERS = 20
 EASY_AT = 0.75
 MEDIUM_AT = 0.45
 
+#: Where a passage's VOCABULARY puts it, for the materials nobody has
+#: answered enough of yet.
+#:
+#: The figure is the share of a passage's running words that neither the NGSL
+#: nor the NAWL knows -- ``profile()["off_list_share"]`` in `seed/vocabulary.py`
+#: -- and these two numbers are the tertiles of it measured over 86 glossed
+#: Cambridge passages: p33 = 0.095, p67 = 0.127, over a range of 0.049 to
+#: 0.196.
+#:
+#: Tertiles rather than round numbers, because the scale is comparative and
+#: has no absolute meaning. "12% of this passage is off-list" is not a fact a
+#: learner can place; "harder than two thirds of the reading papers here" is.
+#: Splitting the corpus in three is the only calibration that makes the three
+#: words mean what they say.
+#:
+#: Note which measure this is and which it is not. ``frequency_band`` is
+#: deterministic and identical across the whole catalogue, which is what
+#: makes two passages comparable. ``cefr_level`` is the model's, sees the
+#: context, and is the better figure for ONE word -- and drifts from material
+#: to material, so an average of it cannot be compared with another average
+#: of it. The learner sees CEFR; the arithmetic uses frequency.
+VOCAB_EASY_UNDER = 0.095
+VOCAB_HARD_OVER = 0.127
 
-def _band(correct: int, answered: int) -> tuple[Band, int | None]:
+
+def _estimate(load: float | None) -> Band:
+    """The band a passage's vocabulary alone suggests.
+
+    A guess, and it says so wherever it is shown. What it is guessing from is
+    real though: how often a reader is stopped by a word neither frequency
+    list knows. It cannot see the questions, and a passage of plain words can
+    carry a brutal set of TRUE/FALSE/NOT GIVEN — which is exactly why the
+    measured band replaces this the moment there are enough answers to have
+    one.
+    """
+    if load is None:
+        return "new"
+    if load < VOCAB_EASY_UNDER:
+        return "easy"
+    if load <= VOCAB_HARD_OVER:
+        return "medium"
+    return "hard"
+
+
+def _band(
+    correct: int, answered: int, load: float | None = None
+) -> tuple[Band, int | None]:
     """The band for one tally, plus the percentage it came from.
 
     The percentage is returned alongside rather than recomputed by callers,
     so the band and the number that justifies it can never disagree — and it
-    is ``None`` below the threshold, because a band of ``new`` has no
-    percentage to show.
+    is ``None`` below the threshold, because a band that came from the
+    vocabulary has no proportion-correct to show.
+
+    Below :data:`MIN_ANSWERS` the vocabulary answers if it can. That is the
+    cold-start fix: a material nobody has sat is not a material nobody can
+    judge, because its TEXT is right there and measurable. What the
+    measurement cannot do is outlive the real thing — twenty answers and the
+    estimate is gone, replaced by what actually happened to people.
     """
     if answered < MIN_ANSWERS:
-        return "new", None
+        return _estimate(load), None
     rate = correct / answered
     if rate >= EASY_AT:
         return "easy", round(rate * 100)
@@ -100,7 +151,7 @@ def unknown() -> dict:
     """What a material with no answers against it looks like. One definition,
     so the "never attempted" row and the "attempted twice" row are the same
     shape and the caller never has to check which it got."""
-    return {"band": "new", "correct_pct": None, "answered": 0}
+    return {"band": "new", "correct_pct": None, "answered": 0, "estimated": False}
 
 
 async def _tally(
@@ -191,11 +242,16 @@ async def recompute(
         return 0
 
     tallies = await _tally(session, material_ids)
+    # The one column here that is not a function of the attempts. Read back
+    # rather than recomputed, because computing it means tokenising every
+    # passage against the frequency lists — which happens once, in the seed
+    # pipeline, and must not happen again every fifteen minutes.
+    loads = await _loads(session, material_ids)
     now = datetime.now(timezone.utc)
     rows = []
     for material_id in material_ids:
         correct, answered = tallies.get(material_id, (0, 0))
-        band, _pct = _band(correct, answered)
+        band, _pct = _band(correct, answered, loads.get(material_id))
         rows.append(
             {
                 "material_id": material_id,
@@ -210,6 +266,10 @@ async def recompute(
     await session.exec(  # type: ignore[call-overload]
         statement.on_conflict_do_update(
             index_elements=[MaterialDifficulty.material_id],
+            # `vocabulary_load` is deliberately absent. It is written by the
+            # importer, measured from the text, and a refresh of the
+            # attempt tally has nothing to say about it — listing it here
+            # would blank it on the next pass of the worker.
             set_={
                 "answered": statement.excluded.answered,
                 "correct": statement.excluded.correct,
@@ -220,6 +280,59 @@ async def recompute(
     )
     await session.commit()
     return len(rows)
+
+
+async def _loads(
+    session: AsyncSession, material_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, float]:
+    """The vocabulary load of each of these, where one has been measured."""
+    return {
+        material_id: float(load)
+        for material_id, load in (
+            await session.exec(
+                select(
+                    MaterialDifficulty.material_id,
+                    MaterialDifficulty.vocabulary_load,
+                ).where(
+                    MaterialDifficulty.material_id.in_(material_ids),  # type: ignore[attr-defined]
+                    MaterialDifficulty.vocabulary_load.is_not(None),  # type: ignore[attr-defined]
+                )
+            )
+        ).all()
+    }
+
+
+async def set_vocabulary_load(
+    session: AsyncSession, material_id: uuid.UUID, load: float
+) -> None:
+    """Record how much of this material's text is off the frequency lists.
+
+    Called by the passage importer, which is the only thing that has the
+    figure: it is produced by `seed/vocabulary.py` while the passage is being
+    read and cannot be recovered from the database, because the frequency
+    lists do not live on this side of the fence.
+
+    Upserts the one column and leaves the tally alone, so a material that has
+    already been answered does not lose its measured band to an import. The
+    band itself is left for :func:`recompute`; this writes the input, not the
+    conclusion.
+    """
+    statement = pg_insert(MaterialDifficulty).values(
+        material_id=material_id,
+        vocabulary_load=load,
+        band=_estimate(load),
+        computed_at=datetime.now(timezone.utc),
+    )
+    await session.exec(  # type: ignore[call-overload]
+        statement.on_conflict_do_update(
+            index_elements=[MaterialDifficulty.material_id],
+            set_={"vocabulary_load": statement.excluded.vocabulary_load},
+            # Only where nobody has answered it yet. Past the threshold the
+            # stored band is a measurement of what happened to people, and
+            # an import must not talk over it.
+            where=MaterialDifficulty.answered < MIN_ANSWERS,
+        )
+    )
 
 
 async def refresh_if_unrated(
@@ -276,13 +389,14 @@ async def material_difficulty(
         return {}
 
     stored = {
-        material_id: (int(correct or 0), int(answered or 0))
-        for material_id, answered, correct in (
+        material_id: (int(correct or 0), int(answered or 0), load)
+        for material_id, answered, correct, load in (
             await session.exec(
                 select(
                     MaterialDifficulty.material_id,
                     MaterialDifficulty.answered,
                     MaterialDifficulty.correct,
+                    MaterialDifficulty.vocabulary_load,
                 ).where(
                     MaterialDifficulty.material_id.in_(material_ids)  # type: ignore[attr-defined]
                 )
@@ -295,12 +409,17 @@ async def material_difficulty(
         if material_id not in stored:
             out[material_id] = unknown()
             continue
-        correct, answered = stored[material_id]
-        band, pct = _band(correct, answered)
+        correct, answered, load = stored[material_id]
+        band, pct = _band(correct, answered, load)
         out[material_id] = {
             "band": band,
             "correct_pct": pct,
             "answered": answered,
+            # Said out loud, because the two bands are not the same claim.
+            # One is what happened to people who sat this; the other is a
+            # guess from the words in it, and a page that printed them
+            # identically would be passing off a guess as a measurement.
+            "estimated": band != "new" and pct is None,
         }
     return out
 
