@@ -346,6 +346,21 @@ async def submit_attempt(
         material_id=material_id,
         data=data,
     )
+    # The lookups made while this paper was open belong to the sitting that
+    # has just ended, and only now is there an id to point them at. Guarded
+    # like the refresh below it and for the same reason: the attempt is
+    # committed by here, so nothing after it may cost the learner their
+    # answers.
+    try:
+        await vocabulary_service.claim_lookups(
+            session,
+            user_id=user.id,
+            material_id=material_id,
+            attempt_id=attempt.id,
+        )
+    except Exception:  # noqa: BLE001 - telemetry is not worth an attempt
+        logger.exception("could not claim lookups for attempt %s", attempt.id)
+
     # The one moment a difficulty band is worth not waiting for the worker on:
     # a material that has just been answered enough times to be rated at all.
     # Everything after that first crossing waits for the timer — see

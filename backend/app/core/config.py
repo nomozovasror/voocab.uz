@@ -75,6 +75,13 @@ class Settings(BaseSettings):
     # since larger clips may need more headroom than the default.
     groq_timeout_s: float = 120.0
 
+    # --- Gemini (dictionary: the second provider) ---
+    # Bearer token for Google's OpenAI-compatible chat endpoint (GEMINI_API_KEY).
+    # Used only by `app.services.dictionary`, and only when Groq has not
+    # answered — see the chain in `providers()` for why one API is not enough
+    # to stand behind "any word a learner selects is answered".
+    gemini_api_key: str = ""
+
     # --- ASR worker (Faza 4: Postgres-backed transcription queue) ---
     # Retryable failures (network timeout, 408/429/500/502/503/504) retry up
     # to this many attempts before the blob is marked `failed`.

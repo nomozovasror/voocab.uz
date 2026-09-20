@@ -11,6 +11,20 @@ implementation of a Protocol, the callers never learn which one answered, and
 swapping one for another is writing a class rather than editing the code that
 uses it.
 
+## Two providers, in a chain
+
+The first rule of the lookup is that any word a learner selects is answered.
+That cannot rest on one API, and this is not hypothetical: the seed run hit
+Groq's spend limit at the 174th passage and every live lookup in the app
+started returning nothing — ordinary words, to a reader with no way to know
+why. One outage had quietly repealed the rule.
+
+So :func:`providers` returns them in order and the first that answers wins.
+Groq leads because it is what the extraction was measured on; Gemini stands
+behind it on a separate account with a separate quota, which is the only
+kind of backstop worth having — a second model on the same key fails at the
+same moment.
+
 ## Why the answer is still contextual
 
 The paragraph goes with the word, and what comes back is one sense: the one
@@ -62,6 +76,12 @@ logger = logging.getLogger("app.services.dictionary")
 
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "qwen/qwen3.8-27b"
+
+#: Google's OpenAI-compatible endpoint, so one client speaks to both.
+GEMINI_CHAT_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+)
+GEMINI_MODEL = "gemini-3.1-flash-lite"
 
 #: The same three the seed stage is allowed to answer, and for the same
 #: reason: a word below B1 would not have been asked about, and no two
@@ -168,19 +188,37 @@ def parse(reply: str) -> Gloss | None:
     )
 
 
-class GroqDictionary:
-    """The only active :class:`DictionaryProvider`: a chat model, asked about
-    one word in one paragraph.
+class ChatDictionary:
+    """One chat model, asked about one word in one paragraph.
+
+    Both providers speak OpenAI's chat format, so they differ by a URL, a
+    key and a model name and share everything else. Two classes with one
+    body between them would be two places to fix the next prompt.
 
     Deliberately not retried. This runs inside a request a reader is waiting
-    on, and the reader's alternative to waiting twice is reading the sentence
-    again -- which is the skill the paper is testing anyway. A failure here
-    costs one word.
+    on, and the reader's alternative to waiting twice is reading the
+    sentence again -- which is the skill the paper is testing anyway. What
+    stands behind a failure is the NEXT provider in the chain, not a second
+    attempt at the one that just refused.
     """
 
-    def __init__(self, api_key: str | None = None, timeout: float | None = None) -> None:
-        self._api_key = settings.groq_api_key if api_key is None else api_key
-        self._timeout = 20.0 if timeout is None else timeout
+    def __init__(
+        self,
+        name: str,
+        url: str,
+        model: str,
+        api_key: str,
+        timeout: float = 20.0,
+    ) -> None:
+        self.name = name
+        self._url = url
+        self._model = model
+        self._api_key = api_key
+        self._timeout = timeout
+
+    @property
+    def configured(self) -> bool:
+        return bool(self._api_key)
 
     async def look_up(self, word: str, context: str) -> Gloss | None:
         if not self._api_key:
@@ -191,10 +229,10 @@ class GroqDictionary:
         )
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.post(
-                GROQ_CHAT_URL,
+                self._url,
                 headers={"Authorization": f"Bearer {self._api_key}"},
                 json={
-                    "model": GROQ_MODEL,
+                    "model": self._model,
                     "messages": [{"role": "user", "content": prompt}],
                     # One sense, five short fields. A ceiling this low is
                     # also the cheapest guard against a model that decides
@@ -208,9 +246,55 @@ class GroqDictionary:
         return parse(body["choices"][0]["message"]["content"] or "")
 
 
-def provider() -> DictionaryProvider:
-    """The dictionary this deployment uses.
+def GroqDictionary() -> ChatDictionary:  # noqa: N802 - reads as a class
+    # Not `settings.groq_timeout_s` — that is two minutes, sized for
+    # uploading a recording, and a reader mid-paper will not wait twenty
+    # seconds let alone a hundred and twenty.
+    return ChatDictionary(
+        "groq", GROQ_CHAT_URL, GROQ_MODEL, settings.groq_api_key
+    )
 
-    A function rather than a module-level instance so a test can replace it
-    and so a deployment with no Groq key still imports."""
-    return GroqDictionary()
+
+def GeminiDictionary() -> ChatDictionary:  # noqa: N802 - reads as a class
+    return ChatDictionary(
+        "gemini", GEMINI_CHAT_URL, GEMINI_MODEL, settings.gemini_api_key
+    )
+
+
+def providers() -> list[DictionaryProvider]:
+    """The dictionaries this deployment has, in the order to try them.
+
+    Only the configured ones, so a deployment with a single key behaves
+    exactly as it did before there were two.
+    """
+    return [
+        made
+        for made in (GroqDictionary(), GeminiDictionary())
+        if made.configured
+    ]
+
+
+async def look_up(word: str, context: str) -> Gloss | None:
+    """Ask each provider in turn until one answers.
+
+    A provider that RAISES is out of action -- no key, no quota, no network
+    -- and the next one is tried. A provider that returns ``None`` has
+    answered: it read the paragraph and there is no meaning to give, which
+    is the ordinary outcome for a name or a number, and asking a second
+    model the same question about the same name would spend a request to be
+    told the same thing.
+
+    That distinction is the whole design. It is also why this loop cannot
+    become "try everything until something non-empty comes back": the point
+    of a chain is to survive an outage, not to shop around for an answer
+    somebody wants to hear.
+    """
+    for source in providers():
+        try:
+            return await source.look_up(word, context)
+        except Exception:  # noqa: BLE001 - the next provider is the answer
+            logger.warning(
+                "dictionary provider %s could not answer %r",
+                getattr(source, "name", "?"), word, exc_info=True,
+            )
+    return None

@@ -36,16 +36,23 @@ import type {
  * spend one of three on. Nothing else on the platform knows which words
  * those were.
  *
- * ## The rest is collapsed, and sorted by level
+ * ## B2 and up are open; B1 is folded away
  *
- * Eighty entries open under a review would bury the mistakes above them. The
- * count is the invitation; opening is the reader deciding they want it.
+ * Not a single collapsed block. Sorting by level and then hiding all of it
+ * gets the ordering right and the emphasis wrong — what somebody sitting a
+ * band 6 paper should be studying is the B2 and C1 words, and making them
+ * press something to reach those while the B1 list has equal billing is the
+ * page having no opinion.
  *
- * Sorted B1 → C1 rather than by where they stand in the passage, which is
- * the opposite of the lookup panel's order and right for the opposite
- * reason: mid-paper the question is "what does this one mean", and here it
- * is "which of these should I learn first". Level answers that; position
- * does not.
+ * So B2 and C1 are on the page, sorted hardest-last, and the B1 words are
+ * behind one line that says how many there are. They are not junk — a
+ * reader who wants them is a click away — they are simply not what this
+ * passage taught this reader.
+ *
+ * Sorted by level rather than by where the words stand in the passage,
+ * which is the opposite of the lookup panel's order and right for the
+ * opposite reason: mid-paper the question is "what does this one mean", and
+ * here it is "which of these should I learn first".
  *
  * ## The trap count
  *
@@ -103,20 +110,24 @@ export function ReviewVocabulary({
     onError: (e) => toast(getErrorMessage(e)),
   });
 
-  const { opened, rest } = useMemo(() => {
+  const { opened, main, easiest } = useMemo(() => {
     const entries = data?.entries ?? [];
     const wanted = new Set(lookedUp);
+    const byLevel = (a: VocabularyEntry, b: VocabularyEntry) =>
+      LEVELS.indexOf(a.cefr_level as (typeof LEVELS)[number]) -
+        LEVELS.indexOf(b.cefr_level as (typeof LEVELS)[number]) ||
+      a.paragraph_index - b.paragraph_index ||
+      a.offset_start - b.offset_start;
+    const rest = entries
+      .filter((entry) => !wanted.has(entry.lemma))
+      .sort(byLevel);
     return {
       opened: entries.filter((entry) => wanted.has(entry.lemma)),
-      rest: [...entries]
-        .filter((entry) => !wanted.has(entry.lemma))
-        .sort(
-          (a, b) =>
-            LEVELS.indexOf(a.cefr_level as (typeof LEVELS)[number]) -
-              LEVELS.indexOf(b.cefr_level as (typeof LEVELS)[number]) ||
-            a.paragraph_index - b.paragraph_index ||
-            a.offset_start - b.offset_start,
-        ),
+      // An entry with no level sits with the harder ones rather than being
+      // folded away: unrated is not the same as easy, and hiding it would
+      // be the page making a claim it has no basis for.
+      main: rest.filter((entry) => entry.cefr_level !== "B1"),
+      easiest: rest.filter((entry) => entry.cefr_level === "B1"),
     };
   }, [data, lookedUp]);
 
@@ -128,6 +139,7 @@ export function ReviewVocabulary({
 
   const unsaved = data.entries.filter((entry) => !entry.saved);
   const openedUnsaved = opened.filter((entry) => !entry.saved);
+  const hardest = unsaved.filter((entry) => entry.cefr_level === "C1");
 
   return (
     <section className={cn("rounded-xl border border-border", className)}>
@@ -148,15 +160,33 @@ export function ReviewVocabulary({
             </p>
           )}
         </div>
+        {/* Three ways to save a handful at once, and each answers a
+            different question somebody actually asks. "All of them" is the
+            reader who wants the passage's whole vocabulary; "just C1" is
+            the one who already knows most of it and wants the top of the
+            list; the third, beside the opened words below, is the one who
+            only wants what beat them. */}
         {unsaved.length > 0 && (
-          <Button
-            variant="ghost"
-            size="xs"
-            disabled={save.isPending}
-            onClick={() => save.mutate(unsaved.map((entry) => entry.lemma))}
-          >
-            Save all {unsaved.length}
-          </Button>
+          <div className="flex shrink-0 items-center gap-1">
+            {hardest.length > 1 && hardest.length < unsaved.length && (
+              <Button
+                variant="ghost"
+                size="xs"
+                disabled={save.isPending}
+                onClick={() => save.mutate(hardest.map((entry) => entry.lemma))}
+              >
+                Save the {hardest.length} C1
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={save.isPending}
+              onClick={() => save.mutate(unsaved.map((entry) => entry.lemma))}
+            >
+              Save all {unsaved.length}
+            </Button>
+          </div>
         )}
       </header>
 
@@ -193,23 +223,48 @@ export function ReviewVocabulary({
         </div>
       )}
 
-      <details className="border-t border-border">
-        <summary className="cursor-pointer px-5 py-3 text-sm text-muted-foreground transition-colors hover:text-foreground">
-          {opened.length > 0
-            ? `The other ${rest.length}, by level`
-            : `All ${rest.length}, by level`}
-        </summary>
-        <ul className="border-t border-border px-5 py-2">
-          {rest.map((entry) => (
-            <Word
-              key={entry.id}
-              entry={entry}
-              busy={save.isPending}
-              onSave={() => save.mutate([entry.lemma])}
-            />
-          ))}
-        </ul>
-      </details>
+      {main.length > 0 && (
+        <div className="border-t border-border px-5 py-4">
+          <h3 className="mb-2 text-xs tracking-caps text-muted-foreground uppercase">
+            {opened.length > 0
+              ? "The rest of the passage"
+              : "From this passage"}
+          </h3>
+          <ul>
+            {main.map((entry) => (
+              <Word
+                key={entry.id}
+                entry={entry}
+                busy={save.isPending}
+                onSave={() => save.mutate([entry.lemma])}
+              />
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* The B1 words, behind one line. Not junk — somebody who wants them
+          is one press away — but not what this passage taught a reader
+          sitting for band 6 or 7, and giving them equal billing is the page
+          declining to have an opinion. */}
+      {easiest.length > 0 && (
+        <details className="border-t border-border">
+          <summary className="cursor-pointer px-5 py-3 text-sm text-muted-foreground transition-colors hover:text-foreground">
+            {easiest.length} easier {easiest.length === 1 ? "word" : "words"}{" "}
+            (B1)
+          </summary>
+          <ul className="border-t border-border px-5 py-2">
+            {easiest.map((entry) => (
+              <Word
+                key={entry.id}
+                entry={entry}
+                busy={save.isPending}
+                onSave={() => save.mutate([entry.lemma])}
+              />
+            ))}
+          </ul>
+        </details>
+      )}
     </section>
   );
 }

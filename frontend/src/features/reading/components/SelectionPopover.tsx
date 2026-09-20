@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, Copy, StickyNote } from "lucide-react";
+import { BookOpen, Check, Copy, StickyNote } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Swatch } from "@/features/reading/components/PassageTools";
 import { MARK_COLOURS, MARK_MEANING } from "@/features/reading/highlights";
 import type { MarkColour } from "@/features/reading/highlights";
+import { LOOKUP_BUDGET, LOOKUP_WORDS } from "@/features/reading/lookups";
 import type { Selected } from "@/features/reading/selection";
 
 /**
@@ -15,10 +16,23 @@ import type { Selected } from "@/features/reading/selection";
  * exist. This is the one they use afterwards, because it arrives where their
  * attention already is instead of at the top of the screen.
  *
- * Four things, and no more: three colours and a note are what a reader does
- * to a stretch of prose. Everything else on the row is about the PAGE — its
- * size, which side it is on, what the questions want — and a popover that
- * carried those too would be the row again, in the way.
+ * Three colours, a note, a copy, and — the one thing here that is about the
+ * WORDS rather than the marking of them — a look-up. Everything else on the
+ * tool row is about the PAGE: its size, which side it is on, what the
+ * questions want. A popover carrying those too would be the row again, in
+ * the way.
+ *
+ * ## Why Look up belongs here and not only up there
+ *
+ * It is the action a reader reaches for at the exact moment this appears.
+ * They have just selected a word because they do not know it; the toolbar
+ * is at the top of the screen and this is under their finger. The row keeps
+ * its copy because that is where somebody LEARNS the feature exists, and
+ * this is where they use it.
+ *
+ * The count travels with it. `Look up 2` is not decoration — a reader
+ * deciding whether this word is worth one of three has to be able to see
+ * how many are left without going back to the top of the screen.
  *
  * ## Copy is here because the real test has it
  *
@@ -70,10 +84,27 @@ export function SelectionPopover({
   selected,
   onMark,
   onNote,
+  onLookup,
+  lookupLeft,
+  lookupFree,
+  allowLookup,
 }: {
   selected: Selected | null;
   onMark: (colour: MarkColour) => void;
   onNote: (at: Selected) => void;
+  onLookup: (
+    word: string,
+    where: { paragraphIndex: number; offset: number },
+  ) => void;
+  /** How many of the three are left. Shown on the button, because that is
+   *  the number the decision is made against. */
+  lookupLeft: number;
+  /** This word has been opened before on this passage, so it costs nothing
+   *  — and the button says so rather than leaving a reader to husband a
+   *  look-up they would not be charged for. */
+  lookupFree: boolean;
+  /** False in an exam, where the control is absent rather than disabled. */
+  allowLookup: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   // Cleared whenever the selection changes, so the tick belongs to the copy
@@ -83,6 +114,12 @@ export function SelectionPopover({
   if (!selected) return null;
 
   const { rect } = selected;
+  const words = selected.text.trim().split(/\s+/).length;
+  // Absent for a long selection rather than greyed out. Somebody who has
+  // dragged across three sentences is reading them, not asking what they
+  // mean, and a disabled control would answer a question they never asked.
+  const askable = allowLookup && words <= LOOKUP_WORDS;
+  const spent = lookupLeft === 0 && !lookupFree;
   // Above the words where there is room, below them where there is not.
   const above = rect.top > 96;
 
@@ -133,6 +170,40 @@ export function SelectionPopover({
         >
           <StickyNote className="size-3.5" aria-hidden />
         </button>
+        {askable && (
+          <>
+            <span aria-hidden className="mx-0.5 h-4 w-px bg-border" />
+            <button
+              type="button"
+              disabled={spent}
+              title={
+                lookupFree
+                  ? "Already looked up — this one is free"
+                  : spent
+                    ? `No look-ups left — ${LOOKUP_BUDGET} a passage`
+                    : "What does this mean here?"
+              }
+              onClick={() =>
+                onLookup(selected.text.trim(), {
+                  paragraphIndex: selected.where.index,
+                  offset: selected.where.start,
+                })
+              }
+              className={cn(
+                "flex h-7 items-center gap-1 rounded-lg px-1.5 text-[0.7rem] transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                spent
+                  ? "text-muted-foreground opacity-40"
+                  : "text-muted-foreground hover:bg-surface-hover hover:text-foreground",
+              )}
+            >
+              <BookOpen className="size-3.5" aria-hidden />
+              {lookupFree ? "Free" : lookupLeft}
+            </button>
+          </>
+        )}
+
+        <span aria-hidden className="mx-0.5 h-4 w-px bg-border" />
+
         <button
           type="button"
           title="Copy — for an answer that has to be spelt exactly"

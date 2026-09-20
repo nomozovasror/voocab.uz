@@ -53,6 +53,7 @@ changing its meaning underneath somebody is worse than one that has aged.
 
 import logging
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -64,7 +65,12 @@ from app.core.database import AsyncSession
 from app.models.attempt import Attempt, AttemptStatus
 from app.models.material import Material
 from app.models.part import Part
-from app.models.vocabulary import MaterialVocabulary, SavedWord, SavedWordContext
+from app.models.vocabulary import (
+    LookupEvent,
+    MaterialVocabulary,
+    SavedWord,
+    SavedWordContext,
+)
 from app.services import dictionary as dictionary_service
 
 logger = logging.getLogger("app.services.vocabulary")
@@ -212,6 +218,7 @@ async def look_up(
     session: AsyncSession,
     material: Material,
     *,
+    user_id: uuid.UUID,
     word: str,
     paragraph_index: int | None = None,
     offset: int | None = None,
@@ -223,7 +230,14 @@ async def look_up(
     ``rise`` inside ``give rise to`` is reading the phrase, whatever their
     finger landed on, and the word's own meaning underneath is there for the
     case where the phrase is not what confused them.
+
+    Every call writes a :class:`LookupEvent`, including the ones that find
+    nothing. The failures are the interesting half: a live answer is saved
+    and becomes indistinguishable from an extracted one, so whether this
+    lookup was served from the extraction is a fact that erases itself
+    within milliseconds unless it is written down here.
     """
+    started = time.monotonic()
     found = await entries(session, material.id)
     asked = normalise(word)
 
@@ -232,18 +246,99 @@ async def look_up(
         phrase = _covering(found, paragraph_index, offset, phrases=True)
         exact = _covering(found, paragraph_index, offset, phrases=False)
         if exact is not None:
-            return {"word": exact, "phrase": phrase}
+            return await _answered(
+                session, material, user_id, asked, started, "cache",
+                {"word": exact, "phrase": phrase}, paragraph_index, offset)
 
     matched = _by_string(found, asked)
     if matched is not None:
-        return {"word": matched, "phrase": phrase}
+        return await _answered(
+            session, material, user_id, asked, started, "cache",
+            {"word": matched, "phrase": phrase}, paragraph_index, offset)
 
     # Nothing extracted for this one. It is a word the frequency filter did
     # not think was hard, and this reader does -- which is worth an answer
     # and worth keeping, so the next reader who taps it gets it for free.
     made = await _generate(session, material, asked,
                            paragraph_index=paragraph_index)
-    return {"word": made, "phrase": phrase}
+    return await _answered(
+        session, material, user_id, asked, started,
+        # `cache` where the phrase answered and the word did not: nothing was
+        # generated, and calling it live would inflate the one number this
+        # table exists to report.
+        "live" if made is not None or phrase is None else "cache",
+        {"word": made, "phrase": phrase}, paragraph_index, offset)
+
+
+async def _answered(
+    session: AsyncSession,
+    material: Material,
+    user_id: uuid.UUID,
+    asked: str,
+    started: float,
+    source: str,
+    answer: dict,
+    paragraph_index: int | None,
+    offset: int | None,
+) -> dict:
+    """Write down what just happened, and hand the answer back unchanged.
+
+    Guarded, and the guard is the point: a log that can fail a lookup is a
+    log that has made the feature less reliable in order to measure it. A
+    row nobody can write is a row nobody will miss.
+    """
+    entry = answer["word"] or answer["phrase"]
+    try:
+        session.add(
+            LookupEvent(
+                user_id=user_id,
+                material_id=material.id,
+                asked=asked[:120],
+                lemma=(entry.lemma if entry else "")[:80],
+                source=source,
+                latency_ms=int((time.monotonic() - started) * 1000),
+                found=entry is not None,
+                paragraph_index=paragraph_index,
+                offset=offset,
+            )
+        )
+        await session.commit()
+    except Exception:  # noqa: BLE001 - telemetry never costs an answer
+        logger.exception("could not log the lookup of %r", asked)
+        await session.rollback()
+    return answer
+
+
+async def claim_lookups(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    material_id: uuid.UUID,
+    attempt_id: uuid.UUID,
+) -> int:
+    """Attach this reader's unclaimed lookups on this material to the sitting
+    that has just ended. Returns how many.
+
+    Done here rather than at the moment of the lookup because there is no
+    attempt to point at then: the row is created by the submit. What is left
+    unclaimed afterwards is therefore a passage somebody looked words up in
+    and never finished, which is a fact worth being able to count rather
+    than a gap to apologise for.
+    """
+    rows = await session.exec(
+        select(LookupEvent).where(
+            LookupEvent.user_id == user_id,
+            LookupEvent.material_id == material_id,
+            LookupEvent.attempt_id.is_(None),  # type: ignore[union-attr]
+        )
+    )
+    claimed = list(rows.all())
+    for event in claimed:
+        event.attempt_id = attempt_id
+        session.add(event)
+    if claimed:
+        await session.commit()
+    return len(claimed)
 
 
 def _covering(
@@ -299,9 +394,11 @@ async def _generate(
     which is a better list than any frequency table can describe -- and it
     grows at a few words a passage, so the cost stays where it was put.
 
-    Everything here is guarded. A word with no meaning is an ordinary outcome
-    and a provider that is down is not the reader's problem: both return
-    nothing, and the panel says the word is not in this passage's list.
+    Everything here is guarded, and the guard is the last of several. Each
+    provider in the chain is tried in turn (``dictionary.look_up``); this
+    catch is for the case where every one of them failed, which the reader
+    is told about in the panel's own voice rather than as a fact about a
+    list they cannot see.
     """
     part, index, start, end, context = await _place(session, material, word,
                                                     paragraph_index)
@@ -314,7 +411,7 @@ async def _generate(
     # that makes those offsets checkable.
     surface = context[start:end]
     try:
-        gloss = await dictionary_service.provider().look_up(word, context)
+        gloss = await dictionary_service.look_up(word, context)
     except Exception:  # noqa: BLE001 - one word is not worth a 500
         logger.exception("dictionary lookup of %r failed", word)
         return None

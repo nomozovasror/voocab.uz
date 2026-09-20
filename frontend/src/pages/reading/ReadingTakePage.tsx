@@ -63,6 +63,7 @@ import {
 } from "@/features/reading/components/ReadingPanels";
 import {
   known,
+  left,
   loadLookups,
   opened,
   resetSpend,
@@ -125,6 +126,11 @@ const PANE_FOOT = 0;
  *  nothing is inside the faded band, so the fade costs nothing and only
  *  does anything once the reader scrolls. */
 const PANE_TOP = "pt-19 pb-6";
+
+/** The levels a reader sees, in the order they get harder. Named because
+ *  `Object.keys` on the counts would print them in whatever order the JSON
+ *  arrived in, and `B1 · C1 · B2` reads as a bug. */
+const LEVELS = ["B1", "B2", "C1"] as const;
 
 /*  The `pb-6` is the other end of the same idea, and it is NOT the gap that
  *  was taken out below the panes. That one sat outside them and cost every
@@ -881,6 +887,23 @@ export default function ReadingTakePage() {
                   .filter(Boolean)
                   .join(" · ")}
               </p>
+              {/* The spread under the count, because the two answer
+                  different questions. "88 words" is how much; "B1 18 · B2 44
+                  · C1 27" is whether they are pitched at this reader — and
+                  somebody working towards band 6, choosing between two
+                  passages, is asking the second one.
+
+                  The vocabulary LOAD is not here and never will be. It is
+                  the figure the difficulty arithmetic runs on, measured off
+                  the frequency lists, and "11% of this passage is off-list"
+                  is a fact about a corpus that no learner can place. */}
+              {vocabulary && vocabulary.total > 0 && (
+                <p className="mt-0.5 text-[0.75em] tabular-nums text-muted-foreground">
+                  {LEVELS.filter((level) => vocabulary.levels[level])
+                    .map((level) => `${level} ${vocabulary.levels[level]}`)
+                    .join(" · ")}
+                </p>
+              )}
             </div>
             <div className="space-y-10">
               {sorted.map((part, index) =>
@@ -954,6 +977,10 @@ export default function ReadingTakePage() {
           selected={selected}
           onMark={(which) => selected && markSelection(which, selected)}
           onNote={(at) => setPanel({ kind: "note", at })}
+          onLookup={lookUp}
+          lookupLeft={left(lookups)}
+          lookupFree={known(lookups, selected?.text.trim() ?? "")}
+          allowLookup={config.allowLookup}
         />
       )}
 

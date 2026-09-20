@@ -230,3 +230,101 @@ class SavedWordContext(SQLModel, table=True):
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
+
+
+class LookupEvent(SQLModel, table=True):
+    """One time a reader asked what a word meant.
+
+    ## Why this is written from the first day
+
+    Everything it will be asked is a question about the PAST, and a table
+    added in three months answers none of them — it starts empty and the
+    three months that would have been interesting are gone. It costs one row
+    per lookup, of which there are at most three a sitting.
+
+    ## What it is for
+
+    Four questions, in the order they will be asked:
+
+    * **What share is served from the extraction?** If it is 95%, pushing a
+      five-thousand-word dictionary through the pipeline in advance buys
+      nothing. If it is 60%, it buys a great deal. ``source`` is the whole
+      answer, and nothing else in the database can reconstruct it after the
+      fact -- a live lookup and an extracted one leave identical rows in
+      ``material_vocabulary``.
+    * **Which words go live?** If they turn out to be `people` and `water`,
+      the learners are further from the extraction's assumptions than the
+      frequency lists suggest, and the filter's cut is in the wrong place.
+    * **How long does a live one take?** ``latency_ms``. A reader waiting two
+      seconds mid-paper is a reader who stops using the feature.
+    * **Is three the right number?** It was a judgement, not a measurement.
+      If most sittings spend all three, three is too few; if most stop at
+      one, it is not the budget that is limiting them.
+
+    And later, the thing the extraction cannot know. The pipeline decides
+    which words are hard from frequency, which is a statement about English.
+    This is a statement about a person: these are the words that stopped
+    THIS reader, in this passage, badly enough to spend one of three on.
+
+    ## No unique constraint, on purpose
+
+    The same reader looking the same word up twice is two events. The budget
+    treats it as one charge -- see ``features/reading/lookups.ts`` -- and
+    that is a rule about fairness, not a claim about what happened. Somebody
+    who checked the same word three times has told us something about the
+    word, and a unique key would throw it away.
+    """
+
+    __tablename__ = "lookup_events"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="users.id", index=True)
+    material_id: uuid.UUID = Field(foreign_key="materials.id", index=True)
+    #: The sitting it belonged to, filled in at SUBMIT rather than here.
+    #:
+    #: No attempt row exists while a paper is open -- one is created by the
+    #: submit that ends it -- so the id cannot be known at the moment of the
+    #: lookup. Rather than leave the column meaningless, the submit claims
+    #: every unclaimed event this reader made against this material (see
+    #: ``app.services.vocabulary.claim_lookups``).
+    #:
+    #: Null therefore means "the paper was never submitted", which is itself
+    #: a fact worth being able to count: somebody who looked up three words
+    #: and then abandoned the passage is a different story from somebody who
+    #: finished it.
+    attempt_id: uuid.UUID | None = Field(
+        default=None, foreign_key="attempts.id", index=True
+    )
+
+    #: What was asked, as the reader selected it -- lower-cased and trimmed,
+    #: but not lemmatised, because half the point is to see what people
+    #: actually tap.
+    asked: str = Field(max_length=120)
+    #: The lemma that answered, where one did. Differs from ``asked``
+    #: whenever the reader tapped an inflected form, and is empty where
+    #: nothing could be glossed.
+    lemma: str = Field(default="", max_length=80, index=True)
+
+    #: ``cache`` -- answered from a row the extraction had already written.
+    #: ``live`` -- nothing matched, so a model was asked on the spot.
+    #:
+    #: The single most important column here, and the one that cannot be
+    #: recovered later: by the time anybody looks, the live answer has been
+    #: saved and is indistinguishable from an extracted one.
+    source: str = Field(default="cache", max_length=8, index=True)
+    #: How long the whole answer took, in milliseconds. Near zero for a
+    #: cached one; the wait the reader actually sat through for a live one.
+    latency_ms: int = Field(default=0)
+    #: Whether anything came back at all. False is a name, a number, a word
+    #: in another language -- or a minute when the provider was down.
+    found: bool = Field(default=False)
+
+    #: Where in the passage they tapped, in the coordinates the highlights
+    #: use. Null where the client did not send a position.
+    paragraph_index: int | None = Field(default=None)
+    offset: int | None = Field(default=None)
+
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )

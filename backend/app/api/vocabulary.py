@@ -91,6 +91,7 @@ async def look_up_word(
     found = await vocabulary_service.look_up(
         session,
         material,
+        user_id=user.id,
         word=data.word,
         paragraph_index=data.paragraph_index,
         offset=data.offset,

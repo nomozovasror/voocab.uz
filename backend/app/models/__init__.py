@@ -22,6 +22,7 @@ from app.models.segment import Segment
 from app.models.segment_attempt import SegmentAttempt
 from app.models.user import User
 from app.models.vocabulary import (
+    LookupEvent,
     MaterialVocabulary,
     SavedWord,
     SavedWordContext,
@@ -45,6 +46,7 @@ __all__ = [
     "QuestionGroup",
     "Question",
     "QuestionAttempt",
+    "LookupEvent",
     "MaterialVocabulary",
     "SavedWord",
     "SavedWordContext",

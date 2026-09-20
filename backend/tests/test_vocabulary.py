@@ -36,7 +36,12 @@ from app.models.attempt import Attempt, AttemptStatus
 from app.models.material import Material
 from app.models.part import Part
 from app.models.user import User
-from app.models.vocabulary import MaterialVocabulary, SavedWord, SavedWordContext
+from app.models.vocabulary import (
+    LookupEvent,
+    MaterialVocabulary,
+    SavedWord,
+    SavedWordContext,
+)
 from app.services import dictionary as dictionary_service
 from app.services import vocabulary as vocabulary_service
 
@@ -179,6 +184,7 @@ async def _submit_something(material_id: uuid.UUID, user_id: uuid.UUID) -> None:
 async def _cleanup(material_id: uuid.UUID, *emails: str) -> None:
     async with async_session_factory() as session:
         for model, column in (
+            (LookupEvent, LookupEvent.material_id),
             (SavedWordContext, SavedWordContext.material_id),
             (MaterialVocabulary, MaterialVocabulary.material_id),
             (Attempt, Attempt.material_id),
@@ -241,19 +247,19 @@ async def test_a_tapped_word_is_found_four_different_ways() -> None:
             # 1. By where they tapped: the offset falls inside `vogue`.
             at = text.find("vogue")
             by_span = await vocabulary_service.look_up(
-                session, loaded, word="vogue", paragraph_index=0, offset=at + 2
+                session, loaded, user_id=user.id, word="vogue", paragraph_index=0, offset=at + 2
             )
             assert by_span["word"].lemma == "vogue"
 
             # 2. By the surface form, which is what stands in the passage.
             by_surface = await vocabulary_service.look_up(
-                session, loaded, word="Undertaken"
+                session, loaded, user_id=user.id, word="Undertaken"
             )
             assert by_surface["word"].lemma == "undertake"
 
             # 3. By the lemma itself.
             by_lemma = await vocabulary_service.look_up(
-                session, loaded, word="proponent"
+                session, loaded, user_id=user.id, word="proponent"
             )
             assert by_lemma["word"].lemma == "proponent"
 
@@ -261,7 +267,7 @@ async def test_a_tapped_word_is_found_four_different_ways() -> None:
             #    reader who taps a form the passage does not print still has
             #    to land somewhere. `proponents` reduces to `proponent`.
             by_reduction = await vocabulary_service.look_up(
-                session, loaded, word="Proponents,"
+                session, loaded, user_id=user.id, word="Proponents,"
             )
             assert by_reduction["word"].lemma == "proponent"
     finally:
@@ -285,7 +291,7 @@ async def test_tapping_inside_a_phrase_returns_the_phrase_as_well() -> None:
             assert text.find("give rise to") < inside < text.find("give rise to") + 12
 
             found = await vocabulary_service.look_up(
-                session, loaded, word="rise", paragraph_index=0, offset=inside
+                session, loaded, user_id=user.id, word="rise", paragraph_index=0, offset=inside
             )
             assert found["phrase"].lemma == "give rise to"
             assert found["phrase"].is_phrase is True
@@ -493,7 +499,7 @@ async def test_a_word_nothing_has_glossed_is_an_ordinary_empty_answer(
     email = f"vocab-empty-{uuid.uuid4()}@test.local"
     user = await _make_user(email)
     material, _ = await _make_passage(user.id)
-    monkeypatch.setattr(dictionary_service, "provider", lambda: _Silent())
+    monkeypatch.setattr(dictionary_service, "providers", lambda: [_Silent()])
     try:
         async with _client() as client:
             found = await client.post(
@@ -526,14 +532,14 @@ async def test_a_generated_gloss_is_kept_for_the_next_reader(
     email = f"vocab-live-{uuid.uuid4()}@test.local"
     user = await _make_user(email)
     material, _ = await _make_passage(user.id)
-    monkeypatch.setattr(dictionary_service, "provider", lambda: _Knows())
+    monkeypatch.setattr(dictionary_service, "providers", lambda: [_Knows()])
     try:
         async with async_session_factory() as session:
             loaded = await session.get(Material, material.id)
             # Paragraph B holds `scheme`; paragraph A is searched too, which
             # is what lets a client that sent no position still be answered.
             made = await vocabulary_service.look_up(
-                session, loaded, word="hothouse"
+                session, loaded, user_id=user.id, word="hothouse"
             )
             assert made["word"].lemma == "scheme"
             assert made["word"].source == "extracted"
@@ -552,10 +558,166 @@ async def test_a_generated_gloss_is_kept_for_the_next_reader(
             assert made["word"].frequency_band == ""
 
         # Asking again does not ask the model again.
-        monkeypatch.setattr(dictionary_service, "provider", lambda: _Silent())
+        monkeypatch.setattr(dictionary_service, "providers", lambda: [_Silent()])
         async with async_session_factory() as session:
             loaded = await session.get(Material, material.id)
-            again = await vocabulary_service.look_up(session, loaded, word="scheme")
+            again = await vocabulary_service.look_up(
+                session, loaded, user_id=user.id, word="scheme"
+            )
             assert again["word"].meaning_uz == "reja"
     finally:
         await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_every_lookup_is_logged_including_the_ones_that_find_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The log is written from the first day because every question it will
+    be asked is about the past.
+
+    `source` is the column that cannot be recovered later: a live answer is
+    saved into `material_vocabulary` and becomes indistinguishable from an
+    extracted one within milliseconds.
+    """
+    email = f"vocab-log-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material, _ = await _make_passage(user.id)
+    monkeypatch.setattr(dictionary_service, "providers", lambda: [_Silent()])
+    try:
+        async with _client() as client:
+            # Served from the extraction.
+            await client.post(
+                f"/api/materials/{material.id}/lookups",
+                json={"word": "vogue", "paragraph_index": 0, "offset": 100},
+                headers=_headers(user),
+            )
+            # Nothing extracted and nothing generated: a word the dictionary
+            # cannot gloss. Logged all the same — the failures are the half
+            # that says whether the extraction's cut is in the right place.
+            await client.post(
+                f"/api/materials/{material.id}/lookups",
+                json={"word": "carefully"},
+                headers=_headers(user),
+            )
+
+        async with async_session_factory() as session:
+            events = (
+                await session.exec(
+                    select(LookupEvent)
+                    .where(LookupEvent.material_id == material.id)
+                    .order_by(LookupEvent.created_at)
+                )
+            ).all()
+            assert len(events) == 2
+            cached, missed = events
+
+            assert cached.source == "cache"
+            assert cached.found is True
+            assert cached.lemma == "vogue"
+            assert cached.asked == "vogue"
+            assert (cached.paragraph_index, cached.offset) == (0, 100)
+
+            assert missed.source == "live"
+            assert missed.found is False
+            assert missed.lemma == ""
+            assert missed.asked == "carefully"
+
+            # Nothing belongs to a sitting yet: no attempt exists while a
+            # paper is open.
+            assert {event.attempt_id for event in events} == {None}
+    finally:
+        await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_submitting_claims_the_lookups_made_while_the_paper_was_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What stays unclaimed is a passage somebody looked words up in and
+    never finished — a fact worth counting, not a gap to apologise for."""
+    email = f"vocab-claim-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material, _ = await _make_passage(user.id)
+    monkeypatch.setattr(dictionary_service, "providers", lambda: [_Silent()])
+    try:
+        async with _client() as client:
+            await client.post(
+                f"/api/materials/{material.id}/lookups",
+                json={"word": "proponent"},
+                headers=_headers(user),
+            )
+            submitted = await client.post(
+                f"/api/materials/{material.id}/attempts",
+                json={"answers": [], "looked_up": ["proponent"]},
+                headers=_headers(user),
+            )
+            assert submitted.status_code == 200
+            attempt_id = uuid.UUID(submitted.json()["attempt_id"])
+
+        async with async_session_factory() as session:
+            events = (
+                await session.exec(
+                    select(LookupEvent).where(
+                        LookupEvent.material_id == material.id
+                    )
+                )
+            ).all()
+            assert [event.attempt_id for event in events] == [attempt_id]
+    finally:
+        await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_one_provider_being_down_does_not_repeal_the_rule() -> None:
+    """Any word a learner selects is answered — and that cannot rest on one
+    API.
+
+    Not hypothetical: the seed run hit Groq's spend limit at the 174th
+    passage, and every live lookup in the app began returning nothing for
+    ordinary words, to readers with no way to know why. One outage had
+    quietly repealed the feature's first rule.
+    """
+
+    class _Down:
+        name = "down"
+
+        async def look_up(self, word: str, context: str):
+            raise RuntimeError("spend limit reached")
+
+    class _Up:
+        name = "up"
+
+        async def look_up(self, word: str, context: str):
+            return dictionary_service.Gloss(
+                lemma="scheme", pos="n", meaning_en="a plan",
+                meaning_uz="reja", cefr_level="B2",
+            )
+
+    class _Refuses:
+        name = "refuses"
+
+        async def look_up(self, word: str, context: str):
+            return None
+
+    with pytest.MonkeyPatch.context() as patch:
+        # A provider that RAISES is out of action, so the next one answers.
+        patch.setattr(dictionary_service, "providers", lambda: [_Down(), _Up()])
+        found = await dictionary_service.look_up("scheme", "the scheme here")
+        assert found is not None
+        assert found.lemma == "scheme"
+
+        # A provider that RETURNS NOTHING has answered: it read the
+        # paragraph and there is no meaning to give. Asking the next model
+        # the same question about the same name spends a request to be told
+        # the same thing — and a chain that shops around for a non-empty
+        # answer is no longer a chain, it is a vote.
+        patch.setattr(
+            dictionary_service, "providers", lambda: [_Refuses(), _Up()]
+        )
+        assert await dictionary_service.look_up("Brazil", "larger than Brazil") is None
+
+        # Every one down is the only case the reader ever sees, and it is
+        # reported as ours rather than as a fact about a list.
+        patch.setattr(dictionary_service, "providers", lambda: [_Down(), _Down()])
+        assert await dictionary_service.look_up("scheme", "the scheme here") is None

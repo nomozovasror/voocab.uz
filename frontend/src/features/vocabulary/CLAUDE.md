@@ -13,9 +13,18 @@ the compromise, and the count is what makes it teach something: somebody with
 three left spends them on the words the questions turn on rather than on the
 first unfamiliar noun in paragraph A.
 
+- **The extracted list has no edges the reader can see.** Which words the
+  seed pipeline happened to prepare is an optimisation, not a boundary
+  anybody is entitled to be told about. Never "this word is not in the
+  list", never "that one is easy", and never a control greyed out for a
+  reason they cannot see. Whatever they select is answered — from the table
+  where a row exists, from a model where it does not — and the only
+  difference they may notice is that one of them takes a moment. **The
+  system's own ignorance is never handed to the learner as theirs.**
 - **The budget lives in the browser** (`features/reading/lookups.ts`), and
-  that is right for a rule whose purpose is to make somebody choose. What is
-  enforced on the server is the thing that would make it a formality: the
+  that is right for a rule whose purpose is to make somebody choose. It is
+  also the ONLY reason a look-up control is ever disabled. What is enforced
+  on the server is the thing that would make the budget a formality: the
   whole-list endpoint is refused until the paper is submitted.
 - **Unique lemmas, not openings.** Looking the same word up again is free.
   Charging twice for one choice teaches people not to check their memory.
@@ -36,6 +45,17 @@ first unfamiliar noun in paragraph A.
 - **No lookup at all in exam mode.** Not disabled — absent. A greyed-out
   dictionary is a page telling a candidate, every minute of the hour, what
   they are not allowed to do.
+
+## Two ways in, and the popover is the one they use
+
+The tool row is where somebody LEARNS the feature exists; the popover at the
+selection is where they use it, because it arrives under their finger at the
+moment they have just selected a word they do not know. The remaining count
+travels with it — a reader deciding whether this word is worth one of three
+cannot be made to look at the top of the screen to find out.
+
+A selection longer than `LOOKUP_WORDS` drops the control rather than
+greying it out. Absence reads as "not this"; disabled reads as "not you".
 
 ## The panel: what it shows and what it refuses to
 
@@ -107,3 +127,30 @@ hard rather than what a frequency table predicts.
 
 The consequence worth protecting: the site does not stop teaching vocabulary
 on a morning when Groq is down.
+
+**Two providers, in a chain.** "Any word a learner selects is answered"
+cannot rest on one API, and that is not hypothetical — the seed run hit
+Groq's spend limit at the 174th passage and every live look-up in the app
+began returning nothing for ordinary words, to readers with no way to know
+why. Gemini stands behind Groq on a separate account with a separate quota.
+A provider that RAISES is out of action and the next is tried; a provider
+that returns nothing has ANSWERED, and asking the next model about the same
+name would spend a request to be told the same thing.
+
+## Every look-up is logged
+
+`lookup_events`, written with the feature rather than after it, because a
+table added in three months starts empty and the three months worth knowing
+about are gone. `source` is the column that cannot be recovered later: a
+live answer is saved into `material_vocabulary` and is indistinguishable
+from an extracted one within milliseconds.
+
+It answers four questions — what share comes from the extraction, which
+words go live (if they are `people` and `water`, the filter's cut is in the
+wrong place), how long a live one makes somebody wait, and whether three is
+the right number, which was a judgement and not a measurement.
+
+`attempt_id` is filled at SUBMIT, because no attempt exists while a paper is
+open. What stays null afterwards is a passage somebody looked words up in
+and never finished — a fact worth counting rather than a gap to apologise
+for.

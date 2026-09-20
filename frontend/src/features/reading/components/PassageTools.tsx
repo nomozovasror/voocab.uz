@@ -22,6 +22,7 @@ import {
   known,
   left,
   type Lookups,
+  LOOKUP_WORDS,
 } from "@/features/reading/lookups";
 
 /**
@@ -54,6 +55,14 @@ import {
  * See `features/reading/lookups.ts`. The count IS the feature: a reader with
  * three left spends them on the words the questions turn on rather than on
  * the first unfamiliar noun in paragraph A.
+ *
+ * The number is also the ONLY reason this control is ever disabled. The
+ * extracted list is an optimisation — what happens to be prepared — and a
+ * reader must never be shown its edges: no "not in the list", no "that one
+ * is easy", no control greyed out for a reason they cannot see. Whatever
+ * they select is answered, from the table where one exists and from a model
+ * where it does not, and the difference they are allowed to notice is how
+ * long it takes.
  */
 
 /** The three sizes, as a percentage of the pane's own. Small enough a step
@@ -161,15 +170,18 @@ export function PassageTools({
   };
 
   const word = selected?.text.trim() ?? "";
-  const oneWord = word.length > 0 && !/\s/.test(word);
+  // A word or a short phrase. Longer than that is somebody selecting a
+  // sentence to read it, and the control steps out of the way rather than
+  // greying out — absence reads as "not this", disabled reads as "not you".
+  const askable = word.length > 0 && word.split(/\s+/).length <= LOOKUP_WORDS;
   const aside = (
     <Aside
       stacked={!roomy}
       swapped={swapped}
       onSwap={onSwap}
       lookupLeft={left(lookups)}
-      canLookUp={oneWord && canOpen(lookups, word)}
-      free={oneWord && known(lookups, word)}
+      canLookUp={askable && canOpen(lookups, word)}
+      free={askable && known(lookups, word)}
       onLookup={() =>
         onLookup(
           word,
@@ -343,7 +355,7 @@ function Aside({
               ? "Already looked up — this one is free"
               : lookupLeft === 0
                 ? `No look-ups left — ${LOOKUP_BUDGET} a passage`
-                : "Select one word, then look it up"
+                : "Select a word, then look it up"
           }
           onClick={onLookup}
           stacked={stacked}

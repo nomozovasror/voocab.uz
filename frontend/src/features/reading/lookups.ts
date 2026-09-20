@@ -38,6 +38,20 @@ export interface Lookups {
 /** How many a reader gets per passage. */
 export const LOOKUP_BUDGET = 3;
 
+/**
+ * The longest selection worth looking up, in words.
+ *
+ * A word or a short phrase — `give rise to`, `at the expense of`. Past that
+ * somebody is selecting a sentence to read it, not asking what it means,
+ * and the control steps out of the way rather than greying out: absence
+ * reads as "not this", disabled reads as "not you".
+ *
+ * It is NOT a claim about what the server can answer. Anything sent is
+ * answered, from the extracted table where a row exists and from a model
+ * where it does not. This is about what a reader plausibly meant.
+ */
+export const LOOKUP_WORDS = 5;
+
 const key = (materialId: string) => `voocab.lookups.${materialId}`;
 
 const EMPTY: Lookups = { words: [], spent: 0 };

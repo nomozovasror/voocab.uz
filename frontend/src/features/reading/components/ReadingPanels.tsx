@@ -170,12 +170,21 @@ export function NotePanel({
  * above, and the word's own meaning below it, for the case where the phrase
  * was not the difficulty.
  *
- * ## An empty answer is ordinary
+ * ## The list has no edges the reader can see
  *
- * A name, a number, a word in another language, or a morning the dictionary
- * is unreachable. The panel says so plainly, and — this is the part that
- * matters — the lookup is NOT charged. Spending one of three to be told
- * nothing is the kind of small unfairness a learner remembers.
+ * Which words the seed pipeline happened to prepare is an optimisation, not
+ * a boundary anybody is entitled to be told about. So there is no "this
+ * word is not in the list", no "that one is easy", and nothing here that
+ * treats a word differently for having arrived by one route rather than the
+ * other: a row the extraction wrote and a meaning fetched a second ago are
+ * drawn identically, and the only difference a reader may notice is that
+ * one of them took a moment.
+ *
+ * The system's own ignorance must not be handed to the learner as theirs.
+ * Where nothing at all can be said — a name, a number, a minute when the
+ * provider is down — the panel says that IT did not find a meaning, in its
+ * own voice, and the lookup is not charged. Spending one of three to be
+ * told nothing is the kind of small unfairness a learner remembers.
  */
 export function LookupPanel({
   materialId,
@@ -237,18 +246,19 @@ export function LookupPanel({
 
   return (
     <Panel title={word} onClose={onClose}>
+      {/* One line, and the same one whichever route the answer is taking.
+          A reader waiting on a model must not be told they have wandered
+          off the prepared list — they have no way to know where it ends and
+          no reason to care. */}
       {found.isPending && (
         <p className="text-xs text-muted-foreground">Looking it up…</p>
       )}
-      {found.isError && (
+      {/* Both failures read the same, and they read as OURS. "We could not
+          find a meaning" is the system admitting a limit; "this word is not
+          in our list" makes the reader's choice of word the problem. */}
+      {(found.isError || (found.data && !entry)) && (
         <p className="text-xs text-muted-foreground">
-          The dictionary could not be reached. This one is not charged.
-        </p>
-      )}
-      {found.data && !entry && (
-        <p className="text-xs text-muted-foreground">
-          No meaning for that one — it may be a name or a number. This lookup is
-          not charged.
+          We couldn&apos;t find a meaning for that one — it isn&apos;t counted.
         </p>
       )}
       {found.data?.phrase && (
