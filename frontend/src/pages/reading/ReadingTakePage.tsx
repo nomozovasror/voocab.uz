@@ -24,7 +24,12 @@ import {
   paperTotal,
 } from "@/features/paper/take-paper";
 import { goToQuestion, useQuestionSpy, Q_ANCHOR } from "@/features/paper/take-focus";
-import { PRACTICE } from "@/features/paper/take-config";
+import {
+  READING_PRACTICE,
+  paperMs,
+} from "@/features/paper/take-config";
+import { TakeTimer } from "@/features/paper/components/TakeTimer";
+import { useActiveTime } from "@/features/paper/use-active-time";
 import {
   clearSession,
   loadSession,
@@ -89,7 +94,7 @@ export default function ReadingTakePage() {
   const attemptMut = useSubmitAttempt("reading", id ?? "");
   const drillMut = useSubmitDrill("reading", groupId ?? "");
   const submitMut = drilling ? drillMut : attemptMut;
-  const config = PRACTICE;
+  const config = READING_PRACTICE;
   // A drill's draft is keyed by its group, or two drills cut from one paper
   // would share one — and the paper's own key must not collide with either.
   const sessionKey = drilling ? `drill:${groupId}` : id;
@@ -120,6 +125,28 @@ export default function ReadingTakePage() {
   const blank = total - answered;
 
   const current = useQuestionSpy(questionIds);
+
+  // --- The clock ------------------------------------------------------------
+  //
+  // Reading is the paper that needs one. A recording is its own clock and a
+  // passage has none, and pace is exactly the skill a reading candidate is
+  // short of — the same person scores 35 with no limit and 25 in an hour.
+  // Practice counts UP, against what the paper is worth, and says so in
+  // amber rather than shouting: this is a measurement somebody can act on
+  // afterwards, not a constraint to work under now.
+  const banked = useRef(restored.current?.activeMs ?? 0);
+  const { elapsedMs, activeMs, away } = useActiveTime({
+    startedAt: session.current.startedAt,
+    activeFrom: banked.current,
+    onSample: (ms) => {
+      session.current.activeMs = ms;
+      if (sessionKey) saveSession(sessionKey, session.current);
+    },
+  });
+  // What the paper is worth: ninety seconds a question, which is the real
+  // paper's own arithmetic — forty questions in sixty minutes.
+  const worth = config.durationMs ?? paperMs(total);
+  const shown = config.timerMode === "countDown" ? worth - elapsedMs : activeMs;
 
   // --- The passage pane follows the question --------------------------------
   //
@@ -354,6 +381,23 @@ export default function ReadingTakePage() {
     send();
   };
 
+  // --- Time is up -----------------------------------------------------------
+  //
+  // The real computer-delivered test locks the screen on the second and
+  // takes what is there; this does the same. No confirmation — there is
+  // nothing to confirm, the decision was made by the clock — and the ref
+  // guards against the effect firing twice while the request is in flight.
+  const finished = useRef(false);
+  const out = config.timerMode === "countDown" && shown <= 0;
+  useEffect(() => {
+    if (!out || finished.current) return;
+    finished.current = true;
+    send();
+    // `send` is rebuilt every render and this must run exactly once, which
+    // the ref above is what guarantees.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [out]);
+
   if (!sessionKey) return null;
   if (isLoading) return <TakeSkeleton />;
   if (isError || !material) {
@@ -383,34 +427,49 @@ export default function ReadingTakePage() {
     <div className="mx-auto flex w-full max-w-[1500px] flex-col overflow-hidden">
       <HeaderGround />
 
-      <div className="shrink-0 pt-1">
+      {/* One row, and it is the whole of the chrome above the paper.
+          It used to be four: the app header, a "Reading" crumb, a 2xl title
+          on its own line, and a meta line under it — and then the passage
+          repeated its name and the question paper repeated the part. On a
+          screen where vertical space is the scarcest thing there is, the
+          prose was left about seven hundred pixels and cut off mid-sentence.
+
+          Everything that is only a LABEL now shares one baseline, and the
+          title truncates rather than wraps: a second line here costs the
+          reader a line of the passage. */}
+      <div className="flex shrink-0 flex-wrap items-baseline gap-x-4 gap-y-1 pt-1 pb-2">
         <Link
           to="/reading"
-          className="inline-flex items-center gap-1.5 rounded-md text-xs text-muted-foreground transition-colors duration-fast hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md text-xs text-muted-foreground transition-colors duration-fast hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
           <ArrowLeft className="size-3.5" aria-hidden />
           Reading
         </Link>
-        <div className="mt-1.5 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-          <h1 className="text-2xl font-semibold text-foreground">
-            {material.title}
-          </h1>
-          <p className="shrink-0 text-xs tabular-nums text-muted-foreground">
-            {[
-              // Which test this was cut from, where the title used to carry
-              // it. The title is the name the book gives the passage; this
-              // is a fact about where it came from, which is what the rest
-              // of this line is made of.
-              material.reference !== material.title
-                ? material.reference
-                : null,
-              `${sorted.length} ${sorted.length === 1 ? "passage" : "passages"}`,
-              `${total} ${total === 1 ? "question" : "questions"}`,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-          </p>
-        </div>
+        <h1 className="min-w-0 flex-1 truncate text-base font-semibold text-foreground">
+          {material.title}
+        </h1>
+        <p className="shrink-0 text-xs tabular-nums text-muted-foreground">
+          {[
+            // Which test this was cut from, where the title used to carry
+            // it. The title is the name the book gives the passage; this is
+            // a fact about where it came from.
+            material.reference !== material.title ? material.reference : null,
+            sorted.length > 1
+              ? `${sorted.length} passages`
+              : null,
+            `${total} ${total === 1 ? "question" : "questions"}`,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </p>
+        {config.showTimer && (
+          <TakeTimer
+            mode={config.timerMode}
+            ms={shown}
+            targetMs={config.timerMode === "countUp" ? worth : null}
+            away={config.pauseOnIdle && away}
+          />
+        )}
       </div>
 
       {material.last_attempt && (
@@ -471,6 +530,7 @@ export default function ReadingTakePage() {
                   key={part.id}
                   partId={part.id}
                   title={part.title || `Reading Passage ${index + 1}`}
+                  showTitle={sorted.length > 1}
                   passage={part.passage}
                 />
               ) : null,
@@ -486,7 +546,7 @@ export default function ReadingTakePage() {
               onChange={onAnswer}
               flagged={flagged}
               onFlag={onFlag}
-              disabled={submitMut.isPending}
+              disabled={submitMut.isPending || out}
               onFocus={(e) => {
                 const qid = (e.target as HTMLElement).dataset?.question;
                 if (!qid) return;

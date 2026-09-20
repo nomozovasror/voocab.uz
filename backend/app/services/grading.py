@@ -506,6 +506,14 @@ async def _settle(
     attempt.submitted_at = datetime.now(timezone.utc)
     if data.elapsed_ms is not None:
         attempt.time_spent_ms = data.elapsed_ms
+    if data.active_ms is not None:
+        # Never above the wall clock. The client works this out from a timer
+        # a throttled tab can fire late, and a "time spent" larger than the
+        # time the page was open is a number nobody can explain.
+        attempt.active_ms = min(
+            data.active_ms,
+            data.elapsed_ms if data.elapsed_ms is not None else data.active_ms,
+        )
     if data.listened:
         attempt.listened_ms = merged_ms(data.listened)
     if data.seeks_back is not None:

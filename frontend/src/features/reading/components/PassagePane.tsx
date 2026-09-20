@@ -26,6 +26,9 @@ interface PassagePaneProps {
    *  from A: without it a page carries three elements called `p-C` and every
    *  jump lands on the first of them. */
   partId: string;
+  /** Whether to print the passage's own heading above it. False where it is
+   *  the only passage on the page — see the comment where it is drawn. */
+  showTitle?: boolean;
   /** A paragraph to draw attention to — the review page points at the one an
    *  answer came from. Null while the paper is being sat: there is nothing to
    *  point at yet, and pointing would be telling. */
@@ -50,19 +53,31 @@ export function PassagePane({
   title,
   passage,
   partId,
+  showTitle = true,
   highlight,
   className,
 }: PassagePaneProps) {
   return (
-    <article id={passageId(partId)} className={cn("max-w-prose", className)}>
-      <header className="mb-5">
-        <h2 className="text-lg font-semibold text-foreground">{title}</h2>
-        {passage.subtitle && (
-          <p className="mt-1 text-sm text-muted-foreground">
-            {passage.subtitle}
-          </p>
-        )}
-      </header>
+    <article
+      id={passageId(partId)}
+      aria-label={title}
+      className={cn("max-w-prose", className)}
+    >
+      {/* No heading of its own where there is only one passage on the page.
+          It said "Reading Passage 2" under a page already titled with the
+          passage's name, beside a meta line already saying which passage of
+          which test it is — four lines of the most expensive space on this
+          screen spent on one fact, while the prose below them was cut off
+          mid-sentence. `showTitle` puts it back for a paper that holds
+          three, where the reader does need to know which one they are in. */}
+      {showTitle && (
+        <h2 className="mb-1 text-lg font-semibold text-foreground">{title}</h2>
+      )}
+      {passage.subtitle && (
+        <p className="mb-5 text-sm leading-relaxed text-muted-foreground">
+          {passage.subtitle}
+        </p>
+      )}
 
       <div className="space-y-4">
         {passage.paragraphs.map((paragraph, index) => (

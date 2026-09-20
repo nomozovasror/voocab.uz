@@ -322,9 +322,13 @@ async def _mistakes(
 async def _time_spent(session: AsyncSession, user_id: uuid.UUID, *, skill: str) -> int:
     """Every finished attempt, retries included — time spent is time spent.
 
-    From ``time_spent_ms`` where the client reported it and from the gap
-    between starting and submitting where it didn't; the second is always true
-    and the first is more honest about pauses, so the reported number wins.
+    From ``active_ms`` where the client reported it, from ``time_spent_ms``
+    where it didn't, and from the gap between starting and submitting where
+    neither is there. Each is more honest than the one after it: the wall
+    clock counts the tea break, ``time_spent_ms`` counts the tab that was
+    left open, and ``active_ms`` counts the sitting. Older attempts have
+    nothing under the middle one, which is why this is a chain and not a
+    column swap.
     """
     elapsed_ms = cast(
         func.extract("epoch", Attempt.submitted_at - Attempt.started_at) * 1000,
@@ -336,7 +340,12 @@ async def _time_spent(session: AsyncSession, user_id: uuid.UUID, *, skill: str) 
                 func.coalesce(
                     func.sum(
                         func.greatest(
-                            func.coalesce(Attempt.time_spent_ms, elapsed_ms), 0
+                            func.coalesce(
+                                Attempt.active_ms,
+                                Attempt.time_spent_ms,
+                                elapsed_ms,
+                            ),
+                            0,
                         )
                     ),
                     0,

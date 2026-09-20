@@ -40,6 +40,7 @@ import { useWaveform } from "@/features/listening/use-waveform";
 import {
 } from "@/features/listening/queries";
 import { PRACTICE } from "@/features/paper/take-config";
+import { useActiveTime } from "@/features/paper/use-active-time";
 import {
   MAX_SPANS,
   clearSession,
@@ -123,6 +124,21 @@ export default function ListeningTakePage() {
   const session = useRef<TakeSession>(restored.current ?? newSession());
   const [resumed, setResumed] = useState(() => restored.current !== null);
   const [confirming, setConfirming] = useState(false);
+
+  // Measured here and never shown. The recording is this page's clock —
+  // it ends and the questions end with it — so a second one would be
+  // counting something nothing depends on. What the measurement is FOR is
+  // the statistics, and those have the same problem on both papers: a tab
+  // left open for twenty minutes used to be recorded as twenty minutes of
+  // study. See `use-active-time`.
+  useActiveTime({
+    startedAt: session.current.startedAt,
+    activeFrom: restored.current?.activeMs ?? 0,
+    onSample: (ms) => {
+      session.current.activeMs = ms;
+      if (sessionKey) saveSession(sessionKey, session.current);
+    },
+  });
 
   const parts = useMemo(
     () => (material ? paperParts(material) : []),

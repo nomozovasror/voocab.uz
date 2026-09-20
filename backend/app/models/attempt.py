@@ -69,6 +69,21 @@ class Attempt(SQLModel, table=True):
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
     time_spent_ms: int | None = Field(default=None)
+    #: The part of ``time_spent_ms`` somebody was actually present for -- the
+    #: tab in front of them, and something moving.
+    #:
+    #: Two columns rather than one, because they answer two questions. How
+    #: long the paper was OUT is a fact about the session; how long it was
+    #: being SAT is the only one of the two worth measuring a learner by. A
+    #: candidate who opens a passage, leaves for twenty minutes and comes back
+    #: did not read for twenty-three of them, and every figure built on
+    #: ``time_spent_ms`` -- time spent, pace, the per-question timings behind
+    #: "where you lose marks" -- believed that they did.
+    #:
+    #: Nullable, and null means the attempt predates the measurement rather
+    #: than that nobody was there. Anything reading it falls back to
+    #: ``time_spent_ms``.
+    active_ms: int | None = Field(default=None)
     completed_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )

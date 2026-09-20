@@ -7,8 +7,10 @@ import { MatchingGroup } from "@/features/paper/components/MatchingGroup";
 import {
   groupNumbering,
   partNumber,
+  questionSpan,
   sorted,
 } from "@/features/paper/numbering";
+import { QUESTION_TYPE_LABEL } from "@/features/paper/question-types";
 import { paperParts } from "@/features/paper/take-paper";
 import { isFixedChoice, isMatching } from "@/features/paper/types";
 import type {
@@ -85,6 +87,20 @@ function restates(
   return title.trim().toLowerCase().endsWith(said);
 }
 
+/** "Questions 14–20", or "Question 40" where a group holds one number.
+ *
+ *  Numbers, not a count: a "choose TWO letters" is one question carrying two
+ *  of them, so the span is what the paper prints down its side and what the
+ *  navigator along the bottom agrees with. */
+function numbersOf(
+  group: { questions: unknown[]; config: { answers_per_question?: number | null } },
+  from: number,
+): string {
+  const to =
+    from + group.questions.length * questionSpan(group.config.answers_per_question) - 1;
+  return to > from ? `Questions ${from}\u2013${to}` : `Question ${from}`;
+}
+
 export function QuestionPaper({
   material,
   answers,
@@ -120,6 +136,14 @@ export function QuestionPaper({
           {/* A rule ABOVE the heading rather than under it. A part is a break
               in a continuous paper, not a box around a set of questions, and
               the line that says so belongs where the break is. */}
+          {/* Only where the paper HAS more than one part.
+              With one, the heading names the only thing on the page — and
+              says its numbers again, which each group now prints for itself
+              just above its own questions. A reading passage is one part, so
+              the screen was spending four lines on the same fact: the page
+              title, the passage heading, the part heading and the group's
+              numbers. */}
+          {parts.length > 1 && (
           <h2 className="mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-border pt-4">
             <span className="text-sm font-medium text-foreground">
               {partWord} {number}
@@ -148,6 +172,7 @@ export function QuestionPaper({
               </button>
             )}
           </h2>
+          )}
           <div className="space-y-8">
             {sorted(part.question_groups).map((group) => {
               const shared = {
@@ -164,14 +189,35 @@ export function QuestionPaper({
               // Anything this build doesn't know about is rendered as a
               // form: every group has a template field, so showing it is
               // better than leaving the questions out of the paper entirely.
-              return group.type === "multiple_choice" ? (
-                <ChoiceGroup key={group.id} {...shared} />
-              ) : isMatching(group.type as QuestionGroupType) ? (
-                <MatchingGroup key={group.id} {...shared} />
-              ) : isFixedChoice(group.type as QuestionGroupType) ? (
-                <FixedChoiceGroup key={group.id} {...shared} />
-              ) : (
-                <FormCompletionGroup key={group.id} {...shared} />
+              const body =
+                group.type === "multiple_choice" ? (
+                  <ChoiceGroup {...shared} />
+                ) : isMatching(group.type as QuestionGroupType) ? (
+                  <MatchingGroup {...shared} />
+                ) : isFixedChoice(group.type as QuestionGroupType) ? (
+                  <FixedChoiceGroup {...shared} />
+                ) : (
+                  <FormCompletionGroup {...shared} />
+                );
+              return (
+                <section key={group.id}>
+                  {/* Its own numbers and its own name, above its own
+                      questions. A paper is read group by group — "Questions
+                      14–20, matching headings" is the unit a candidate plans
+                      their twenty minutes in — and until now only the PART
+                      said any of that, which is the same sentence for all
+                      three groups under it. */}
+                  <h3 className="mb-2.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                    <span className="text-xs font-medium tabular-nums text-primary">
+                      {numbersOf(group, shared.startNumber)}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {QUESTION_TYPE_LABEL[group.type as QuestionGroupType] ??
+                        group.type}
+                    </span>
+                  </h3>
+                  {body}
+                </section>
               );
             })}
           </div>

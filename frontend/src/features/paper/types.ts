@@ -915,6 +915,11 @@ export interface AttemptSubmit {
    *  so the server can subtract it from its own clock instead of trusting
    *  ours. */
   elapsed_ms?: number;
+  /** The part of it somebody was actually there for — the tab in front, and
+   *  something moving. Both are sent because they are two facts: `elapsed_ms`
+   *  is how long the paper was out, and this is how long it was being sat.
+   *  Anything that MEASURES a learner reads this one. */
+  active_ms?: number;
 }
 
 /** One line of the transcript across an answer's moment — the author's

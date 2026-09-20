@@ -40,6 +40,16 @@ export interface TakeSession {
   timing: Record<string, AnswerTiming>;
   listened: ListenedSpan[];
   seeksBack: number;
+  /** How much of `startedAt`-to-now anybody was actually present for.
+   *
+   *  Banked here rather than recomputed, because it cannot be: a reload
+   *  leaves `startedAt` intact and the clock keeps running, but the minutes
+   *  somebody spent in another tab before the reload are gone unless they
+   *  were written down. See `use-active-time`.
+   *
+   *  Absent in a draft written before this existed, which is why it is
+   *  optional and why every reader defaults it. */
+  activeMs?: number;
   /** Question ids the candidate marked to come back to.
    *
    *  Part of the draft rather than a piece of page state, for the same reason
@@ -57,6 +67,7 @@ export function newSession(): TakeSession {
     timing: {},
     listened: [],
     seeksBack: 0,
+    activeMs: 0,
     flagged: [],
   };
 }
@@ -171,6 +182,7 @@ export function toSubmit(
   session: TakeSession,
   questionIds: string[],
 ): AttemptSubmit {
+  const elapsed = Math.max(0, Date.now() - session.startedAt);
   return {
     answers: questionIds.map((question_id) => {
       const timing = session.timing[question_id];
@@ -182,6 +194,10 @@ export function toSubmit(
     }),
     listened: session.listened.slice(0, MAX_SPANS),
     seeks_back: session.seeksBack,
-    elapsed_ms: Math.max(0, Date.now() - session.startedAt),
+    elapsed_ms: elapsed,
+    // Never more than the wall clock, whatever the tab did to the interval
+    // that accumulated it. A figure larger than the time the page was open
+    // is one nobody can explain, and it would be the one the statistics use.
+    active_ms: Math.min(elapsed, Math.max(0, session.activeMs ?? 0)),
   };
 }

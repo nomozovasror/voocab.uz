@@ -1361,6 +1361,11 @@ class AttemptSubmit(BaseModel):
     #: rather than believing the client's, so a device set to next year still
     #: records a sane attempt.
     elapsed_ms: int | None = Field(default=None, ge=0)
+    #: The part of ``elapsed_ms`` somebody was actually there for -- the tab
+    #: in front of them and something moving. Both are sent because they are
+    #: two facts, and anything that MEASURES a learner reads this one. See
+    #: ``Attempt.active_ms``.
+    active_ms: int | None = Field(default=None, ge=0)
 
 
 class TranscriptLineOut(BaseModel):
