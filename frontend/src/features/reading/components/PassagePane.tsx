@@ -50,14 +50,28 @@ interface PassagePaneProps {
 
 /** How each mark is washed over the prose.
  *
- *  A quarter of the colour, so the words underneath stay the foreground
- *  rather than becoming text on a coloured block — a passage with six marks
- *  in it has to still read as a passage. */
+ *  A wash rather than a block, so the words underneath stay the foreground
+ *  — a passage with six marks in it has to still read as a passage.
+ *
+ *  It was a quarter of the colour and that was too little to read as a
+ *  highlight at all: against a dark ground a 25% tint of amber is a change
+ *  in shade, not a mark, and a reader scanning back through nine hundred
+ *  words could not find what they had marked. Two fifths, with the padding
+ *  and the small radius of a real marker stroke — which is what carries
+ *  most of it, because what says "highlighted" is the shape of the block
+ *  around the words rather than the strength of the colour in it. */
 const WASH: Record<MarkColour, string> = {
-  key: "bg-mark-key/25",
-  found: "bg-mark-found/25",
-  doubt: "bg-mark-doubt/25",
+  key: "bg-mark-key/40",
+  found: "bg-mark-found/40",
+  doubt: "bg-mark-doubt/40",
 };
+
+/** What every mark wears, whatever colour it is. `box-decoration-clone` is
+ *  the one that matters: a mark that wraps across a line break would
+ *  otherwise get its padding and rounding only at the two outer ends, and
+ *  the middle lines would run flush into the margin. */
+const STROKE =
+  "rounded-[0.2em] px-[0.12em] py-[0.05em] [box-decoration-break:clone]";
 
 /** The id a paragraph can be scrolled to by, so the review's "go to
  *  paragraph C" and the letter printed beside it name the same thing. */
@@ -109,9 +123,7 @@ export function PassagePane({
           <div
             key={index}
             id={
-              paragraph.label
-                ? paragraphId(partId, paragraph.label)
-                : undefined
+              paragraph.label ? paragraphId(partId, paragraph.label) : undefined
             }
             className={cn(
               "flex gap-3 rounded-md transition-colors duration-slow",
@@ -162,7 +174,8 @@ export function PassagePane({
                       onUnmark ? () => onUnmark(index, run.at) : undefined
                     }
                     className={cn(
-                      "rounded-[2px] text-foreground",
+                      "text-foreground",
+                      STROKE,
                       WASH[run.mark.colour ?? "key"],
                       // A note is a mark that says something, and it has to
                       // look like one or the reader cannot tell which of

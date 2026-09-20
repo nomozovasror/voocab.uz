@@ -129,6 +129,7 @@ export interface PassageToolsProps {
   onLookup: (
     word: string,
     where?: { paragraphIndex: number; offset: number },
+    rect?: DOMRect | null,
   ) => void;
   /** False in an exam: there is no dictionary in the hall. */
   allowLookup: boolean;
@@ -191,6 +192,9 @@ export function PassageTools({
                 offset: selected.where.start,
               }
             : undefined,
+          // So the answer arrives at the words even when the question was
+          // asked from the row at the top of the screen.
+          selected?.rect,
         )
       }
       allowLookup={allowLookup}
@@ -202,12 +206,17 @@ export function PassageTools({
   return (
     <div className="relative flex shrink-0 items-center gap-1">
       {/* ── What marks the passage ─────────────────────────────────── */}
+      {/* The pen is inked rather than followed by a dot. A filled circle
+          beside a word is a bullet — it reads as punctuation, and at this
+          size it was louder than the label it was qualifying. Tinting the
+          icon says the same thing in the space the icon already occupies:
+          this is the colour the next mark will be. */}
       <Tool
         icon={Highlighter}
         label="Highlight"
         pressed={picking}
         onClick={() => setPicking((was) => !was)}
-        swatch={colour}
+        inked={colour}
       />
       <Tool
         icon={StickyNote}
@@ -385,7 +394,7 @@ function Tool({
   dim,
   title,
   onClick,
-  swatch,
+  inked,
   stacked,
 }: {
   icon?: typeof Highlighter;
@@ -396,7 +405,9 @@ function Tool({
   dim?: boolean;
   title?: string;
   onClick: () => void;
-  swatch?: MarkColour;
+  /** Paints the ICON in one of the mark colours. What the reader has chosen
+   *  for the next highlight, said in the space the icon already takes. */
+  inked?: MarkColour;
   stacked?: boolean;
 }) {
   return (
@@ -416,12 +427,23 @@ function Tool({
         dim && "opacity-50",
       )}
     >
-      {Icon && <Icon className="size-3.5 shrink-0" aria-hidden />}
+      {Icon && (
+        <Icon
+          className={cn("size-3.5 shrink-0", inked && INK[inked])}
+          aria-hidden
+        />
+      )}
       {!hideLabel && label}
-      {swatch && <Swatch colour={swatch} small />}
     </button>
   );
 }
+
+/** The mark colours as a foreground, for the pen that carries one. */
+const INK: Record<MarkColour, string> = {
+  key: "text-mark-key",
+  found: "text-mark-found",
+  doubt: "text-mark-doubt",
+};
 
 export function Swatch({
   colour,

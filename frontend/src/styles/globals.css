@@ -222,6 +222,14 @@
   --mark-found: #5b9bd5;
   --mark-doubt: #a98cd8;
 
+  /* What a drag of the mouse looks like before it becomes anything.
+     Left to the browser it is the platform blue, which is the one colour on
+     this screen that belongs to no part of the design — and on a reading
+     paper the reader is dragging constantly, so it is on screen more than
+     any mark. The accent at a low tint reads as "the app noticed", and the
+     text stays the foreground colour rather than flipping to white. */
+  --selection: color-mix(in srgb, var(--primary) 28%, transparent);
+
   /* Audio (§3). --wave and --wave-progress exist as real custom properties
      rather than as @theme entries alone because wavesurfer takes colours as
      JS strings, not classes, and reads them with getPropertyValue(). @theme
@@ -331,6 +339,25 @@
     margin: 0;
     min-height: 100svh;
   }
+
+  /* The drag itself, in the app's own colour rather than the platform's.
+     Both selectors are needed and neither is a fallback for the other:
+     `::-moz-selection` is Firefox's spelling, and a rule list containing a
+     selector a browser does not understand is a rule list it throws away
+     entirely — so writing them together would lose the styling in whichever
+     browser was not the one being tested.
+
+     The text keeps its own colour. Flipping it to white is what a form
+     field does, and this is nine hundred words of prose somebody is
+     reading: the selection has to mark where the drag went without
+     restyling the passage under it. */
+  ::selection {
+    background: var(--selection);
+  }
+
+  ::-moz-selection {
+    background: var(--selection);
+  }
 }
 
 /* The catalogue's side card swaps face as the pointer moves between rows, and
@@ -377,31 +404,72 @@
 
 /* Typing Rescue animations (juice for the connection-gate game). */
 @keyframes tr-rise {
-  0% { opacity: 0; transform: translate(-50%, 6px) scale(0.9); }
-  18% { opacity: 1; }
-  100% { opacity: 0; transform: translate(-50%, -48px) scale(1.05); }
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 6px) scale(0.9);
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -48px) scale(1.05);
+  }
 }
 @keyframes tr-wave {
-  0% { opacity: 0; transform: scale(0.6); letter-spacing: 0.5em; }
-  22% { opacity: 1; transform: scale(1); }
-  72% { opacity: 1; }
-  100% { opacity: 0; transform: scale(1.18); letter-spacing: 0.35em; }
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+    letter-spacing: 0.5em;
+  }
+  22% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  72% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.18);
+    letter-spacing: 0.35em;
+  }
 }
 @keyframes tr-pop {
-  0% { opacity: 0; transform: scale(0.5); }
-  60% { transform: scale(1.08); }
-  100% { opacity: 1; transform: scale(1); }
+  0% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  60% {
+    transform: scale(1.08);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 @keyframes tr-fade-in {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* The publish moment's panel: rises into place with a touch of overshoot, so
    it arrives rather than appears. See PublishCelebration. */
 @keyframes celebrate {
-  from { opacity: 0; transform: translateY(12px) scale(0.96); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 /* ── Magic-Bento card effects ─────────────────────────────────────────────
@@ -503,14 +571,28 @@
 }
 
 @keyframes magic-particle {
-  0% { opacity: 0; transform: translate(0, 0) scale(0.5); }
-  18% { opacity: 0.95; }
-  55% { opacity: 0.7; transform: translate(var(--dx), var(--dy)) scale(1); }
-  100% { opacity: 0; transform: translate(calc(var(--dx) * 1.7), calc(var(--dy) * 1.7)) scale(0.4); }
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.5);
+  }
+  18% {
+    opacity: 0.95;
+  }
+  55% {
+    opacity: 0.7;
+    transform: translate(var(--dx), var(--dy)) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(var(--dx) * 1.7), calc(var(--dy) * 1.7))
+      scale(0.4);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .magic-particle { display: none; }
+  .magic-particle {
+    display: none;
+  }
 }
 
 /* ── Shine ────────────────────────────────────────────────────────────────
@@ -552,10 +634,14 @@
 }
 
 @keyframes shine-sweep {
-  0% { transform: translateX(-110%); }
-  45%, 100% { transform: translateX(110%); }
+  0% {
+    transform: translateX(-110%);
+  }
+  45%,
+  100% {
+    transform: translateX(110%);
+  }
 }
-
 
 @media (prefers-reduced-motion: reduce) {
   /* Still lit, just not moving — the point is that the control is worth
@@ -600,14 +686,27 @@
 }
 
 @keyframes logo-wipe {
-  0% { clip-path: inset(0 100% 0 0); }
-  26%, 74% { clip-path: inset(0 0 0 0); }
-  100% { clip-path: inset(0 0 0 100%); }
+  0% {
+    clip-path: inset(0 100% 0 0);
+  }
+  26%,
+  74% {
+    clip-path: inset(0 0 0 0);
+  }
+  100% {
+    clip-path: inset(0 0 0 100%);
+  }
 }
 
 @keyframes logo-shine {
-  0%, 32% { transform: translateX(0); }
-  64%, 100% { transform: translateX(1240px); }
+  0%,
+  32% {
+    transform: translateX(0);
+  }
+  64%,
+  100% {
+    transform: translateX(1240px);
+  }
 }
 
 /* Stroke draw — the outline is written first, then the colour sweeps in
@@ -636,16 +735,40 @@
 }
 
 @keyframes logo-sdraw {
-  0% { stroke-dashoffset: 1; opacity: 1; }
-  40% { stroke-dashoffset: 0; opacity: 1; }
-  80% { opacity: 1; }
-  95%, 100% { stroke-dashoffset: 0; opacity: 0; }
+  0% {
+    stroke-dashoffset: 1;
+    opacity: 1;
+  }
+  40% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  95%,
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
 }
 
 @keyframes logo-sfill {
-  0%, 42% { clip-path: inset(0 100% 0 0); opacity: 1; }
-  64%, 82% { clip-path: inset(0 0 0 0); opacity: 1; }
-  95%, 100% { clip-path: inset(0 0 0 0); opacity: 0; }
+  0%,
+  42% {
+    clip-path: inset(0 100% 0 0);
+    opacity: 1;
+  }
+  64%,
+  82% {
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+  }
+  95%,
+  100% {
+    clip-path: inset(0 0 0 0);
+    opacity: 0;
+  }
 }
 
 /* Hover — the header mark redraws itself when the brand link is hovered.
@@ -681,9 +804,20 @@
 }
 
 @keyframes logo-key {
-  0% { opacity: 0; transform: translateY(-26%) scale(0.9); }
-  18%, 70% { opacity: 1; transform: translateY(0) scale(1); }
-  86%, 100% { opacity: 0; transform: translateY(8%) scale(0.96); }
+  0% {
+    opacity: 0;
+    transform: translateY(-26%) scale(0.9);
+  }
+  18%,
+  70% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  86%,
+  100% {
+    opacity: 0;
+    transform: translateY(8%) scale(0.96);
+  }
 }
 
 /* One-shot version of the stroke draw — settles on the solid mark. Used by
@@ -704,14 +838,28 @@
 }
 
 @keyframes logo-draw-line {
-  0% { stroke-dashoffset: 1; opacity: 1; }
-  62% { stroke-dashoffset: 0; opacity: 1; }
-  100% { stroke-dashoffset: 0; opacity: 0; }
+  0% {
+    stroke-dashoffset: 1;
+    opacity: 1;
+  }
+  62% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
 }
 
 @keyframes logo-draw-fill {
-  0%, 55% { clip-path: inset(0 100% 0 0); }
-  100% { clip-path: inset(0 0 0 0); }
+  0%,
+  55% {
+    clip-path: inset(0 100% 0 0);
+  }
+  100% {
+    clip-path: inset(0 0 0 0);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -727,7 +875,9 @@
     transform: none;
   }
   .logo-ghost,
-  .logo-outline { display: none; }
+  .logo-outline {
+    display: none;
+  }
 }
 
 /* Loader fades in only after a beat. A wait that resolves in 150ms should show
@@ -739,11 +889,15 @@
 }
 
 @keyframes loader-appear {
-  to { opacity: 1; }
+  to {
+    opacity: 1;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .loader-deferred { animation-duration: 0.01s; }
+  .loader-deferred {
+    animation-duration: 0.01s;
+  }
 }
 
 /* Skeleton bars pulse via Tailwind's built-in `animate-pulse`, which — unlike
@@ -751,7 +905,9 @@
    its own. One rule covers every skeleton in the app; the shapes still hold
    the layout, they just stop breathing. */
 @media (prefers-reduced-motion: reduce) {
-  .animate-pulse { animation: none; }
+  .animate-pulse {
+    animation: none;
+  }
 }
 
 /* Indeterminate route progress. Fast at the start — most of a chunk's wait is
@@ -763,9 +919,15 @@
 }
 
 @keyframes route-progress {
-  0%   { transform: scaleX(0.02); }
-  30%  { transform: scaleX(0.55); }
-  100% { transform: scaleX(0.97); }
+  0% {
+    transform: scaleX(0.02);
+  }
+  30% {
+    transform: scaleX(0.55);
+  }
+  100% {
+    transform: scaleX(0.97);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -839,19 +1001,30 @@
 .modal-stagger > * {
   animation: modal-item-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
-.modal-stagger > *:nth-child(1) { animation-delay: 0.06s; }
-.modal-stagger > *:nth-child(2) { animation-delay: 0.11s; }
-.modal-stagger > *:nth-child(3) { animation-delay: 0.16s; }
-.modal-stagger > *:nth-child(4) { animation-delay: 0.21s; }
-.modal-stagger > *:nth-child(5) { animation-delay: 0.26s; }
-.modal-stagger > *:nth-child(6) { animation-delay: 0.31s; }
+.modal-stagger > *:nth-child(1) {
+  animation-delay: 0.06s;
+}
+.modal-stagger > *:nth-child(2) {
+  animation-delay: 0.11s;
+}
+.modal-stagger > *:nth-child(3) {
+  animation-delay: 0.16s;
+}
+.modal-stagger > *:nth-child(4) {
+  animation-delay: 0.21s;
+}
+.modal-stagger > *:nth-child(5) {
+  animation-delay: 0.26s;
+}
+.modal-stagger > *:nth-child(6) {
+  animation-delay: 0.31s;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .modal-stagger > * {
     animation: none;
   }
 }
-
 
 /* ── Transcript line flash ────────────────────────────────────────────────
    Fires once a jump has landed, to say "here" without leaving a mark. A
@@ -878,7 +1051,6 @@
     animation-duration: 0.01s;
   }
 }
-
 
 /* ── Opening a listening material ─────────────────────────────────────────
    The material is started in order — the parts, the recording, then what each

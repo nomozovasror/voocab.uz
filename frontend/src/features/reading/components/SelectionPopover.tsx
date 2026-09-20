@@ -95,6 +95,7 @@ export function SelectionPopover({
   onLookup: (
     word: string,
     where: { paragraphIndex: number; offset: number },
+    rect: DOMRect,
   ) => void;
   /** How many of the three are left. Shown on the button, because that is
    *  the number the decision is made against. */
@@ -184,10 +185,16 @@ export function SelectionPopover({
                     : "What does this mean here?"
               }
               onClick={() =>
-                onLookup(selected.text.trim(), {
-                  paragraphIndex: selected.where.index,
-                  offset: selected.where.start,
-                })
+                onLookup(
+                  selected.text.trim(),
+                  {
+                    paragraphIndex: selected.where.index,
+                    offset: selected.where.start,
+                  },
+                  // The same box this popover is hanging off, so the answer
+                  // arrives where the question was asked.
+                  selected.rect,
+                )
               }
               className={cn(
                 "flex h-7 items-center gap-1 rounded-lg px-1.5 text-[0.7rem] transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",

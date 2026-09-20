@@ -58,7 +58,7 @@ import {
 import { SelectionPopover } from "@/features/reading/components/SelectionPopover";
 import {
   HelpPanel,
-  LookupPanel,
+  LookupPopover,
   NotePanel,
 } from "@/features/reading/components/ReadingPanels";
 import {
@@ -266,6 +266,10 @@ export default function ReadingTakePage() {
         kind: "lookup";
         word: string;
         where?: { paragraphIndex: number; offset: number };
+        /** The selection's box, taken at the moment of asking. The answer
+         *  hangs off the words rather than off the corner of the screen,
+         *  and by the time it arrives the selection may be gone. */
+        rect?: DOMRect | null;
       }
     | null
   >(null);
@@ -291,9 +295,13 @@ export default function ReadingTakePage() {
   // is told there is no meaning has not used one of their three, and being
   // charged for nothing is the kind of small unfairness people remember.
   const lookUp = useCallback(
-    (word: string, where?: { paragraphIndex: number; offset: number }) => {
+    (
+      word: string,
+      where?: { paragraphIndex: number; offset: number },
+      rect?: DOMRect | null,
+    ) => {
       if (!word) return;
-      setPanel({ kind: "lookup", word, where });
+      setPanel({ kind: "lookup", word, where, rect });
     },
     [],
   );
@@ -880,30 +888,23 @@ export default function ReadingTakePage() {
                   // one question group cut out of a paper is not the paper,
                   // and counting the whole passage's words beside six
                   // questions would be a number about something else.
+                  // The count and the spread are one segment, not two
+                  // lines. They answer the same question at two
+                  // magnifications — how much there is to learn, and
+                  // whether it is pitched at this reader — and a second
+                  // row under the title pushed the passage down for
+                  // something read once.
                   vocabulary && vocabulary.total > 0
-                    ? `${vocabulary.total} words to learn`
+                    ? `${vocabulary.total} words to learn (${LEVELS.filter(
+                        (level) => vocabulary.levels[level],
+                      )
+                        .map((level) => `${level} ${vocabulary.levels[level]}`)
+                        .join(" · ")})`
                     : null,
                 ]
                   .filter(Boolean)
                   .join(" · ")}
               </p>
-              {/* The spread under the count, because the two answer
-                  different questions. "88 words" is how much; "B1 18 · B2 44
-                  · C1 27" is whether they are pitched at this reader — and
-                  somebody working towards band 6, choosing between two
-                  passages, is asking the second one.
-
-                  The vocabulary LOAD is not here and never will be. It is
-                  the figure the difficulty arithmetic runs on, measured off
-                  the frequency lists, and "11% of this passage is off-list"
-                  is a fact about a corpus that no learner can place. */}
-              {vocabulary && vocabulary.total > 0 && (
-                <p className="mt-0.5 text-[0.75em] tabular-nums text-muted-foreground">
-                  {LEVELS.filter((level) => vocabulary.levels[level])
-                    .map((level) => `${level} ${vocabulary.levels[level]}`)
-                    .join(" · ")}
-                </p>
-              )}
             </div>
             <div className="space-y-10">
               {sorted.map((part, index) =>
@@ -996,12 +997,13 @@ export default function ReadingTakePage() {
         />
       )}
       {panel?.kind === "lookup" && id && (
-        <LookupPanel
+        <LookupPopover
           materialId={id}
           word={panel.word}
           where={panel.where}
+          rect={panel.rect}
           spent={lookups.spent}
-          isKnown={(lemma) => known(lookups, lemma)}
+          isKnown={(lemma: string) => known(lookups, lemma)}
           onFound={spend}
           onClose={() => setPanel(null)}
         />
