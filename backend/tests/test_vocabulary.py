@@ -525,6 +525,15 @@ async def test_a_generated_gloss_is_kept_for_the_next_reader(
             )
             assert made["word"].lemma == "scheme"
             assert made["word"].source == "extracted"
+            # The surface is the passage's own spelling, and its offsets
+            # slice back to it. The search is case-insensitive, so storing
+            # the query instead would leave the one field that makes the
+            # offsets checkable disagreeing with the text.
+            entry = made["word"]
+            text = PASSAGE["paragraphs"][entry.paragraph_index]["text"]
+            assert (
+                text[entry.offset_start : entry.offset_end] == entry.surface
+            )
             # No frequency list on this side of the fence, and a guess here
             # would put a made-up figure into the column the difficulty
             # arithmetic reads.

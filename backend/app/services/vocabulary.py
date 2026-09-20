@@ -307,6 +307,12 @@ async def _generate(
                                                     paragraph_index)
     if part is None or not context:
         return None
+    # The form as the PASSAGE writes it, not as the query arrived. The search
+    # is case-insensitive, so a reader who tapped `Vertical` at the start of
+    # a sentence would otherwise have stored a surface that does not match
+    # the text its own offsets point at -- and the surface is the one field
+    # that makes those offsets checkable.
+    surface = context[start:end]
     try:
         gloss = await dictionary_service.provider().look_up(word, context)
     except Exception:  # noqa: BLE001 - one word is not worth a 500
@@ -319,7 +325,7 @@ async def _generate(
         material_id=material.id,
         part_id=part.id,
         lemma=gloss.lemma,
-        surface=word,
+        surface=surface,
         pos=gloss.pos,
         meaning_en=gloss.meaning_en,
         meaning_uz=gloss.meaning_uz,
@@ -332,7 +338,7 @@ async def _generate(
         # put a made-up figure into the column the difficulty arithmetic
         # reads. Empty says "not measured", which is true.
         frequency_band="",
-        is_phrase=" " in word,
+        is_phrase=" " in surface,
         source="extracted",
     )
     session.add(entry)
