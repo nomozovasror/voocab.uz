@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import type { Passage } from "@/features/paper/types";
+import { marksIn, runsOf, type Highlight } from "@/features/reading/highlights";
 
 /**
  * The text a reading paper is answered from.
@@ -29,6 +30,12 @@ interface PassagePaneProps {
   /** Whether to print the passage's own heading above it. False where it is
    *  the only passage on the page — see the comment where it is drawn. */
   showTitle?: boolean;
+  /** What the reader marked. Drawn here and nowhere else — the passage is
+   *  the only thing on either page there is anything to mark. */
+  highlights?: Highlight[];
+  /** Clicking a mark asks for it to go. Absent on the review, where the
+   *  marks are a record of how the paper was read rather than a tool. */
+  onUnmark?: (index: number, offset: number) => void;
   /** A paragraph to draw attention to — the review page points at the one an
    *  answer came from. Null while the paper is being sat: there is nothing to
    *  point at yet, and pointing would be telling. */
@@ -54,6 +61,8 @@ export function PassagePane({
   passage,
   partId,
   showTitle = true,
+  highlights,
+  onUnmark,
   highlight,
   className,
 }: PassagePaneProps) {
@@ -102,7 +111,7 @@ export function PassagePane({
               <span
                 aria-hidden
                 className={cn(
-                  "w-4 shrink-0 pt-0.5 text-sm font-semibold tabular-nums",
+                  "w-4 shrink-0 pt-0.5 text-[0.8em] font-semibold tabular-nums",
                   highlight === paragraph.label
                     ? "text-primary"
                     : "text-muted-foreground",
@@ -111,8 +120,41 @@ export function PassagePane({
                 {paragraph.label}
               </span>
             )}
-            <p className="min-w-0 flex-1 text-[0.95rem] leading-7 text-foreground">
-              {paragraph.text}
+            <p
+              // The offsets a selection is measured against are offsets into
+              // THIS element's text, so it is the one the page reaches for.
+              data-paragraph-index={index}
+              // `em`, not `rem`: the size control sets a percentage on the
+              // pane, and an absolute size ignores it — which is what the
+              // first version of the control did, silently.
+              className="min-w-0 flex-1 text-[0.95em] leading-[1.72] text-foreground"
+            >
+              {runsOf(
+                paragraph.text,
+                marksIn(highlights ?? [], partId, index),
+              ).map((run, k) =>
+                run.marked ? (
+                  // `mark` rather than a span: it is literally what the
+                  // element is for, and it is what a screen reader announces
+                  // as marked text. A click takes it off again — the same
+                  // gesture that put it on, which is how every highlighter
+                  // in a document works.
+                  <mark
+                    key={k}
+                    onClick={
+                      onUnmark ? () => onUnmark(index, run.at) : undefined
+                    }
+                    className={cn(
+                      "rounded-[2px] bg-primary/25 text-foreground",
+                      onUnmark && "cursor-pointer",
+                    )}
+                  >
+                    {run.text}
+                  </mark>
+                ) : (
+                  <span key={k}>{run.text}</span>
+                ),
+              )}
             </p>
           </div>
         ))}

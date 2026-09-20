@@ -22,6 +22,7 @@ import {
   PassagePane,
   paragraphId,
 } from "@/features/reading/components/PassagePane";
+import { loadHighlights } from "@/features/reading/highlights";
 import type { QuoteSource } from "@/features/paper/review";
 import type { AttemptResult } from "@/features/paper/types";
 
@@ -67,6 +68,16 @@ export default function ReadingResultsPage() {
   );
   const mistakes = useMemo(() => tallyMistakes(data?.results ?? []), [data]);
   const wrong = useMemo(() => rows.filter((r) => !r.result.is_correct), [rows]);
+
+  // What they marked while they were reading it. Read-only here: the marks
+  // are a record of how the paper was worked, and the value of seeing them
+  // again is being able to ask whether the answer really was where they
+  // thought it was. Keyed by material, so they are waiting on this page
+  // even though the take session was cleared by the submit that reached it.
+  const marks = useMemo(
+    () => (data?.material_id ? loadHighlights(data.material_id) : []),
+    [data?.material_id],
+  );
 
   const [chosen, setChosen] = useState<ReviewScope>("mistakes");
   // The passages are closed until somebody wants them, and "Paragraph C"
@@ -240,6 +251,7 @@ export default function ReadingResultsPage() {
                       ? highlight.where.label
                       : null
                   }
+                  highlights={marks}
                   className="max-w-none"
                 />
               ) : null,

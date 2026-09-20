@@ -45,6 +45,13 @@ import {
   passageId,
 } from "@/features/reading/components/PassagePane";
 import { LEFT_PANE, SplitPanes } from "@/features/reading/components/SplitPanes";
+import { PassageTools, useTextSize } from "@/features/reading/components/PassageTools";
+import {
+  loadHighlights,
+  saveHighlights,
+  withoutAt,
+  type Highlight,
+} from "@/features/reading/highlights";
 
 /**
  * Practice: the passages, the questions, and the reader between them.
@@ -125,6 +132,24 @@ export default function ReadingTakePage() {
   const blank = total - answered;
 
   const current = useQuestionSpy(questionIds);
+
+  // --- What the reader marked ----------------------------------------------
+  //
+  // The real computer-delivered test lets a candidate highlight the passage
+  // and they use it constantly — the sentence an answer came from gets
+  // marked, and the marks are how they find their way back through nine
+  // hundred words at the end. See `features/reading/highlights`.
+  const [marks, setMarks] = useState<Highlight[]>(() =>
+    id ? loadHighlights(id) : [],
+  );
+  const keep = useCallback(
+    (next: Highlight[]) => {
+      setMarks(next);
+      if (id) saveHighlights(id, next);
+    },
+    [id],
+  );
+  const [textSize, setTextSize] = useTextSize();
 
   // --- Which paragraph the reader is looking at ----------------------------
   //
@@ -493,6 +518,12 @@ export default function ReadingTakePage() {
             .filter(Boolean)
             .join(" · ")}
         </p>
+        <PassageTools
+          marks={marks}
+          onMarks={keep}
+          size={textSize}
+          onSize={setTextSize}
+        />
         {config.showTimer && (
           <TakeTimer
             mode={config.timerMode}
@@ -556,6 +587,7 @@ export default function ReadingTakePage() {
         left={
           <div
             className="space-y-10"
+            style={{ fontSize: `${textSize}%` }}
             onMouseOver={(e) => look(e.target)}
             onFocusCapture={(e) => look(e.target)}
             onMouseLeave={() => setLit(null)}
@@ -569,6 +601,10 @@ export default function ReadingTakePage() {
                   showTitle={sorted.length > 1}
                   passage={part.passage}
                   highlight={lit}
+                  highlights={marks}
+                  onUnmark={(index, offset) =>
+                    keep(withoutAt(marks, part.id, index, offset))
+                  }
                 />
               ) : null,
             )}
