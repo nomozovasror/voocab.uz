@@ -65,6 +65,9 @@ interface QuestionPaperProps {
    *  the paper prints its own word, and a reading paper headed "Part 1" is
    *  the app calling it something the page beside it doesn't. */
   partWord?: string;
+  /** The passage paragraph the reader is looking at. Passed straight through
+   *  to the groups that can say anything about one — reading only. */
+  litParagraph?: string | null;
 }
 
 /** Whether a part's own title adds nothing to the heading beside it.
@@ -114,6 +117,7 @@ export function QuestionPaper({
   onFocus,
   onBlur,
   partWord = "Part",
+  litParagraph,
 }: QuestionPaperProps) {
   const parts = sorted(material.parts);
   const startNumbers = groupNumbering(material);
@@ -193,7 +197,7 @@ export function QuestionPaper({
                 group.type === "multiple_choice" ? (
                   <ChoiceGroup {...shared} />
                 ) : isMatching(group.type as QuestionGroupType) ? (
-                  <MatchingGroup {...shared} />
+                  <MatchingGroup {...shared} litParagraph={litParagraph} />
                 ) : isFixedChoice(group.type as QuestionGroupType) ? (
                   <FixedChoiceGroup {...shared} />
                 ) : (

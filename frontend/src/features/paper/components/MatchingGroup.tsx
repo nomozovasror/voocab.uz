@@ -2,7 +2,7 @@ import { ChevronDown, Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FlagQuestion } from "@/features/listening/components/FlagQuestion";
 import { Q_ANCHOR } from "@/features/paper/take-focus";
-import { matchLabel } from "@/features/paper/matching";
+import { matchLabel, paragraphNamed } from "@/features/paper/matching";
 import type {
   LabelStyle,
   QuestionResult,
@@ -45,6 +45,9 @@ interface MatchingGroupProps {
   /** Only while the paper is being sat — see QuestionPaper. */
   flagged?: Set<string>;
   onFlag?: (questionId: string) => void;
+  /** The passage paragraph the reader is looking at, so an item that names
+   *  that paragraph can say so. Reading only — see `paragraphNamed`. */
+  litParagraph?: string | null;
 }
 
 export function MatchingGroup({
@@ -57,6 +60,7 @@ export function MatchingGroup({
   disabled,
   flagged,
   onFlag,
+  litParagraph,
 }: MatchingGroupProps) {
   const options = group.config.options ?? [];
   // Matching headings is printed in roman numerals, because ITS items are
@@ -150,6 +154,7 @@ export function MatchingGroup({
               options={options}
               style={style}
               wordy={wordy}
+              litParagraph={litParagraph}
               chosen={(answers[question.id] ?? "").trim().toLowerCase()}
               onChange={(letter) => onChange(question.id, letter)}
               result={results?.[question.id]}
@@ -170,6 +175,7 @@ function MatchingItem({
   options,
   style,
   wordy,
+  litParagraph,
   chosen,
   onChange,
   result,
@@ -184,6 +190,7 @@ function MatchingItem({
   style: LabelStyle;
   /** Whether the box says anything beyond its own labels — see the group. */
   wordy: boolean;
+  litParagraph?: string | null;
   chosen: string;
   onChange: (letter: string) => void;
   result?: QuestionResult;
@@ -195,13 +202,24 @@ function MatchingItem({
   const graded = result !== undefined;
   // The answer, once it is allowed to exist here — never before grading.
   const key = graded ? result.correct_answers[0]?.trim().toLowerCase() : undefined;
+  const names = paragraphNamed(question.prompt);
 
   return (
     <fieldset
       // What the navigator scrolls to, and what the page reads to know which
       // question is being worked on.
       {...{ [Q_ANCHOR]: question.id }}
-      className="flex flex-wrap items-center gap-x-2 gap-y-1 py-0.5"
+      // Which paragraph this item is about, where it is about one. Read
+      // both ways: the take screen lights the prose when the pointer is on
+      // the row, and lights the row when the pointer is on the prose.
+      {...(names ? { "data-paragraph": names } : {})}
+      className={cn(
+        // Padding rather than a negative margin bleeding into the pane's
+        // own: `-mx-2` put eight pixels past the content box and gave the
+        // question pane a horizontal scrollbar.
+        "flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md px-2 py-0.5 transition-colors duration-fast",
+        names && litParagraph === names && "bg-surface-hover",
+      )}
       aria-invalid={graded && !result.is_correct}
     >
       <legend className="sr-only">Question {number}</legend>

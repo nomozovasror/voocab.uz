@@ -126,6 +126,37 @@ export default function ReadingTakePage() {
 
   const current = useQuestionSpy(questionIds);
 
+  // --- Which paragraph the reader is looking at ----------------------------
+  //
+  // The most useful thing a reading screen can do, and the page was not
+  // doing it: a candidate on "Paragraph C" wants to know which of the seven
+  // that is, and was counting letters down the margin to find out.
+  //
+  // It runs both ways. Point at a question and its paragraph lights; point
+  // at a paragraph and the questions about it light. Read off the DOM, the
+  // way `take-focus` reads where the reader is, rather than threaded up out
+  // of every group component — the two panes already write down what they
+  // are (`data-paragraph` on an item, `passage-<part>-<letter>` on a
+  // paragraph) and the page only has to ask.
+  //
+  // Only matching headings can say this before the paper is answered: its
+  // ITEMS are the paragraphs. Every other task points the other way, and a
+  // page that lit the paragraph an answer is in would be answering the
+  // question. Nothing is drawn where nothing is known.
+  const [lit, setLit] = useState<string | null>(null);
+
+  const look = useCallback((target: EventTarget | null) => {
+    const el = target instanceof Element ? target : null;
+    const item = el?.closest<HTMLElement>("[data-paragraph]");
+    if (item) {
+      setLit(item.dataset.paragraph ?? null);
+      return;
+    }
+    const paragraph = el?.closest<HTMLElement>('[id^="passage-"]');
+    const letter = paragraph?.id.split("-").pop();
+    setLit(letter && letter.length === 1 ? letter : null);
+  }, []);
+
   // --- The clock ------------------------------------------------------------
   //
   // Reading is the paper that needs one. A recording is its own clock and a
@@ -523,7 +554,12 @@ export default function ReadingTakePage() {
           if (side === "left") showPassage();
         }}
         left={
-          <div className="space-y-10">
+          <div
+            className="space-y-10"
+            onMouseOver={(e) => look(e.target)}
+            onFocusCapture={(e) => look(e.target)}
+            onMouseLeave={() => setLit(null)}
+          >
             {sorted.map((part, index) =>
               part.passage ? (
                 <PassagePane
@@ -532,22 +568,31 @@ export default function ReadingTakePage() {
                   title={part.title || `Reading Passage ${index + 1}`}
                   showTitle={sorted.length > 1}
                   passage={part.passage}
+                  highlight={lit}
                 />
               ) : null,
             )}
           </div>
         }
         right={
-          <div onKeyDown={onPaperKeyDown}>
+          <div
+            onKeyDown={onPaperKeyDown}
+            onMouseOver={(e) => look(e.target)}
+            onMouseLeave={() => setLit(null)}
+          >
             <QuestionPaper
               material={material}
               partWord="Passage"
+              litParagraph={lit}
               answers={answers}
               onChange={onAnswer}
               flagged={flagged}
               onFlag={onFlag}
               disabled={submitMut.isPending || out}
               onFocus={(e) => {
+                // Tab lands on a question the same way a pointer does, and
+                // the passage should follow either.
+                look(e.target);
                 const qid = (e.target as HTMLElement).dataset?.question;
                 if (!qid) return;
                 closeFocus();

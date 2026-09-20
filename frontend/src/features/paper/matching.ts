@@ -524,3 +524,21 @@ export function matchedSummary(items: MatchItem[]): string {
   const matched = items.filter((item) => item.answer !== null).length;
   return `${matched} of ${items.length} matched`;
 }
+
+/**
+ * The paragraph an item names, where it names one.
+ *
+ * Matching headings is the one task whose ITEMS are the passage's own
+ * paragraphs — "Paragraph A", "Section A" — so the row and the prose can be
+ * lit together before anything is answered. Every other task points the
+ * other way round: its answer names a paragraph, which is not something a
+ * page may reveal to somebody still working.
+ *
+ * Null for anything else, and the caller draws nothing. A guess here would
+ * be a highlight in the wrong place, which on a reading paper is worse than
+ * none — it teaches a candidate the answer is somewhere it isn't.
+ */
+export function paragraphNamed(prompt: string | null | undefined): string | null {
+  const found = /^\s*(?:paragraph|section)\s+([A-Za-z])\s*$/i.exec(prompt ?? "");
+  return found ? found[1].toUpperCase() : null;
+}
