@@ -65,6 +65,13 @@ export interface TakeConfig {
    *  What is collected for the STATISTICS is idle-adjusted either way; this
    *  is only about the number on screen. */
   pauseOnIdle: boolean;
+  /** May the reader open a dictionary?
+   *
+   *  Not in an exam — there is none in the hall, and a paper worked with one
+   *  measures comprehension-with-help. In practice there is a budget rather
+   *  than a licence: three words a passage, which is what makes looking one
+   *  up a decision instead of a habit. See `features/reading/lookups.ts`. */
+  allowLookup: boolean;
 }
 
 /** What one question is worth, in the exam's own arithmetic.
@@ -93,6 +100,7 @@ export const PRACTICE: TakeConfig = {
   showTimer: false,
   timerMode: "countUp",
   pauseOnIdle: true,
+  allowLookup: true,
   submitLabel: "Check answers",
 };
 
@@ -120,5 +128,6 @@ export const READING_EXAM: TakeConfig = {
   showTimer: true,
   timerMode: "countDown",
   pauseOnIdle: false,
+  allowLookup: false,
   submitLabel: "Finish",
 };

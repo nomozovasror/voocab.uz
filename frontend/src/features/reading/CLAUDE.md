@@ -78,3 +78,71 @@ that moment, it can run first. The scroll belongs in an effect. The same
 two-step applies to jumping to a question the filter is hiding, which is why
 the parked id lives in STATE: parked in a ref, nothing reads it, and the jump
 silently never happens.
+
+## The tools are the real test's, and the budget is ours
+
+Computer-delivered IELTS gives a candidate a highlighter, a note, and the
+ability to copy a word out of the passage. Those are not conveniences — they
+are how the paper is actually worked, and a practice screen without them
+teaches a technique the exam room will not support.
+
+    Highlight · Note · Clear  │  A A A  │  Swap · Look up 3 · Help
+
+Three groups with a rule between each: what MARKS the passage, what SETS it,
+and what sits beside it. Nine buttons in one row is a row of nine buttons —
+the reader scans all of them every time. Below 80rem the third group folds
+into one `⋯`; the two it holds are the two reached for least often.
+
+- **Select, then act.** Never a mode with a pen held down: a reader drags to
+  select for half a dozen reasons, and a tool that marked every one of them
+  fills the passage with colour by the third paragraph. It also gives every
+  button somewhere honest to be disabled, which is how each says what it
+  needs.
+- **Two paths to the same few actions, on purpose.** The row in the header is
+  the one a reader can SEE, before they have selected anything; the popover
+  at the selection is the one they use once they know it is there. The
+  popover carries only what is done to a STRETCH OF PROSE — three colours, a
+  note, a copy. Size, side and help are about the page, and a popover
+  carrying those would be the row again, in the way.
+- **Three colours, and never green or red.** Amber is a keyword in the
+  question, blue is where the answer was found, violet is a line to come
+  back to — three different reasons somebody marks something, and they have
+  to stay apart at a glance twenty minutes later. Green and red mean right
+  and wrong on the review page, where these same marks are shown: a line
+  highlighted green while reading would come back as a verdict nobody made.
+- **A note IS a mark with words on it**, not a second kind of object beside
+  one. Same anchor, same persistence, same click-to-remove — every one of
+  which would otherwise be written twice — and an empty note removes the
+  mark, because there is then nothing for it to be attached to.
+- **Copy goes through the SELECTION.** `document.execCommand` first and
+  `navigator.clipboard` second, which is the deprecated one winning on
+  merit: the modern API refuses whenever the document is not focused, and
+  the old call copies what is already selected, which needs no permission
+  because the user chose it by selecting it.
+
+## Look up is counted, and the count is the feature
+
+Three words a passage — `features/reading/lookups.ts`. A reader who can look
+anything up is reading with a dictionary, which is not the skill being
+practised; a reader who can look up nothing stalls and stops. Three makes it
+a DECISION, and somebody with three left spends them on the words the
+questions turn on.
+
+Unique words, not openings: looking the same word up again is free, or the
+budget would be teaching people not to check their own memory. Sitting the
+paper again resets the count and keeps the words — a second attempt is a
+fresh three, and a word already explained is not a lookup any more. Absent
+entirely in an exam rather than disabled: a greyed-out dictionary is the
+page telling a candidate what they may not have, every minute of an hour.
+
+The words are kept, not just the number, because the review page lists them.
+"You looked up three words" with the words under it is a vocabulary list out
+of a passage just read closely; a bare count is a score for something nobody
+was being scored on.
+
+## Help follows the group the reader is in
+
+Three lines — the move, the thing marked wrong most often, one piece of
+technique — and they change with the question type. Advice about matching
+headings while somebody is filling a summary is worse than none: they asked
+the page a question and it answered a different one.

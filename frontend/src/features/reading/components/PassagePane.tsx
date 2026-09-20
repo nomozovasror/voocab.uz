@@ -1,6 +1,11 @@
 import { cn } from "@/lib/utils";
 import type { Passage } from "@/features/paper/types";
-import { marksIn, runsOf, type Highlight } from "@/features/reading/highlights";
+import {
+  marksIn,
+  runsOf,
+  type Highlight,
+  type MarkColour,
+} from "@/features/reading/highlights";
 
 /**
  * The text a reading paper is answered from.
@@ -42,6 +47,17 @@ interface PassagePaneProps {
   highlight?: string | null;
   className?: string;
 }
+
+/** How each mark is washed over the prose.
+ *
+ *  A quarter of the colour, so the words underneath stay the foreground
+ *  rather than becoming text on a coloured block — a passage with six marks
+ *  in it has to still read as a passage. */
+const WASH: Record<MarkColour, string> = {
+  key: "bg-mark-key/25",
+  found: "bg-mark-found/25",
+  doubt: "bg-mark-doubt/25",
+};
 
 /** The id a paragraph can be scrolled to by, so the review's "go to
  *  paragraph C" and the letter printed beside it name the same thing. */
@@ -133,7 +149,7 @@ export function PassagePane({
                 paragraph.text,
                 marksIn(highlights ?? [], partId, index),
               ).map((run, k) =>
-                run.marked ? (
+                run.mark ? (
                   // `mark` rather than a span: it is literally what the
                   // element is for, and it is what a screen reader announces
                   // as marked text. A click takes it off again — the same
@@ -141,11 +157,20 @@ export function PassagePane({
                   // in a document works.
                   <mark
                     key={k}
+                    title={run.mark.note || undefined}
                     onClick={
                       onUnmark ? () => onUnmark(index, run.at) : undefined
                     }
                     className={cn(
-                      "rounded-[2px] bg-primary/25 text-foreground",
+                      "rounded-[2px] text-foreground",
+                      WASH[run.mark.colour ?? "key"],
+                      // A note is a mark that says something, and it has to
+                      // look like one or the reader cannot tell which of
+                      // their own marks they wrote on. An underline rather
+                      // than an icon: an icon inside running prose is a
+                      // character the sentence did not have.
+                      run.mark.note &&
+                        "decoration-dotted underline underline-offset-4",
                       onUnmark && "cursor-pointer",
                     )}
                   >

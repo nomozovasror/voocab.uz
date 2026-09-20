@@ -1,65 +1,127 @@
-import { useCallback, useEffect, useState } from "react";
-import { Highlighter } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ArrowLeftRight,
+  BookOpen,
+  CircleHelp,
+  Highlighter,
+  MoreHorizontal,
+  StickyNote,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { LEFT_PANE } from "@/features/reading/components/SplitPanes";
-import type { Highlight } from "@/features/reading/highlights";
+import { useMediaQuery } from "@/hooks/use-media-query";
+import { selectionIn, type Selected } from "@/features/reading/selection";
+import {
+  MARK_COLOURS,
+  MARK_MEANING,
+  type Highlight,
+  type MarkColour,
+} from "@/features/reading/highlights";
+import {
+  LOOKUP_BUDGET,
+  canOpen,
+  known,
+  left,
+  type Lookups,
+} from "@/features/reading/lookups";
 
 /**
- * The two things a reader does to a passage that are not answering it.
+ * Everything a reader does to the passage that is not answering it.
  *
- * ## Highlight
+ * Nine controls in three groups, and the grouping is most of what keeps it
+ * readable:
  *
- * Select the words, then press the button. Not a mode with the button held
- * down and every drag marking something: a reader drags to select for half a
- * dozen reasons — to read carefully, to count, to hold their place — and a
- * tool that marked all of them would fill the passage with yellow by the
- * third paragraph. Select-then-act also gives the button somewhere honest to
- * be disabled, which is how it says what it needs.
+ *     Highlight · Note · Clear  │  A A A  │  Swap · Look up 3 · Help
  *
- * Taking one off is a click on it, in the passage. That is how every
- * highlighter in every document works and it needs no second control.
+ * What MARKS the passage, what SETS it, and what sits beside it. A rule
+ * between each, because nine buttons in a row is a row of nine buttons — the
+ * reader has to scan all of them to find the one they want, every time.
  *
- * ## Size
+ * ## Select first, then act
  *
- * Nine hundred words at a size chosen for a paragraph. Three steps, because
- * a slider over a range this short is a control with more precision than
- * decisions, and it is remembered — somebody who needs larger text needs it
- * on the next passage too.
+ * Not a mode with a pen held down. A reader drags to select for half a dozen
+ * reasons — reading carefully, counting, holding their place — and a tool
+ * that marked every one of them fills the passage with colour by the third
+ * paragraph. Select-then-act also gives every button here somewhere honest
+ * to be disabled, which is how each one says what it needs.
  *
- * ## Where the offsets come from
+ * There are two ways to the same few actions, deliberately: this row is the
+ * one a reader can SEE, and the popover at the selection is the one they
+ * reach for once they know it is there. Neither is a shortcut for the other
+ * — they are the visible path and the fast path.
  *
- * A selection is turned into two character offsets into ONE paragraph's
- * text, by measuring a range from the start of that paragraph to the start
- * of the selection and taking the length of the string it covers. That is
- * the one technique that survives the marks already in there: the paragraph
- * renders as several elements once anything is highlighted, and every
- * approach that counts nodes rather than characters gets this wrong the
- * second time somebody marks the same paragraph.
+ * ## Why Look up carries a number
+ *
+ * See `features/reading/lookups.ts`. The count IS the feature: a reader with
+ * three left spends them on the words the questions turn on rather than on
+ * the first unfamiliar noun in paragraph A.
  */
 
 /** The three sizes, as a percentage of the pane's own. Small enough a step
  *  that nothing reflows alarmingly, large enough to be worth pressing. */
 const SIZES = [100, 115, 130] as const;
 const SIZE_KEY = "voocab-reading-text-size";
+const COLOUR_KEY = "voocab-reading-mark-colour";
 
 export function useTextSize(): [number, (next: number) => void] {
-  const [size, setSize] = useState<number>(() => {
+  return useRemembered<number>(SIZE_KEY, SIZES[0], (raw) =>
+    (SIZES as readonly number[]).includes(Number(raw)) ? Number(raw) : null,
+  );
+}
+
+/** The colour the next mark takes. Remembered, because a reader who has
+ *  decided blue means "the answer is here" means it for the whole paper. */
+export function useMarkColour(): [MarkColour, (next: MarkColour) => void] {
+  return useRemembered<MarkColour>(COLOUR_KEY, "key", (raw) =>
+    MARK_COLOURS.includes(raw as MarkColour) ? (raw as MarkColour) : null,
+  );
+}
+
+function useRemembered<T>(
+  key: string,
+  fallback: T,
+  parse: (raw: string) => T | null,
+): [T, (next: T) => void] {
+  const [value, setValue] = useState<T>(() => {
     try {
-      const raw = Number(localStorage.getItem(SIZE_KEY));
-      return (SIZES as readonly number[]).includes(raw) ? raw : SIZES[0];
+      const raw = localStorage.getItem(key);
+      return (raw !== null ? parse(raw) : null) ?? fallback;
     } catch {
-      return SIZES[0];
+      return fallback;
     }
   });
-  const put = useCallback((next: number) => {
-    setSize(next);
-    try {
-      localStorage.setItem(SIZE_KEY, String(next));
-    } catch {
-      /* private window; the default is fine */
-    }
-  }, []);
-  return [size, put];
+  const put = useCallback(
+    (next: T) => {
+      setValue(next);
+      try {
+        localStorage.setItem(key, String(next));
+      } catch {
+        /* private window; the default is fine */
+      }
+    },
+    [key],
+  );
+  return [value, put];
+}
+
+export interface PassageToolsProps {
+  marks: Highlight[];
+  onMarks: (next: Highlight[]) => void;
+  size: number;
+  onSize: (next: number) => void;
+  colour: MarkColour;
+  onColour: (next: MarkColour) => void;
+  /** Ask for a note on the current selection. The page owns the writing of
+   *  it: the panel that opens belongs to the page, not to a row of buttons
+   *  in the header. */
+  onNote: (at: Selected) => void;
+  swapped: boolean;
+  onSwap: () => void;
+  lookups: Lookups;
+  onLookup: (word: string) => void;
+  /** False in an exam: there is no dictionary in the hall. */
+  allowLookup: boolean;
+  onHelp: () => void;
+  helpOpen: boolean;
 }
 
 export function PassageTools({
@@ -67,60 +129,76 @@ export function PassageTools({
   onMarks,
   size,
   onSize,
-}: {
-  marks: Highlight[];
-  onMarks: (next: Highlight[]) => void;
-  size: number;
-  onSize: (next: number) => void;
-}) {
-  // Whether there is anything to highlight right now. Watched rather than
-  // read on click, because the button has to be able to look disabled — a
-  // control that does nothing when pressed teaches people not to press it.
-  const [selected, setSelected] = useState<Highlight | null>(null);
-  useEffect(() => {
-    const check = () => setSelected(selectionIn());
-    document.addEventListener("selectionchange", check);
-    return () => document.removeEventListener("selectionchange", check);
-  }, []);
+  colour,
+  onColour,
+  onNote,
+  swapped,
+  onSwap,
+  lookups,
+  onLookup,
+  allowLookup,
+  onHelp,
+  helpOpen,
+}: PassageToolsProps) {
+  const selected = useSelection();
+  const [picking, setPicking] = useState(false);
+  // Below this the nine do not fit beside a title and a clock, so the third
+  // group folds into one button — the two it holds are the two a reader
+  // reaches for least often per passage.
+  const roomy = useMediaQuery("(min-width: 80rem)");
+  const [more, setMore] = useState(false);
 
-  const mark = () => {
-    if (!selected) return;
-    onMarks([...marks, selected]);
-    // The selection has been turned into a mark; leaving it highlighted on
-    // top of the highlight is two colours over the same words.
-    window.getSelection()?.removeAllRanges();
-    setSelected(null);
+  const mark = (which: MarkColour) => {
+    onColour(which);
+    if (selected) {
+      onMarks([...marks, { ...selected.where, colour: which }]);
+      window.getSelection()?.removeAllRanges();
+    }
+    setPicking(false);
   };
 
+  const word = selected?.text.trim() ?? "";
+  const oneWord = word.length > 0 && !/\s/.test(word);
+  const aside = (
+    <Aside
+      stacked={!roomy}
+      swapped={swapped}
+      onSwap={onSwap}
+      lookupLeft={left(lookups)}
+      canLookUp={oneWord && canOpen(lookups, word)}
+      free={oneWord && known(lookups, word)}
+      onLookup={() => onLookup(word)}
+      allowLookup={allowLookup}
+      onHelp={onHelp}
+      helpOpen={helpOpen}
+    />
+  );
+
   return (
-    <div className="flex shrink-0 items-center gap-1">
-      <button
-        type="button"
-        onClick={mark}
+    <div className="relative flex shrink-0 items-center gap-1">
+      {/* ── What marks the passage ─────────────────────────────────── */}
+      <Tool
+        icon={Highlighter}
+        label="Highlight"
+        pressed={picking}
+        onClick={() => setPicking((was) => !was)}
+        swatch={colour}
+      />
+      <Tool
+        icon={StickyNote}
+        label="Note"
         disabled={!selected}
-        title="Highlight the selected text"
-        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors duration-fast hover:bg-surface-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40"
-      >
-        <Highlighter className="size-3.5" aria-hidden />
-        Highlight
-      </button>
+        title={selected ? "Write a note on this" : "Select the words first"}
+        onClick={() => selected && onNote(selected)}
+      />
       {/* Only where there is something to clear. A permanently visible
           "Clear" on an unmarked passage is a button whose whole job is to be
           greyed out. */}
-      {marks.length > 0 && (
-        <button
-          type="button"
-          onClick={() => onMarks([])}
-          title="Remove every highlight on this passage"
-          className="rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors duration-fast hover:bg-surface-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-        >
-          Clear
-        </button>
-      )}
-      {/* A rule between what MARKS the passage and what SETS it. Two kinds
-          of control sitting in one island read as one list of four
-          buttons. */}
-      <span aria-hidden className="mx-1 h-4 w-px bg-border" />
+      {marks.length > 0 && <Tool label="Clear" onClick={() => onMarks([])} />}
+
+      <Rule />
+
+      {/* ── What sets it ───────────────────────────────────────────── */}
       <div
         role="group"
         aria-label="Text size"
@@ -147,55 +225,255 @@ export function PassageTools({
           </button>
         ))}
       </div>
+
+      <Rule />
+
+      {/* ── What sits beside it ────────────────────────────────────── */}
+      {roomy ? (
+        aside
+      ) : (
+        <>
+          <Tool
+            icon={MoreHorizontal}
+            label="More tools"
+            hideLabel
+            pressed={more}
+            onClick={() => setMore((was) => !was)}
+          />
+          {more && <Tray onClose={() => setMore(false)}>{aside}</Tray>}
+        </>
+      )}
+
+      {/* The colours, under the button that opens them. */}
+      {picking && (
+        <Tray onClose={() => setPicking(false)} className="right-auto left-0">
+          {MARK_COLOURS.map((which) => (
+            <button
+              key={which}
+              type="button"
+              onClick={() => mark(which)}
+              className={cn(
+                "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs whitespace-nowrap transition-colors duration-fast hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                colour === which ? "text-foreground" : "text-muted-foreground",
+              )}
+            >
+              <Swatch colour={which} ring={colour === which} />
+              {MARK_MEANING[which]}
+            </button>
+          ))}
+          {!selected && (
+            // Said rather than left to be discovered: pressing the button
+            // before selecting anything is the natural order, and it does
+            // nothing visible.
+            <p className="mt-1 border-t border-border px-2 pt-1.5 text-[0.7rem] text-muted-foreground">
+              Select the words first, then pick a colour.
+            </p>
+          )}
+        </Tray>
+      )}
     </div>
   );
 }
 
-/**
- * The current selection as one paragraph and two offsets, or nothing.
- *
- * Nothing for a selection that is collapsed, that is outside the passage
- * pane, or that runs across two paragraphs. The last is a real restriction
- * and a deliberate one: a mark is stored against one paragraph's text, and
- * the alternative — silently marking only the first paragraph of a
- * three-paragraph drag — would leave the reader looking at a highlight that
- * is not what they asked for.
- */
-function selectionIn(): Highlight | null {
-  const selection = window.getSelection();
-  if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
-    return null;
-  }
-  const range = selection.getRangeAt(0);
-  const found = closestIn(range.commonAncestorContainer);
-  if (!found) return null;
-  const { paragraph, index, partId } = found;
-  const before = document.createRange();
-  before.selectNodeContents(paragraph);
-  before.setEnd(range.startContainer, range.startOffset);
-  const start = before.toString().length;
-  const end = start + range.toString().length;
-  return end > start ? { partId, index, start, end } : null;
+function Aside({
+  stacked,
+  swapped,
+  onSwap,
+  lookupLeft,
+  canLookUp,
+  free,
+  onLookup,
+  allowLookup,
+  onHelp,
+  helpOpen,
+}: {
+  stacked?: boolean;
+  swapped: boolean;
+  onSwap: () => void;
+  lookupLeft: number;
+  canLookUp: boolean;
+  free: boolean;
+  onLookup: () => void;
+  allowLookup: boolean;
+  onHelp: () => void;
+  helpOpen: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-1",
+        stacked && "flex-col items-stretch",
+      )}
+    >
+      <Tool
+        icon={ArrowLeftRight}
+        label="Swap"
+        pressed={swapped}
+        title={
+          swapped
+            ? "Put the passage back on the left"
+            : "Put the passage on the right"
+        }
+        onClick={onSwap}
+        stacked={stacked}
+      />
+      {/* Absent in an exam rather than disabled. A greyed-out dictionary is
+          the page telling a candidate what they may not have, every minute
+          of an hour. */}
+      {allowLookup && (
+        <Tool
+          icon={BookOpen}
+          label={`Look up ${lookupLeft}`}
+          disabled={!canLookUp}
+          title={
+            free
+              ? "Already looked up — this one is free"
+              : lookupLeft === 0
+                ? `No look-ups left — ${LOOKUP_BUDGET} a passage`
+                : "Select one word, then look it up"
+          }
+          onClick={onLookup}
+          stacked={stacked}
+          // Spent looks spent even where a free word is selected: the number
+          // is what the reader is budgeting against.
+          dim={lookupLeft === 0}
+        />
+      )}
+      <Tool
+        icon={CircleHelp}
+        label="Help"
+        pressed={helpOpen}
+        title="What this kind of question asks for"
+        onClick={onHelp}
+        stacked={stacked}
+      />
+    </div>
+  );
 }
 
-/** The paragraph a node sits in, with the part it belongs to. */
-function closestIn(
-  node: Node,
-): { paragraph: HTMLElement; index: number; partId: string } | null {
-  const el =
-    node.nodeType === Node.ELEMENT_NODE
-      ? (node as Element)
-      : node.parentElement;
-  const paragraph = el?.closest<HTMLElement>("[data-paragraph-index]");
-  if (!paragraph || !paragraph.closest(`[${LEFT_PANE}]`)) return null;
-  // The ARTICLE, not the nearest id that starts the same way: a lettered
-  // paragraph's own wrapper is `passage-<uuid>-C`, and reaching for that
-  // would hand back a part id with the letter still stuck on the end.
-  const article = paragraph.closest<HTMLElement>('article[id^="passage-"]');
-  // `passage-<uuid>` — and the uuid has dashes of its own, so the id is cut
-  // once at the front rather than split on them.
-  const partId = article?.id.slice("passage-".length);
-  const index = Number(paragraph.dataset.paragraphIndex);
-  if (!partId || !Number.isInteger(index)) return null;
-  return { paragraph, index, partId };
+function Tool({
+  icon: Icon,
+  label,
+  hideLabel,
+  pressed,
+  disabled,
+  dim,
+  title,
+  onClick,
+  swatch,
+  stacked,
+}: {
+  icon?: typeof Highlighter;
+  label: string;
+  hideLabel?: boolean;
+  pressed?: boolean;
+  disabled?: boolean;
+  dim?: boolean;
+  title?: string;
+  onClick: () => void;
+  swatch?: MarkColour;
+  stacked?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title ?? label}
+      aria-pressed={pressed}
+      aria-label={hideLabel ? label : undefined}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs whitespace-nowrap transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40",
+        stacked && "w-full justify-start",
+        pressed
+          ? "bg-primary/15 text-primary"
+          : "text-muted-foreground hover:bg-surface-hover hover:text-foreground",
+        dim && "opacity-50",
+      )}
+    >
+      {Icon && <Icon className="size-3.5 shrink-0" aria-hidden />}
+      {!hideLabel && label}
+      {swatch && <Swatch colour={swatch} small />}
+    </button>
+  );
+}
+
+export function Swatch({
+  colour,
+  ring,
+  small,
+}: {
+  colour: MarkColour;
+  ring?: boolean;
+  small?: boolean;
+}) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "shrink-0 rounded-full",
+        small ? "size-2" : "size-3",
+        ring && "ring-2 ring-foreground/30 ring-offset-1 ring-offset-background",
+        colour === "key"
+          ? "bg-mark-key"
+          : colour === "found"
+            ? "bg-mark-found"
+            : "bg-mark-doubt",
+      )}
+    />
+  );
+}
+
+function Rule() {
+  return <span aria-hidden className="mx-1 h-4 w-px bg-border" />;
+}
+
+/** A small panel hanging under the row, closed by anything outside it. */
+function Tray({
+  children,
+  onClose,
+  className,
+}: {
+  children: React.ReactNode;
+  onClose: () => void;
+  className?: string;
+}) {
+  const box = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const away = (e: MouseEvent) => {
+      if (!box.current?.contains(e.target as Node)) onClose();
+    };
+    const escape = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    // `mousedown` rather than click: the row's own buttons act on click, and
+    // a close running first would eat the press that opened this.
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [onClose]);
+  return (
+    <div
+      ref={box}
+      className={cn(
+        "absolute top-full right-0 z-50 mt-2 flex min-w-48 flex-col gap-0.5 rounded-xl border border-border bg-card p-1.5 shadow-lg",
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** The selection, watched rather than read on click — every button that
+ *  needs one has to be able to look disabled without one. */
+export function useSelection(): Selected | null {
+  const [selected, setSelected] = useState<Selected | null>(null);
+  useEffect(() => {
+    const check = () => setSelected(selectionIn());
+    document.addEventListener("selectionchange", check);
+    return () => document.removeEventListener("selectionchange", check);
+  }, []);
+  return selected;
 }

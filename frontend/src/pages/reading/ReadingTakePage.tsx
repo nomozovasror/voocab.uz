@@ -45,7 +45,26 @@ import {
   passageId,
 } from "@/features/reading/components/PassagePane";
 import { LEFT_PANE, SplitPanes } from "@/features/reading/components/SplitPanes";
-import { PassageTools, useTextSize } from "@/features/reading/components/PassageTools";
+import {
+  PassageTools,
+  useMarkColour,
+  useSelection,
+  useTextSize,
+} from "@/features/reading/components/PassageTools";
+import { SelectionPopover } from "@/features/reading/components/SelectionPopover";
+import {
+  HelpPanel,
+  LookupPanel,
+  NotePanel,
+} from "@/features/reading/components/ReadingPanels";
+import {
+  loadLookups,
+  opened,
+  saveLookups,
+  type Lookups,
+} from "@/features/reading/lookups";
+import type { Selected } from "@/features/reading/selection";
+import type { QuestionGroupType } from "@/features/paper/types";
 import {
   loadHighlights,
   saveHighlights,
@@ -101,6 +120,19 @@ const PANE_FOOT = 0;
  *  does anything once the reader scrolls. */
 const PANE_TOP = "pt-19";
 
+/** What the reader has already written about exactly this stretch. */
+function noteAt(marks: Highlight[], at: Selected): string {
+  return (
+    marks.find(
+      (m) =>
+        m.partId === at.where.partId &&
+        m.index === at.where.index &&
+        m.start === at.where.start &&
+        m.end === at.where.end,
+    )?.note ?? ""
+  );
+}
+
 export default function ReadingTakePage() {
   // One page, two routes. `/reading/:id` is a whole paper;
   // `/reading/drills/:groupId` is one question group cut out of one, and the
@@ -153,6 +185,26 @@ export default function ReadingTakePage() {
 
   const current = useQuestionSpy(questionIds);
 
+  // Which KIND of question the reader is in, so Help can be about the task
+  // in front of them. Built from the material rather than carried on the
+  // row, because the row is the paper's numbering and this is the paper's
+  // vocabulary — two different questions about the same walk.
+  const typeOf = useMemo(() => {
+    const at = new Map<string, QuestionGroupType>();
+    for (const part of material?.parts ?? []) {
+      for (const group of part.question_groups) {
+        for (const question of group.questions) {
+          at.set(question.id, group.type as QuestionGroupType);
+        }
+      }
+    }
+    return at;
+  }, [material]);
+  const typeAt = useCallback(
+    (questionId: string | null) => (questionId ? typeOf.get(questionId) ?? null : null),
+    [typeOf],
+  );
+
   // --- What the reader marked ----------------------------------------------
   //
   // The real computer-delivered test lets a candidate highlight the passage
@@ -170,6 +222,72 @@ export default function ReadingTakePage() {
     [id],
   );
   const [textSize, setTextSize] = useTextSize();
+  const [colour, setColour] = useMarkColour();
+  const selected = useSelection();
+
+  // Which side the passage is drawn on. Page state rather than remembered:
+  // swapping is something a reader does for one passage, usually because
+  // this particular one has a diagram or a long box they want nearer their
+  // dominant eye, and inheriting it into the next paper would be the app
+  // deciding something they decided once.
+  const [swapped, setSwapped] = useState(false);
+
+  // The three small panels the tools open. One at a time, by construction —
+  // two of them over the same corner would cover each other.
+  const [panel, setPanel] = useState<
+    | { kind: "help" }
+    | { kind: "note"; at: Selected }
+    | { kind: "lookup"; word: string }
+    | null
+  >(null);
+
+  const [lookups, setLookups] = useState<Lookups>(() =>
+    id ? loadLookups(id) : { words: [], spent: 0 },
+  );
+  const lookUp = useCallback(
+    (word: string) => {
+      if (!word) return;
+      setLookups((was) => {
+        const next = opened(was, word);
+        if (id && next !== was) saveLookups(id, next);
+        return next;
+      });
+      setPanel({ kind: "lookup", word });
+    },
+    [id],
+  );
+
+  // A mark from either path — the row's colour row, or the popover at the
+  // selection. Both end here, so there is one place where a selection turns
+  // into a mark and one place that clears it afterwards.
+  const markSelection = useCallback(
+    (which: typeof colour, at: Selected) => {
+      setColour(which);
+      keep([...marks, { ...at.where, colour: which }]);
+      window.getSelection()?.removeAllRanges();
+    },
+    [marks, keep, setColour],
+  );
+
+  const writeNote = useCallback(
+    (at: Selected, text: string) => {
+      // An empty note takes the mark away with it: a note IS the mark here,
+      // so there is nothing left for it to be attached to.
+      const without = marks.filter(
+        (m) =>
+          !(
+            m.partId === at.where.partId &&
+            m.index === at.where.index &&
+            m.start === at.where.start &&
+            m.end === at.where.end
+          ),
+      );
+      keep(text ? [...without, { ...at.where, colour, note: text }] : without);
+      setPanel(null);
+      window.getSelection()?.removeAllRanges();
+    },
+    [marks, keep, colour],
+  );
 
   // The header works for this paper while it is open. Reading cannot dock a
   // control on scroll the way listening does — there is no scroll — so the
@@ -558,6 +676,18 @@ export default function ReadingTakePage() {
           onMarks={keep}
           size={textSize}
           onSize={setTextSize}
+          colour={colour}
+          onColour={setColour}
+          onNote={(at) => setPanel({ kind: "note", at })}
+          swapped={swapped}
+          onSwap={() => setSwapped((was) => !was)}
+          lookups={lookups}
+          onLookup={lookUp}
+          allowLookup={config.allowLookup}
+          onHelp={() =>
+            setPanel((was) => (was?.kind === "help" ? null : { kind: "help" }))
+          }
+          helpOpen={panel?.kind === "help"}
         />
       </HeaderSlot>
 
@@ -575,6 +705,7 @@ export default function ReadingTakePage() {
 
       <SplitPanes
         ref={paneRef}
+        swapped={swapped}
         // On both panes, because it is the paper's size and not the prose's.
         // Set on the passage alone, the control made nine hundred words
         // bigger and left the questions beside them at the size somebody
@@ -728,6 +859,37 @@ export default function ReadingTakePage() {
           </div>
         }
       />
+
+      {/* The fast path, at the words rather than at the top of the screen.
+          Withheld while a panel is open: the note box holds the selection it
+          is about, and a popover over it would be offering to act on the
+          thing already being acted on. */}
+      {!panel && (
+        <SelectionPopover
+          selected={selected}
+          onMark={(which) => selected && markSelection(which, selected)}
+          onNote={(at) => setPanel({ kind: "note", at })}
+        />
+      )}
+
+      {panel?.kind === "help" && (
+        <HelpPanel type={typeAt(current)} onClose={() => setPanel(null)} />
+      )}
+      {panel?.kind === "note" && (
+        <NotePanel
+          at={panel.at}
+          existing={noteAt(marks, panel.at)}
+          onSave={(text) => writeNote(panel.at, text)}
+          onClose={() => setPanel(null)}
+        />
+      )}
+      {panel?.kind === "lookup" && (
+        <LookupPanel
+          word={panel.word}
+          spent={lookups.spent}
+          onClose={() => setPanel(null)}
+        />
+      )}
 
       <QuestionNav
         ref={navRef}

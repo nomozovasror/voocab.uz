@@ -97,6 +97,10 @@ interface SplitPanesProps {
   rightLabel: string;
   /** False below the breakpoint, where the two become tabs instead. */
   split: boolean;
+  /** Draw `right` first. The passage stays the `left` prop whichever side it
+   *  is drawn on, so `LEFT_PANE` — and everything that finds the passage by
+   *  it — keeps meaning the passage rather than "whatever is on the left". */
+  swapped?: boolean;
   /** Which side the tabs just put on screen. Only ever called in the tab
    *  arrangement — with a split there is no "showing", both are. Called
    *  AFTER the change has been painted, because a caller that wants to
@@ -120,6 +124,7 @@ export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
       leftLabel,
       rightLabel,
       split,
+      swapped,
       onShowing,
       height,
       className,
@@ -241,7 +246,11 @@ export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
     >
       <div
         {...{ [LEFT_PANE]: "" }}
-        className={cn(FADE, "min-w-0 overflow-y-auto pr-5")}
+        className={cn(
+          FADE,
+          "min-w-0 overflow-y-auto",
+          swapped ? "order-3 pl-5" : "order-1 pr-5",
+        )}
         style={{ width: `${percent}%` }}
       >
         {left}
@@ -271,7 +280,7 @@ export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
           e.preventDefault();
         }}
         onDoubleClick={() => put(50)}
-        className="group relative w-px shrink-0 cursor-col-resize bg-border focus-visible:outline-none"
+        className="group relative order-2 w-px shrink-0 cursor-col-resize bg-border focus-visible:outline-none"
       >
         {/* The line is one pixel and the grab area is sixteen. A divider you
             have to hit exactly is a divider nobody moves twice. */}
@@ -281,7 +290,15 @@ export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
         />
       </div>
 
-      <div className={cn(FADE, "min-w-0 flex-1 overflow-y-auto pl-5")}>{right}</div>
+      <div
+        className={cn(
+          FADE,
+          "order-2 min-w-0 flex-1 overflow-y-auto",
+          swapped ? "pr-5" : "pl-5",
+        )}
+      >
+        {right}
+      </div>
     </div>
   );
   },

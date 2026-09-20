@@ -69,6 +69,13 @@
   --color-published: var(--published);
   --color-draft: var(--draft);
   --color-stub: var(--stub);
+  /* The reader's own marks on a passage (§3). Three, and never green or
+     red: those two mean "right" and "wrong" on the review page, and a
+     candidate who marked a line green while reading would meet their own
+     marking again as a verdict they never made. */
+  --color-mark-key: var(--mark-key);
+  --color-mark-found: var(--mark-found);
+  --color-mark-doubt: var(--mark-doubt);
   --color-wave: var(--wave);
   --color-wave-progress: var(--wave-progress);
   --color-region: var(--region);
@@ -202,6 +209,18 @@
   --published: var(--success);
   --draft: var(--muted-foreground);
   --stub: color-mix(in srgb, var(--foreground) 15%, transparent);
+
+  /* The reader's marks (§3). What each one MEANS is the point of having
+     three: the amber is a keyword in the question, the blue is where the
+     answer was found in the passage, and the violet is a line to come back
+     to. A candidate working a forty-question paper needs those three apart
+     at a glance, twenty minutes later, without a legend.
+
+     The amber is the app's own accent, because "this is the thing" is
+     already what that colour says everywhere else here. */
+  --mark-key: var(--primary);
+  --mark-found: #5b9bd5;
+  --mark-doubt: #a98cd8;
 
   /* Audio (§3). --wave and --wave-progress exist as real custom properties
      rather than as @theme entries alone because wavesurfer takes colours as

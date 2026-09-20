@@ -33,6 +33,32 @@
  * navigates to.
  */
 
+/**
+ * What a mark MEANS, which is the point of having three of them.
+ *
+ * A candidate working a forty-question paper marks for different reasons and
+ * needs them apart at a glance twenty minutes later: the word the question
+ * turns on, the place the answer was found, and the line they are not sure
+ * about and mean to come back to. One colour makes all three the same
+ * decision, which is the same as making none of them.
+ *
+ * Never green and never red. Those two mean "right" and "wrong" on the
+ * review page, and the marks are shown there — a line a candidate
+ * highlighted green while reading would come back as a verdict they never
+ * made.
+ */
+export type MarkColour = "key" | "found" | "doubt";
+
+export const MARK_COLOURS: MarkColour[] = ["key", "found", "doubt"];
+
+/** What each is for, in the reader's own words — the popover and the tool
+ *  row both label them, because a row of three swatches is a puzzle. */
+export const MARK_MEANING: Record<MarkColour, string> = {
+  key: "Keyword in the question",
+  found: "Answer found here",
+  doubt: "Come back to this",
+};
+
 export interface Highlight {
   /** Which part's passage. A paper can hold three. */
   partId: string;
@@ -42,6 +68,16 @@ export interface Highlight {
   /** Character offsets into the paragraph's text, half-open. */
   start: number;
   end: number;
+  /** Absent in a mark made before there was a choice, which reads as the
+   *  amber it was drawn in. */
+  colour?: MarkColour;
+  /** What the reader wrote about this stretch, where they wrote anything.
+   *
+   *  A note IS a mark with words attached rather than a second kind of
+   *  object beside it: it has the same anchor, the same persistence and the
+   *  same click-to-remove, and every one of those would otherwise be written
+   *  twice. */
+  note?: string;
 }
 
 const key = (materialId: string) => `voocab.highlights.${materialId}`;
@@ -80,36 +116,50 @@ export function marksIn(
   all: Highlight[],
   partId: string,
   index: number,
-): Array<[number, number]> {
+): Highlight[] {
   const mine = all
     .filter((m) => m.partId === partId && m.index === index && m.end > m.start)
-    .map((m) => [m.start, m.end] as [number, number])
-    .sort((a, b) => a[0] - b[0]);
+    .sort((a, b) => a.start - b.start);
 
-  const out: Array<[number, number]> = [];
-  for (const [start, end] of mine) {
+  const out: Highlight[] = [];
+  for (const mark of mine) {
     const last = out[out.length - 1];
-    if (last && start <= last[1]) last[1] = Math.max(last[1], end);
-    else out.push([start, end]);
+    // Merged only where they agree. Two marks of one colour that touch are
+    // one mark; two of DIFFERENT colours that touch are two things the
+    // reader said, and running them together would turn "the keyword" and
+    // "where the answer is" into one stripe of whichever came first.
+    if (last && mark.start <= last.end && sameKind(last, mark)) {
+      last.end = Math.max(last.end, mark.end);
+    } else {
+      out.push({ ...mark });
+    }
   }
   return out;
 }
 
+function sameKind(a: Highlight, b: Highlight): boolean {
+  return (a.colour ?? "key") === (b.colour ?? "key") && !a.note && !b.note;
+}
+
+export interface Run {
+  text: string;
+  at: number;
+  /** Null where this run is plain text. */
+  mark: Highlight | null;
+}
+
 /** The text of one paragraph, cut into marked and unmarked runs. */
-export function runsOf(
-  text: string,
-  marks: Array<[number, number]>,
-): Array<{ text: string; marked: boolean; at: number }> {
-  const out: Array<{ text: string; marked: boolean; at: number }> = [];
+export function runsOf(text: string, marks: Highlight[]): Run[] {
+  const out: Run[] = [];
   let at = 0;
-  for (const [start, end] of marks) {
-    const from = Math.max(at, Math.min(start, text.length));
-    const to = Math.max(from, Math.min(end, text.length));
-    if (from > at) out.push({ text: text.slice(at, from), marked: false, at });
-    if (to > from) out.push({ text: text.slice(from, to), marked: true, at: from });
+  for (const mark of marks) {
+    const from = Math.max(at, Math.min(mark.start, text.length));
+    const to = Math.max(from, Math.min(mark.end, text.length));
+    if (from > at) out.push({ text: text.slice(at, from), at, mark: null });
+    if (to > from) out.push({ text: text.slice(from, to), at: from, mark });
     at = to;
   }
-  if (at < text.length) out.push({ text: text.slice(at), marked: false, at });
+  if (at < text.length) out.push({ text: text.slice(at), at, mark: null });
   return out;
 }
 
@@ -129,10 +179,10 @@ export function withoutAt(
   offset: number,
 ): Highlight[] {
   const hit = marksIn(all, partId, index).find(
-    ([start, end]) => offset >= start && offset < end,
+    (m) => offset >= m.start && offset < m.end,
   );
   if (!hit) return all;
-  const [start, end] = hit;
+  const { start, end } = hit;
   return all.filter(
     (m) =>
       m.partId !== partId ||

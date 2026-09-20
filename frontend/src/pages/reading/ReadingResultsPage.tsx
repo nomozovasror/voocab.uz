@@ -23,6 +23,7 @@ import {
   paragraphId,
 } from "@/features/reading/components/PassagePane";
 import { loadHighlights } from "@/features/reading/highlights";
+import { loadLookups } from "@/features/reading/lookups";
 import type { QuoteSource } from "@/features/paper/review";
 import type { AttemptResult } from "@/features/paper/types";
 
@@ -76,6 +77,15 @@ export default function ReadingResultsPage() {
   // even though the take session was cleared by the submit that reached it.
   const marks = useMemo(
     () => (data?.material_id ? loadHighlights(data.material_id) : []),
+    [data?.material_id],
+  );
+
+  // The words they spent a look-up on. Worth saying afterwards in a way it
+  // is not worth saying during: mid-paper it is a budget, and here it is a
+  // short vocabulary list out of a passage they have just read closely —
+  // which is the most learnable thing on this page after their mistakes.
+  const looked = useMemo(
+    () => (data?.material_id ? loadLookups(data.material_id).words : []),
     [data?.material_id],
   );
 
@@ -220,6 +230,27 @@ export default function ReadingResultsPage() {
       </div>
 
       <ReviewMistakes groups={mistakes} skill="reading" className="mt-10" />
+
+      {looked.length > 0 && (
+        <section className="mt-6 rounded-xl border border-border px-5 py-4">
+          <h2 className="text-sm font-semibold text-foreground">
+            You looked up {looked.length}{" "}
+            {looked.length === 1 ? "word" : "words"}
+          </h2>
+          {/* The words, not the number. A count is a score for something
+              nobody was being scored on; the list is something to learn. */}
+          <ul className="mt-2 flex flex-wrap gap-1.5">
+            {looked.map((word) => (
+              <li
+                key={word}
+                className="rounded-full bg-surface-sunken px-2.5 py-1 text-xs text-foreground"
+              >
+                {word}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {/* The passages themselves, at the bottom and collapsed.
       
