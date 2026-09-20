@@ -177,8 +177,25 @@ export default function ListeningTakePage() {
 
   // --- Keeping the draft ----------------------------------------------------
 
+  // Whether the reader has written anything of their own since the draft
+  // came back.
+  //
+  // A ref, not state, and that is deliberate: every caller of `persist` is
+  // already calling a setter beside it, so the re-render that hides the
+  // offer is the one the edit was going to cause anyway — and setting state
+  // from inside another setter's updater is a rule this avoids having to
+  // remember.
+  const touched = useRef(false);
+
   const persist = useCallback(
     (next: Partial<TakeSession>) => {
+      // The one funnel every real edit goes through — answers, flags,
+      // timings — which is why the "you have been restored" offer is
+      // retired here rather than in each handler. A fourth handler added
+      // later inherits it instead of forgetting it. The active-time sampler
+      // does NOT come through here: seconds passing is not the reader
+      // writing something.
+      touched.current = true;
       session.current = { ...session.current, ...next };
       if (sessionKey) saveSession(sessionKey, session.current);
     },
@@ -529,7 +546,7 @@ export default function ListeningTakePage() {
             <ArrowLeft className="size-3.5" aria-hidden />
             Listening
           </Link>
-          {resumed && (
+          {resumed && !touched.current && (
             <>
               <span aria-hidden className="mx-1 h-3 w-px bg-border" />
               <button
