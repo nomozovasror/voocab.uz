@@ -124,7 +124,14 @@ const PANE_FOOT = 0;
  *  It is also why the panes fade over the header's own sixty: at rest
  *  nothing is inside the faded band, so the fade costs nothing and only
  *  does anything once the reader scrolls. */
-const PANE_TOP = "pt-19";
+const PANE_TOP = "pt-19 pb-6";
+
+/*  The `pb-6` is the other end of the same idea, and it is NOT the gap that
+ *  was taken out below the panes. That one sat outside them and cost every
+ *  reader twenty-four pixels of paper at rest; this is INSIDE the scroller,
+ *  so it is invisible until somebody reaches the bottom, and what it buys
+ *  there is the last question's TRUE / FALSE / NOT GIVEN row not ending
+ *  flush against the edge with the submit bar directly under it. */
 
 /** What the reader has already written about exactly this stretch. */
 function noteAt(marks: Highlight[], at: Selected): string {

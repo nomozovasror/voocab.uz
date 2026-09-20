@@ -132,174 +132,182 @@ export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
     },
     outerRef,
   ) {
-  const [percent, setPercent] = useState(remembered);
-  const [showing, setShowing] = useState<"left" | "right">("right");
-  const frame = useRef<HTMLDivElement | null>(null);
-  const dragging = useRef(false);
+    const [percent, setPercent] = useState(remembered);
+    const [showing, setShowing] = useState<"left" | "right">("right");
+    const frame = useRef<HTMLDivElement | null>(null);
+    const dragging = useRef(false);
 
-  const put = useCallback((next: number) => {
-    const clamped = Math.min(MAX_PERCENT, Math.max(MIN_PERCENT, next));
-    setPercent(clamped);
-    try {
-      localStorage.setItem(STORE_KEY, String(Math.round(clamped)));
-    } catch {
-      /* nothing to do about it, and nothing depends on it */
-    }
-  }, []);
+    const put = useCallback((next: number) => {
+      const clamped = Math.min(MAX_PERCENT, Math.max(MIN_PERCENT, next));
+      setPercent(clamped);
+      try {
+        localStorage.setItem(STORE_KEY, String(Math.round(clamped)));
+      } catch {
+        /* nothing to do about it, and nothing depends on it */
+      }
+    }, []);
 
-  // After the paint, not in the click handler: the pane being revealed is
-  // still `hidden` at the moment the tab is pressed, and a hidden element
-  // measures as nothing.
-  useEffect(() => {
-    if (split) return;
-    onShowing?.(showing);
-  }, [split, showing, onShowing]);
+    // After the paint, not in the click handler: the pane being revealed is
+    // still `hidden` at the moment the tab is pressed, and a hidden element
+    // measures as nothing.
+    useEffect(() => {
+      if (split) return;
+      onShowing?.(showing);
+    }, [split, showing, onShowing]);
 
-  useEffect(() => {
-    if (!split) return;
-    const onMove = (e: PointerEvent) => {
-      if (!dragging.current || !frame.current) return;
-      const box = frame.current.getBoundingClientRect();
-      put(((e.clientX - box.left) / box.width) * 100);
-    };
-    const onUp = () => {
-      dragging.current = false;
-      document.body.style.removeProperty("cursor");
-      document.body.style.removeProperty("user-select");
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    return () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    };
-  }, [split, put]);
+    useEffect(() => {
+      if (!split) return;
+      const onMove = (e: PointerEvent) => {
+        if (!dragging.current || !frame.current) return;
+        const box = frame.current.getBoundingClientRect();
+        put(((e.clientX - box.left) / box.width) * 100);
+      };
+      const onUp = () => {
+        dragging.current = false;
+        document.body.style.removeProperty("cursor");
+        document.body.style.removeProperty("user-select");
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      return () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+      };
+    }, [split, put]);
 
-  if (!split) {
-    return (
-      <div
-        ref={outerRef}
-        style={{ ...style, ...(height ? { height } : {}) }}
-        className={cn("flex min-h-0 flex-col", className)}
-      >
-        {/* Tabs rather than a stack, and rather than a split nobody can read.
+    if (!split) {
+      return (
+        <div
+          ref={outerRef}
+          style={{ ...style, ...(height ? { height } : {}) }}
+          className={cn("flex min-h-0 flex-col", className)}
+        >
+          {/* Tabs rather than a stack, and rather than a split nobody can read.
             The strip along the bottom still numbers every question, so this
             is only ever "which of the two am I looking at". */}
-        <div
-          role="tablist"
-          aria-label="Passage or questions"
-          className="mb-3 flex shrink-0 gap-1 rounded-lg bg-surface-sunken p-1"
-        >
-          {(
-            [
-              ["left", leftLabel],
-              ["right", rightLabel],
-            ] as const
-          ).map(([side, label]) => (
-            <button
-              key={side}
-              type="button"
-              role="tab"
-              aria-selected={showing === side}
-              onClick={() => setShowing(side)}
-              className={cn(
-                "flex-1 rounded-md px-3 py-1.5 text-sm transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-                showing === side
-                  ? "bg-card text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        {/* Both stay MOUNTED and one is hidden. The questions carry typed
+          <div
+            role="tablist"
+            aria-label="Passage or questions"
+            className="mb-3 flex shrink-0 gap-1 rounded-lg bg-surface-sunken p-1"
+          >
+            {(
+              [
+                ["left", leftLabel],
+                ["right", rightLabel],
+              ] as const
+            ).map(([side, label]) => (
+              <button
+                key={side}
+                type="button"
+                role="tab"
+                aria-selected={showing === side}
+                onClick={() => setShowing(side)}
+                className={cn(
+                  "flex-1 rounded-md px-3 py-1.5 text-sm transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                  showing === side
+                    ? "bg-card text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {/* Both stay MOUNTED and one is hidden. The questions carry typed
             answers and the focus timing that measures them, and unmounting
             the pane to look something up in the passage would throw both
             away — see take-session. */}
+          <div
+            {...{ [LEFT_PANE]: "" }}
+            className={cn(FADE, "min-h-0 flex-1 overflow-y-auto")}
+            hidden={showing !== "left"}
+          >
+            {left}
+          </div>
+          <div
+            className={cn(FADE, "min-h-0 flex-1 overflow-y-auto")}
+            hidden={showing !== "right"}
+          >
+            {right}
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div
+        ref={(el) => {
+          frame.current = el;
+          if (typeof outerRef === "function") outerRef(el);
+          else if (outerRef) outerRef.current = el;
+        }}
+        style={{ ...style, ...(height ? { height } : {}) }}
+        className={cn("flex min-h-0", className)}
+      >
         <div
           {...{ [LEFT_PANE]: "" }}
-          className={cn(FADE, "min-h-0 flex-1 overflow-y-auto")}
-          hidden={showing !== "left"}
+          className={cn(
+            FADE,
+            "min-w-0 overflow-y-auto",
+            swapped ? "order-3 pl-5" : "order-1 pr-5",
+          )}
+          style={{ width: `${percent}%` }}
         >
           {left}
         </div>
+
+        {/* A real control, not a decorated border: it is draggable with a
+          pointer and movable with the arrow keys, because a reader who works
+          by keyboard has the same reason to widen the passage. */}
         <div
-          className={cn(FADE, "min-h-0 flex-1 overflow-y-auto")}
-          hidden={showing !== "right"}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={`Resize ${leftLabel} and ${rightLabel}`}
+          aria-valuenow={Math.round(percent)}
+          aria-valuemin={MIN_PERCENT}
+          aria-valuemax={MAX_PERCENT}
+          tabIndex={0}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            dragging.current = true;
+            document.body.style.cursor = "col-resize";
+            document.body.style.userSelect = "none";
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft") put(percent - 2);
+            else if (e.key === "ArrowRight") put(percent + 2);
+            else return;
+            e.preventDefault();
+          }}
+          onDoubleClick={() => put(50)}
+          className="group relative order-2 w-px shrink-0 cursor-col-resize bg-border focus-visible:outline-none"
+        >
+          {/* The line is one pixel and the grab area is sixteen. A divider you
+            have to hit exactly is a divider nobody moves twice. */}
+          <span
+            aria-hidden
+            className="absolute inset-y-0 -left-2 -right-2 transition-colors duration-fast group-hover:bg-primary/20 group-focus-visible:bg-primary/30"
+          />
+        </div>
+
+        <div
+          className={cn(
+            FADE,
+            // The THIRD order, opposite the passage's. It used to be `order-2`
+            // — the divider's own — and the two then tied, so the browser fell
+            // back to DOM order and put the divider first. Unswapped that was
+            // invisibly correct (divider, then questions, after the passage at
+            // order-1); swapped it laid the row out as divider, questions,
+            // passage: the rule stranded against the left edge of the window
+            // with nothing to its left, and no line at all between the two
+            // panes it exists to separate.
+            "min-w-0 flex-1 overflow-y-auto",
+            swapped ? "order-1 pr-5" : "order-3 pl-5",
+          )}
         >
           {right}
         </div>
       </div>
     );
-  }
-
-  return (
-    <div
-      ref={(el) => {
-        frame.current = el;
-        if (typeof outerRef === "function") outerRef(el);
-        else if (outerRef) outerRef.current = el;
-      }}
-      style={{ ...style, ...(height ? { height } : {}) }}
-      className={cn("flex min-h-0", className)}
-    >
-      <div
-        {...{ [LEFT_PANE]: "" }}
-        className={cn(
-          FADE,
-          "min-w-0 overflow-y-auto",
-          swapped ? "order-3 pl-5" : "order-1 pr-5",
-        )}
-        style={{ width: `${percent}%` }}
-      >
-        {left}
-      </div>
-
-      {/* A real control, not a decorated border: it is draggable with a
-          pointer and movable with the arrow keys, because a reader who works
-          by keyboard has the same reason to widen the passage. */}
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={`Resize ${leftLabel} and ${rightLabel}`}
-        aria-valuenow={Math.round(percent)}
-        aria-valuemin={MIN_PERCENT}
-        aria-valuemax={MAX_PERCENT}
-        tabIndex={0}
-        onPointerDown={(e) => {
-          e.preventDefault();
-          dragging.current = true;
-          document.body.style.cursor = "col-resize";
-          document.body.style.userSelect = "none";
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "ArrowLeft") put(percent - 2);
-          else if (e.key === "ArrowRight") put(percent + 2);
-          else return;
-          e.preventDefault();
-        }}
-        onDoubleClick={() => put(50)}
-        className="group relative order-2 w-px shrink-0 cursor-col-resize bg-border focus-visible:outline-none"
-      >
-        {/* The line is one pixel and the grab area is sixteen. A divider you
-            have to hit exactly is a divider nobody moves twice. */}
-        <span
-          aria-hidden
-          className="absolute inset-y-0 -left-2 -right-2 transition-colors duration-fast group-hover:bg-primary/20 group-focus-visible:bg-primary/30"
-        />
-      </div>
-
-      <div
-        className={cn(
-          FADE,
-          "order-2 min-w-0 flex-1 overflow-y-auto",
-          swapped ? "pr-5" : "pl-5",
-        )}
-      >
-        {right}
-      </div>
-    </div>
-  );
   },
 );
