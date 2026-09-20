@@ -93,7 +93,26 @@ export function useActiveTime({
     away: false,
   }));
 
+  // Which attempt the running total belongs to. `activeFrom` is what the
+  // RESTORED one had banked, and it is meaningful for that one only.
+  const attempt = useRef(startedAt);
+
   useEffect(() => {
+    // A new `startedAt` is a new attempt — somebody pressed Start over —
+    // and nothing the last one banked belongs to it. Without this the
+    // counter is a ref and simply carries on: the paper went blank and the
+    // clock kept the seven minutes spent on the answers that were just
+    // thrown away.
+    if (attempt.current !== startedAt) {
+      attempt.current = startedAt;
+      active.current = 0;
+      setState({ elapsedMs: 0, activeMs: 0, away: false });
+    }
+    // The gap between this hook rendering and its effect running belongs to
+    // nobody: counted from a stale `lastTick`, the first tick would add all
+    // of it at once.
+    lastTick.current = Date.now();
+
     const seen = () => {
       lastSign.current = Date.now();
     };

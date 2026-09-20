@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, ArrowRight } from "lucide-react";
+import { ArrowLeft, ArrowRight, RotateCcw } from "lucide-react";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -514,13 +514,36 @@ export default function ListeningTakePage() {
         is a summary of the very squares it sits beside.
       */}
       <div className="pt-1">
-        <Link
-          to="/listening"
-          className="inline-flex items-center gap-1.5 rounded-md text-xs text-muted-foreground transition-colors duration-fast hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-        >
-          <ArrowLeft className="size-3.5" aria-hidden />
-          Listening
-        </Link>
+        {/* The two ways out of this attempt, together. Reading puts the same
+            pair in its left header island; this page keeps its islands for
+            the travelling player, so the pair sits where its back link
+            already was. Either way it is the corner people look in when they
+            want out of something, and `Start over` is the same kind of thing
+            as the link beside it: one abandons the sitting by leaving, the
+            other by beginning it again. */}
+        <div className="flex items-center gap-1">
+          <Link
+            to="/listening"
+            className="inline-flex items-center gap-1.5 rounded-md text-xs text-muted-foreground transition-colors duration-fast hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            <ArrowLeft className="size-3.5" aria-hidden />
+            Listening
+          </Link>
+          {resumed && (
+            <>
+              <span aria-hidden className="mx-1 h-3 w-px bg-border" />
+              <button
+                type="button"
+                onClick={startOver}
+                title="Picked up where you left off — this throws that away and answers the paper again"
+                className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-primary transition-colors duration-fast hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                <RotateCcw className="size-3" aria-hidden />
+                Start over
+              </button>
+            </>
+          )}
+        </div>
         {/* The title and what the paper IS, on one line and on one baseline.
             Everything up here used to stack down the left edge — four rows of
             different lengths against an empty right half, which reads as a
@@ -674,7 +697,6 @@ export default function ListeningTakePage() {
         submitLabel={config.submitLabel}
         answered={answered}
         total={total}
-        onStartOver={resumed ? startOver : undefined}
         submitting={submitMut.isPending}
         blank={blank}
         confirming={confirming}

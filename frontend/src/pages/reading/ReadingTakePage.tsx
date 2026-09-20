@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, ArrowRight } from "lucide-react";
+import { ArrowLeft, ArrowRight, RotateCcw } from "lucide-react";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 import { toast } from "@/lib/toast";
 import { timeAgo } from "@/lib/time";
@@ -788,17 +788,53 @@ export default function ReadingTakePage() {
 
           The row was about forty pixels. On the screen where vertical space
           is the scarcest thing there is, that is two more lines of prose. */}
+      {/* The two ways out of this attempt, together, in the corner people
+          look in when they want one.
+      
+          It took three tries to find this. Above the passage it was loose
+          micro-text holding a line of the pane open all hour; in the footer
+          it was a quiet label in the dead space between thirteen numbered
+          squares and a big amber button, and the reader who asked for it
+          had to hunt. Neither was a HOME — it appeared in a different place
+          depending on what else was on screen.
+      
+          Here it is a sibling of the back link, which is the same kind of
+          thing: both abandon the sitting, one by leaving and one by
+          starting it again. Top-left is where "get me out of this" lives on
+          every screen anybody has ever used, and the island is chrome, so
+          it costs the passage nothing. */}
       <HeaderSlot side="left">
-        <Link
-          to="/reading"
-          // The same lift as the tool row beside it. `--muted-foreground`
-          // against the island's ground is 2.17:1, and a back link nobody
-          // can read is a page with no way out of it.
-          className="inline-flex items-center gap-1.5 rounded-full px-1 text-sm text-foreground/70 transition-colors duration-fast hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-        >
-          <ArrowLeft className="size-4" aria-hidden />
-          Reading
-        </Link>
+        <div className="flex items-center gap-1">
+          <Link
+            to="/reading"
+            // The same lift as the tool row beside it. `--muted-foreground`
+            // against the island's ground is 2.17:1, and a back link nobody
+            // can read is a page with no way out of it.
+            className="inline-flex items-center gap-1.5 rounded-full px-1 text-sm text-foreground/70 transition-colors duration-fast hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            <ArrowLeft className="size-4" aria-hidden />
+            Reading
+          </Link>
+          {resumed && (
+            <>
+              <span aria-hidden className="mx-1 h-4 w-px bg-border" />
+              {/* Amber, like every other "this is the action" in the app.
+                  The footer version was `text-foreground/60` and that is
+                  most of why it could not be found: a control that only
+                  appears sometimes has no learned position, so it has to
+                  carry its own weight when it does. */}
+              <button
+                type="button"
+                onClick={startOver}
+                title="Picked up where you left off — this throws that away and answers the paper again"
+                className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-sm text-primary transition-colors duration-fast hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                <RotateCcw className="size-3.5" aria-hidden />
+                Start over
+              </button>
+            </>
+          )}
+        </div>
       </HeaderSlot>
 
       <HeaderSlot side="centre">
@@ -1050,7 +1086,6 @@ export default function ReadingTakePage() {
         submitLabel={config.submitLabel}
         answered={answered}
         total={total}
-        onStartOver={resumed ? startOver : undefined}
         submitting={submitMut.isPending}
         blank={blank}
         confirming={confirming}
