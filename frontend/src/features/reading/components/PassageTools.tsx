@@ -117,7 +117,10 @@ export interface PassageToolsProps {
   swapped: boolean;
   onSwap: () => void;
   lookups: Lookups;
-  onLookup: (word: string) => void;
+  onLookup: (
+    word: string,
+    where?: { paragraphIndex: number; offset: number },
+  ) => void;
   /** False in an exam: there is no dictionary in the hall. */
   allowLookup: boolean;
   onHelp: () => void;
@@ -167,7 +170,17 @@ export function PassageTools({
       lookupLeft={left(lookups)}
       canLookUp={oneWord && canOpen(lookups, word)}
       free={oneWord && known(lookups, word)}
-      onLookup={() => onLookup(word)}
+      onLookup={() =>
+        onLookup(
+          word,
+          selected
+            ? {
+                paragraphIndex: selected.where.index,
+                offset: selected.where.start,
+              }
+            : undefined,
+        )
+      }
       allowLookup={allowLookup}
       onHelp={onHelp}
       helpOpen={helpOpen}
@@ -413,7 +426,8 @@ export function Swatch({
       className={cn(
         "shrink-0 rounded-full",
         small ? "size-2" : "size-3",
-        ring && "ring-2 ring-foreground/30 ring-offset-1 ring-offset-background",
+        ring &&
+          "ring-2 ring-foreground/30 ring-offset-1 ring-offset-background",
         colour === "key"
           ? "bg-mark-key"
           : colour === "found"

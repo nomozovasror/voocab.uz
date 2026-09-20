@@ -35,9 +35,7 @@ export interface PaperMaterialCreate {
   visibility?: Visibility;
 }
 
-export type PaperMaterialUpdate = Partial<
-  Omit<PaperMaterialCreate, "type">
->;
+export type PaperMaterialUpdate = Partial<Omit<PaperMaterialCreate, "type">>;
 
 export interface AudioUpload {
   asset_id: string;
@@ -176,7 +174,9 @@ const FIXED_CHOICE_TYPES: FixedChoiceType[] = [
 ];
 
 /** One box of options answering a list of items, under any of its names. */
-export function isMatching(type: QuestionGroupType | null): type is MatchingType {
+export function isMatching(
+  type: QuestionGroupType | null,
+): type is MatchingType {
   return MATCHING_TYPES.includes(type as MatchingType);
 }
 
@@ -449,6 +449,21 @@ export interface LastAttempt {
   submitted_at: string;
 }
 
+/** How much there is to learn in one material.
+ *
+ *  Here rather than in `features/vocabulary` because it is part of the take
+ *  payload, and `features/paper` is what the take payload belongs to. The
+ *  entries themselves — the words, their meanings, where they stand — are a
+ *  different fetch and live over there.
+ *
+ *  A spread rather than an average. "B2: 30" is something a learner can act
+ *  on; "mean CEFR 2.3" is a number with no referent. */
+export interface VocabularySummary {
+  total: number;
+  /** B1 / B2 / C1 counts. */
+  levels: Record<string, number>;
+}
+
 export interface MaterialTake {
   id: string;
   title: string;
@@ -464,6 +479,13 @@ export interface MaterialTake {
    *  how it went — which would write a second attempt, and every ability
    *  figure on the platform counts first attempts. */
   last_attempt?: LastAttempt | null;
+  /** How much vocabulary this paper is worth. Absent for a material nothing
+   *  has glossed — every listening paper today.
+   *
+   *  A count and a spread, never the words: "64 worth learning here" is a
+   *  reason to choose this passage over the next one, and the words
+   *  themselves are what the review opens with. */
+  vocabulary?: VocabularySummary | null;
 }
 
 /** One row of the learner's catalogue. Deliberately not `PaperMaterial`:
@@ -920,6 +942,13 @@ export interface AttemptSubmit {
    *  is how long the paper was out, and this is how long it was being sat.
    *  Anything that MEASURES a learner reads this one. */
   active_ms?: number;
+  /** The words a reading candidate spent their three lookups on, as lemmas.
+   *
+   *  Sent so the review can open with them: the words somebody stalled on
+   *  mid-paper are the vocabulary most worth studying afterwards, and they
+   *  are the one part of the list that nothing else can identify. Empty on a
+   *  listening paper and on any sitting where nothing was looked up. */
+  looked_up?: string[];
 }
 
 /** One line of the transcript across an answer's moment — the author's
@@ -1010,6 +1039,13 @@ export interface AttemptResult {
   submitted_at: string | null;
   /** How long the paper took, where the page reported it. */
   time_spent_ms?: number | null;
+  /** The words looked up while sitting it, as lemmas.
+   *
+   *  A list and not a count, because the review turns it into vocabulary
+   *  worth studying. "You looked up three words" is a score for something
+   *  nobody was being scored on; the three words, with what they mean in the
+   *  passage that defeated them, is homework. */
+  looked_up?: string[];
 
   // --- what turns the score into a sentence --------------------------------
   /** Which try this is, counting submitted attempts at this material only. */
@@ -1050,7 +1086,11 @@ export interface AudioSegment {
   edited?: boolean;
 }
 
-export type AudioTranscriptStatus = "pending" | "processing" | "ready" | "failed";
+export type AudioTranscriptStatus =
+  | "pending"
+  | "processing"
+  | "ready"
+  | "failed";
 
 /** GET /api/audio-assets/{asset_id}. `segments` populated only once
  *  `transcript_status === "ready"`; `transcript_error` only once `"failed"`.

@@ -23,11 +23,12 @@ import {
   paperRows,
   paperTotal,
 } from "@/features/paper/take-paper";
-import { goToQuestion, useQuestionSpy, Q_ANCHOR } from "@/features/paper/take-focus";
 import {
-  READING_PRACTICE,
-  paperMs,
-} from "@/features/paper/take-config";
+  goToQuestion,
+  useQuestionSpy,
+  Q_ANCHOR,
+} from "@/features/paper/take-focus";
+import { READING_PRACTICE, paperMs } from "@/features/paper/take-config";
 import { TakeTimer } from "@/features/paper/components/TakeTimer";
 import { useActiveTime } from "@/features/paper/use-active-time";
 import {
@@ -44,7 +45,10 @@ import {
   PassagePane,
   passageId,
 } from "@/features/reading/components/PassagePane";
-import { LEFT_PANE, SplitPanes } from "@/features/reading/components/SplitPanes";
+import {
+  LEFT_PANE,
+  SplitPanes,
+} from "@/features/reading/components/SplitPanes";
 import {
   PassageTools,
   useMarkColour,
@@ -58,8 +62,10 @@ import {
   NotePanel,
 } from "@/features/reading/components/ReadingPanels";
 import {
+  known,
   loadLookups,
   opened,
+  resetSpend,
   saveLookups,
   type Lookups,
 } from "@/features/reading/lookups";
@@ -201,7 +207,8 @@ export default function ReadingTakePage() {
     return at;
   }, [material]);
   const typeAt = useCallback(
-    (questionId: string | null) => (questionId ? typeOf.get(questionId) ?? null : null),
+    (questionId: string | null) =>
+      questionId ? (typeOf.get(questionId) ?? null) : null,
     [typeOf],
   );
 
@@ -237,22 +244,62 @@ export default function ReadingTakePage() {
   const [panel, setPanel] = useState<
     | { kind: "help" }
     | { kind: "note"; at: Selected }
-    | { kind: "lookup"; word: string }
+    | {
+        kind: "lookup";
+        word: string;
+        where?: { paragraphIndex: number; offset: number };
+      }
     | null
   >(null);
 
-  const [lookups, setLookups] = useState<Lookups>(() =>
-    id ? loadLookups(id) : { words: [], spent: 0 },
-  );
+  // A fresh sitting is a fresh three. A resumed one keeps what it had spent,
+  // which is the same distinction the session draft makes: `restored` is
+  // non-null exactly when this is the paper somebody walked away from rather
+  // than one they are starting.
+  //
+  // The WORDS are never reset. Somebody sitting the passage a second time
+  // has already been told what `vogue` means, and charging them for it again
+  // would be the app pretending not to remember.
+  const [lookups, setLookups] = useState<Lookups>(() => {
+    if (!id) return { words: [], spent: 0 };
+    const held = loadLookups(id);
+    if (restored.current) return held;
+    const fresh = resetSpend(held);
+    saveLookups(id, fresh);
+    return fresh;
+  });
+  // Opening the panel does not spend anything. The charge happens when a
+  // meaning comes BACK, through `spend` below — a reader who taps a name and
+  // is told there is no meaning has not used one of their three, and being
+  // charged for nothing is the kind of small unfairness people remember.
   const lookUp = useCallback(
-    (word: string) => {
+    (word: string, where?: { paragraphIndex: number; offset: number }) => {
       if (!word) return;
+      setPanel({ kind: "lookup", word, where });
+    },
+    [],
+  );
+
+  // What THIS sitting opened, which is not the same list as `lookups.words`.
+  // That one remembers across attempts on purpose — a word this reader has
+  // already been told the meaning of is free for ever — so on a retake it
+  // holds words from a sitting that is over. The review is about this one.
+  const openedHere = useRef<string[]>([]);
+
+  // Idempotent: `opened` returns the same state for a word already on the
+  // list, so a re-render or a refetch cannot spend twice. That is also what
+  // makes "looking the same word up again is free" true rather than
+  // approximately true.
+  const spend = useCallback(
+    (lemma: string) => {
+      if (!openedHere.current.includes(lemma)) {
+        openedHere.current.push(lemma);
+      }
       setLookups((was) => {
-        const next = opened(was, word);
+        const next = opened(was, lemma);
         if (id && next !== was) saveLookups(id, next);
         return next;
       });
-      setPanel({ kind: "lookup", word });
     },
     [id],
   );
@@ -561,15 +608,25 @@ export default function ReadingTakePage() {
     if (!sessionKey) return;
     closeFocus();
     setConfirming(false);
-    submitMut.mutate(toSubmit(session.current, questionIds), {
-      onSuccess: (result) => {
-        clearSession(sessionKey);
-        navigate(`/reading/attempts/${result.attempt_id}`, {
-          state: { result },
-        });
+    submitMut.mutate(
+      {
+        ...toSubmit(session.current, questionIds),
+        // Sent from here rather than from `toSubmit`, because the lookups
+        // are a reading fact and that function is the shared one. Listening
+        // has nothing to put in this field and should not have to know it
+        // exists.
+        looked_up: openedHere.current,
       },
-      onError: (e) => toast(getErrorMessage(e)),
-    });
+      {
+        onSuccess: (result) => {
+          clearSession(sessionKey);
+          navigate(`/reading/attempts/${result.attempt_id}`, {
+            state: { result },
+          });
+        },
+        onError: (e) => toast(getErrorMessage(e)),
+      },
+    );
   };
 
   const onSubmit = () => {
@@ -648,7 +705,6 @@ export default function ReadingTakePage() {
     // is the one place in this app where that reads as depth rather than as
     // a rendering fault.
     <div className="-mt-23 -mb-8 mx-[calc(50%-50vw)] flex w-auto flex-col overflow-hidden px-4 sm:px-6">
-
       {/* Nothing above the paper at all.
 
           There was a row here: the crumb, the title, the meta line, the
@@ -735,42 +791,45 @@ export default function ReadingTakePage() {
                 pixels of passage for something that is read once. Inside the
                 pane they scroll away with the paragraph they are next to,
                 which is what a note read once should do. */}
-      {material.last_attempt && (
-        <Link
-          to={`/reading/attempts/${material.last_attempt.attempt_id}`}
-          className="mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-lg border border-border bg-card px-4 py-2.5 transition-colors duration-fast hover:border-border-strong focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-        >
-          <span className="text-sm text-foreground">You have sat this</span>
-          <span className="text-sm tabular-nums text-muted-foreground">
-            {material.last_attempt.score} / {material.last_attempt.total_questions}
-            {" · "}
-            {timeAgo(material.last_attempt.submitted_at)}
-          </span>
-          <span className="ml-auto inline-flex items-center gap-1 text-sm text-primary">
-            See what you got wrong
-            <ArrowRight className="size-3.5" aria-hidden />
-          </span>
-        </Link>
-      )}
+            {material.last_attempt && (
+              <Link
+                to={`/reading/attempts/${material.last_attempt.attempt_id}`}
+                className="mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-lg border border-border bg-card px-4 py-2.5 transition-colors duration-fast hover:border-border-strong focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                <span className="text-sm text-foreground">
+                  You have sat this
+                </span>
+                <span className="text-sm tabular-nums text-muted-foreground">
+                  {material.last_attempt.score} /{" "}
+                  {material.last_attempt.total_questions}
+                  {" · "}
+                  {timeAgo(material.last_attempt.submitted_at)}
+                </span>
+                <span className="ml-auto inline-flex items-center gap-1 text-sm text-primary">
+                  See what you got wrong
+                  <ArrowRight className="size-3.5" aria-hidden />
+                </span>
+              </Link>
+            )}
 
-      {resumed && (
-        <p className="mb-4 flex items-center gap-2 text-xs text-muted-foreground">
-          Picked up where you left off.
-          <button
-            type="button"
-            onClick={() => {
-              clearSession(sessionKey);
-              session.current = newSession();
-              setAnswers({});
-              setFlagged(new Set());
-              setResumed(false);
-            }}
-            className="rounded-md px-1.5 py-0.5 text-primary transition-colors duration-fast hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-          >
-            Start over
-          </button>
-        </p>
-      )}
+            {resumed && (
+              <p className="mb-4 flex items-center gap-2 text-xs text-muted-foreground">
+                Picked up where you left off.
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearSession(sessionKey);
+                    session.current = newSession();
+                    setAnswers({});
+                    setFlagged(new Set());
+                    setResumed(false);
+                  }}
+                  className="rounded-md px-1.5 py-0.5 text-primary transition-colors duration-fast hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  Start over
+                </button>
+              </p>
+            )}
 
             {/* Centred over the column it names, and larger than the prose
                 under it — it is the passage's heading, and a heading set at
@@ -799,22 +858,22 @@ export default function ReadingTakePage() {
               </p>
             </div>
             <div className="space-y-10">
-            {sorted.map((part, index) =>
-              part.passage ? (
-                <PassagePane
-                  key={part.id}
-                  partId={part.id}
-                  title={part.title || `Reading Passage ${index + 1}`}
-                  showTitle={sorted.length > 1}
-                  passage={part.passage}
-                  highlight={lit}
-                  highlights={marks}
-                  onUnmark={(index, offset) =>
-                    keep(withoutAt(marks, part.id, index, offset))
-                  }
-                />
-              ) : null,
-            )}
+              {sorted.map((part, index) =>
+                part.passage ? (
+                  <PassagePane
+                    key={part.id}
+                    partId={part.id}
+                    title={part.title || `Reading Passage ${index + 1}`}
+                    showTitle={sorted.length > 1}
+                    passage={part.passage}
+                    highlight={lit}
+                    highlights={marks}
+                    onUnmark={(index, offset) =>
+                      keep(withoutAt(marks, part.id, index, offset))
+                    }
+                  />
+                ) : null,
+              )}
             </div>
           </div>
         }
@@ -853,7 +912,8 @@ export default function ReadingTakePage() {
             />
             {submitMut.isError && (
               <p className="mt-6 text-right text-xs text-destructive">
-                {getErrorMessage(submitMut.error)} — your answers are still here.
+                {getErrorMessage(submitMut.error)} — your answers are still
+                here.
               </p>
             )}
           </div>
@@ -883,10 +943,14 @@ export default function ReadingTakePage() {
           onClose={() => setPanel(null)}
         />
       )}
-      {panel?.kind === "lookup" && (
+      {panel?.kind === "lookup" && id && (
         <LookupPanel
+          materialId={id}
           word={panel.word}
+          where={panel.where}
           spent={lookups.spent}
+          isKnown={(lemma) => known(lookups, lemma)}
+          onFound={spend}
           onClose={() => setPanel(null)}
         />
       )}
