@@ -580,10 +580,22 @@ async def replace_extracted(
 
     now = datetime.now(timezone.utc)
     written = 0
+    # Deduplicated here, against what is kept AND against what this batch has
+    # already written. One passage can offer the same lemma twice: the
+    # candidate filter sends `descending` and `descent` as two words, and the
+    # model correctly answers `descend` for both. The first occurrence wins,
+    # which is passage order -- where the reader meets the word.
+    #
+    # Enforced here rather than left to the unique constraint, because the
+    # constraint's answer is an IntegrityError that fails the whole import of
+    # a passage over one repeated word. Ninety of two hundred and three
+    # imports died this way.
+    seen = set(kept)
     for row in rows:
         lemma = normalise(row.get("lemma") or "")
-        if not lemma or lemma in kept:
+        if not lemma or lemma in seen:
             continue
+        seen.add(lemma)
         session.add(
             MaterialVocabulary(
                 material_id=material_id,

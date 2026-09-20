@@ -46,7 +46,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Literal
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select
 
@@ -312,10 +312,17 @@ async def set_vocabulary_load(
     read and cannot be recovered from the database, because the frequency
     lists do not live on this side of the fence.
 
-    Upserts the one column and leaves the tally alone, so a material that has
-    already been answered does not lose its measured band to an import. The
-    band itself is left for :func:`recompute`; this writes the input, not the
-    conclusion.
+    The measurement is ALWAYS recorded; the band it implies is written only
+    while nothing better exists. Those are two different things, and guarding
+    them with one condition got it wrong: a material twenty people had
+    already sat kept its measured band, correctly, and silently failed to
+    record the input behind the estimate it no longer needed. The fact about
+    the text is true whatever anybody scored.
+
+    Setting the band here as well as the load, rather than leaving it to the
+    next :func:`recompute`, is what makes the catalogue's own filter right
+    immediately: that column is what SQL sorts and filters by, and an
+    estimate a learner cannot find the material by only decorates a row.
     """
     statement = pg_insert(MaterialDifficulty).values(
         material_id=material_id,
@@ -326,11 +333,18 @@ async def set_vocabulary_load(
     await session.exec(  # type: ignore[call-overload]
         statement.on_conflict_do_update(
             index_elements=[MaterialDifficulty.material_id],
-            set_={"vocabulary_load": statement.excluded.vocabulary_load},
-            # Only where nobody has answered it yet. Past the threshold the
-            # stored band is a measurement of what happened to people, and
-            # an import must not talk over it.
-            where=MaterialDifficulty.answered < MIN_ANSWERS,
+            set_={
+                "vocabulary_load": statement.excluded.vocabulary_load,
+                # Past the threshold the stored band is a measurement of what
+                # happened to people, and an import must not talk over it.
+                "band": case(
+                    (
+                        MaterialDifficulty.answered < MIN_ANSWERS,
+                        statement.excluded.band,
+                    ),
+                    else_=MaterialDifficulty.band,
+                ),
+            },
         )
     )
 

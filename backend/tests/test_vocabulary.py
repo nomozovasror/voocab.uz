@@ -453,6 +453,16 @@ async def test_a_re_extraction_keeps_what_a_person_edited() -> None:
                      "meaning_en": "a heated glass building",
                      "meaning_uz": "issiqxona", "index": 0, "start": 0,
                      "end": 8, "cefr_level": "B2"},
+                    # The same lemma twice in one passage, which really
+                    # happens: the filter offers `descending` and `descent`
+                    # as two candidates and the model answers `descend` for
+                    # both. The first wins; the second must not reach the
+                    # unique constraint, whose answer would be to fail the
+                    # whole import of the passage over one repeated word.
+                    {"lemma": "hothouse", "surface": "hothouses",
+                     "meaning_en": "a second reading of the same word",
+                     "meaning_uz": "takror", "index": 1, "start": 0,
+                     "end": 9, "cefr_level": "C1"},
                 ],
             )
             await session.commit()
@@ -465,6 +475,8 @@ async def test_a_re_extraction_keeps_what_a_person_edited() -> None:
             # it was refused rather than written beside it.
             assert by_lemma["vogue"].meaning_uz == "urf, moda"
             assert by_lemma["vogue"].source == "author_edited"
+            # The first reading of `hothouse` is the one that survived.
+            assert by_lemma["hothouse"].surface == "hothouse"
             # And everything the pipeline had written before is gone, not
             # accumulated: only the new extraction and the kept edit remain.
             assert set(by_lemma) == {"vogue", "hothouse"}

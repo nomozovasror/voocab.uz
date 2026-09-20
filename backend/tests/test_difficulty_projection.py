@@ -514,9 +514,11 @@ async def test_an_import_never_talks_over_a_measured_band() -> None:
 
         assert stored is not None
         assert stored.band == "easy"
-        # The input is not recorded either, and that is the honest outcome
-        # of one upsert guarded by one condition: past the threshold the row
-        # is a measurement, and the import leaves it entirely alone.
         assert stored.answered >= MIN_ANSWERS
+        # The measurement IS recorded, though. It is a fact about the text
+        # and true whatever anybody scored; what the guard protects is the
+        # BAND, which is a fact about people. Guarding both with one
+        # condition was the bug this line pins.
+        assert stored.vocabulary_load == pytest.approx(0.18)
     finally:
         await _cleanup(material_id)
