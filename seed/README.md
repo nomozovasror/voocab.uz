@@ -2470,3 +2470,98 @@ IN PLACE (match group by `order_index`, question by `number`) rather than
 replacing it, and re-grading the `question_attempts` that point at it. Note
 that this moves difficulty projections and learner stats too, since every
 ability figure counts first attempts.
+
+## Vocabulary: which words are hard, decided by counting
+
+`read_vocabulary.py` adds a sixth stage to `run_reading.py`, and the
+interesting half of it never calls a model.
+
+A nine-hundred-word passage holds about four hundred distinct lemmas and a
+reader knows most of them. Glossing four hundred words costs four hundred
+words' worth of tokens to produce a list nobody reads; the value is in the
+sixty or eighty a band 5-6 candidate actually stumbles on. Deciding WHICH
+sixty is a frequency question, and frequency questions have frequency
+answers — so `vocabulary.py` answers it deterministically, for nothing, and a
+model is only asked about words that have already survived.
+
+`wordlists/` carries the New General Service List and the New Academic Word
+List, both 1.2, downloaded verbatim from the project's own site and licensed
+CC BY-SA 4.0 (attribution is a condition, not a courtesy — see the README
+there). They are a matched pair built by the same people from the same
+corpus, which is why they can be used together where GSL-plus-AWL, from 1953
+and 2000 and built independently, disagree about what counts as general.
+
+### The cut is at rank 2000, not at the edge of the list
+
+The obvious rule — in the NGSL, so the reader knows it — is wrong, and
+measurably so. `phenomenon` is NGSL rank 2096, `undertake` 2036, `constitute`
+2357, and those are the words that stop people. Measured over Cambridge 11
+Test 1 Passage 1, 320 distinct lemmas:
+
+    rank 1000   135 candidates      too many; `urban`, `crop`, `spring`
+    rank 1500   109 candidates
+    rank 2000    91 candidates      ~70 after names and possessives
+    rank 2809    74 candidates      loses `phenomenon`, `undertake`
+
+The first two thousand are the words a passage is READ with. Past that a
+candidate is meeting a word rather than using one. Median over the corpus:
+82 candidates a passage.
+
+### Lemmatisation without a parser
+
+The lists ship lemmatised, so most surface forms map home by lookup, and that
+map is better than a guess because the people who counted the corpus made it.
+What it does not carry is derivation — `vertically` is not filed under
+`vertical` — so those fall through to a handful of suffix rules whose answer
+is only accepted when it lands on a lemma the lists already know. A rule that
+invents `outdoor` from `outdoors` and finds nothing has not proved anything,
+so `outdoors` stays as it is and counts as off-list, which is true.
+
+That acceptance test is what makes rules this crude safe. No spaCy, no model
+download, and no gamble on a compiled wheel for Python 3.14.
+
+### Thirty words a request, because eighty-five did not come back
+
+The first shape asked one question covering the whole candidate list. The
+reply is not refused and not malformed — it simply STOPS, eighteen thousand
+characters in, mid-string, three times at three temperatures. `ask_json`'s
+retry cannot help with a ceiling.
+
+So the words go in batches of thirty and the passage goes with each one.
+That repeats about 1 200 input tokens a batch, which was never where the
+money was. A later batch of thirty died the same way at 8 581 characters,
+because the model pretty-printed six lines an entry where the estimate
+allowed two; the ceiling is now 150 tokens an entry.
+
+A passage the model will not answer cleanly is skipped and the run carries
+on. Before that, one bad page took the other hundred and sixty down with it.
+
+### Neither the example sentence nor the offsets are asked for
+
+The example is cut from the passage here, because the passage is on disk and
+exact. Asking for a copy costs thirty output tokens an entry to get one that
+may differ by a comma, and the one thing an example must be is the sentence
+that is actually there.
+
+Offsets are worse. A model asked for character positions produces plausible
+numbers, and plausible numbers are the worst failure available: a highlight
+two words off looks like a bug in the highlighting. Single words already have
+exact offsets from the deterministic scan; phrases return the string as it
+stands and are LOCATED, and one that cannot be found is dropped rather than
+placed approximately.
+
+### Phrases are the half no frequency list sees
+
+`give rise to`, `account for`, `in light of`, `in vogue`. Every word in them
+is NGSL rank one hundred, so no filter will ever offer them, and they are
+what stops a reader who knows each word separately. They are their own
+entries with their own spans, so a tap on `rise` can land inside the phrase.
+
+### Cost
+
+Measured on Cambridge 11 Test 1 Passage 1: 84 candidates, four requests,
+5 800 tokens in and 7 600 out, 86 entries whose offsets all slice back
+exactly — **$0.0062**. The whole reading corpus is about **$1.20**, paid
+once. The estimate made before running it said two cents a passage, so the
+oldest lesson here holds again: the only honest number is the one in
+`work/usage.jsonl`.

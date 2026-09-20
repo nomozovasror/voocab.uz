@@ -185,3 +185,60 @@ claiming spelling — see the threshold notes in that module.
 Letter-answered groups (multiple choice, matching, boxed summaries) are
 excluded: there is no spelling in "b". Distractor analysis is the equivalent
 question there, and belongs on the full statistics page.
+
+## Vocabulary is per material, and that is not a duplication bug
+
+`material_vocabulary` stores one row per word per material, so `analysis` is
+glossed forty times across the catalogue. That is deliberate and the shape is
+the whole feature. `spring` is a season in one passage, a coil in the next
+and a source of water in a third; a global `words` table has to pick one
+sense and is then wrong for most of the passages that use the word — which is
+exactly the failure that makes a plain dictionary API useless to a band 5
+reader shown five senses. Forty rows cost four kilobytes; a global table
+costs the feature.
+
+Deduplication happens once, where it means something: `saved_words` is per
+lemma, because what somebody is STUDYING is one word however many passages
+they met it in. Each meeting is a `SavedWordContext` and **copies** the
+gloss rather than pointing at it — a material can be re-glossed, and a saved
+word changing meaning underneath somebody is worse than one that has aged.
+
+- **`entries` is gated on having submitted** (`may_see_all`). The budget of
+  three lookups lives in the browser, where a rule meant to make somebody
+  choose has to be visible to work; a list endpoint serving eighty-six
+  glosses mid-paper would make it a formality, and the network tab is not a
+  difficult place to look. `look_up` answers about one word and is always
+  allowed.
+- **No lemmatiser on this side of the fence.** The search space is not
+  English, it is the eighty lemmas of one material, so the tapped word is
+  matched by span, then surface, then lemma, then by reducing it until it
+  hits one of the eighty. A second copy of `seed/vocabulary.py`'s rules would
+  be two implementations that have to agree for ever.
+- **The span match is how a phrase is recognised.** `give rise to` is one
+  entry over three words; a tap on `rise` lands inside it. Nothing else
+  would ever surface it — every word in it is NGSL rank one hundred.
+- **`source` is never overwritten unless it is `extracted`.** The column
+  exists from the first day so that nobody discovers, months later, that a
+  re-run reverted their correction.
+
+## Two difficulty measures, and they do not merge
+
+`cefr_level` is the model's, sees the context, and is the better figure for
+ONE word — `bank` is B1 financially and C1 geologically. It is what the
+learner is shown. It also drifts from material to material, so an average of
+it cannot be compared with another average of it.
+
+`frequency_band` is from the lists alone, identical across the whole
+catalogue, and never shown to anybody: "NGSL rank 2400" is a fact about a
+corpus. It is what the arithmetic uses.
+
+**Do not average them into one "difficulty".** The two disagreeing is itself
+the signal worth having: a frequent word rated C1 is being used in an unusual
+sense, and unusual senses are where an IELTS passage lays its traps.
+
+`material_difficulty.vocabulary_load` is the one column in that table that is
+not a function of the attempts — it is a function of the TEXT, written by the
+passage importer, and `recompute` reads it and never writes it. Listing it in
+that upsert's `set_` would blank it on the worker's next pass. Below
+`MIN_ANSWERS` it gives a band instead of `New`; at twenty answers the
+measured proportion correct takes over and the estimate is gone.

@@ -11,10 +11,11 @@ area:**
 
 | File | Covers |
 |---|---|
-| `backend/app/services/CLAUDE.md` | Catalogue query, recommendations, collections, difficulty, learner stats, mistake classification, `answers.py` layering |
+| `backend/app/services/CLAUDE.md` | Catalogue query, recommendations, collections, difficulty, learner stats, mistake classification, vocabulary, `answers.py` layering |
 | `frontend/CLAUDE.md` | Preferences, loading states and skeletons |
 | `frontend/src/features/paper/CLAUDE.md` | What listening and reading SHARE: the skill descriptor, the take engine, question types, the review |
 | `frontend/src/features/reading/CLAUDE.md` | The passage, and why the reading take screen is two panes |
+| `frontend/src/features/vocabulary/CLAUDE.md` | The three lookups, the review's word list, what a saved word is |
 | `frontend/src/features/listening/CLAUDE.md` | Take screen, audio engine, the travelling player, waveform, collection covers |
 | `frontend/src/pages/listening/CLAUDE.md` | The results/review page |
 | `frontend/src/pages/studio/CLAUDE.md` | Studio tabs, the author's collection shelf |
