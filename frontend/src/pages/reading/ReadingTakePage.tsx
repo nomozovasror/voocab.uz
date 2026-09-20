@@ -8,6 +8,7 @@ import { getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { HeaderGround } from "@/components/layout/HeaderGround";
+import { HeaderSlot, useHeaderTask } from "@/components/layout/header-task";
 import {
   useDrillTake,
   useSubmitAttempt,
@@ -150,6 +151,11 @@ export default function ReadingTakePage() {
     [id],
   );
   const [textSize, setTextSize] = useTextSize();
+
+  // The header works for this paper while it is open. Reading cannot dock a
+  // control on scroll the way listening does — there is no scroll — so the
+  // islands go over to the page from the first paint. See `header-task`.
+  useHeaderTask();
 
   // --- Which paragraph the reader is looking at ----------------------------
   //
@@ -495,56 +501,47 @@ export default function ReadingTakePage() {
     <div className="-my-8 mx-[calc(50%-50vw)] flex w-auto flex-col overflow-hidden px-4 sm:px-6">
       <HeaderGround />
 
-      {/* One row, and it is the whole of the chrome above the paper.
-          It used to be four: the app header, a "Reading" crumb, a 2xl title
-          on its own line, and a meta line under it — and then the passage
-          repeated its name and the question paper repeated the part. On a
-          screen where vertical space is the scarcest thing there is, the
-          prose was left about seven hundred pixels and cut off mid-sentence.
+      {/* Nothing above the paper at all.
 
-          Everything that is only a LABEL now shares one baseline, and the
-          title truncates rather than wraps: a second line here costs the
-          reader a line of the passage. */}
-      <div className="flex shrink-0 flex-wrap items-baseline gap-x-4 gap-y-1 pt-1 pb-2">
+          There was a row here: the crumb, the title, the meta line, the
+          tools and the clock. Every one of them has gone somewhere better.
+          The way out is in the header's left island where the wordmark was,
+          the tools are the middle island, and the clock sits beside the
+          account. What is left — the name of the passage and which test it
+          is — belongs over the passage itself, which is the thing it names.
+
+          The row was about forty pixels. On the screen where vertical space
+          is the scarcest thing there is, that is two more lines of prose. */}
+      <HeaderSlot side="left">
         <Link
           to="/reading"
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-md text-xs text-muted-foreground transition-colors duration-fast hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          className="inline-flex items-center gap-1.5 rounded-full px-1 text-sm text-muted-foreground transition-colors duration-fast hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
-          <ArrowLeft className="size-3.5" aria-hidden />
+          <ArrowLeft className="size-4" aria-hidden />
           Reading
         </Link>
-        <h1 className="min-w-0 flex-1 truncate text-base font-semibold text-foreground">
-          {material.title}
-        </h1>
-        <p className="shrink-0 text-xs tabular-nums text-muted-foreground">
-          {[
-            // Which test this was cut from, where the title used to carry
-            // it. The title is the name the book gives the passage; this is
-            // a fact about where it came from.
-            material.reference !== material.title ? material.reference : null,
-            sorted.length > 1
-              ? `${sorted.length} passages`
-              : null,
-            `${total} ${total === 1 ? "question" : "questions"}`,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
-        </p>
+      </HeaderSlot>
+
+      <HeaderSlot side="centre">
         <PassageTools
           marks={marks}
           onMarks={keep}
           size={textSize}
           onSize={setTextSize}
         />
-        {config.showTimer && (
+      </HeaderSlot>
+
+      {config.showTimer && (
+        <HeaderSlot side="right">
           <TakeTimer
             mode={config.timerMode}
             ms={shown}
             targetMs={config.timerMode === "countUp" ? worth : null}
             away={config.pauseOnIdle && away}
+            className="mr-1"
           />
-        )}
-      </div>
+        </HeaderSlot>
+      )}
 
       {material.last_attempt && (
         <Link
@@ -604,6 +601,24 @@ export default function ReadingTakePage() {
             onFocusCapture={(e) => look(e.target)}
             onMouseLeave={() => setLit(null)}
           >
+            {/* Over the passage, because that is what it names. One line:
+                what the book calls it, and which test it came from. */}
+            <div className="-mt-1">
+              <h1 className="text-base font-semibold text-foreground">
+                {material.title}
+              </h1>
+              <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">
+                {[
+                  material.reference !== material.title
+                    ? material.reference
+                    : null,
+                  sorted.length > 1 ? `${sorted.length} passages` : null,
+                  `${total} ${total === 1 ? "question" : "questions"}`,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+            </div>
             {sorted.map((part, index) =>
               part.passage ? (
                 <PassagePane

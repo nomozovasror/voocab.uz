@@ -117,10 +117,14 @@ export function PassageTools({
           Clear
         </button>
       )}
+      {/* A rule between what MARKS the passage and what SETS it. Two kinds
+          of control sitting in one island read as one list of four
+          buttons. */}
+      <span aria-hidden className="mx-1 h-4 w-px bg-border" />
       <div
         role="group"
         aria-label="Text size"
-        className="ml-1 flex items-center gap-0.5 rounded-md bg-surface-sunken p-0.5"
+        className="flex items-center gap-0.5 rounded-md bg-surface-sunken p-0.5"
       >
         {SIZES.map((step, i) => (
           <button

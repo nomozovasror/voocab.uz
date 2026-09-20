@@ -24,16 +24,44 @@ header's own height, which at rest the header already occupies in the flow.
 It is per page rather than in `Layout` only because the home page paints a
 star field behind everything and a pane across the top would frost the stars.
 
-**The band is not somewhere a page puts things.** It is already contested by
-the brand island, the account island, the app's nav, and — on the take screen
-— the player that docks into the middle. At 1024px that leaves about 680px
-between the two islands, and the docked player takes 448 of it. A page that
-also pinned its own title row across the same band runs the title under one
-pill and its counter under the other. The take screen did exactly that, and
-the answer was not to shuffle it sideways: the title row went back into the
-flow and scrolls away, and the one figure that had to survive — how much is
-answered — moved to the strip along the bottom, beside the squares it
-summarises.
+**The band is not somewhere a page puts things — BESIDE the islands.** It is
+already contested by the brand island, the account island, the app's nav,
+and — on the listening take screen — the player that docks into the middle.
+At 1024px that leaves about 680px between the two islands, and the docked
+player takes 448 of it. A page that also pinned its own title row across the
+same band runs the title under one pill and its counter under the other. The
+listening take screen did exactly that, and the answer was not to shuffle it
+sideways: the title row went back into the flow and scrolls away, and the one
+figure that had to survive — how much is answered — moved to the strip along
+the bottom, beside the squares it summarises.
+
+**A page may take the islands over entirely, which is a different thing.**
+`header-task.tsx`. The conflict above is about crowding: two owners of one
+band, neither aware of the other. Task mode has one owner. The brand, the
+nav and the space beside the account are handed to the page for as long as
+it is mounted, so there is nothing left to collide with — the reading take
+screen's way out, its highlight and text-size tools, and its clock ARE the
+three islands while a paper is open.
+
+It exists because reading cannot do what listening does. The docking
+pattern needs a scroll to trigger it and an element to travel, and reading
+has neither: the document never moves, the two panes hold their own
+scrollbars. So the header is in a different mode from the first paint rather
+than crossing into one as the page goes by.
+
+Two consequences worth knowing:
+
+- **Nodes cross this boundary, where `header-center` passes a boolean.** The
+  no-re-parenting rule is about a control in MOTION — a re-parented element
+  arrives, and arriving is a cut. Nothing in task mode moves, so there is no
+  cut to avoid. They cross through a portal rather than through context
+  state, because the clock ticks once a second and a node in state would
+  re-render the whole app shell sixty times a minute to move one digit.
+- **The islands settle immediately.** `useScrolled` can never fire on a page
+  whose document does not move, so `pill` reads `scrolled || task.active` —
+  otherwise the take screen's controls would float transparent on the
+  background for the whole paper instead of sitting in the three pills the
+  rest of the app has.
 
 **One trigger per island.** The theme used to be a second control beside the
 account menu, and between them the right island was wide enough that the

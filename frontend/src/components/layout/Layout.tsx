@@ -8,6 +8,10 @@ import {
   HeaderCentreProvider,
   useHeaderCentreState,
 } from "@/components/layout/header-center";
+import {
+  HeaderTaskProvider,
+  useHeaderTaskState,
+} from "@/components/layout/header-task";
 import { ThemeSwitcher } from "@/theme/ThemeSwitcher";
 import { useCurrentUser } from "@/auth/useCurrentUser";
 import { useScrolled } from "@/hooks/use-scrolled";
@@ -26,6 +30,9 @@ export function Layout() {
   // The middle of the header is held clear when a page has something of its
   // own arriving there (see components/layout/header-center.tsx).
   const centre = useHeaderCentreState();
+  // ...and all three islands go over to a page that fills the window and
+  // cannot scroll (see components/layout/header-task.tsx).
+  const task = useHeaderTaskState();
 
   // Each group is its own floating island — transparent at the top, frosted
   // glass once scrolled. A shared height keeps the three islands aligned.
@@ -34,15 +41,23 @@ export function Layout() {
   // on <header> below. It is on the pill rather than on each island because
   // the islands ARE the pills, and a fourth one added later would otherwise
   // be silently unclickable.
+  // Settled once the page has moved under them — or straight away for a page
+  // that has taken the islands over. `useScrolled` can never fire on the
+  // reading take screen: the document does not move, the two panes do. Its
+  // islands would have sat transparent for the whole paper, which is a row
+  // of loose controls floating on the background rather than the three pills
+  // the rest of the app has.
+  const settled = scrolled || task.active;
   const pill = cn(
     "pointer-events-auto flex h-12 items-center rounded-2xl border px-4 transition-[background-color,border-color,box-shadow,backdrop-filter] duration-300",
-    scrolled
+    settled
       ? "border-border bg-background/70 shadow-sm backdrop-blur-md supports-[backdrop-filter]:bg-background/60"
       : "border-transparent bg-transparent",
   );
 
   return (
     <HeaderCentreProvider value={centre.value}>
+    <HeaderTaskProvider value={task.value}>
     <div className="flex min-h-svh flex-col">
       <RouteProgress />
       {/*
@@ -66,14 +81,23 @@ export function Layout() {
             scrolled ? "max-w-7xl" : "max-w-[85rem]",
           )}
         >
-          {/* Brand — the "voocab" wordmark is the Home link. */}
+          {/* Brand — the "voocab" wordmark is the Home link.
+
+              Given up entirely in task mode. A paper that fills the window
+              has one thing worth putting where the reader's eye already
+              goes for "out of here", and it is the way out of the paper —
+              not the way to the home page. */}
           <div className={cn(pill, "gap-2 justify-self-start")}>
-            <NavLink to="/" className="group flex items-center gap-2">
-              <Logo animate="hover" className="size-6" />
-              <span className="text-base font-semibold text-foreground">
-                voocab
-              </span>
-            </NavLink>
+            {task.active ? (
+              <div ref={task.value.binds.left} className="flex items-center" />
+            ) : (
+              <NavLink to="/" className="group flex items-center gap-2">
+                <Logo animate="hover" className="size-6" />
+                <span className="text-base font-semibold text-foreground">
+                  voocab
+                </span>
+              </NavLink>
+            )}
           </div>
 
           {/* Primary nav, centered. Active item gets a soft glass chip.
@@ -83,6 +107,17 @@ export function Layout() {
               direction that reads as being pushed rather than as blinking
               out. Moved rather than unmounted: it has to come back down when
               the page lets go, and something that was removed can't. */}
+          {/* The middle island is the page's tools in task mode, and the
+              app's navigation otherwise. Not the nav hiding and something
+              else landing on top of it — that is `header-center`, and it is
+              for a control that TRAVELS. This one is simply a different
+              island for as long as the paper is open. */}
+          {task.active ? (
+            <div
+              ref={task.value.binds.centre}
+              className={cn(pill, "hidden gap-1 px-2 justify-self-center md:flex")}
+            />
+          ) : (
           <nav
             aria-hidden={centre.claimed}
             className={cn(
@@ -118,6 +153,7 @@ export function Layout() {
               </NavLink>
             ))}
           </nav>
+          )}
 
           {/* Actions.
 
@@ -128,6 +164,13 @@ export function Layout() {
               account menu; a visitor with no account menu still gets it, as
               an icon. */}
           <div className={cn(pill, "gap-2 justify-self-end")}>
+            {/* Whatever the page is counting, to the LEFT of the account —
+                the middle island is spoken for by the tools, and a clock
+                belongs next to the thing it is about to interrupt rather
+                than among the controls it is not part of. */}
+            {task.active && (
+              <div ref={task.value.binds.right} className="flex items-center" />
+            )}
             {/* Reflect session: signed-in users get an account menu, everyone
                 else a Sign in button. `isLoading` avoids a flash of the wrong
                 one on first paint. */}
@@ -164,6 +207,7 @@ export function Layout() {
         </Suspense>
       </main>
     </div>
+    </HeaderTaskProvider>
     </HeaderCentreProvider>
   );
 }
