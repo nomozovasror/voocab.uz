@@ -30,6 +30,22 @@ import { cn } from "@/lib/utils";
  *  thing on screen" is better than two. */
 export const LEFT_PANE = "data-left-pane";
 
+/** Why every pane here is `relative`.
+ *
+ *  An `sr-only` label is `position: absolute`, and an absolutely positioned
+ *  element is placed against its nearest POSITIONED ancestor -- so with none
+ *  in the chain, the screen-reader labels inside the question paper were
+ *  being laid out against the document. They escaped the pane's `overflow`
+ *  entirely and stretched the page to 2307px against a 741px viewport, which
+ *  meant a wheel turn anywhere but over a pane scrolled the whole two-pane
+ *  layout off the top of the screen and left the reader looking at nothing.
+ *
+ *  That is the one thing this component exists to prevent -- "the page itself
+ *  does not scroll: the panes do" -- and it was being undone by four
+ *  invisible one-pixel spans. `relative` costs nothing and makes each pane
+ *  the containing block for whatever is inside it.
+ */
+
 const MIN_PERCENT = 25;
 const MAX_PERCENT = 75;
 const STORE_KEY = "voocab-reading-split";
@@ -158,12 +174,15 @@ export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
             away — see take-session. */}
         <div
           {...{ [LEFT_PANE]: "" }}
-          className="min-h-0 flex-1 overflow-y-auto"
+          className="relative min-h-0 flex-1 overflow-y-auto"
           hidden={showing !== "left"}
         >
           {left}
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto" hidden={showing !== "right"}>
+        <div
+          className="relative min-h-0 flex-1 overflow-y-auto"
+          hidden={showing !== "right"}
+        >
           {right}
         </div>
       </div>
@@ -182,7 +201,7 @@ export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
     >
       <div
         {...{ [LEFT_PANE]: "" }}
-        className="min-w-0 overflow-y-auto pr-5"
+        className="relative min-w-0 overflow-y-auto pr-5"
         style={{ width: `${percent}%` }}
       >
         {left}
@@ -222,7 +241,7 @@ export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
         />
       </div>
 
-      <div className="min-w-0 flex-1 overflow-y-auto pl-5">{right}</div>
+      <div className="relative min-w-0 flex-1 overflow-y-auto pl-5">{right}</div>
     </div>
   );
   },

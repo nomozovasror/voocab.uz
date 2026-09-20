@@ -95,7 +95,7 @@ export function FormCompletionGroup({
             group.type === "short_answer"
           }
           renderNumber={(n) => startNumber + n - 1}
-          renderGap={(n, numbered) => {
+          renderGap={(n, numbered, tail) => {
             const question = byNumber.get(n);
             // A token with no question behind it can only come from a
             // template we didn't author; show the gap rather than pretend.
@@ -180,6 +180,11 @@ export function FormCompletionGroup({
                   aria-invalid={graded && !result.is_correct}
                 />
                 )}
+                {/* Against the field, and before the flag. The flag is a
+                    control and this is the sentence's own full stop; with
+                    the two the other way round the line read "28 [—] ⚑ ." */}
+                {/* -ml-1 cancels the flex gap: a full stop sits flush. */}
+                {tail && <span className="-ml-1">{tail}</span>}
                 {graded && !result.is_correct && (
                   <span className="text-xs text-muted-foreground">
                     (

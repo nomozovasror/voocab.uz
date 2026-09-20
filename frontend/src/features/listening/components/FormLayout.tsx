@@ -1,7 +1,51 @@
 import { Fragment, type ReactNode } from "react";
 import { ArrowDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { FormBlock } from "@/features/paper/form-syntax";
+import type { FormBlock, FormPart } from "@/features/paper/form-syntax";
+
+/** A gap, with whatever punctuation closes the sentence it ends. */
+type GluedPart =
+  | { kind: "text"; text: string }
+  | { kind: "gap"; number: number; tail: string };
+
+/** Punctuation that belongs to the gap before it rather than to the words
+ *  after it. Closing marks only: an opening bracket or quote belongs to what
+ *  follows. */
+const CLOSERS = /^[.,;:!?)\]}"'’”]+/;
+
+/**
+ * The line's pieces, with a gap and its trailing punctuation glued together.
+ *
+ * A gap renders as an inline-block control, and the browser will happily
+ * break the line between it and the text node after it. Where that text node
+ * is a single full stop -- which it is at the end of every sentence a gap
+ * finishes -- the reader gets the control at the end of one line and a
+ * lonely "." at the start of the next, which looks like the form is broken
+ * rather than like a sentence ending.
+ *
+ * Only the closing marks are taken. Gluing the whole following text would
+ * make a sentence that cannot wrap at all, which is a worse bug in a pane
+ * the reader can drag narrower than this one is wide.
+ */
+function glued(parts: FormPart[]): GluedPart[] {
+  const out: GluedPart[] = [];
+  for (const part of parts) {
+    if (part.kind === "gap") {
+      out.push({ ...part, tail: "" });
+      continue;
+    }
+    const last = out[out.length - 1];
+    const closing = last?.kind === "gap" ? CLOSERS.exec(part.text) : null;
+    if (closing && last?.kind === "gap") {
+      last.tail = closing[0];
+      const rest = part.text.slice(closing[0].length);
+      if (rest) out.push({ kind: "text", text: rest });
+      continue;
+    }
+    out.push(part);
+  }
+  return out;
+}
 
 interface FormLayoutProps {
   blocks: FormBlock[];
@@ -11,7 +55,10 @@ interface FormLayoutProps {
    *
    *  ``numbered`` is false where the layout has already printed the number in
    *  the margin, so the gap doesn't print it a second time. */
-  renderGap: (number: number, numbered: boolean) => ReactNode;
+  /** `tail` is the punctuation that closes the sentence this gap ends —
+   *  drawn inside the gap so it sits against the field rather than after the
+   *  flag beside it. See `glued`. */
+  renderGap: (number: number, numbered: boolean, tail?: string) => ReactNode;
   /** The number as the candidate reads it — the layout knows a gap's place in
    *  this group and nothing about where the group sits in the paper. Only
    *  needed with ``numberInMargin``. */
@@ -227,13 +274,15 @@ export function FormLayout({
                       </span>
                     )}
                     <div className="min-w-0 flex-1 leading-relaxed">
-                      {line.parts.map((part, k) =>
-                        part.kind === "text" ? (
-                          <Fragment key={k}>{part.text}</Fragment>
+                      {glued(line.parts).map((unit, k) =>
+                        unit.kind === "text" ? (
+                          <Fragment key={k}>{unit.text}</Fragment>
                         ) : (
-                          <Fragment key={k}>
-                            {renderGap(part.number, !inMargin)}
-                          </Fragment>
+                          // The gap and the punctuation that closes its
+                          // sentence, as one unwrappable thing -- see `glued`.
+                          <span key={k} className="whitespace-nowrap">
+                            {renderGap(unit.number, !inMargin, unit.tail)}
+                          </span>
                         ),
                       )}
                     </div>

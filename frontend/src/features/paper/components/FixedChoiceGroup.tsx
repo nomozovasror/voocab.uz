@@ -118,7 +118,18 @@ function Statement({
       >
         {number}
       </span>
-      <span className="min-w-0 flex-1 text-base text-foreground">
+      {/* A floor under the statement, not `min-w-0`.
+          The three words are `shrink-0` and take about two hundred pixels,
+          and with the statement free to shrink to nothing the row kept them
+          company by squeezing the QUESTION into a third of the pane — three
+          cramped lines beside one comfortable row of buttons, while the
+          multiple-choice group next to it gives its options the full width
+          for the same act of picking one of several.
+
+          With a floor, the row wraps instead: wide enough and the words sit
+          beside the statement as before; too narrow and they drop to their
+          own line and the sentence gets all of it. */}
+      <span className="min-w-[20rem] flex-1 text-base text-foreground">
         {question.prompt}
       </span>
       {onFlag && (

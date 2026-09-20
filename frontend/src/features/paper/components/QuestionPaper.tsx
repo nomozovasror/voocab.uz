@@ -65,6 +65,26 @@ interface QuestionPaperProps {
   partWord?: string;
 }
 
+/** Whether a part's own title adds nothing to the heading beside it.
+ *
+ *  The heading already prints "Passage 3". A seeded reading part is titled
+ *  "Reading Passage 3", which is that with the name of the paper in front of
+ *  it — on the reading page, under a Reading tab, beside a Reading heading.
+ *  So the header read "Passage 3 · Questions 27–40 · Reading Passage 3".
+ *
+ *  ENDS WITH rather than equals, which is the whole of the fix: the guard
+ *  was already here and only caught the exact string.
+ */
+function restates(
+  title: string | null | undefined,
+  partWord: string,
+  number: number,
+): boolean {
+  if (!title) return true;
+  const said = `${partWord} ${number}`.toLowerCase();
+  return title.trim().toLowerCase().endsWith(said);
+}
+
 export function QuestionPaper({
   material,
   answers,
@@ -110,9 +130,7 @@ export function QuestionPaper({
                 {spans[i].to > spans[i].from ? `\u2013${spans[i].to}` : ""}
               </span>
             )}
-            {part.title &&
-              part.title.toLowerCase() !==
-                `${partWord.toLowerCase()} ${number}` && (
+            {!restates(part.title, partWord, number) && (
               <span className="text-xs text-muted-foreground">{part.title}</span>
             )}
             {/* Where the author marked the part's boundaries, the learner can
