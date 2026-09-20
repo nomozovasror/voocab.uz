@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AArrowDown,
+  AArrowUp,
   ArrowLeftRight,
   BookOpen,
   CircleHelp,
@@ -170,6 +172,11 @@ export function PassageTools({
     setPicking(false);
   };
 
+  // Where the reader is on the three-step scale. Found rather than stored:
+  // the size itself is what is remembered, and a second piece of state
+  // saying which step it is would be a second thing that can disagree.
+  const step = Math.max(0, SIZES.indexOf(size as (typeof SIZES)[number]));
+
   const word = selected?.text.trim() ?? "";
   // A word or a short phrase. Longer than that is somebody selecting a
   // sentence to read it, and the control steps out of the way rather than
@@ -233,31 +240,38 @@ export function PassageTools({
       <Rule />
 
       {/* ── What sets it ───────────────────────────────────────────── */}
-      <div
-        role="group"
-        aria-label="Text size"
-        className="flex items-center gap-0.5 rounded-md bg-surface-sunken p-0.5"
-      >
-        {SIZES.map((step, i) => (
-          <button
-            key={step}
-            type="button"
-            aria-pressed={size === step}
-            onClick={() => onSize(step)}
-            title={`Text size ${i + 1} of ${SIZES.length}`}
-            className={cn(
-              "rounded px-1.5 leading-none transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-              // The control says what it does by BEING it: each button is
-              // set at the size it sets.
-              i === 0 ? "text-[10px]" : i === 1 ? "text-xs" : "text-sm",
-              size === step
-                ? "bg-primary/15 text-primary"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            A
-          </button>
-        ))}
+      {/* A stepper, not three specimens of the letter A.
+
+          The three-button version said what it did by BEING it — each
+          button set in the size it sets — which is a good idea that does
+          not survive contact with a 28px row. Three glyphs at three sizes
+          share a baseline and therefore sit at three different heights in
+          it; the chosen one wore a filled box, which around a single letter
+          reads as a selected character rather than a pressed control; and
+          the sunken tray holding them was the only container in a row of
+          otherwise bare buttons.
+
+          Two steps, and the passage itself is the readout. That is how
+          every reader does it, it is half the width, and the ends disable
+          themselves — which is the whole of what the third button was
+          telling anybody. */}
+      <div role="group" aria-label="Text size" className="flex items-center">
+        <Tool
+          icon={AArrowDown}
+          label="Smaller text"
+          hideLabel
+          disabled={step === 0}
+          title="Smaller text"
+          onClick={() => onSize(SIZES[Math.max(0, step - 1)])}
+        />
+        <Tool
+          icon={AArrowUp}
+          label="Larger text"
+          hideLabel
+          disabled={step === SIZES.length - 1}
+          title="Larger text"
+          onClick={() => onSize(SIZES[Math.min(SIZES.length - 1, step + 1)])}
+        />
       </div>
 
       <Rule />
