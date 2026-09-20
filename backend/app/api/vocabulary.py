@@ -64,6 +64,7 @@ def _entry(
         example=entry.example,
         cefr_level=entry.cefr_level,
         is_phrase=entry.is_phrase,
+        unusual=entry.unusual,
         paragraph_index=entry.paragraph_index,
         offset_start=entry.offset_start,
         offset_end=entry.offset_end,
@@ -131,6 +132,7 @@ async def material_vocabulary(
         material_id=material_id,
         total=len(entries),
         levels=levels,
+        unusual=sum(1 for entry in entries if entry.unusual),
         entries=[
             _entry(entry, material, saved=entry.lemma in saved)
             for entry in entries

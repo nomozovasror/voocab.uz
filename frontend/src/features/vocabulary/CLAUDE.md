@@ -48,6 +48,11 @@ senses, no synonyms.** Each lookup has about two seconds to pay for itself,
 and a panel that reads like a dictionary page is a panel somebody closes and
 goes back to guessing, having spent one of three for the privilege.
 
+**A word marked `unusual` says so in words, not with a badge.** It is a
+common word in a sense the reader would not expect — `bank` as the side of a
+river — and a badge would say "this one is special" and leave them to work
+out how. What helps is the sentence.
+
 **CEFR is printed; the frequency band never is.** `C1` is a scale a learner
 already has a feel for. "NGSL rank 2400" is a fact about a corpus. The band
 exists and stays on the server, where the arithmetic is.

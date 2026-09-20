@@ -46,6 +46,14 @@ import type {
  * reason: mid-paper the question is "what does this one mean", and here it
  * is "which of these should I learn first". Level answers that; position
  * does not.
+ *
+ * ## The trap count
+ *
+ * "Six of them are common words in an unexpected sense" is the one figure
+ * neither measure reports alone — the frequency says easy, the level says
+ * C1, and the disagreement is the finding. It goes in the header rather than
+ * on the rows, because what a candidate takes from it is a habit ("a word I
+ * know can still be the wrong word here") rather than six facts.
  */
 
 const LEVELS = ["B1", "B2", "C1"] as const;
@@ -133,6 +141,12 @@ export function ReviewVocabulary({
               .map((level) => `${level} ${data.levels[level]}`)
               .join(" · ")}
           </p>
+          {data.unusual > 0 && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {data.unusual} of them are everyday words in a sense you would not
+              expect — the kind a passage does not warn you about.
+            </p>
+          )}
         </div>
         {unsaved.length > 0 && (
           <Button
@@ -238,6 +252,14 @@ function Word({
           {entry.cefr_level && (
             <span className="rounded border border-border px-1 text-[0.65rem] font-medium text-muted-foreground">
               {entry.cefr_level}
+            </span>
+          )}
+          {/* Named rather than badged. A badge says "this one is special"
+              and leaves the reader to work out how; the sentence says what
+              is actually going on, which is the only part that helps. */}
+          {entry.unusual && (
+            <span className="text-[0.7rem] text-muted-foreground">
+              · not the usual sense
             </span>
           )}
         </p>

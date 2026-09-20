@@ -2557,6 +2557,30 @@ is NGSL rank one hundred, so no filter will ever offer them, and they are
 what stops a reader who knows each word separately. They are their own
 entries with their own spans, so a tap on `rise` can land inside the phrase.
 
+### The third question: common words meaning something else
+
+`bank` is NGSL rank 627 and `spring` is 1332, so the filter drops both —
+correctly by its own rule, and wrongly for a passage where one is the side of
+a river and the other is a coil. These are not rare words met for the first
+time; they are familiar words doing something unexpected, which is nastier,
+because nothing about them looks difficult and so nothing signals that there
+is anything to check.
+
+Frequency is exactly what makes them invisible, so only something that has
+read the passage can find them. One more question over the whole text, at
+most six answers, each located in the text like a phrase and refused where
+the word turns out to be genuinely rare — an off-list word is not a
+disagreement between the two measures, it is just a hard word the candidate
+filter would have caught.
+
+Asked of Cambridge 11 Test 1 Passage 1 it returns `subject` (to force to
+undergo) and `address` (to deal with): two of the six words the brief names,
+found in the first passage tried.
+
+`--senses-only` adds them to a passage already glossed, which is how the
+corpus got them without being re-read: one request a passage, about a tenth
+of a cent.
+
 ### Cost
 
 Measured on Cambridge 11 Test 1 Passage 1: 84 candidates, four requests,

@@ -35,6 +35,10 @@ class VocabularyEntryOut(BaseModel):
     example: str
     cefr_level: str
     is_phrase: bool
+    #: A common word used in a sense a reader would not expect — `bank` as
+    #: the side of a river. Marked because nothing about such a word looks
+    #: difficult, which is exactly what makes it the hardest kind to spot.
+    unusual: bool = False
     #: Where it stands, in the coordinates the reading highlights use.
     paragraph_index: int
     offset_start: int
@@ -84,6 +88,10 @@ class VocabularySummaryOut(BaseModel):
     #: B1 / B2 / C1 counts. A spread, not an average: "B2: 30" is something a
     #: learner can act on and "mean CEFR 2.3" is not.
     levels: dict[str, int]
+    #: How many of them are common words in an unexpected sense. The one
+    #: figure neither measure reports on its own, and the one an IELTS
+    #: candidate most needs warning about.
+    unusual: int = 0
 
 
 class VocabularyListOut(BaseModel):
@@ -92,6 +100,7 @@ class VocabularyListOut(BaseModel):
     material_id: uuid.UUID
     total: int
     levels: dict[str, int]
+    unusual: int = 0
     entries: list[VocabularyEntryOut]
 
 

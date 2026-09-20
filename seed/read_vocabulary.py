@@ -50,6 +50,27 @@ actually stops a reader who knows every word separately. Each is its own
 entry with its own span, so `rise` and `give rise to` stand side by side and
 a tap on `rise` can offer both.
 
+## The third question: common words meaning something else
+
+`bank` is NGSL rank 627 and `spring` is 1332, so the frequency filter drops
+both -- correctly, by its own rule, and wrongly for this passage, where one
+is the side of a river and the other is a coil. These are not rare words
+being met for the first time; they are FAMILIAR words doing something a
+reader does not expect, which is a different and nastier problem: nothing
+signals that there is anything to look up.
+
+No frequency list can find them, because frequency is exactly what makes
+them invisible. Only something that has read the passage can say that this
+`bank` is not the one the reader knows. So it is asked, in the same shape as
+the phrases: one question over the whole text, a small number of answers,
+each located in the text rather than placed by offset.
+
+Those entries are marked `unusual`, and that mark is the whole point. It is
+the one thing neither measure can report on its own -- the frequency says
+easy, the CEFR says C1, and the disagreement between them is the finding.
+"Six words in this passage are used in a sense you would not expect" is
+something a candidate can act on.
+
 ## What is NOT asked for
 
 **The example sentence.** It is cut out of the passage here, by
@@ -110,6 +131,12 @@ MEANING = 120
 #: five the model has started quoting the passage back rather than naming an
 #: expression in it.
 PHRASE_WORDS = (2, 5)
+
+#: How many common-word-unusual-sense entries a passage may have. Small on
+#: purpose: a model asked for twenty will find twenty, and the twentieth will
+#: be an ordinary word used ordinarily. The finding is only worth anything
+#: while it is rare.
+SENSES = 6
 
 #: How many words one request may cover. See the module docstring: eighty-five
 #: is more than the model will finish, and the reply arrives cut off mid-string
@@ -185,6 +212,38 @@ Reply with JSON only, and nothing else:
 
 {{"phrases": [{{"surface": "...", "lemma": "...", "meaning_en": "...",
 "meaning_uz": "...", "cefr": "..."}}]}}
+"""
+
+SENSES_PROMPT = PASSAGE + """
+Find the COMMON words in this passage that are used in a sense a band 5-6
+reader would not expect.
+
+Not rare words -- those are handled elsewhere. Everyday words carrying an
+unfamiliar meaning here: "bank" as the side of a river, "spring" as a coil
+or a source of water, "figure" as a person of importance, "address" as
+"deal with", "subject" as "make undergo", "sound" as a body of water.
+
+This is the hardest kind of word to spot, because nothing about it looks
+difficult. Only include a word where the passage's sense is genuinely not
+the first one a learner would think of. At most {most}, and fewer is
+better -- an ordinary word used ordinarily on this list makes the whole
+list useless.
+
+Each entry:
+- "surface": the word EXACTLY as written in the passage, findable by exact
+  search in the text above
+- "lemma": its dictionary form
+- "pos": one of {parts}
+- "meaning_en": the sense it has HERE. One short line, under {meaning}
+  characters
+- "meaning_uz": the same sense in natural Uzbek, latin script
+- "cefr": one of {levels}, for this sense -- which is harder than the
+  everyday sense of the same word
+
+Reply with JSON only, and nothing else:
+
+{{"senses": [{{"surface": "...", "lemma": "...", "pos": "...",
+"meaning_en": "...", "meaning_uz": "...", "cefr": "..."}}]}}
 """
 
 #: Where one sentence ends and the next begins: a full stop, question mark or
@@ -274,6 +333,14 @@ def ask_phrases(passage: dict, *, model: str, most: int) -> dict:
                            max_tokens=600 + 150 * most) or {}
 
 
+def ask_senses(passage: dict, *, model: str, most: int) -> dict:
+    prompt = SENSES_PROMPT.format(
+        passage=numbered(passage), parts=", ".join(PARTS),
+        levels=", ".join(LEVELS), meaning=MEANING, most=most)
+    return vision.ask_json(prompt, [], model=model,
+                           max_tokens=600 + 150 * most) or {}
+
+
 def glossed(reply: dict, candidates: list[dict], passage: dict) -> list[dict]:
     """The model's word entries, checked and joined back to their places.
 
@@ -336,6 +403,56 @@ def phrased(reply: dict, passage: dict) -> list[dict]:
     return entries
 
 
+def sensed(reply: dict, passage: dict, taken: set) -> list[dict]:
+    """The common words the model says are doing something unexpected here.
+
+    Located in the text like a phrase, and refused where the span is already
+    somebody else's: a word the frequency filter already offered is by
+    definition not a common word, and one inside a phrase's span is the
+    phrase's business.
+
+    Refused too where the word is genuinely rare -- if the frequency lists
+    have never heard of it, it is not a COMMON word used unusually, it is
+    just a hard word, and the candidate filter would have caught it. The
+    finding this list exists for is the disagreement between the two
+    measures, and an off-list word is not a disagreement.
+    """
+    entries = []
+    for said in reply.get("senses") or []:
+        surface = " ".join(str(said.get("surface") or "").split())
+        if not surface or " " in surface:
+            continue
+        found = locate(passage["paragraphs"], surface)
+        if found is None:
+            print(f"    sense not in the passage, dropped: {surface!r}",
+                  file=sys.stderr)
+            continue
+        index, start, end = found
+        if (index, start) in taken:
+            continue
+        band = vocabulary.band(vocabulary.lemma_for(surface))
+        if band in ("wider", "academic", "off-list"):
+            continue
+        entry = judged(said, band)
+        if entry is None:
+            continue
+        text = passage["paragraphs"][index].get("text") or ""
+        entries.append({
+            **entry,
+            "surface": text[start:end],
+            "index": index,
+            "start": start,
+            "end": end,
+            "example": sentence_at(text, start, end),
+            "is_phrase": False,
+            # The mark that makes this entry mean something. Frequency says
+            # easy, the model says C1, and neither figure on its own can
+            # report the disagreement.
+            "unusual": True,
+        })
+    return entries
+
+
 def band_of(surface: str) -> str:
     """A phrase's frequency band: the rarest of the words in it.
 
@@ -378,7 +495,8 @@ def judged(said: dict, frequency_band: str) -> dict | None:
     }
 
 
-def read(passage_id: str, *, model: str, most: int) -> dict | None:
+def read(passage_id: str, *, model: str, most: int,
+         senses: int = SENSES) -> dict | None:
     path = WORK / passage_id / "passage.json"
     if not path.exists():
         print(f"{passage_id:16} no passage.json", file=sys.stderr)
@@ -417,6 +535,10 @@ def read(passage_id: str, *, model: str, most: int) -> dict | None:
     if most:
         entries += phrased(ask_phrases(passage, model=model, most=most),
                            passage)
+    if senses:
+        taken = {(entry["index"], entry["start"]) for entry in entries}
+        entries += sensed(ask_senses(passage, model=model, most=senses),
+                          passage, taken)
     entries.sort(key=lambda entry: (entry["index"], entry["start"]))
     return {
         "passage": passage_id,
@@ -430,6 +552,35 @@ def read(passage_id: str, *, model: str, most: int) -> dict | None:
         "candidates": len(candidates),
         "entries": entries,
     }
+
+
+def already_sensed(path: pathlib.Path) -> bool:
+    return any(entry.get("unusual")
+               for entry in json.loads(path.read_text()).get("entries", []))
+
+
+def add_senses(passage_id: str, *, model: str, most: int) -> dict | None:
+    """One extra question over a passage already glossed, folded back in.
+
+    Here because the third question was written after the corpus had been
+    read, and re-glossing two hundred passages to add six words each would
+    cost the whole extraction again for a twentieth of its output. One
+    request a passage, about a tenth of a cent.
+    """
+    path = WORK / passage_id / "vocabulary.json"
+    passage_path = WORK / passage_id / "passage.json"
+    if not path.exists() or not passage_path.exists():
+        return None
+    result = json.loads(path.read_text())
+    passage = json.loads(passage_path.read_text())
+    entries = [entry for entry in result.get("entries", [])
+               if not entry.get("unusual")]
+    taken = {(entry["index"], entry["start"]) for entry in entries}
+    entries += sensed(ask_senses(passage, model=model, most=most),
+                      passage, taken)
+    entries.sort(key=lambda entry: (entry["index"], entry["start"]))
+    result["entries"] = entries
+    return result
 
 
 def passages(conn: sqlite3.Connection, where: str, args: tuple) -> list[str]:
@@ -467,6 +618,11 @@ def main() -> int:
                     help="gloss again a passage already done")
     ap.add_argument("--phrases", type=int, default=8,
                     help="at most this many multi-word expressions")
+    ap.add_argument("--senses", type=int, default=SENSES,
+                    help="at most this many common words used unusually")
+    ap.add_argument("--senses-only", action="store_true",
+                    help="add the unusual senses to passages already glossed, "
+                         "without asking about anything else again")
     ap.add_argument("--model", default=vision.DEFAULT_MODEL)
     args = ap.parse_args()
 
@@ -485,7 +641,13 @@ def main() -> int:
     done = skipped = failed = 0
     for passage_id in ids:
         out = WORK / passage_id / "vocabulary.json"
-        if out.exists() and not args.force:
+        if args.senses_only:
+            # The opposite test: this arm has nothing to do for a passage
+            # that was never glossed, and everything to do for one that was.
+            if not out.exists() or (already_sensed(out) and not args.force):
+                skipped += 1
+                continue
+        elif out.exists() and not args.force:
             skipped += 1
             continue
         # `vision.ask_json` gives up by raising SystemExit, which is right
@@ -494,7 +656,11 @@ def main() -> int:
         # to take the other hundred and sixty down with it. Caught here so
         # the run carries on and says at the end what it could not do.
         try:
-            result = read(passage_id, model=args.model, most=args.phrases)
+            result = (add_senses(passage_id, model=args.model,
+                                 most=args.senses)
+                      if args.senses_only
+                      else read(passage_id, model=args.model,
+                                most=args.phrases, senses=args.senses))
         except SystemExit as stopped:
             print(f"{passage_id:16} FAILED  {stopped}", file=sys.stderr)
             failed += 1

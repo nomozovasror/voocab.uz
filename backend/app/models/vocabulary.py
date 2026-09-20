@@ -129,6 +129,22 @@ class MaterialVocabulary(SQLModel, table=True):
     #: than a word. Its own entry with its own span, so a tap on ``rise``
     #: inside it can offer the phrase first and the word underneath.
     is_phrase: bool = Field(default=False)
+    #: A COMMON word used in a sense a reader would not expect: ``bank`` as
+    #: the side of a river, ``spring`` as a coil, ``address`` as "deal with".
+    #:
+    #: The one thing neither measure can report on its own. The frequency
+    #: band says easy -- ``bank`` is NGSL rank 627 -- and the CEFR says C1,
+    #: and the DISAGREEMENT between them is the finding. It is also the
+    #: nastiest kind of hard word, because nothing about it looks difficult
+    #: and so nothing tells the reader there is anything to check.
+    #:
+    #: Its own column rather than derived from ``frequency_band`` being
+    #: ``core`` with a high ``cefr_level``. Today that derivation would
+    #: work, because the candidate filter drops everything below NGSL rank
+    #: 2000 and these are the only common words that reach the table at all
+    #: -- which makes it a rule that holds by accident of one constant, and
+    #: would silently stop meaning anything the day that constant moved.
+    unusual: bool = Field(default=False)
 
     source: str = Field(default="extracted", max_length=16)
     #: Kept out of the way without being deleted. An author who judges an

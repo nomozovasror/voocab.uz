@@ -35,6 +35,14 @@ export interface VocabularyEntry {
   /** A multi-word expression rather than a word. `give rise to` is one
    *  entry over three words, which is what lets a tap on `rise` find it. */
   is_phrase: boolean;
+  /** A COMMON word in a sense a reader would not expect — `bank` as the side
+   *  of a river, `address` as "deal with".
+   *
+   *  The hardest kind to spot, because nothing about it looks difficult, so
+   *  nothing tells the reader there is anything to check. It is also the one
+   *  finding neither measure reports alone: the frequency says easy and the
+   *  level says C1, and the disagreement is the point. */
+  unusual: boolean;
   /** Where it stands, in the coordinates the reading highlights use. */
   paragraph_index: number;
   offset_start: number;
@@ -67,6 +75,8 @@ export interface VocabularyList {
   material_id: string;
   total: number;
   levels: Record<string, number>;
+  /** How many are common words in an unexpected sense. */
+  unusual: number;
   entries: VocabularyEntry[];
 }
 

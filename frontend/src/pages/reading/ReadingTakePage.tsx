@@ -175,6 +175,11 @@ export default function ReadingTakePage() {
   const [resumed, setResumed] = useState(() => restored.current !== null);
   const [confirming, setConfirming] = useState(false);
 
+  // Only a whole paper has one; a drill is one group cut out of a passage,
+  // and the passage's word count is not a fact about it.
+  const vocabulary =
+    material && "vocabulary" in material ? material.vocabulary : null;
+
   const parts = useMemo(
     () => (material ? paperParts(material) : []),
     [material],
@@ -852,6 +857,19 @@ export default function ReadingTakePage() {
                     : null,
                   sorted.length > 1 ? `${sorted.length} passages` : null,
                   `${total} ${total === 1 ? "question" : "questions"}`,
+                  // How much there is to learn here, beside how much there
+                  // is to answer. It is a reason to have chosen this
+                  // passage, and the only place a reader can see it before
+                  // the review — the words themselves stay shut until the
+                  // paper is finished.
+                  //
+                  // Absent on a drill, which carries no vocabulary field:
+                  // one question group cut out of a paper is not the paper,
+                  // and counting the whole passage's words beside six
+                  // questions would be a number about something else.
+                  vocabulary && vocabulary.total > 0
+                    ? `${vocabulary.total} words to learn`
+                    : null,
                 ]
                   .filter(Boolean)
                   .join(" · ")}

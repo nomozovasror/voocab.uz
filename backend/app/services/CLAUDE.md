@@ -234,7 +234,12 @@ corpus. It is what the arithmetic uses.
 
 **Do not average them into one "difficulty".** The two disagreeing is itself
 the signal worth having: a frequent word rated C1 is being used in an unusual
-sense, and unusual senses are where an IELTS passage lays its traps.
+sense, and unusual senses are where an IELTS passage lays its traps. That
+disagreement has its own column, `material_vocabulary.unusual`, rather than
+being derived at read time — `frequency_band == "core" AND cefr_level ==
+"C1"` identifies exactly those rows today, but only because the candidate
+filter drops everything under NGSL rank 2000, so it is a rule holding by
+accident of one constant.
 
 `material_difficulty.vocabulary_load` is the one column in that table that is
 not a function of the attempts — it is a function of the TEXT, written by the

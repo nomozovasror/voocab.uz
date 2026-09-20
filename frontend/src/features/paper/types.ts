@@ -462,6 +462,8 @@ export interface VocabularySummary {
   total: number;
   /** B1 / B2 / C1 counts. */
   levels: Record<string, number>;
+  /** How many are common words in an unexpected sense. */
+  unusual?: number;
 }
 
 export interface MaterialTake {

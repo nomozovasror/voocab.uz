@@ -83,6 +83,14 @@ ENTRIES = [
      "meaning_en": "a unit of area, ten thousand square metres",
      "meaning_uz": "gektar", "index": 1, "cefr_level": "B2",
      "frequency_band": "off-list", "is_phrase": False},
+    # A common word doing something unexpected: `scheme` here is the plan,
+    # which is the everyday sense -- but `claim` in paragraph A is a noun
+    # meaning an assertion rather than a demand, and that is the shape the
+    # third question looks for. NGSL-frequent, rated hard.
+    {"lemma": "claim", "surface": "claim", "pos": "n",
+     "meaning_en": "a statement that something is true, without proof",
+     "meaning_uz": "da'vo, tasdiq", "index": 0, "cefr_level": "C1",
+     "frequency_band": "core", "is_phrase": False, "unusual": True},
 ]
 
 
@@ -147,6 +155,7 @@ async def _make_passage(author_id: uuid.UUID) -> tuple[Material, Part]:
                     cefr_level=entry["cefr_level"],
                     frequency_band=entry["frequency_band"],
                     is_phrase=entry["is_phrase"],
+                    unusual=bool(entry.get("unusual")),
                 )
             )
         await session.commit()
@@ -321,7 +330,10 @@ async def test_the_whole_list_opens_only_once_the_paper_is_finished() -> None:
             assert opened.status_code == 200
             body = opened.json()
             assert body["total"] == len(ENTRIES)
-            assert body["levels"] == {"B1": 0, "B2": 3, "C1": 2}
+            assert body["levels"] == {"B1": 0, "B2": 3, "C1": 3}
+            # The one figure neither measure reports on its own: a word the
+            # frequency lists call easy and the model calls C1.
+            assert body["unusual"] == 1
 
             # The author never had to sit their own paper.
             theirs = await client.get(

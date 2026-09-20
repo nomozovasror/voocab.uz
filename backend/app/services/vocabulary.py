@@ -148,20 +148,26 @@ async def summary(session: AsyncSession, material_id: uuid.UUID) -> dict:
     catalogue query one day.
     """
     rows = await session.exec(
-        select(MaterialVocabulary.cefr_level, func.count())
+        select(
+            MaterialVocabulary.cefr_level,
+            MaterialVocabulary.unusual,
+            func.count(),
+        )
         .where(
             MaterialVocabulary.material_id == material_id,
             MaterialVocabulary.hidden.is_(False),
         )
-        .group_by(MaterialVocabulary.cefr_level)
+        .group_by(MaterialVocabulary.cefr_level, MaterialVocabulary.unusual)
     )
     levels = {level: 0 for level in LEVELS}
-    total = 0
-    for level, count in rows.all():
+    total = unusual = 0
+    for level, is_unusual, count in rows.all():
         total += count
+        if is_unusual:
+            unusual += count
         if level in levels:
-            levels[level] = count
-    return {"total": total, "levels": levels}
+            levels[level] += count
+    return {"total": total, "levels": levels, "unusual": unusual}
 
 
 def stale(material: Material, entry: MaterialVocabulary) -> bool:
@@ -588,6 +594,7 @@ async def replace_extracted(
                 cefr_level=row.get("cefr_level") or "",
                 frequency_band=row.get("frequency_band") or "",
                 is_phrase=bool(row.get("is_phrase")),
+                unusual=bool(row.get("unusual")),
                 source="extracted",
                 generated_at=now,
             )
