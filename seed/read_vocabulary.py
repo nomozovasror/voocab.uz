@@ -257,11 +257,13 @@ def ask_words(passage: dict, batch: list[dict], *, model: str) -> dict:
         candidates="\n".join(f"{entry['lemma']} | {entry['surface']}"
                              for entry in batch),
         parts=", ".join(PARTS), levels=", ".join(LEVELS), meaning=MEANING)
-    # Room for every entry in the batch and a little over. A reply cut off by
-    # the ceiling does not parse, and `ask_json` then spends two more requests
-    # failing in exactly the same place.
+    # Room for every entry in the batch and half as much again. A reply cut
+    # off by the ceiling does not parse, and `ask_json` then spends two more
+    # requests failing in exactly the same place -- which is how a batch of
+    # thirty still managed to die at 8 581 characters: the model pretty-
+    # printed six lines an entry where the estimate allowed for two.
     return vision.ask_json(prompt, [], model=model,
-                           max_tokens=400 + 90 * len(batch)) or {}
+                           max_tokens=600 + 150 * len(batch)) or {}
 
 
 def ask_phrases(passage: dict, *, model: str, most: int) -> dict:
@@ -269,7 +271,7 @@ def ask_phrases(passage: dict, *, model: str, most: int) -> dict:
         passage=numbered(passage), levels=", ".join(LEVELS), meaning=MEANING,
         low=PHRASE_WORDS[0], high=PHRASE_WORDS[1], most=most)
     return vision.ask_json(prompt, [], model=model,
-                           max_tokens=400 + 90 * most) or {}
+                           max_tokens=600 + 150 * most) or {}
 
 
 def glossed(reply: dict, candidates: list[dict], passage: dict) -> list[dict]:
@@ -486,7 +488,17 @@ def main() -> int:
         if out.exists() and not args.force:
             skipped += 1
             continue
-        result = read(passage_id, model=args.model, most=args.phrases)
+        # `vision.ask_json` gives up by raising SystemExit, which is right
+        # for a script asking one question and wrong for a loop over two
+        # hundred passages: one page the model will not answer cleanly used
+        # to take the other hundred and sixty down with it. Caught here so
+        # the run carries on and says at the end what it could not do.
+        try:
+            result = read(passage_id, model=args.model, most=args.phrases)
+        except SystemExit as stopped:
+            print(f"{passage_id:16} FAILED  {stopped}", file=sys.stderr)
+            failed += 1
+            continue
         if result is None or not result["entries"]:
             failed += 1
             continue

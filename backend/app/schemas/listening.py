@@ -33,6 +33,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.question_group import FIXED_CHOICE_OPTIONS
+from app.schemas.vocabulary import VocabularySummaryOut
 from app.services.mistakes import MistakeKind
 
 #: The tasks answered by filling in what's missing. One payload shape, nine
@@ -972,6 +973,16 @@ class MaterialTakeOut(BaseModel):
     #: to find out how it went — which would write a second attempt, and
     #: every ability figure on the platform counts first attempts.
     last_attempt: LastAttemptOut | None = None
+    #: How much vocabulary this paper is worth, and how it is spread across
+    #: B1/B2/C1. Absent for a material nothing has glossed — every listening
+    #: paper today, and any reading one the extraction has not reached.
+    #:
+    #: A COUNT and a spread, never the words. "64 words worth learning here"
+    #: is a reason to choose this passage over the next one; the words
+    #: themselves are what the review opens with, and handing them over
+    #: before the paper is sat would be handing over the dictionary the three
+    #: lookups exist to ration.
+    vocabulary: VocabularySummaryOut | None = None
 
 
 class CatalogueAuthorOut(BaseModel):
@@ -1366,6 +1377,14 @@ class AttemptSubmit(BaseModel):
     #: two facts, and anything that MEASURES a learner reads this one. See
     #: ``Attempt.active_ms``.
     active_ms: int | None = Field(default=None, ge=0)
+    #: The words a reading candidate spent their three lookups on, as lemmas,
+    #: in the order they opened them.
+    #:
+    #: Capped low because the budget is three. The cap is not the rule -- the
+    #: rule lives in the browser, where a limit whose purpose is to make
+    #: somebody CHOOSE has to be visible to work -- it is what stops a broken
+    #: or hostile client from posting a dictionary into a JSONB column.
+    looked_up: list[str] = Field(default_factory=list, max_length=20)
 
 
 class TranscriptLineOut(BaseModel):
@@ -1573,6 +1592,14 @@ class AttemptResultOut(BaseModel):
     submitted_at: datetime | None = None
     #: How long the paper took, where the page reported it.
     time_spent_ms: int | None = None
+    #: The words this candidate looked up while sitting it.
+    #:
+    #: A LIST and not a count, because the review page turns it into
+    #: vocabulary worth studying. "You looked up three words" is a score for
+    #: something nobody was being scored on; the three words, with what they
+    #: mean in the passage that defeated them, is homework. Empty for a
+    #: listening attempt, and for anybody who looked nothing up.
+    looked_up: list[str] = Field(default_factory=list)
 
     # --- what turns the score into a sentence -------------------------------
     #: Which try this is, counting only submitted attempts at this material by

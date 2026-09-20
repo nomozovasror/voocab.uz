@@ -40,6 +40,7 @@ from app.core.database import async_session_factory
 from app.models.material import Material
 from app.models.part import Part
 from app.models.user import User
+from app.services import vocabulary as vocabulary_service
 
 from scripts.import_section import book_code, import_questions
 
@@ -142,6 +143,32 @@ def read_passage(passage_id: str) -> tuple[dict, dict, str, str]:
     return dict(row), passage, reference, title
 
 
+async def import_vocabulary(session, material_id: uuid.UUID,
+                            part_id: uuid.UUID, passage_id: str) -> int:
+    """The passage's glossed words, where `read_vocabulary.py` has left any.
+
+    Optional, and silent when there is nothing: `vocab` is an optional stage
+    in `run_reading.py` for the reason written there -- a passage with no
+    glosses is still a passage worth sitting -- so an import that insisted on
+    finding the file would turn a loss of help into a loss of the paper.
+
+    Re-run on every import, like the passage text and the questions. A
+    passage re-read is a passage whose offsets have moved, and glosses left
+    over from the previous reading would point at the wrong words. What
+    survives is anything an author has touched, which the service decides
+    from the `source` column rather than this script.
+    """
+    path = SEED / "work" / passage_id / "vocabulary.json"
+    if not path.exists():
+        return 0
+    entries = json.loads(path.read_text()).get("entries") or []
+    written, kept = await vocabulary_service.replace_extracted(
+        session, material_id=material_id, part_id=part_id, rows=entries)
+    if kept:
+        logger.info("kept %d author-edited entries", kept)
+    return written
+
+
 async def import_passage(passage_id: str, owner_id: uuid.UUID) -> None:
     row, passage, reference, title = read_passage(passage_id)
     first_number = FIRST_NUMBER[row["passage_no"]]
@@ -207,6 +234,9 @@ async def import_passage(passage_id: str, owner_id: uuid.UUID) -> None:
         part.first_number = first_number
         session.add(part)
 
+        glossed = await import_vocabulary(session, material.id, part.id,
+                                          passage_id)
+
         written = await import_questions(session, part.id, passage_id)
         if written:
             # Every authoring write bumps the counter the editor checks
@@ -226,7 +256,7 @@ async def import_passage(passage_id: str, owner_id: uuid.UUID) -> None:
     words = sum(len(one["text"].split()) for one in passage["paragraphs"])
     print(f"{passage_id} -> material {material_id} "
           f"({len(passage['paragraphs'])} paragraphs, {words} words, "
-          f"{written} questions, {seen})")
+          f"{written} questions, {glossed} glossed, {seen})")
 
 
 def main() -> int:

@@ -21,6 +21,11 @@ from app.models.question_group import QuestionGroup
 from app.models.segment import Segment
 from app.models.segment_attempt import SegmentAttempt
 from app.models.user import User
+from app.models.vocabulary import (
+    MaterialVocabulary,
+    SavedWord,
+    SavedWordContext,
+)
 
 __all__ = [
     "User",
@@ -40,4 +45,7 @@ __all__ = [
     "QuestionGroup",
     "Question",
     "QuestionAttempt",
+    "MaterialVocabulary",
+    "SavedWord",
+    "SavedWordContext",
 ]

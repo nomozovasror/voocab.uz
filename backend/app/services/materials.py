@@ -146,6 +146,24 @@ async def get_material(
     return await session.get(Material, material_id)
 
 
+async def titles_for(
+    session: AsyncSession, material_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    """The titles of these materials, by id.
+
+    For callers holding a list of ids that each need a name printed beside
+    them -- a learner's saved words, say, gathered from forty passages. One
+    query rather than a relationship walked per row, which is the difference
+    between one round trip and a hundred and one.
+    """
+    if not material_ids:
+        return {}
+    rows = await session.exec(
+        select(Material.id, Material.title).where(Material.id.in_(material_ids))
+    )
+    return {material_id: title for material_id, title in rows.all()}
+
+
 async def get_segments(
     session: AsyncSession, material_id: uuid.UUID
 ) -> list[Segment]:

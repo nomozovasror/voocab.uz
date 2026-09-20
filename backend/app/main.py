@@ -13,6 +13,7 @@ from app.models.material import PAPER_TYPES
 from app.api.materials import MATERIAL_VERSION_HEADER, MATERIAL_VISIBILITY_HEADER
 from app.api.materials import router as materials_router
 from app.api.studio import router as studio_router
+from app.api.vocabulary import router as vocabulary_router
 from app.core.config import settings
 
 app = FastAPI(title="voocab.uz API")
@@ -45,6 +46,7 @@ for _skill in PAPER_TYPES:
     app.include_router(paper_router(_skill))
 app.include_router(collections_router)
 app.include_router(studio_router)
+app.include_router(vocabulary_router)
 
 # In dev (no R2), serve uploaded media off local disk. In prod the R2 public
 # base URL fronts the bucket, so no local mount is needed.

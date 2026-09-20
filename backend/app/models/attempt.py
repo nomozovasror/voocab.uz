@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import Column, DateTime
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
 
@@ -94,6 +95,29 @@ class Attempt(SQLModel, table=True):
     # NULL means the attempt predates this measurement, 0 means the learner
     # genuinely never pressed play. A statistic built on "0 for everything
     # before August" would be a lie told by a DEFAULT clause.
+
+    #: --- What the reader looked up (reading) -------------------------------
+
+    #: The lemmas this candidate spent their three dictionary lookups on,
+    #: in the order they opened them.
+    #:
+    #: A column of its own rather than a table, on the same reading as
+    #: ``parts.passage``: this list is written once at submit and read by
+    #: exactly one screen -- the review of this attempt, where the words they
+    #: struggled with are the vocabulary most worth studying. Nothing joins
+    #: it, nothing aggregates it, nothing indexes it. A table would buy those
+    #: three and cost a migration and a join on every review.
+    #:
+    #: Lemmas rather than the words as typed, because the budget counts
+    #: unique lemmas: somebody who opened ``phenomena`` and then ``phenomenon``
+    #: looked up one word, and the review should say one word.
+    #:
+    #: Null means the attempt predates the measurement. An empty list means
+    #: they looked nothing up, which on a reading paper is a real and
+    #: different fact.
+    looked_up: list | None = Field(
+        default=None, sa_column=Column(JSONB, nullable=True)
+    )
 
     #: Total audio actually played, overlaps counted once — listening to the
     #: same minute three times is one minute of recording, three times heard.

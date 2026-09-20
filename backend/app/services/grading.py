@@ -518,6 +518,17 @@ async def _settle(
         attempt.listened_ms = merged_ms(data.listened)
     if data.seeks_back is not None:
         attempt.seeks_back = data.seeks_back
+    if data.looked_up:
+        # Lower-cased and deduplicated here rather than trusted as sent: the
+        # budget counts unique lemmas, so a client that reported
+        # ``["Phenomena", "phenomenon"]`` is reporting one word twice and the
+        # review must not show it twice.
+        seen: list[str] = []
+        for lemma in data.looked_up:
+            tidy = " ".join(lemma.split()).lower()[:80]
+            if tidy and tidy not in seen:
+                seen.append(tidy)
+        attempt.looked_up = seen
     session.add(attempt)
     await session.commit()
     await session.refresh(attempt)
@@ -633,6 +644,7 @@ async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
         "total_questions": attempt.total_questions or 0,
         "submitted_at": attempt.submitted_at,
         "time_spent_ms": attempt.time_spent_ms,
+        "looked_up": list(attempt.looked_up or []),
         **(await _standing(session, attempt, skill=material.type if material else "")),
         "results": results,
     }

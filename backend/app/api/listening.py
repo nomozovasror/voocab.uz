@@ -50,9 +50,11 @@ from app.schemas.listening import (
     QuestionGroupOut,
     QuestionOut,
 )
+from app.schemas.vocabulary import VocabularySummaryOut
 from app.services import difficulty as difficulty_service
 from app.services import grading as grading_service
 from app.services import listening as listening_service
+from app.services import vocabulary as vocabulary_service
 
 router = APIRouter(prefix="/api", tags=["listening"])
 
@@ -299,6 +301,9 @@ async def take_material(
     done = await grading_service.last_submitted_attempt(
         session, user.id, material.id
     )
+    # A count and a spread, never the words. What it buys is the one thing
+    # somebody choosing between two passages cannot see for themselves.
+    counted = await vocabulary_service.summary(session, material.id)
     return MaterialTakeOut(
         id=material.id,
         title=material.title,
@@ -306,6 +311,9 @@ async def take_material(
         audio_url=audio["audio_url"],
         duration_ms=audio["duration_ms"],
         parts=parts,
+        vocabulary=(
+            VocabularySummaryOut(**counted) if counted["total"] else None
+        ),
         last_attempt=(
             LastAttemptOut(
                 attempt_id=done.id,

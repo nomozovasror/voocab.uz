@@ -1,0 +1,597 @@
+"""A passage's words: finding one, listing them, and saving them to study.
+
+The expensive half of this feature is not here. `seed/read_vocabulary.py`
+glosses every passage once, at seed time, and what this module does is answer
+questions about rows that already exist.
+
+## Finding the word somebody tapped, without a lemmatiser
+
+A reader double-clicks ``undertaken`` and the row says ``undertake``. The
+obvious fix is a lemmatiser on the server, which means the NGSL form map, a
+second copy of `seed/vocabulary.py`'s rules, and two implementations of
+lemmatisation that have to agree forever.
+
+None of that is needed, because the search space is not English. It is the
+eighty-odd lemmas of ONE material, and against a set that small the question
+can be asked four cheap ways in order:
+
+1. **By where they tapped.** The client sends the paragraph and the two
+   offsets of the selection, and an entry whose span CONTAINS that point is
+   the answer -- exactly, with no string matching at all. This is also what
+   makes phrases work: ``give rise to`` is stored as one entry over three
+   words, so tapping ``rise`` inside it lands in the phrase's span.
+2. **By the surface form**, which is the word as it stands in the passage
+   and therefore what the reader most often taps.
+3. **By the lemma**, for the reader who taps the dictionary form.
+4. **By reducing the tapped word until it matches one of this material's
+   lemmas.** A handful of suffix rules, tried against eighty candidates. A
+   rule that produces a string none of the eighty matches has simply failed,
+   which is the same acceptance test the seed side uses and is what makes
+   rules this crude safe.
+
+## What the take screen may ask for, and what it may not
+
+``look_up`` answers about ONE word. ``entries`` -- the whole list -- is
+refused to anybody who has not finished the paper (see
+:func:`may_see_all`). The budget of three lookups is enforced in the
+browser, which is the right place for a rule whose purpose is to make a
+learner choose; but a list endpoint that handed out all eighty-six glosses
+would make the browser's rule a formality, and the network tab is not a
+difficult place to look.
+
+The review page, which is where the list belongs, is reached by submitting.
+
+## Saving is deduplicated; glossing is not
+
+A material's entries are per material, because ``spring`` means different
+things in different passages. A learner's saved words are per lemma, because
+somebody studying ``spring`` is studying one word. The join between the two
+is :class:`app.models.vocabulary.SavedWordContext`, which copies the gloss
+rather than pointing at it: a material can be re-glossed, and a saved word
+changing its meaning underneath somebody is worse than one that has aged.
+"""
+
+import logging
+import re
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import select
+
+from app.core.database import AsyncSession
+from app.models.attempt import Attempt, AttemptStatus
+from app.models.material import Material
+from app.models.part import Part
+from app.models.vocabulary import MaterialVocabulary, SavedWord, SavedWordContext
+from app.services import dictionary as dictionary_service
+
+logger = logging.getLogger("app.services.vocabulary")
+
+#: The levels a learner sees, in the order they are shown. An ordering the
+#: database cannot give -- ``cefr_level`` is a string column and ``B1`` sorts
+#: after ``C1`` alphabetically -- so it is named once here and every reader
+#: uses it.
+LEVELS: tuple[str, ...] = ("B1", "B2", "C1")
+
+#: Suffix reductions for step 4 of the search, tried in order against this
+#: material's own lemmas. Short on purpose: the seed side has the frequency
+#: lists to check an answer against and can afford fourteen rules; here the
+#: check is "does it match one of eighty lemmas", which is a narrower test,
+#: so the rules that survive it are the ones that are nearly always right.
+REDUCTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("ies", ("y",)),
+    ("ied", ("y",)),
+    ("ing", ("", "e")),
+    ("ed", ("", "e")),
+    ("es", ("", "e")),
+    ("er", ("", "e")),
+    ("ly", ("",)),
+    ("s", ("",)),
+)
+
+#: Everything around a word that is not the word. A reader double-clicking
+#: ``languages,`` has looked up ``languages``, and one who drags across
+#: ``"vogue"`` has looked up ``vogue``.
+EDGES = re.compile(r"^[^\w]+|[^\w]+$", re.UNICODE)
+
+
+def normalise(word: str) -> str:
+    """One tapped word, as a thing to search by."""
+    return EDGES.sub("", " ".join((word or "").split())).lower()
+
+
+def reductions(word: str) -> list[str]:
+    """Every shorter form worth trying for this word, longest first."""
+    found = []
+    for ending, replacements in REDUCTIONS:
+        if word.endswith(ending) and len(word) - len(ending) >= 2:
+            stem = word[: -len(ending)]
+            found += [stem + replacement for replacement in replacements]
+    # A doubled final consonant before -ed or -ing: `stopped`, `running`.
+    doubled = re.sub(r"([bcdfghjklmnpqrstvwxz])\1(ed|ing)$", r"\1\2", word)
+    if doubled != word:
+        found += [doubled[:-2], doubled[:-3], doubled[:-2] + "e"]
+    return found
+
+
+async def entries(
+    session: AsyncSession, material_id: uuid.UUID, *, hidden: bool = False
+) -> list[MaterialVocabulary]:
+    """Every word of one material, in passage order.
+
+    Passage order rather than alphabetical, because the review shows them
+    beside the passage they came from and a walk through the text is how
+    somebody re-reads it. Alphabetical is a dictionary, and this is not one.
+    """
+    query = select(MaterialVocabulary).where(
+        MaterialVocabulary.material_id == material_id
+    )
+    if not hidden:
+        query = query.where(MaterialVocabulary.hidden.is_(False))
+    rows = await session.exec(
+        query.order_by(
+            MaterialVocabulary.paragraph_index,
+            MaterialVocabulary.offset_start,
+        )
+    )
+    return list(rows.all())
+
+
+async def summary(session: AsyncSession, material_id: uuid.UUID) -> dict:
+    """How much there is to learn here, for the card that has to say so.
+
+    Counted in SQL rather than by loading the rows, because the one caller
+    that wants it is a material page that wants a number and not eighty-six
+    glosses -- and because the same shape will be wanted per row in a
+    catalogue query one day.
+    """
+    rows = await session.exec(
+        select(MaterialVocabulary.cefr_level, func.count())
+        .where(
+            MaterialVocabulary.material_id == material_id,
+            MaterialVocabulary.hidden.is_(False),
+        )
+        .group_by(MaterialVocabulary.cefr_level)
+    )
+    levels = {level: 0 for level in LEVELS}
+    total = 0
+    for level, count in rows.all():
+        total += count
+        if level in levels:
+            levels[level] = count
+    return {"total": total, "levels": levels}
+
+
+def stale(material: Material, entry: MaterialVocabulary) -> bool:
+    """Whether the passage has been edited since this entry was made.
+
+    The offsets are the reason to care: text that has moved leaves a gloss
+    pointing at the wrong words. Derived rather than flagged, so no authoring
+    path has to remember to set anything -- the one that forgot would be the
+    one nobody noticed.
+    """
+    return material.updated_at > entry.generated_at
+
+
+async def may_see_all(
+    session: AsyncSession, material: Material, user_id: uuid.UUID
+) -> bool:
+    """Whether this caller may have the whole list.
+
+    The author may, because it is theirs. Anybody who has SUBMITTED the paper
+    may, because the list is what the review is for and they can no longer
+    use it to answer anything. Nobody else, which is what keeps the three
+    lookups meaningful while the paper is open.
+    """
+    if material.author_id == user_id:
+        return True
+    sat = await session.exec(
+        select(Attempt.id)
+        .where(
+            Attempt.user_id == user_id,
+            Attempt.material_id == material.id,
+            Attempt.status == AttemptStatus.SUBMITTED,
+        )
+        .limit(1)
+    )
+    return sat.first() is not None
+
+
+# --- Looking one word up ----------------------------------------------------
+
+
+async def look_up(
+    session: AsyncSession,
+    material: Material,
+    *,
+    word: str,
+    paragraph_index: int | None = None,
+    offset: int | None = None,
+) -> dict:
+    """What to show for the word a reader just tapped.
+
+    Returns ``{"word": entry | None, "phrase": entry | None}``. Both can be
+    filled, and when they are the phrase is shown FIRST: somebody who tapped
+    ``rise`` inside ``give rise to`` is reading the phrase, whatever their
+    finger landed on, and the word's own meaning underneath is there for the
+    case where the phrase is not what confused them.
+    """
+    found = await entries(session, material.id)
+    asked = normalise(word)
+
+    phrase = None
+    if paragraph_index is not None and offset is not None:
+        phrase = _covering(found, paragraph_index, offset, phrases=True)
+        exact = _covering(found, paragraph_index, offset, phrases=False)
+        if exact is not None:
+            return {"word": exact, "phrase": phrase}
+
+    matched = _by_string(found, asked)
+    if matched is not None:
+        return {"word": matched, "phrase": phrase}
+
+    # Nothing extracted for this one. It is a word the frequency filter did
+    # not think was hard, and this reader does -- which is worth an answer
+    # and worth keeping, so the next reader who taps it gets it for free.
+    made = await _generate(session, material, asked,
+                           paragraph_index=paragraph_index)
+    return {"word": made, "phrase": phrase}
+
+
+def _covering(
+    found: list[MaterialVocabulary], index: int, offset: int, *, phrases: bool
+) -> MaterialVocabulary | None:
+    """The entry whose span contains this point, if one does.
+
+    Exact, and the only step of the search that needs no string comparison
+    at all. It is also the whole of how a phrase is recognised: the brief's
+    rule -- does the tapped offset fall inside some ``is_phrase`` entry's
+    span -- is this function with ``phrases=True``.
+    """
+    for entry in found:
+        if entry.is_phrase != phrases or entry.paragraph_index != index:
+            continue
+        if entry.offset_start <= offset < entry.offset_end:
+            return entry
+    return None
+
+
+def _by_string(
+    found: list[MaterialVocabulary], asked: str
+) -> MaterialVocabulary | None:
+    """The entry for this word, by surface, by lemma, then by reduction."""
+    if not asked:
+        return None
+    by_surface = {entry.surface.lower(): entry for entry in found}
+    by_lemma = {entry.lemma.lower(): entry for entry in found}
+    if asked in by_surface:
+        return by_surface[asked]
+    if asked in by_lemma:
+        return by_lemma[asked]
+    for shorter in reductions(asked):
+        if shorter in by_lemma:
+            return by_lemma[shorter]
+        if shorter in by_surface:
+            return by_surface[shorter]
+    return None
+
+
+async def _generate(
+    session: AsyncSession,
+    material: Material,
+    word: str,
+    *,
+    paragraph_index: int | None,
+) -> MaterialVocabulary | None:
+    """Gloss a word the extraction missed, and keep what comes back.
+
+    Kept, and marked ``extracted`` like the rest, because that is what it is:
+    the same process, run later, for a word the frequency filter did not
+    flag. The list therefore grows towards what readers actually find hard,
+    which is a better list than any frequency table can describe -- and it
+    grows at a few words a passage, so the cost stays where it was put.
+
+    Everything here is guarded. A word with no meaning is an ordinary outcome
+    and a provider that is down is not the reader's problem: both return
+    nothing, and the panel says the word is not in this passage's list.
+    """
+    part, index, start, end, context = await _place(session, material, word,
+                                                    paragraph_index)
+    if part is None or not context:
+        return None
+    try:
+        gloss = await dictionary_service.provider().look_up(word, context)
+    except Exception:  # noqa: BLE001 - one word is not worth a 500
+        logger.exception("dictionary lookup of %r failed", word)
+        return None
+    if gloss is None:
+        return None
+
+    entry = MaterialVocabulary(
+        material_id=material.id,
+        part_id=part.id,
+        lemma=gloss.lemma,
+        surface=word,
+        pos=gloss.pos,
+        meaning_en=gloss.meaning_en,
+        meaning_uz=gloss.meaning_uz,
+        example=_sentence_at(context, start, end),
+        paragraph_index=index,
+        offset_start=start,
+        offset_end=end,
+        cefr_level=gloss.cefr_level,
+        # No frequency list on this side of the fence, and guessing one would
+        # put a made-up figure into the column the difficulty arithmetic
+        # reads. Empty says "not measured", which is true.
+        frequency_band="",
+        is_phrase=" " in word,
+        source="extracted",
+    )
+    session.add(entry)
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Two readers tapped the same unusual word at once, or the model
+        # returned a lemma this material already has under another surface.
+        # Either way the row that is already there is the answer.
+        await session.rollback()
+        return _by_string(await entries(session, material.id), gloss.lemma)
+    await session.refresh(entry)
+    return entry
+
+
+async def _place(
+    session: AsyncSession,
+    material: Material,
+    word: str,
+    paragraph_index: int | None,
+) -> tuple[Part | None, int, int, int, str]:
+    """Where this word stands in the material, and the paragraph around it.
+
+    The paragraph is what the model is given -- a whole passage would cost
+    four times the tokens to answer a question about one sentence -- and the
+    offsets are found here rather than taken from the client, because the
+    client's are a claim and the passage is the fact.
+    """
+    parts = await session.exec(
+        select(Part).where(Part.material_id == material.id).order_by(Part.order_index)
+    )
+    for part in parts.all():
+        paragraphs = ((part.passage or {}).get("paragraphs")) or []
+        order = ([paragraph_index] if paragraph_index is not None else []) + [
+            index for index in range(len(paragraphs)) if index != paragraph_index
+        ]
+        for index in order:
+            if not 0 <= index < len(paragraphs):
+                continue
+            text = paragraphs[index].get("text") or ""
+            at = text.lower().find(word)
+            if at >= 0:
+                return part, index, at, at + len(word), text
+    return None, 0, 0, 0, ""
+
+
+#: Where one sentence ends and the next begins. The same rough rule the seed
+#: stage uses, and wrong about `Dr.` in the same way: a fragment for an
+#: example is occasionally ugly, a whole paragraph is always useless.
+SENTENCE = re.compile(r"(?<=[.!?][\"'’”)\]])\s+|(?<=[.!?])\s+")
+
+
+def _sentence_at(text: str, start: int, end: int) -> str:
+    edges = [0] + [split.end() for split in SENTENCE.finditer(text)] + [len(text)]
+    for left, right in zip(edges, edges[1:]):
+        if left <= start < right:
+            return text[left : max(right, end)].strip()
+    return text[start:end]
+
+
+# --- The learner's own list -------------------------------------------------
+
+
+async def save(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    material_id: uuid.UUID,
+    lemmas: list[str],
+) -> int:
+    """Put these words on the learner's list. Returns how many are new to it.
+
+    Idempotent in both directions: saving a word twice is one word, and
+    saving it from a second material is one word with two contexts -- which
+    is the whole point of the split. Somebody who met ``spring`` in a passage
+    about seasons and again in one about coils has one card with two meanings
+    on it, and that card teaches more than either would alone.
+    """
+    wanted = {normalise(lemma) for lemma in lemmas} - {""}
+    if not wanted:
+        return 0
+
+    rows = await session.exec(
+        select(MaterialVocabulary).where(
+            MaterialVocabulary.material_id == material_id,
+            MaterialVocabulary.lemma.in_(wanted),
+        )
+    )
+    found = list(rows.all())
+    if not found:
+        return 0
+
+    existing = await session.exec(
+        select(SavedWord).where(
+            SavedWord.user_id == user_id,
+            SavedWord.lemma.in_([entry.lemma for entry in found]),
+        )
+    )
+    words = {word.lemma: word for word in existing.all()}
+
+    added = 0
+    for entry in found:
+        word = words.get(entry.lemma)
+        if word is None:
+            word = SavedWord(user_id=user_id, lemma=entry.lemma)
+            session.add(word)
+            await session.flush()
+            words[entry.lemma] = word
+            added += 1
+        already = await session.exec(
+            select(SavedWordContext.id).where(
+                SavedWordContext.saved_word_id == word.id,
+                SavedWordContext.material_id == material_id,
+            )
+        )
+        if already.first() is not None:
+            continue
+        session.add(
+            SavedWordContext(
+                saved_word_id=word.id,
+                material_id=material_id,
+                vocabulary_id=entry.id,
+                surface=entry.surface,
+                pos=entry.pos,
+                meaning_en=entry.meaning_en,
+                meaning_uz=entry.meaning_uz,
+                example=entry.example,
+                cefr_level=entry.cefr_level,
+                is_phrase=entry.is_phrase,
+            )
+        )
+    await session.commit()
+    return added
+
+
+async def saved_lemmas(
+    session: AsyncSession, user_id: uuid.UUID, lemmas: list[str]
+) -> set[str]:
+    """Which of these the learner already has, so a button can say `Saved`.
+
+    Asked for the words on one page rather than for the whole list, because
+    the list grows without limit and the page is eighty-six rows.
+    """
+    if not lemmas:
+        return set()
+    rows = await session.exec(
+        select(SavedWord.lemma).where(
+            SavedWord.user_id == user_id, SavedWord.lemma.in_(lemmas)
+        )
+    )
+    return set(rows.all())
+
+
+async def saved_list(
+    session: AsyncSession, user_id: uuid.UUID
+) -> list[tuple[SavedWord, list[SavedWordContext]]]:
+    """Everything the learner has saved, newest first, with its contexts."""
+    words = await session.exec(
+        select(SavedWord)
+        .where(SavedWord.user_id == user_id)
+        .order_by(SavedWord.created_at.desc())
+    )
+    found = list(words.all())
+    if not found:
+        return []
+    contexts = await session.exec(
+        select(SavedWordContext)
+        .where(SavedWordContext.saved_word_id.in_([word.id for word in found]))
+        .order_by(SavedWordContext.created_at)
+    )
+    by_word: dict[uuid.UUID, list[SavedWordContext]] = {}
+    for context in contexts.all():
+        by_word.setdefault(context.saved_word_id, []).append(context)
+    return [(word, by_word.get(word.id, [])) for word in found]
+
+
+async def forget(
+    session: AsyncSession, user_id: uuid.UUID, lemma: str
+) -> bool:
+    """Take a word off the list, with everywhere it was met. Returns whether
+    there was one."""
+    row = await session.exec(
+        select(SavedWord).where(
+            SavedWord.user_id == user_id, SavedWord.lemma == normalise(lemma)
+        )
+    )
+    word = row.first()
+    if word is None:
+        return False
+    contexts = await session.exec(
+        select(SavedWordContext).where(SavedWordContext.saved_word_id == word.id)
+    )
+    for context in contexts.all():
+        await session.delete(context)
+    # Flushed before the word goes, rather than left to one flush to order:
+    # the contexts point AT the word, and a single flush emitted them the
+    # wrong way round.
+    await session.flush()
+    await session.delete(word)
+    await session.commit()
+    return True
+
+
+# --- Writing the pipeline's output in ---------------------------------------
+
+
+async def replace_extracted(
+    session: AsyncSession,
+    *,
+    material_id: uuid.UUID,
+    part_id: uuid.UUID,
+    rows: list[dict],
+) -> tuple[int, int]:
+    """Put a fresh extraction in, keeping whatever an author has touched.
+
+    Returns ``(written, kept)``. What is kept is every entry whose ``source``
+    is not ``extracted``: a person's correction outlives the process that
+    produced the thing they corrected, and the alternative -- a re-run that
+    silently reverts an edit -- is the failure the ``source`` column exists
+    to prevent.
+
+    Flushes; the CALLER commits. The one caller is the passage importer,
+    which is part-way through writing a material when it gets here, and a
+    commit of its own would leave a half-imported paper behind on any later
+    failure.
+    """
+    existing = await session.exec(
+        select(MaterialVocabulary).where(
+            MaterialVocabulary.material_id == material_id
+        )
+    )
+    kept: dict[str, MaterialVocabulary] = {}
+    for entry in existing.all():
+        if entry.source == "extracted":
+            await session.delete(entry)
+        else:
+            kept[entry.lemma] = entry
+    await session.flush()
+
+    now = datetime.now(timezone.utc)
+    written = 0
+    for row in rows:
+        lemma = normalise(row.get("lemma") or "")
+        if not lemma or lemma in kept:
+            continue
+        session.add(
+            MaterialVocabulary(
+                material_id=material_id,
+                part_id=part_id,
+                lemma=lemma,
+                surface=row.get("surface") or lemma,
+                pos=row.get("pos") or "",
+                meaning_en=row.get("meaning_en") or "",
+                meaning_uz=row.get("meaning_uz") or "",
+                example=row.get("example") or "",
+                paragraph_index=int(row.get("index") or 0),
+                offset_start=int(row.get("start") or 0),
+                offset_end=int(row.get("end") or 0),
+                cefr_level=row.get("cefr_level") or "",
+                frequency_band=row.get("frequency_band") or "",
+                is_phrase=bool(row.get("is_phrase")),
+                source="extracted",
+                generated_at=now,
+            )
+        )
+        written += 1
+    await session.flush()
+    return written, len(kept)
