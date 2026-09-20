@@ -745,7 +745,10 @@ export default function ReadingTakePage() {
       <HeaderSlot side="left">
         <Link
           to="/reading"
-          className="inline-flex items-center gap-1.5 rounded-full px-1 text-sm text-muted-foreground transition-colors duration-fast hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          // The same lift as the tool row beside it. `--muted-foreground`
+          // against the island's ground is 2.17:1, and a back link nobody
+          // can read is a page with no way out of it.
+          className="inline-flex items-center gap-1.5 rounded-full px-1 text-sm text-foreground/70 transition-colors duration-fast hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
           <ArrowLeft className="size-4" aria-hidden />
           Reading

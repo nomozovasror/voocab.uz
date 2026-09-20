@@ -67,7 +67,9 @@ export function TakeTimer({
         aria-live="polite"
         className={cn(
           "shrink-0 text-sm font-medium tabular-nums",
-          warning ? "text-destructive motion-safe:animate-pulse" : "text-foreground",
+          warning
+            ? "text-destructive motion-safe:animate-pulse"
+            : "text-foreground",
           className,
         )}
       >
@@ -81,7 +83,11 @@ export function TakeTimer({
     <p
       className={cn(
         "shrink-0 text-sm tabular-nums",
-        over ? "text-attention" : "text-muted-foreground",
+        // Not `--muted-foreground`: against the header island's ground that
+        // is 2.17:1, and this is the figure a candidate glances at every
+        // couple of minutes for twenty. The target beside it steps down one
+        // level rather than two — secondary, not invisible.
+        over ? "text-attention" : "text-foreground/70",
         className,
       )}
       title={
@@ -94,7 +100,7 @@ export function TakeTimer({
     >
       <span className={cn(away && "opacity-50")}>{clock(ms)}</span>
       {targetMs != null && (
-        <span className="text-muted-foreground"> / {clock(targetMs)}</span>
+        <span className="text-foreground/50"> / {clock(targetMs)}</span>
       )}
     </p>
   );

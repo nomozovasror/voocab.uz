@@ -260,6 +260,7 @@ export function PassageTools({
           icon={AArrowDown}
           label="Smaller text"
           hideLabel
+          iconClass="size-[1.15rem]"
           disabled={step === 0}
           title="Smaller text"
           onClick={() => onSize(SIZES[Math.max(0, step - 1)])}
@@ -268,6 +269,7 @@ export function PassageTools({
           icon={AArrowUp}
           label="Larger text"
           hideLabel
+          iconClass="size-[1.15rem]"
           disabled={step === SIZES.length - 1}
           title="Larger text"
           onClick={() => onSize(SIZES[Math.min(SIZES.length - 1, step + 1)])}
@@ -409,6 +411,7 @@ function Tool({
   title,
   onClick,
   inked,
+  iconClass,
   stacked,
 }: {
   icon?: typeof Highlighter;
@@ -422,6 +425,10 @@ function Tool({
   /** Paints the ICON in one of the mark colours. What the reader has chosen
    *  for the next highlight, said in the space the icon already takes. */
   inked?: MarkColour;
+  /** A bigger box for an icon that needs one. Most are a single shape; the
+   *  size stepper's pack a letter AND an arrow into the same square, so at
+   *  a shared size they read as half the weight of everything beside them. */
+  iconClass?: string;
   stacked?: boolean;
 }) {
   return (
@@ -433,17 +440,32 @@ function Tool({
       aria-pressed={pressed}
       aria-label={hideLabel ? label : undefined}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs whitespace-nowrap transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40",
+        "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs whitespace-nowrap transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:pointer-events-none",
         stacked && "w-full justify-start",
+        // Measured, not guessed. `--muted-foreground` against the island's
+        // ground is 2.17:1 — well under the 4.5:1 that makes text readable
+        // — and at the old `opacity-40` a disabled control came to 1.36:1,
+        // which is not dim, it is gone. This row sits over a passage
+        // somebody is reading for twenty minutes; it has to be legible
+        // without being loud.
+        //
+        // The opacity is on the COLOUR rather than the element, so a quiet
+        // button keeps its crisp strokes and its focus ring instead of
+        // fading the whole control including the outline.
         pressed
           ? "bg-primary/15 text-primary"
-          : "text-muted-foreground hover:bg-surface-hover hover:text-foreground",
-        dim && "opacity-50",
+          : "text-foreground/70 hover:bg-surface-hover hover:text-foreground",
+        // 3.24:1 — clearly quieter than the 4.80:1 of a live control, and
+        // still readable. For the size stepper especially: "disabled" there
+        // means "you are at the limit", which is information rather than an
+        // absence.
+        "disabled:text-foreground/50",
+        dim && "text-foreground/50",
       )}
     >
       {Icon && (
         <Icon
-          className={cn("size-3.5 shrink-0", inked && INK[inked])}
+          className={cn("shrink-0", iconClass ?? "size-4", inked && INK[inked])}
           aria-hidden
         />
       )}
