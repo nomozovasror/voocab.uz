@@ -14,12 +14,13 @@ things that are not sections or carry a second bookkeeping scheme beside the
 first. This carries no bookkeeping at all: what a passage has done is what is
 on disk beside it, which is also what makes the run resumable for free.
 
-Five stages, and three of listening's are simply absent -- there is no
+Six stages, and three of listening's are simply absent -- there is no
 recording, so nothing to align, nothing to trim, and no replay span to find:
 
     text       read_passages.py            passage.json
     questions  read_passage_questions.py   questions.src.json
     build      build_questions.py          questions.json
+    vocab      read_vocabulary.py          vocabulary.json
     picture    extract_image.py            image-group<N>.png
     import     scripts.import_passage      a Material, private
 
@@ -28,6 +29,12 @@ build named, and `picture` before `import` because a labelling group without
 its picture is a group `publish_blockers` refuses. `import` runs under the
 BACKEND venv, like its listening twin: extraction needs no database and the
 import needs nothing else.
+
+`vocab` needs only `passage.json` and could run second. It runs fourth
+because it is the only stage here that spends money: a passage whose
+questions could not be read is a passage that will not be imported, and
+glossing its eighty words first would be paying for a material nobody is
+going to sit.
 
 Nothing is redone. A stage whose output is already on disk is skipped unless
 --force, so a run that stops halfway is simply run again.
@@ -50,14 +57,19 @@ WORK = SEED / "work"
 #: The order they depend on each other in. Not the order they are interesting
 #: in: `build` is the one that catches a misread page, and it can only run
 #: after both readings of it exist.
-STAGES = ("text", "questions", "build", "picture", "import")
+STAGES = ("text", "questions", "build", "vocab", "picture", "import")
 
 #: A stage whose failure is a loss of quality rather than of content. A
 #: passage with no labelling group has no picture to cut and says so by
 #: exiting zero with nothing done; one whose picture could not be found still
 #: has twelve other questions worth practising, and stopping the run there
 #: would hold all of them back.
-OPTIONAL = {"picture"}
+#:
+#: `vocab` is optional on the same reading. A passage with no glosses is a
+#: passage a learner can still sit; it is the help around it that is missing,
+#: and holding the paper back to protest about the help would be a strange
+#: way to serve them.
+OPTIONAL = {"picture", "vocab"}
 
 
 def output(stage: str, passage_id: str) -> pathlib.Path | None:
@@ -73,6 +85,7 @@ def output(stage: str, passage_id: str) -> pathlib.Path | None:
         "text": work / "passage.json",
         "questions": work / "questions.src.json",
         "build": work / "questions.json",
+        "vocab": work / "vocabulary.json",
     }.get(stage)
 
 
@@ -84,6 +97,8 @@ def command(stage: str, passage_id: str, owner: str) -> list[str]:
             return [str(PYTHON), str(SEED / "read_passage_questions.py"), passage_id]
         case "build":
             return [str(PYTHON), str(SEED / "build_questions.py"), passage_id]
+        case "vocab":
+            return [str(PYTHON), str(SEED / "read_vocabulary.py"), passage_id]
         case "picture":
             return [str(PYTHON), str(SEED / "extract_image.py"), passage_id]
         case "import":
