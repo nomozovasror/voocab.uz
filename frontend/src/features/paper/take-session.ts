@@ -95,6 +95,20 @@ export function loadSession(materialId: string): TakeSession | null {
       listened: parsed.listened ?? [],
       seeksBack: parsed.seeksBack ?? 0,
       flagged: parsed.flagged ?? [],
+      // Rebuilt field by field rather than spread, so that a draft written
+      // by an older page cannot smuggle in a shape nothing here expects.
+      // The cost of that is this list being the real definition of a
+      // session: `activeMs` was added to the interface above — with a
+      // comment saying it is banked precisely BECAUSE it cannot be
+      // recomputed — and never added here, so every reload dropped it.
+      //
+      // What that looked like: the reading clock restarting at 0:00 on
+      // every refresh, and then overwriting the banked figure with the
+      // fresh count five seconds later. The wall clock survived, because
+      // it is derived from `startedAt`; the minutes somebody was actually
+      // present for did not, which is the one of the two that measures
+      // them.
+      activeMs: parsed.activeMs ?? 0,
     };
   } catch {
     return null;

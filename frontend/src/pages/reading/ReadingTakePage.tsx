@@ -200,14 +200,6 @@ export default function ReadingTakePage() {
   // the restored work and `Start over` stands against it. The sentence
   // survives as that control's tooltip.
 
-  const startOver = useCallback(() => {
-    if (!sessionKey) return;
-    clearSession(sessionKey);
-    session.current = newSession();
-    setAnswers({});
-    setFlagged(new Set());
-    setResumed(false);
-  }, [sessionKey]);
   const [confirming, setConfirming] = useState(false);
 
   // Only a whole paper has one; a drill is one group cut out of a passage,
@@ -351,6 +343,38 @@ export default function ReadingTakePage() {
     },
     [id],
   );
+
+  // Everything this sitting left behind, and not only the answers.
+  //
+  // It used to clear the draft alone, which made the same intent behave two
+  // ways: closing the tab and coming back gave a fresh three look-ups
+  // (`resetSpend` on mount, below), and pressing Start over left the budget
+  // spent — so a reader who used all three and then asked for a clean paper
+  // began it with none. Two routes to one state must not disagree.
+  //
+  // The marks go too. "Start over" promises a clean paper, and a passage
+  // still covered in the stripes of an attempt the reader has just thrown
+  // away is not one — they are in no position to remember what any of them
+  // meant. The WORDS already opened stay known, which is the one thing that
+  // should survive: being told what `vogue` means is not undone by starting
+  // the questions again, and charging for it twice would be the app
+  // pretending not to remember.
+  const startOver = useCallback(() => {
+    if (!sessionKey) return;
+    clearSession(sessionKey);
+    session.current = newSession();
+    setAnswers({});
+    setFlagged(new Set());
+    setResumed(false);
+    if (!id) return;
+    setMarks([]);
+    saveHighlights(id, []);
+    setLookups((was) => {
+      const fresh = resetSpend(was);
+      saveLookups(id, fresh);
+      return fresh;
+    });
+  }, [sessionKey, id]);
 
   // A mark from either path — the row's colour row, or the popover at the
   // selection. Both end here, so there is one place where a selection turns
