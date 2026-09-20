@@ -303,6 +303,15 @@ function Sense({ entry, lead }: { entry: VocabularyEntry; lead?: string }) {
           </span>
         )}
       </p>
+      {/* Said out loud where it costs most to miss. A reader who tapped a
+          word they thought they knew has to be told that they do — the
+          meaning alone would read as the app being unhelpful, when what is
+          happening is that the passage has moved the word. */}
+      {entry.unusual && (
+        <p className="mt-0.5 text-[0.7rem] text-muted-foreground">
+          Not the usual sense of this word.
+        </p>
+      )}
       <p className="mt-1 text-xs leading-relaxed text-foreground">
         {entry.meaning_uz}
       </p>
