@@ -480,7 +480,19 @@ export default function ReadingTakePage() {
   return (
     // The page itself does not scroll: the panes do. That is the whole of
     // what makes them two panes rather than two columns of one document.
-    <div className="mx-auto flex w-full max-w-[1500px] flex-col overflow-hidden">
+    //
+    // And it takes the whole window. `<main>` centres every page inside
+    // `max-w-7xl` with a gutter each side, which is right for a page of
+    // prose and wrong for this one: it left about a hundred and twenty empty
+    // pixels down both edges of a screen where horizontal space is what the
+    // two panes are dividing. `mx-[calc(50%-50vw)]` is the full-bleed
+    // margin — the element stays in the flow and simply reaches past its
+    // parent to the viewport — and `-my-8` gives back the vertical padding
+    // main adds under a header that is already in the flow above it.
+    //
+    // Done here rather than in `Layout` because this is the only page that
+    // wants it. The day a second one does, it moves up a level.
+    <div className="-my-8 mx-[calc(50%-50vw)] flex w-auto flex-col overflow-hidden px-4 sm:px-6">
       <HeaderGround />
 
       {/* One row, and it is the whole of the chrome above the paper.

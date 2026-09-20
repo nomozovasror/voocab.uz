@@ -30,6 +30,16 @@ import { cn } from "@/lib/utils";
  *  thing on screen" is better than two. */
 export const LEFT_PANE = "data-left-pane";
 
+/** Why every pane wears `scrollbar-quiet`.
+ *
+ *  It is the app's own treatment for a scroller it keeps — invisible at
+ *  rest, fading in on hover, with the gutter reserved either way so the text
+ *  does not reflow when the pointer arrives. The studio's editor panes, the
+ *  practice page's aside and the transcript column all use it, and these two
+ *  were the only long scrollers in the app drawing the platform's default
+ *  bar instead.
+ */
+
 /** Why every pane here is `relative`.
  *
  *  An `sr-only` label is `position: absolute`, and an absolutely positioned
@@ -174,13 +184,13 @@ export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
             away — see take-session. */}
         <div
           {...{ [LEFT_PANE]: "" }}
-          className="relative min-h-0 flex-1 overflow-y-auto"
+          className="scrollbar-quiet relative min-h-0 flex-1 overflow-y-auto"
           hidden={showing !== "left"}
         >
           {left}
         </div>
         <div
-          className="relative min-h-0 flex-1 overflow-y-auto"
+          className="scrollbar-quiet relative min-h-0 flex-1 overflow-y-auto"
           hidden={showing !== "right"}
         >
           {right}
@@ -201,7 +211,7 @@ export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
     >
       <div
         {...{ [LEFT_PANE]: "" }}
-        className="relative min-w-0 overflow-y-auto pr-5"
+        className="scrollbar-quiet relative min-w-0 overflow-y-auto pr-5"
         style={{ width: `${percent}%` }}
       >
         {left}
@@ -241,7 +251,7 @@ export const SplitPanes = forwardRef<HTMLDivElement, SplitPanesProps>(
         />
       </div>
 
-      <div className="relative min-w-0 flex-1 overflow-y-auto pl-5">{right}</div>
+      <div className="scrollbar-quiet relative min-w-0 flex-1 overflow-y-auto pl-5">{right}</div>
     </div>
   );
   },
