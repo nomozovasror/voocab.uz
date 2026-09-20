@@ -87,6 +87,20 @@ import {
  *  covers what goes beneath it. */
 const PANE_FOOT = 0;
 
+/** What a pane leaves above its first line.
+ *
+ *  The islands end at 60px, and content that began there touched them: the
+ *  title's first line and the question paper's first heading arrived level
+ *  with the chrome, which reads as the page having been cut rather than as
+ *  it starting. 76 gives sixteen pixels of daylight — enough to separate
+ *  them, and not so much that the screen goes back to spending its height
+ *  on nothing.
+ *
+ *  It is also why the panes fade over the header's own sixty: at rest
+ *  nothing is inside the faded band, so the fade costs nothing and only
+ *  does anything once the reader scrolls. */
+const PANE_TOP = "pt-19";
+
 export default function ReadingTakePage() {
   // One page, two routes. `/reading/:id` is a whole paper;
   // `/reading/drills/:groupId` is one question group cut out of one, and the
@@ -578,7 +592,7 @@ export default function ReadingTakePage() {
         }}
         left={
           <div
-            className="space-y-10 pt-15"
+            className={PANE_TOP}
             onMouseOver={(e) => look(e.target)}
             onFocusCapture={(e) => look(e.target)}
             onMouseLeave={() => setLit(null)}
@@ -629,9 +643,16 @@ export default function ReadingTakePage() {
 
             {/* Centred over the column it names, and larger than the prose
                 under it — it is the passage's heading, and a heading set at
-                the body's own size is a first line rather than a title. */}
-            <div className="-mt-1 text-center">
-              <h1 className="text-[1.35em] font-semibold text-balance text-foreground">
+                the body's own size is a first line rather than a title.
+
+                No `text-balance`. Balancing makes the lines equal length,
+                which on a title that is one word too long for its column
+                means two half-width lines and a wide empty margin down both
+                sides — squeezed into the middle of a column it was given all
+                of. A title may have a short last line; that is what titles
+                look like. */}
+            <div className="mb-5 text-center">
+              <h1 className="text-[1.35em] leading-snug font-semibold text-foreground">
                 {material.title}
               </h1>
               <p className="mt-1 text-[0.8em] tabular-nums text-muted-foreground">
@@ -646,6 +667,7 @@ export default function ReadingTakePage() {
                   .join(" · ")}
               </p>
             </div>
+            <div className="space-y-10">
             {sorted.map((part, index) =>
               part.passage ? (
                 <PassagePane
@@ -662,11 +684,12 @@ export default function ReadingTakePage() {
                 />
               ) : null,
             )}
+            </div>
           </div>
         }
         right={
           <div
-            className="pt-15"
+            className={PANE_TOP}
             onKeyDown={onPaperKeyDown}
             onMouseOver={(e) => look(e.target)}
             onMouseLeave={() => setLit(null)}
