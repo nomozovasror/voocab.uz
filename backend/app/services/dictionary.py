@@ -13,23 +13,39 @@ uses it.
 
 ## Why the answer is still contextual
 
-The obvious fallback is a dictionary API -- free, instant, no model. It is
-kept as the LAST resort rather than the first, because a dictionary answers
-with every sense a word has and the whole problem this feature exists to
-solve is a reader at band 5 picking the wrong one. ``bank`` has six entries
-and exactly one of them is the side of the river the passage is describing.
+The paragraph goes with the word, and what comes back is one sense: the one
+that is true here.
 
-So the paragraph goes with the word, and what comes back is one sense: the
-one that is true here.
+## There is no plain-dictionary fallback, and that is a decision
+
+The obvious backstop is a free dictionary API -- instant, no model, no key.
+The brief asks for one on the grounds that an incomplete answer beats an
+empty one. It is deliberately not built, for three reasons that all point
+the same way:
+
+* **No Uzbek.** A one-line English gloss of a C1 word is regularly harder
+  than the word, which is the whole reason this feature exists rather than
+  a link to Cambridge Dictionary.
+* **No context.** A dictionary answers with every sense a word has, and a
+  reader at band 5 picking the wrong one is precisely the failure the
+  design is built to avoid. ``bank`` has six entries and one of them is the
+  side of the river the passage is describing.
+* **It would almost never run.** 95% of taps are answered from rows already
+  on disk; the remaining 5% reach this module, and the fallback would only
+  fire during the minutes a provider is down. A path that rare is a path
+  nobody exercises, and an unexercised path that shows the one thing the
+  rest of the design calls worse than nothing is not a safety net.
+
+What a reader gets instead is the plain truth: this word is not in the
+passage's list. Say so, and the page is still working.
 
 ## What happens when it is down
 
-The reader is told the word is not in this passage's list and nothing else.
-That is a rare, small failure by construction -- the extracted rows are on
-disk and do not depend on anybody's API being up, so a Groq outage costs the
-occasional unusual word rather than the vocabulary help on every passage in
-the catalogue. That property is the reason the expensive extraction happens
-at seed time, and it is worth more than a fallback that would be wrong.
+The extracted rows are on disk and depend on nobody's API, so an outage
+costs the occasional unusual word rather than the vocabulary help on every
+passage in the catalogue. That property is the reason the expensive
+extraction happens at seed time, and it is worth more than a fallback that
+would be wrong.
 """
 
 import json
