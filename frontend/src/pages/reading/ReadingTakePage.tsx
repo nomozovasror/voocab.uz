@@ -186,6 +186,28 @@ export default function ReadingTakePage() {
   );
   const session = useRef<TakeSession>(restored.current ?? newSession());
   const [resumed, setResumed] = useState(() => restored.current !== null);
+
+  // Where a restored sitting is told about itself: nowhere of its own.
+  //
+  // It used to be a sentence above the passage — loose left-aligned micro
+  // text under the back link, over a centred title, holding a line of the
+  // pane open for the whole hour to say something read once.
+  //
+  // A toast was tried and is worse: on this screen the only corner clear of
+  // the footer is under the header islands, so it lands on the tool row —
+  // and a notice somebody may arrive after is a notice that has not been
+  // given. What carries it now is the footer, where "5 of 13 answered" IS
+  // the restored work and `Start over` stands against it. The sentence
+  // survives as that control's tooltip.
+
+  const startOver = useCallback(() => {
+    if (!sessionKey) return;
+    clearSession(sessionKey);
+    session.current = newSession();
+    setAnswers({});
+    setFlagged(new Set());
+    setResumed(false);
+  }, [sessionKey]);
   const [confirming, setConfirming] = useState(false);
 
   // Only a whole paper has one; a drill is one group cut out of a passage,
@@ -841,25 +863,6 @@ export default function ReadingTakePage() {
               </Link>
             )}
 
-            {resumed && (
-              <p className="mb-4 flex items-center gap-2 text-xs text-muted-foreground">
-                Picked up where you left off.
-                <button
-                  type="button"
-                  onClick={() => {
-                    clearSession(sessionKey);
-                    session.current = newSession();
-                    setAnswers({});
-                    setFlagged(new Set());
-                    setResumed(false);
-                  }}
-                  className="rounded-md px-1.5 py-0.5 text-primary transition-colors duration-fast hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                >
-                  Start over
-                </button>
-              </p>
-            )}
-
             {/* Centred over the column it names, and larger than the prose
                 under it — it is the passage's heading, and a heading set at
                 the body's own size is a first line rather than a title.
@@ -1023,6 +1026,7 @@ export default function ReadingTakePage() {
         submitLabel={config.submitLabel}
         answered={answered}
         total={total}
+        onStartOver={resumed ? startOver : undefined}
         submitting={submitMut.isPending}
         blank={blank}
         confirming={confirming}

@@ -34,11 +34,17 @@ import {
   paperRows,
   paperTotal,
 } from "@/features/paper/take-paper";
-import { goToQuestion, useQuestionSpy, Q_ANCHOR } from "@/features/paper/take-focus";
-import { useAudioEngine, NUDGE_MS } from "@/features/listening/use-audio-engine";
-import { useWaveform } from "@/features/listening/use-waveform";
 import {
-} from "@/features/listening/queries";
+  goToQuestion,
+  useQuestionSpy,
+  Q_ANCHOR,
+} from "@/features/paper/take-focus";
+import {
+  useAudioEngine,
+  NUDGE_MS,
+} from "@/features/listening/use-audio-engine";
+import { useWaveform } from "@/features/listening/use-waveform";
+import {} from "@/features/listening/queries";
 import { PRACTICE } from "@/features/paper/take-config";
 import { useActiveTime } from "@/features/paper/use-active-time";
 import {
@@ -123,6 +129,19 @@ export default function ListeningTakePage() {
   );
   const session = useRef<TakeSession>(restored.current ?? newSession());
   const [resumed, setResumed] = useState(() => restored.current !== null);
+
+  // The same treatment reading has, and the same reasoning: the footer's
+  // "5 of 13 answered" IS the restored work, so the offer to refuse it
+  // belongs against that number rather than in a line of its own.
+
+  const startOver = useCallback(() => {
+    if (!sessionKey) return;
+    clearSession(sessionKey);
+    session.current = newSession();
+    setAnswers({});
+    setFlagged(new Set());
+    setResumed(false);
+  }, [sessionKey]);
   const [confirming, setConfirming] = useState(false);
 
   // Measured here and never shown. The recording is this page's clock —
@@ -518,9 +537,7 @@ export default function ListeningTakePage() {
               // Withheld where it IS the title: a Part 3 the book printed no
               // heading over is named by its reference for want of anything
               // else, and the page would be saying it twice.
-              material.reference !== material.title
-                ? material.reference
-                : null,
+              material.reference !== material.title ? material.reference : null,
               // A drill is one group cut out of a part, so saying "1 part"
               // about it is describing the paper it came from rather than
               // the thing on screen. Which part it was is in the heading
@@ -563,7 +580,8 @@ export default function ListeningTakePage() {
         >
           <span className="text-sm text-foreground">You have sat this</span>
           <span className="text-sm tabular-nums text-muted-foreground">
-            {material.last_attempt.score} / {material.last_attempt.total_questions}
+            {material.last_attempt.score} /{" "}
+            {material.last_attempt.total_questions}
             {" · "}
             {timeAgo(material.last_attempt.submitted_at)}
           </span>
@@ -577,31 +595,14 @@ export default function ListeningTakePage() {
         </Link>
       )}
 
-      {/* The other two-ended row: what the keyboard does on the left, and the
-          notice about this being a resumed draft on the right. Neither is
-          always there, so the row holds a spacer for whichever is missing and
-          the one that is left stays on its own side. */}
-      {(src || resumed) && (
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
-          {src ? <KeyHints /> : <span />}
-          {resumed && (
-            <p className="flex items-center gap-2 text-xs text-muted-foreground">
-              Picked up where you left off.
-              <button
-                type="button"
-                onClick={() => {
-                  clearSession(sessionKey);
-                  session.current = newSession();
-                  setAnswers({});
-                  setFlagged(new Set());
-                  setResumed(false);
-                }}
-                className="rounded-md px-1.5 py-0.5 text-primary transition-colors duration-fast hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-              >
-                Start over
-              </button>
-            </p>
-          )}
+      {/* What the keyboard does. The resumed-draft notice used to share this
+          row — hence the spacer that was here for whichever was missing —
+          and has moved to where reading's went: the footer, beside the
+          count of what was restored. Two papers must not say the same thing
+          two ways. */}
+      {src && (
+        <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2">
+          <KeyHints />
         </div>
       )}
 
@@ -673,6 +674,7 @@ export default function ListeningTakePage() {
         submitLabel={config.submitLabel}
         answered={answered}
         total={total}
+        onStartOver={resumed ? startOver : undefined}
         submitting={submitMut.isPending}
         blank={blank}
         confirming={confirming}

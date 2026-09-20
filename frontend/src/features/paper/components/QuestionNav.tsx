@@ -39,6 +39,16 @@ interface QuestionNavProps {
    *  squares raise, and it belongs beside them. */
   answered: number;
   total: number;
+  /** Throw away a restored draft and start the paper again. Absent unless
+   *  this sitting WAS restored, which is the only time the offer means
+   *  anything.
+   *
+   *  Here, beside the count, because the count is the restored work: "7 of
+   *  13 answered" is what was brought back, and the way to refuse it
+   *  belongs against the number rather than in a line of its own above the
+   *  paper. It used to be a sentence floating over the passage — read once,
+   *  in the way for the rest of the hour. */
+  onStartOver?: () => void;
   submitting?: boolean;
   /** How many numbers are still blank, and whether the page is waiting for an
    *  answer about them. */
@@ -79,6 +89,7 @@ export function QuestionNav({
   submitLabel,
   answered,
   total,
+  onStartOver,
   submitting,
   blank,
   confirming,
@@ -201,6 +212,22 @@ export function QuestionNav({
           ))}
         </div>
 
+        {/* Quiet, and only in a resumed sitting. Next to the submit button
+            it would be a destructive action beside the one everybody is
+            aiming for; two places to its left, against the count it undoes,
+            it is where somebody looking at their restored answers is
+            already looking. */}
+        {onStartOver && (
+          <button
+            type="button"
+            onClick={onStartOver}
+            title="Picked up where you left off — this throws that away and answers the paper again"
+            className="hidden shrink-0 rounded-md px-2 py-1 text-xs text-foreground/60 transition-colors duration-fast hover:bg-surface-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none sm:block"
+          >
+            Start over
+          </button>
+        )}
+
         {/* Held at a fixed width, so the row does not shuffle sideways every
             time an answer is typed. Hidden on a narrow window, where the
             squares are what there is room for. */}
@@ -215,7 +242,9 @@ export function QuestionNav({
           disabled={submitting}
           className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity duration-fast hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card focus-visible:outline-none disabled:opacity-60"
         >
-          {submitting && <Loader2 className="size-4 animate-spin" aria-hidden />}
+          {submitting && (
+            <Loader2 className="size-4 animate-spin" aria-hidden />
+          )}
           {confirming ? "Check anyway" : submitLabel}
         </button>
       </div>
