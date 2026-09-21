@@ -613,3 +613,34 @@ async def test_evidence_reaches_the_review_and_never_the_take():
             assert results[2]["evidence"] == []
     finally:
         await _cleanup(material.id, email)
+
+
+def test_a_span_is_refused_unless_it_lands_on_text_that_is_there():
+    """``import_evidence``'s guard, on its own.
+
+    ``read_evidence.py`` already guarantees every span is a real substring's
+    real position — it found them by searching for the text. This checks
+    again at import because the passage may have been READ AGAIN since, and a
+    re-read passage is one whose offsets have moved. A mark in the wrong
+    place is a bug the reader can see; a missing mark is only missing help.
+    """
+    from scripts.import_passage import fits
+
+    paragraphs = [{"text": "0123456789"}, {"text": "short"}]
+
+    assert fits(paragraphs, {"index": 0, "start": 0, "end": 10})
+    assert fits(paragraphs, {"index": 1, "start": 1, "end": 3})
+
+    # Past the end of the paragraph it claims to be in — the passage was
+    # re-read and came back shorter.
+    assert not fits(paragraphs, {"index": 1, "start": 1, "end": 99})
+    # A paragraph that no longer exists.
+    assert not fits(paragraphs, {"index": 7, "start": 0, "end": 2})
+    # Empty. A zero-width highlight draws nothing and reads, to anybody
+    # debugging it later, as a mark that failed rather than one never meant.
+    assert not fits(paragraphs, {"index": 0, "start": 3, "end": 3})
+    assert not fits(paragraphs, {"index": 0, "start": 5, "end": 2})
+    # Shapes the JSON column can legally hold and the review cannot draw.
+    assert not fits(paragraphs, {"index": 0, "start": 0})
+    assert not fits(paragraphs, {"index": 0, "start": "0", "end": 3})
+    assert not fits(paragraphs, [0, 1, 2])

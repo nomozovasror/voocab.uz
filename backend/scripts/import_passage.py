@@ -1,6 +1,7 @@
 """Write a seeded reading passage into the app database.
 
     uv run python -m scripts.import_passage cam11-t1-p2 --owner <user-uuid>
+    uv run python -m scripts.import_passage --all --owner <uuid> --evidence-only
 
 The reading half of ``import_section``. It writes far less, because a paper
 you read has far less: there is no recording, so no blob, no transcript, no
@@ -19,6 +20,15 @@ What it writes, for one passage:
   importer uses and therefore through the same schemas. A seed script that
   inserted rows behind those would be the one caller allowed to write a
   material the editor could never have produced.
+* where in the passage each answer is found, from ``read_evidence.py``. The
+  one thing written outside the authoring schemas, and the docstring on
+  ``import_evidence`` says why: it is the only part of a re-import that has
+  to reach a material somebody has already sat.
+
+``--evidence-only`` does that last one and nothing else, which is how a stage
+that did not exist before goes out across a corpus that is already in use:
+evidence changes no score, no text and no answer key, so it is the version of
+the change that cannot break anything. See ``place_evidence``.
 
 Private, like every other seeded material, and for the same reason: this is
 copyrighted source, and it is in the database to prove the pipeline works.
@@ -39,6 +49,8 @@ from sqlmodel import select
 from app.core.database import async_session_factory
 from app.models.material import Material
 from app.models.part import Part
+from app.models.question import Question
+from app.models.question_group import QuestionGroup
 from app.models.user import User
 from app.services import difficulty as difficulty_service
 from app.services import vocabulary as vocabulary_service
@@ -181,6 +193,133 @@ async def import_vocabulary(session, material_id: uuid.UUID,
     return written
 
 
+async def import_evidence(session, part_id: uuid.UUID, passage_id: str) -> int:
+    """Where each answer is found in the passage, from `read_evidence.py`.
+
+    ## Why this is its own pass and not part of the question payload
+
+    Everything else a question has goes in through `QuestionGroupIn`, and
+    that rule is worth keeping: a seed script writing rows behind the
+    authoring schemas would be the one caller allowed to produce a material
+    the editor could never have made. Evidence is the exception, on purpose,
+    and for a reason that is about learners rather than about tidiness.
+
+    `import_questions` REFUSES to rewrite the questions of a material anybody
+    has already answered -- Postgres will not delete a row
+    `question_attempts` points at, and a learner's answer is worth more than
+    a re-run's tidiness. A material somebody has sat is exactly the material
+    whose review page this feature exists for. Threading evidence through the
+    question payload would mean the marking never reached a single paper that
+    had been used.
+
+    So it is applied on its own, by matching the group's `order_index` and
+    the question's `number` -- and that is safe in a way a re-import of the
+    questions is not, because evidence changes no score. It is feedback about
+    a paper, not the paper.
+
+    Matched only where the shape still agrees: a group of a different type,
+    or with a different number of questions, is a passage that has been read
+    again into something else, and a span measured against the old text would
+    point at the wrong words. Skipped quietly in that case -- a missing mark
+    is missing help, and a mark in the wrong place is a bug the reader can
+    see.
+
+    The offsets are checked back against the paragraph they claim to be in.
+    `read_evidence.py` has already guaranteed it -- a span there is a real
+    substring's real position, because it was found by searching for the text
+    -- and this checks again because the passage may have been READ again
+    since, and a re-read passage is one whose offsets have moved.
+    """
+    path = SEED / "work" / passage_id / "evidence.json"
+    if not path.exists():
+        return 0
+    read = json.loads(path.read_text())
+
+    part = await session.get(Part, part_id)
+    paragraphs = ((part.passage or {}).get("paragraphs") or []) if part else []
+
+    groups = (await session.exec(
+        select(QuestionGroup).where(QuestionGroup.part_id == part_id)
+        .order_by(QuestionGroup.order_index))).all()
+    by_index = {group.order_index: group for group in groups}
+
+    written = 0
+    for entry in read.get("entries") or []:
+        group = by_index.get(entry.get("group"))
+        if group is None:
+            continue
+        question = (await session.exec(
+            select(Question).where(Question.group_id == group.id,
+                                   Question.number == entry.get("number")))).first()
+        if question is None:
+            continue
+        spans = [span for span in (entry.get("spans") or [])
+                 if fits(paragraphs, span)]
+        if not spans:
+            continue
+        question.evidence = spans
+        session.add(question)
+        written += 1
+    return written
+
+
+def fits(paragraphs: list[dict], span: object) -> bool:
+    """Whether a span really lands on text that is there.
+
+    Empty spans are refused as well as out-of-range ones: a zero-width
+    highlight draws nothing and reads, to anybody debugging it later, as a
+    mark that failed to render rather than as a mark that was never meant.
+    """
+    if not isinstance(span, dict):
+        return False
+    try:
+        index, start, end = span["index"], span["start"], span["end"]
+    except (KeyError, TypeError):
+        return False
+    if not all(isinstance(n, int) for n in (index, start, end)):
+        return False
+    if not 0 <= index < len(paragraphs):
+        return False
+    text = paragraphs[index].get("text") or ""
+    return 0 <= start < end <= len(text)
+
+
+async def place_evidence(passage_id: str, owner_id: uuid.UUID) -> None:
+    """Put this passage's evidence on a material that is already imported.
+
+    The whole of ``--evidence-only``, and it exists because rolling a new
+    stage out across a corpus that is being USED is a different act from
+    importing a passage.
+
+    A full re-import rewrites the passage text, the title, the vocabulary and
+    the questions. All of that is correct after a passage has been READ
+    again, which is what a re-import normally follows — and all of it is
+    beside the point when the only thing that has changed is that a stage
+    which did not exist before has now run. Evidence changes no score, no
+    text and no answer key: it is a note about where the answer was. It can
+    go out on its own, and going out on its own is the version of the change
+    that cannot break anything.
+    """
+    reference = read_passage(passage_id)[2]
+    async with async_session_factory() as session:
+        material = (await session.exec(
+            select(Material).where(Material.author_id == owner_id,
+                                   Material.type == "reading",
+                                   Material.reference == reference))).first()
+        if material is None:
+            print(f"{passage_id} -> not imported yet; nothing to place on")
+            return
+        part = (await session.exec(
+            select(Part).where(Part.material_id == material.id)
+            .order_by(Part.order_index))).first()
+        if part is None:
+            print(f"{passage_id} -> material {material.id} has no part")
+            return
+        marked = await import_evidence(session, part.id, passage_id)
+        await session.commit()
+    print(f"{passage_id} -> material {material.id} ({marked} placed)")
+
+
 async def import_passage(passage_id: str, owner_id: uuid.UUID) -> None:
     row, passage, reference, title = read_passage(passage_id)
     first_number = FIRST_NUMBER[row["passage_no"]]
@@ -250,6 +389,10 @@ async def import_passage(passage_id: str, owner_id: uuid.UUID) -> None:
                                           passage_id)
 
         written = await import_questions(session, part.id, passage_id)
+        # After the questions, always, and whether or not they were rewritten
+        # -- see import_evidence on why this is the one thing that reaches a
+        # material somebody has already sat.
+        marked = await import_evidence(session, part.id, passage_id)
         if written:
             # Every authoring write bumps the counter the editor checks
             # against.
@@ -268,7 +411,39 @@ async def import_passage(passage_id: str, owner_id: uuid.UUID) -> None:
     words = sum(len(one["text"].split()) for one in passage["paragraphs"])
     print(f"{passage_id} -> material {material_id} "
           f"({len(passage['paragraphs'])} paragraphs, {words} words, "
-          f"{written} questions, {glossed} glossed, {seen})")
+          f"{written} questions, {glossed} glossed, {marked} placed, {seen})")
+
+
+async def run_all(ids: list[str], owner_id: uuid.UUID, *,
+                  evidence_only: bool) -> list[str]:
+    """Every passage, in ONE event loop, reporting what could not be done.
+
+    One loop and not one per passage, which is what this was. ``asyncio.run``
+    closes the loop it opened; the database engine is module-level and its
+    pooled connections are not, so the second passage got a connection bound
+    to a loop that no longer existed and asyncpg said "cannot perform
+    operation: another operation is in progress" — about two hundred times,
+    having imported the first passage perfectly.
+
+    It went unseen because the runner drives this a passage at a time, one
+    PROCESS each (``run_reading.py``), where a per-passage loop is the only
+    loop there is. ``--all`` is the path that has more than one.
+
+    A failure is caught per passage and named at the end rather than stopping
+    the run: two hundred passages is not a thing to restart because the
+    hundred and ninth has no questions on disk.
+    """
+    failed: list[str] = []
+    for passage_id in ids:
+        try:
+            if evidence_only:
+                await place_evidence(passage_id, owner_id)
+            else:
+                await import_passage(passage_id, owner_id)
+        except (Exception, SystemExit) as failure:  # noqa: BLE001
+            print(f"{passage_id} FAILED  {failure}", file=sys.stderr)
+            failed.append(passage_id)
+    return failed
 
 
 def main() -> int:
@@ -281,6 +456,9 @@ def main() -> int:
     ap.add_argument("--all", action="store_true",
                     help="every passage that has a text and questions on disk")
     ap.add_argument("--owner", required=True, type=uuid.UUID)
+    ap.add_argument("--evidence-only", action="store_true",
+                    help="place the evidence spans on materials that are "
+                         "already imported, and change nothing else")
     args = ap.parse_args()
 
     if args.passage_id:
@@ -306,13 +484,8 @@ def main() -> int:
                   file=sys.stderr)
             return 1
 
-    failed: list[str] = []
-    for passage_id in ids:
-        try:
-            asyncio.run(import_passage(passage_id, args.owner))
-        except (Exception, SystemExit) as failure:  # noqa: BLE001
-            print(f"{passage_id} FAILED  {failure}", file=sys.stderr)
-            failed.append(passage_id)
+    failed = asyncio.run(run_all(ids, args.owner,
+                                 evidence_only=args.evidence_only))
     if failed:
         print(f"\n{len(failed)} passage(s) failed: {', '.join(failed)}",
               file=sys.stderr)
