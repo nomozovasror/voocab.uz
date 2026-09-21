@@ -970,6 +970,18 @@ export interface TranscriptLine {
   text: string;
 }
 
+/** Where one answer is found in a passage, in the coordinates everything
+ *  else on a reading page is placed in — see
+ *  `features/reading/highlights.ts`. A part as well as a paragraph, because
+ *  a paper holds three passages and each letters its paragraphs from A. */
+export interface EvidenceSpan {
+  part_id: string;
+  paragraph_index: number;
+  /** Half-open offsets into the paragraph's plain text. */
+  start: number;
+  end: number;
+}
+
 export interface QuestionResult {
   question_id: string;
   /** The number printed beside it on the paper — worked out by the server
@@ -995,6 +1007,14 @@ export interface QuestionResult {
    *  two" is answered in two places and sending back one of them would send
    *  the learner to half of why they were wrong. */
   option_replay?: Record<string, [number, number]>;
+  /** Where in the PASSAGE the answer is found — reading's counterpart to the
+   *  replay range, released after the submit for the same reason.
+   *
+   *  Empty for a listening question, for a reading question written before
+   *  the extraction existed, and for one the model could not place. Nothing
+   *  approximate is ever sent: a mark two words off reads as a broken page
+   *  rather than as a near miss. */
+  evidence?: EvidenceSpan[];
   /** Every transcript line this answer's moment touches, in playback order.
    *  Empty when the author marked no range, or when the recording has no
    *  transcript yet — practice doesn't wait for one. */

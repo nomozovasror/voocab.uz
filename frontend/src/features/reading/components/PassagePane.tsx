@@ -6,6 +6,12 @@ import {
   type Highlight,
   type MarkColour,
 } from "@/features/reading/highlights";
+import {
+  overlaysIn,
+  points,
+  WASH as LAYER_WASH,
+  type Overlay,
+} from "@/features/reading/layers";
 
 /**
  * The text a reading paper is answered from.
@@ -45,6 +51,22 @@ interface PassagePaneProps {
    *  answer came from. Null while the paper is being sat: there is nothing to
    *  point at yet, and pointing would be telling. */
   highlight?: string | null;
+  /** What the REVIEW has to say about this text: where the answers were,
+   *  which words are worth learning, which of those are already saved. One
+   *  layer's worth — see `features/reading/layers.ts` on why never four.
+   *
+   *  Absent while the paper is being sat, and that is not a matter of
+   *  tidiness: every one of these is an answer. */
+  overlays?: Overlay[];
+  /** The overlay `key` currently being pointed at from the other pane, drawn
+   *  brighter. One key rather than one overlay, because a question's
+   *  evidence can be two sentences and lighting one of them lights half of
+   *  why the reader was wrong. */
+  lit?: string | null;
+  /** Pointing at a mark from THIS side, which lights the row that belongs to
+   *  it in the other pane. The hover link works both ways or it is a trick
+   *  the reader has to learn the direction of. */
+  onPoint?: (key: string | null) => void;
   className?: string;
 }
 
@@ -94,6 +116,9 @@ export function PassagePane({
   highlights,
   onUnmark,
   highlight,
+  overlays,
+  lit,
+  onPoint,
   className,
 }: PassagePaneProps) {
   return (
@@ -157,42 +182,91 @@ export function PassagePane({
               // first version of the control did, silently.
               className="min-w-0 flex-1 text-[0.95em] leading-[1.72] text-foreground"
             >
-              {runsOf(
-                paragraph.text,
-                marksIn(highlights ?? [], partId, index),
-              ).map((run, k) =>
-                run.mark ? (
-                  // `mark` rather than a span: it is literally what the
-                  // element is for, and it is what a screen reader announces
-                  // as marked text. A click takes it off again — the same
-                  // gesture that put it on, which is how every highlighter
-                  // in a document works.
-                  <mark
-                    key={k}
-                    title={run.mark.note || undefined}
-                    onClick={
-                      onUnmark ? () => onUnmark(index, run.at) : undefined
-                    }
-                    className={cn(
-                      "text-foreground",
-                      STROKE,
-                      WASH[run.mark.colour ?? "key"],
-                      // A note is a mark that says something, and it has to
-                      // look like one or the reader cannot tell which of
-                      // their own marks they wrote on. An underline rather
-                      // than an icon: an icon inside running prose is a
-                      // character the sentence did not have.
-                      run.mark.note &&
-                        "decoration-dotted underline underline-offset-4",
-                      onUnmark && "cursor-pointer",
-                    )}
-                  >
-                    {run.text}
-                  </mark>
-                ) : (
-                  <span key={k}>{run.text}</span>
-                ),
-              )}
+              {/* Two kinds of marking, never both at once.
+
+                  A paragraph carries either what the READER put on it — the
+                  take screen, and the review's "My marks" layer, which is
+                  the same data drawn the same way — or what the REVIEW has
+                  to say about it. Laid over each other they would be two
+                  systems of colour in one sentence, which is the thing
+                  `layers.ts` exists to prevent one level up. */}
+              {overlays
+                ? runsOf(
+                    paragraph.text,
+                    overlaysIn(overlays, partId, index),
+                  ).map((run, k) =>
+                    run.mark ? (
+                      <mark
+                        key={k}
+                        // What the other pane scrolls to. On the MARK rather
+                        // than on the paragraph, because a paragraph is
+                        // ninety words and the reader was promised a
+                        // sentence — and because a question's evidence can
+                        // be in two paragraphs, of which this names the
+                        // first drawn.
+                        data-overlay={run.mark.key}
+                        // And the keys of whatever this mark swallowed, so
+                        // two questions whose evidence is the SAME sentence
+                        // can both be jumped to. Space-separated for the
+                        // `~=` selector that reads it; only question ids are
+                        // ever looked up this way, and those have no spaces
+                        // in them.
+                        data-overlay-also={run.mark.also?.join(" ")}
+                        title={run.mark.title || undefined}
+                        onMouseEnter={
+                          onPoint ? () => onPoint(run.mark!.key) : undefined
+                        }
+                        onMouseLeave={onPoint ? () => onPoint(null) : undefined}
+                        className={cn(
+                          "text-foreground transition-colors duration-fast",
+                          STROKE,
+                          LAYER_WASH[run.mark.tone].rest,
+                          points(run.mark, lit ?? null) &&
+                            LAYER_WASH[run.mark.tone].lit,
+                        )}
+                      >
+                        {run.text}
+                      </mark>
+                    ) : (
+                      <span key={k}>{run.text}</span>
+                    ),
+                  )
+                : runsOf(
+                    paragraph.text,
+                    marksIn(highlights ?? [], partId, index),
+                  ).map((run, k) =>
+                    run.mark ? (
+                      // `mark` rather than a span: it is literally what the
+                      // element is for, and it is what a screen reader announces
+                      // as marked text. A click takes it off again — the same
+                      // gesture that put it on, which is how every highlighter
+                      // in a document works.
+                      <mark
+                        key={k}
+                        title={run.mark.note || undefined}
+                        onClick={
+                          onUnmark ? () => onUnmark(index, run.at) : undefined
+                        }
+                        className={cn(
+                          "text-foreground",
+                          STROKE,
+                          WASH[run.mark.colour ?? "key"],
+                          // A note is a mark that says something, and it has to
+                          // look like one or the reader cannot tell which of
+                          // their own marks they wrote on. An underline rather
+                          // than an icon: an icon inside running prose is a
+                          // character the sentence did not have.
+                          run.mark.note &&
+                            "decoration-dotted underline underline-offset-4",
+                          onUnmark && "cursor-pointer",
+                        )}
+                      >
+                        {run.text}
+                      </mark>
+                    ) : (
+                      <span key={k}>{run.text}</span>
+                    ),
+                  )}
             </p>
           </div>
         ))}

@@ -24,8 +24,9 @@ import type { AttemptResult } from "@/features/paper/types";
  * one fact — how much better this went — where the same two numbers in two
  * places are an arithmetic problem set for the reader.
  *
- * **Every column is withheld rather than faked.** There is no first-try
- * figure on a first try — the same number under a second name is a panel
+ * **Every column is withheld rather than faked.** There is no look-up count
+ * on a paper nobody looked anything up in, no first-try figure on a first
+ * try — the same number under a second name is a panel
  * padding itself out — and no platform average until enough people have
  * answered the paper for one to mean anything, which is the difficulty
  * projection's own threshold and not a second one invented here.
@@ -81,6 +82,18 @@ export function ReviewScore({
           )}
           {data.time_spent_ms != null && (
             <Stat label="Time">{spent(data.time_spent_ms)}</Stat>
+          )}
+          {/* How many of the three this sitting spent. A fact about how the
+              paper was worked rather than about how it was marked, and the
+              only one of these columns that is: somebody who read nine
+              hundred words without reaching for the dictionary once read
+              them differently from somebody who spent all three by
+              paragraph C.
+
+              Absent at zero, and absent for every listening attempt, which
+              is the same absence — there is no dictionary in a recording. */}
+          {(data.looked_up?.length ?? 0) > 0 && (
+            <Stat label="Looked up">{data.looked_up!.length}</Stat>
           )}
           {data.material_avg_pct != null && (
             <Stat label="Average here">{data.material_avg_pct}%</Stat>

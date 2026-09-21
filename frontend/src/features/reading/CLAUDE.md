@@ -57,27 +57,79 @@ label)` and `passageId(partId)` are the only two ways to name one. Three
 passages each letter from A, so a page that anchored on the bare letter
 carried three elements called `p-C` and every jump landed on the first.
 
-## The review's quote says which paragraph, and goes there
+## The review is the take screen again, with the passage marked
 
-Listening places its quote in TIME — a clock above it, a play button beside
-it. A page has no clock, and reading's counterpart is the paragraph:
-`passageQuote` returns the line AND where it came from, the row prints
-*Paragraph C*, and pressing it opens the passages, marks that paragraph and
-scrolls to it. Somebody who answered NOT GIVEN wrongly has to read around the
-line, not just see it — that is the whole of what the play button was for.
+The review used to put the text last and collapsed: a score, the wrong
+answers, a hundred and one vocabulary entries down a column that did not end,
+and the nine hundred words the whole hour was spent inside behind a
+`<details>` called *Read the passage again*.
 
-Both halves are withheld together and for the same reason as everywhere else
-here: no quote where the answer appears twice, and no paragraph where the
-book letters none. A control that points at the wrong paragraph is worse than
-no control, because a candidate uses it to decide what they misread.
+That is the wrong way round, because **everything a review has to say is a
+statement about the passage** — this is where the answer was, this is the
+word you did not know, this is the one you saved a fortnight ago and have
+just met again. Beside the text each of those is a lesson; in a list on its
+own each is a row of data.
 
-**Opening a panel and scrolling into it are two renders, not one.** A closed
-`<details>` does not lay its contents out, so the paragraph has no position
-until React has committed the open panel — and `requestAnimationFrame` is not
-that moment, it can run first. The scroll belongs in an effect. The same
-two-step applies to jumping to a question the filter is hiding, which is why
-the parked id lives in STATE: parked in a ref, nothing reads it, and the jump
-silently never happens.
+So `ReadingResultsPage` is `ReadingTakePage`'s shape: two panes, the header's
+three islands, the same full-bleed pull under the chrome. The reader does not
+have to learn it — they were in it twenty minutes ago. What is different is
+what is written on the passage.
+
+**One layer at a time, never four** (`layers.ts`). Mistakes in red, the
+vocabulary in amber, the already-saved words in blue, and the reader's own
+marks. Four kinds of marking over nine hundred words at once is not four
+findings, it is a page of colour with prose underneath it. One at a time
+makes each a QUESTION somebody asked, and the toggle in the middle island is
+where they ask it.
+
+- **A layer with nothing in it is not offered.** No mistakes on a clean
+  sheet, no vocabulary on a passage the extraction never reached, no marks
+  from a reader who highlighted nothing. Absence reads as "not this paper";
+  a disabled button reads as "not you". The same fall-through picks the
+  opening layer, so a clean sheet opens on the vocabulary with no second
+  rule written for it.
+- **"My marks" is not an overlay.** It hands `PassagePane` the reader's own
+  `Highlight`s and the existing code draws them, so they keep the three
+  colours they were made in. Those colours mean something — the keyword,
+  where the answer was, the line to come back to — and repainting them one
+  neutral colour on the one page that exists to give that back would throw
+  away the only part of a mark that carries information.
+- **The tab carries the layer; the layer does not carry the tab.** Pressing
+  *Vocabulary* marks the vocabulary, because the tab and the layer are the
+  same question asked twice. It is one-way because the layers are finer than
+  the tabs — Saved and My marks have no tab — and a control that silently
+  undid itself from the other side would make four buttons feel like two.
+
+## Where the answer was: evidence, and its fallback
+
+`questions.evidence` is reading's `replay_start_ms`: paragraph and offsets
+rather than a moment in a recording, several spans rather than one, found by
+`seed/read_evidence.py` and checked by being a real substring's real
+position. Pointing at a mistake lights its sentence in the passage; pointing
+at that sentence lights the mistake; pressing scrolls to it.
+
+`passageQuote` is still here and is the FALLBACK for a paper the extraction
+never reached: it finds the answer string in the text and, where the book
+letters its paragraphs, the row offers *Paragraph C*. A row never carries
+both, or it would offer two ways to two different places. Both are withheld
+in silence where they cannot be had — no quote where the answer appears
+twice, no paragraph where the book letters none, no mark where the model
+could not place one. **A control that points at the wrong line is worse than
+no control**, because a candidate uses it to decide what they misread.
+
+**A phrase's mark answers to the words inside it.** `in vogue` and `vogue`
+are two entries over three words and only one mark can be drawn, so
+`overlaysIn` merges the loser's key into the winner's `also`. Without it,
+pointing at `vogue` in the list — one of the three words this reader spent a
+look-up on — lights nothing, and the page looks broken at the row that
+matters most.
+
+**Switching a layer on and scrolling into it are two renders, not one.** The
+mark does not exist until React has drawn the layer, and
+`requestAnimationFrame` is not that moment — it can run first. The scroll
+belongs in an effect, and the target id is parked in STATE: parked in a ref,
+nothing reads it, and the jump silently never happens. The same two-step
+applies to jumping to a question the filter is hiding.
 
 ## The tools are the real test's, and the budget is ours
 

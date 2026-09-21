@@ -103,3 +103,17 @@ they never read, which is worse than no quote at all.
 
 The play button is drawn only where an `onPlay` is handed in. A disabled one
 beside a reading quote would be a control that exists to be greyed out.
+
+**Reading quotes nothing when it can POINT instead.** `QuestionResult.
+evidence` is where in the passage the answer is — reading's counterpart to
+`replay_start_ms`, in paragraphs rather than milliseconds — and the reading
+review draws the passage beside the rows. `ReviewItem` takes an `evidence`
+prop there and replaces the quote box with a link: the same sentence copied
+into a box under the answer would be the words on screen twice, cut out of
+the paragraph that gives them their meaning. `passageQuote` stays as the
+fallback for papers the extraction never reached.
+
+One component either way, because it is one object under different
+conditions: where you were, what you put, and where the answer was. A second
+"review row" for reading would be two files that have to agree about what a
+marked question looks like.

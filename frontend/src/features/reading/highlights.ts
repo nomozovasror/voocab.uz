@@ -141,16 +141,32 @@ function sameKind(a: Highlight, b: Highlight): boolean {
   return (a.colour ?? "key") === (b.colour ?? "key") && !a.note && !b.note;
 }
 
-export interface Run {
+export interface Run<T = Highlight> {
   text: string;
   at: number;
   /** Null where this run is plain text. */
-  mark: Highlight | null;
+  mark: T | null;
 }
 
-/** The text of one paragraph, cut into marked and unmarked runs. */
-export function runsOf(text: string, marks: Highlight[]): Run[] {
-  const out: Run[] = [];
+/**
+ * The text of one paragraph, cut into marked and unmarked runs.
+ *
+ * Generic over what a mark IS, because the review page lays a second kind
+ * over the same prose — where the answer was, which words are worth
+ * learning, which of them this reader has already saved — and every one of
+ * those is a paragraph and two offsets with something else hanging off it.
+ * The cutting is identical; only what the caller does with `mark` differs.
+ *
+ * The marks must arrive sorted and non-overlapping. Both callers see to that
+ * themselves, for different reasons: `marksIn` merges the reader's touching
+ * marks, and `features/reading/layers.ts` drops an overlay swallowed by a
+ * longer one.
+ */
+export function runsOf<T extends { start: number; end: number }>(
+  text: string,
+  marks: T[],
+): Run<T>[] {
+  const out: Run<T>[] = [];
   let at = 0;
   for (const mark of marks) {
     const from = Math.max(at, Math.min(mark.start, text.length));

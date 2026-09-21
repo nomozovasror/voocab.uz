@@ -18,6 +18,15 @@ import type {
  * who has not submitted the paper. One word at a time while the clock is
  * running; the whole list on the review page, which is what it is for.
  */
+/** The cache key for one material's whole vocabulary.
+ *
+ *  Written once because two things now read it: the review's word list, and
+ *  the passage beside it, which is MARKED from the same rows. Two components
+ *  spelling the key out themselves is how one of them ends up reading a copy
+ *  it did not know it had — and here that would show as a save that greys the
+ *  button and leaves the word in the passage drawn as unsaved. */
+export const vocabularyKey = (materialId: string) => ["vocabulary", materialId];
+
 export const vocabularyApi = {
   /** One tapped word, in this passage's sense.
    *

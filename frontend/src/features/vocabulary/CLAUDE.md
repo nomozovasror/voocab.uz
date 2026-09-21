@@ -97,6 +97,27 @@ passage a student struggled with.
 - **Every entry carries its sentence from the passage.** It is the passage's
   own sentence, cut from the text rather than written by a model, and it is
   the whole argument for saving words from a paper instead of from a list.
+- **It sits beside the passage, marked.** It used to be a bordered panel at
+  the bottom of a page, and a hundred and one entries of four lines each is
+  ten screens of words with no text anywhere near them — a dictionary with
+  the one thing that made it worth reading taken out. It is now a tab
+  opposite the passage, the passage is washed amber over the words it is
+  talking about, and pointing at either lights the other.
+- **The list is fetched by the PAGE, not by the list.** The marking on the
+  passage comes from the same rows, and two components asking the cache the
+  same question is one of them holding a copy that stops agreeing with the
+  other the first time somebody presses Save. `vocabularyKey` is written
+  once for that reason.
+- **"Saved earlier" is taken once, when the page opens, and never updated.**
+  It is a claim about a DIFFERENT DAY — you met this word a fortnight ago
+  and here it is again. A badge that appeared on a word two seconds after
+  somebody saved it would be the page congratulating them on remembering
+  what they had just done. `entry.saved` is the live fact and drives the
+  button and the blue mark; this is the other one.
+- **"Save my look-ups" is the smallest button and the most valuable.** Every
+  other word here is one a frequency list thinks is hard. Those two or three
+  are the ones that stopped THIS reader, and nothing else on the platform
+  knows which they were.
 
 ## A saved word is one word with several contexts
 
