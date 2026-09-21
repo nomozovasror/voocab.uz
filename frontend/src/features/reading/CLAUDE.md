@@ -140,8 +140,44 @@ model:
   exactly once and no other mark has claimed that stretch — one run of prose
   gets one mark, so a red word inside a green sentence would be swallowed
   and come back as part of a mark that says the opposite of what it means.
-- **True/false** — nothing. Both readings are the same sentence, and a
-  second mark would point at the first one again.
+- **True/false and yes/no** — three different answers, because there are
+  three different ways to get one wrong. See below; this is the one that
+  teaches most.
+
+## TRUE / FALSE / NOT GIVEN is three explanations, not one
+
+NOT GIVEN is the hardest thing about IELTS reading to learn, and what makes
+it hard is that **the passage always DOES mention the subject.** A candidate
+finds a sentence about the right people doing the right thing, reads one
+step past where it stops, and answers TRUE.
+
+So which explanation a statement gets is decided by what the answer was and
+what they put:
+
+- **The key is NOT GIVEN and they answered otherwise.** There is no evidence
+  — that is what the answer means — so nothing is green. What is drawn is
+  the sentence that made them think there was, in red, and the row says *the
+  passage mentions this — but never says it.* It is filed as a DISTRACTOR
+  under BOTH wrong answers, because whichever of the two they chose, that
+  sentence is what they read.
+
+  This used to be filed as evidence, and the review drew it green under "the
+  answer was here", which is the opposite of what NOT GIVEN means — on the
+  one question type where being wrong about that is the whole difficulty.
+- **They answered NOT GIVEN and the passage does say.** The evidence was
+  there and they missed it: the ordinary green mark, and the row says *the
+  evidence was here all along.*
+- **TRUE and FALSE swapped.** One sentence, read with the wrong word in it,
+  so pointing at the sentence points at something they had already found.
+  The WORD is marked inside the sentence — `Overlay.inner`, drawn by
+  splitting the outer mark's own text, since one run of prose gets one
+  `<mark>` and a second overlay would be swallowed. A stronger tint of the
+  same colour and never a different one: it is not a third kind of finding,
+  it is the point of the one already drawn.
+
+The deciding word is withheld from a RIGHT answer, like the trap is. The
+sentence is drawn quietly there already, and underlining a word inside it
+would be the page explaining something nobody got wrong.
 
 **A question got RIGHT is marked once and quietly** — a thin green rule, no
 wash. Two washes per mistake plus a wash per success is a passage with no

@@ -1501,6 +1501,18 @@ class QuestionResultOut(BaseModel):
     #: all but wherever the learner's own word happens to appear. The review
     #: finds that one itself, in the passage it already has.
     distractor: list[EvidenceSpanOut] = Field(default_factory=list)
+    #: The word or two a TRUE / FALSE statement turns on, inside the sentence
+    #: that settles it — `some` against `all`, `increased` against `fell`.
+    #:
+    #: The third of the three ways to get one of these wrong, and the one a
+    #: span alone cannot explain: the candidate read the right sentence and
+    #: the wrong word in it, so pointing at the sentence points at something
+    #: they had already found. Drawn INSIDE the answer's own mark.
+    #:
+    #: Empty for a right answer — the sentence is already drawn quietly, and
+    #: underlining a word inside it would explain something nobody got
+    #: wrong — and for every statement where no single word settles it.
+    keywords: list[EvidenceSpanOut] = Field(default_factory=list)
     #: The transcript across this answer's moment — every line the marked
     #: range touches, in playback order. Empty when the author marked no
     #: range, or when the recording has no transcript yet (practice doesn't

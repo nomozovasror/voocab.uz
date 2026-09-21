@@ -109,8 +109,15 @@ class Question(SQLModel, table=True):
     #: ``[{"index": int, "start": int, "end": int}, ...]``. NULL rather than
     #: ``[]`` where nothing is known, so "never extracted" and "extracted and
     #: found nothing" stay two different facts.
+    #:
+    #: ``none_as_null`` is not a detail: without it SQLAlchemy writes Python
+    #: ``None`` into a JSONB column as the JSON value ``null``, which reads
+    #: back as ``None`` and is therefore invisible from the application —
+    #: and is NOT SQL NULL, so ``WHERE evidence IS NULL`` misses every row
+    #: of it. Fifty-three questions were cleared that way and went on
+    #: answering "yes, I have evidence" to anybody counting in SQL.
     evidence: list[dict] | None = Field(
-        default=None, sa_column=Column(JSONB, nullable=True)
+        default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
     )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),

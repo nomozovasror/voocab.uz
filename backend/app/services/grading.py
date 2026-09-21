@@ -696,6 +696,26 @@ async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
                     if correct
                     else _distractor(question, group, row, from_option)
                 ),
+                # The word or two a true/false statement turns on, inside
+                # the sentence that settles it. Sent for a wrong answer
+                # only: on a right one the sentence is already drawn
+                # quietly, and underlining the word inside it would be the
+                # page explaining something nobody got wrong.
+                "keywords": (
+                    []
+                    if correct
+                    else [
+                        {
+                            "part_id": group.part_id,
+                            "paragraph_index": span["index"],
+                            "start": span["start"],
+                            "end": span["end"],
+                        }
+                        for span in ((question.config or {}).get("key_words") or [])
+                        if isinstance(span, dict)
+                        and {"index", "start", "end"} <= span.keys()
+                    ]
+                ),
                 "transcript": transcript_across(lines, ranges),
             }
         )
@@ -726,7 +746,11 @@ def _distractor(question, group, row, from_option: dict) -> list[dict]:
     a mark over a sentence nobody was misled by teaches the opposite of what
     this is for.
     """
-    if row is None or not listening_service.answers_are_letters(group):
+    # Everything PICKED from something printed, which is wider than
+    # "answered by a letter" and is the right question here: a true/false
+    # statement is graded as words and is nonetheless chosen from three
+    # buttons, and the button they chose is exactly what this is about.
+    if row is None or not listening_service.answers_are_chosen(group):
         return []
     right = {str(one).strip().lower() for one in question.correct_answers}
     chosen = [
@@ -739,12 +763,21 @@ def _distractor(question, group, row, from_option: dict) -> list[dict]:
     if not chosen:
         return []
 
-    if group.type == QuestionGroupType.MULTIPLE_CHOICE:
-        # The question's own box, so the spans are the question's own —
-        # exactly where ``option_replay`` lives for the same reason.
-        source = (question.config or {}).get("option_evidence") or {}
-    else:
+    if group.type in listening_service.MATCHING_TYPES:
         source = from_option.get(group.id) or {}
+    else:
+        # The question's own box — multiple choice, and the three words a
+        # true/false statement is answered with. The spans are the
+        # question's own, exactly where ``option_replay`` lives for the same
+        # reason.
+        #
+        # A NOT GIVEN statement's entry is the same sentence under BOTH of
+        # its wrong answers, because both are pulled by it: whether they
+        # said TRUE or FALSE, what they read was that. And it is a
+        # distractor rather than evidence, which is the whole difficulty of
+        # the task — the passage mentions the subject here and does not
+        # settle it.
+        source = (question.config or {}).get("option_evidence") or {}
 
     out: list[dict] = []
     for letter in chosen:

@@ -2675,6 +2675,59 @@ all — it is whatever word the learner happened to write — so the review
 searches the passage for it in the browser, and marks it only where it
 appears exactly once and nothing else has claimed that stretch.
 
+### The third question: TRUE / FALSE / NOT GIVEN is three questions
+
+This stage got these wrong the first time, and the way it got them wrong is
+worth writing down, because the same reasoning would look sound again.
+
+The old prompt asked a NOT GIVEN statement for "the place that comes closest
+to the claim" and filed the answer under `quotes` — the evidence field. The
+review then drew it green, under the heading *the answer was here*, which is
+the precise opposite of what NOT GIVEN means. It was also mostly silent: the
+model declined two thirds of them, correctly, because it had been asked
+where the evidence was for a statement that has none.
+
+But NOT GIVEN is the single hardest thing about the task to learn, and what
+makes it hard is exactly what the old prompt could not express: **the
+passage always DOES mention the subject.** That is the trap. A candidate
+finds a sentence about the right people doing the right thing, reads one
+step further than it goes, and answers TRUE. Showing them that sentence —
+in red, saying *the passage mentions this and never says it* — is the whole
+lesson, and it is the one piece of feedback no score can give.
+
+So there are three questions, not one, and the tag on each statement says
+which it is being asked:
+
+* `[not given]` — no evidence exists; give `near`, the place that comes
+  closest without saying it. Stored as a DISTRACTOR under both of the
+  answers it is not, because whichever of the two the candidate chose, that
+  sentence is what they read.
+* `[true/false]` — the evidence as usual, plus `deciding_words`: the words
+  inside that quote which settle it. These are almost always quantity,
+  degree, time or direction — `some` against `all`, `increased` against
+  `declined` — and almost never the nouns, which are what the statement and
+  the passage agree about.
+* everything else is unchanged.
+
+`deciding_words` was called `keys` for one run and the model answered it
+with `"NO"` and `"YES"` — the answer key, which is what the name says.
+Renaming it and giving the prompt a worked example fixed it in one attempt.
+The words are then located INSIDE the quoted span and nowhere else, and
+matched at word boundaries: the first version put `no` inside `not`, on a
+statement turning on *not suffer*, which is not a near miss but the
+opposite word.
+
+Which of the three a statement gets is read off `correct_answers` rather
+than off the printed `key`, and that matters: six passages in the corpus
+print their answer key as initials — `T`, `F`, `NG` — and reading only the
+long form filed every NOT GIVEN statement on those papers as an ordinary
+true/false. `build_questions.py` expands them on the way into
+`correct_answers`, so that is the field to trust.
+
+`--fixed-choice-only` asks these two questions of a corpus already read and
+folds the answers back in, leaving every other entry exactly as it stands —
+the same arm, for the same reason, as `read_vocabulary.py --senses-only`.
+
 ### How wide a span may be
 
 One sentence, or a clause of one, between 12 and 320 characters. Not a

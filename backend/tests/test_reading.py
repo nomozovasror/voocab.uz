@@ -864,3 +864,168 @@ async def test_a_multiple_choice_distractor_comes_from_the_extraction():
             ]
     finally:
         await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_the_three_ways_to_get_a_true_false_statement_wrong():
+    """NOT GIVEN is the hardest thing about this task to learn, and what
+    makes it hard is that the passage always DOES mention the subject.
+
+    So a fixed-choice statement is explained three different ways, and which
+    one it gets is decided by what the answer was and what they put:
+
+    * the key is NOT GIVEN and they answered otherwise — there is no
+      evidence, by definition, and what there is instead is the sentence
+      that made them think there was. It is a DISTRACTOR, filed under both
+      wrong answers, because whichever of the two they chose, that is what
+      they read. Filed as evidence it would be drawn green under "the answer
+      was here", which is the opposite of what NOT GIVEN means;
+    * they answered NOT GIVEN and the passage does say — the evidence was
+      there and they missed it, which is the ordinary green mark;
+    * TRUE and FALSE swapped — one sentence, read with the wrong word in it,
+      so the word itself is marked inside the sentence.
+    """
+    email = f"reading-tfng-cases-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id)
+    headers = {"Cookie": f"access_token={create_access_token(str(user.id))}"}
+    try:
+        async with _client() as client:
+            part = await _passage_part(client, material.id, headers)
+            r = await client.post(
+                f"/api/parts/{part['id']}/question-groups",
+                json={
+                    "type": "true_false_not_given",
+                    "instructions": "Write TRUE, FALSE or NOT GIVEN.",
+                    "questions": [
+                        {"number": 1, "correct_answers": ["NOT GIVEN"],
+                         "prompt": "Beavers were reintroduced across Britain."},
+                        {"number": 2, "correct_answers": ["TRUE"],
+                         "prompt": "Reintroduction began at Knapdale."},
+                        {"number": 3, "correct_answers": ["FALSE"],
+                         "prompt": "The dams speed up rainfall off the hills."},
+                    ],
+                },
+                headers=headers,
+            )
+            assert r.status_code == 201, r.text
+            group_id = uuid.UUID(r.json()["id"])
+
+            async with async_session_factory() as session:
+                rows = {
+                    row.number: row
+                    for row in (await session.exec(
+                        select(Question).where(Question.group_id == group_id))).all()
+                }
+                # The NOT GIVEN statement: no evidence, a trap under both
+                # of the answers it is not.
+                rows[1].config = {
+                    **(rows[1].config or {}),
+                    "option_evidence": {
+                        "true": [{"index": 1, "start": 0, "end": 18}],
+                        "false": [{"index": 1, "start": 0, "end": 18}],
+                    },
+                }
+                rows[2].evidence = [{"index": 1, "start": 0, "end": 18}]
+                rows[3].evidence = [{"index": 2, "start": 0, "end": 20}]
+                rows[3].config = {
+                    **(rows[3].config or {}),
+                    "key_words": [{"index": 2, "start": 9, "end": 13}],
+                }
+                for row in rows.values():
+                    session.add(row)
+                await session.commit()
+
+            await _make_public(material.id)
+            r = await client.get(f"/api/materials/{material.id}/take", headers=headers)
+            assert "option_evidence" not in r.text
+            assert "key_words" not in r.text
+            questions = r.json()["parts"][0]["question_groups"][0]["questions"]
+
+            r = await client.post(
+                f"/api/materials/{material.id}/attempts",
+                json={"answers": [
+                    {"question_id": questions[0]["id"], "given_answer": "TRUE"},
+                    {"question_id": questions[1]["id"], "given_answer": "NOT GIVEN"},
+                    {"question_id": questions[2]["id"], "given_answer": "TRUE"},
+                ]},
+                headers=headers,
+            )
+            assert r.status_code == 200, r.text
+            results = {row["number"]: row for row in r.json()["results"]}
+
+            # 1 — the trap, and NOTHING green. This is the assertion the
+            # whole change is about.
+            assert results[1]["evidence"] == []
+            assert results[1]["distractor"] == [
+                {"part_id": part["id"], "paragraph_index": 1,
+                 "start": 0, "end": 18}
+            ]
+
+            # 2 — they said the passage was silent and it was not.
+            assert results[2]["distractor"] == []
+            assert results[2]["evidence"][0]["paragraph_index"] == 1
+
+            # 3 — one sentence, and the word inside it that settles it.
+            assert results[3]["evidence"][0]["paragraph_index"] == 2
+            assert results[3]["keywords"] == [
+                {"part_id": part["id"], "paragraph_index": 2,
+                 "start": 9, "end": 13}
+            ]
+    finally:
+        await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_a_statement_answered_rightly_explains_nothing():
+    """The deciding word is withheld from a right answer, and so is the
+    trap. The sentence is already drawn quietly on the passage; underlining
+    the word inside it would be the page explaining something nobody got
+    wrong, on the one screen whose whole job is to be about what they did."""
+    email = f"reading-tfng-right-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id)
+    headers = {"Cookie": f"access_token={create_access_token(str(user.id))}"}
+    try:
+        async with _client() as client:
+            part = await _passage_part(client, material.id, headers)
+            r = await client.post(
+                f"/api/parts/{part['id']}/question-groups",
+                json={
+                    "type": "true_false_not_given",
+                    "instructions": "Write TRUE, FALSE or NOT GIVEN.",
+                    "questions": [
+                        {"number": 1, "correct_answers": ["TRUE"],
+                         "prompt": "Reintroduction began at Knapdale."},
+                    ],
+                },
+                headers=headers,
+            )
+            group_id = uuid.UUID(r.json()["id"])
+            async with async_session_factory() as session:
+                row = (await session.exec(
+                    select(Question).where(Question.group_id == group_id))).one()
+                row.evidence = [{"index": 1, "start": 0, "end": 18}]
+                row.config = {**(row.config or {}),
+                              "key_words": [{"index": 1, "start": 0, "end": 4}]}
+                session.add(row)
+                await session.commit()
+
+            await _make_public(material.id)
+            r = await client.get(f"/api/materials/{material.id}/take", headers=headers)
+            question = r.json()["parts"][0]["question_groups"][0]["questions"][0]
+            r = await client.post(
+                f"/api/materials/{material.id}/attempts",
+                json={"answers": [
+                    {"question_id": question["id"], "given_answer": "true"},
+                ]},
+                headers=headers,
+            )
+            [result] = r.json()["results"]
+            assert result["is_correct"] is True
+            assert result["keywords"] == []
+            assert result["distractor"] == []
+            # The answer is still pointed at — quietly, on the passage.
+            assert len(result["evidence"]) == 1
+    finally:
+        await _cleanup(material.id, email)

@@ -1025,6 +1025,12 @@ export interface QuestionResult {
    *  last one is not a fact about the paper and the review finds it itself,
    *  in the passage it already has. */
   distractor?: EvidenceSpan[];
+  /** The word or two a TRUE / FALSE statement turns on, inside the sentence
+   *  that settles it. The third way to get one of those wrong and the one a
+   *  span cannot explain by itself: the candidate read the right sentence
+   *  and the wrong word in it, so pointing at the sentence points at
+   *  something they had already found. Drawn inside the answer's mark. */
+  keywords?: EvidenceSpan[];
   /** Every transcript line this answer's moment touches, in playback order.
    *  Empty when the author marked no range, or when the recording has no
    *  transcript yet — practice doesn't wait for one. */

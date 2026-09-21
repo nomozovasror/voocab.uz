@@ -134,6 +134,16 @@ export interface Overlay {
    *  reading. Seventeen coloured sentences is not an answer to "where was
    *  question 31"; `Q31` beside one of them is. */
   labels?: string[];
+  /** Stretches INSIDE this mark to draw harder — the word a true/false
+   *  statement turns on, within the sentence that settles it.
+   *
+   *  Carried on the outer mark rather than laid over it as a second
+   *  overlay, because one run of prose gets one mark (`overlaysIn`) and a
+   *  second one here would be swallowed by the first. The passage pane
+   *  splits the mark's own text instead, which is the only way two marks
+   *  can be nested at all. Offsets are the paragraph's, like everything
+   *  else. */
+  inner?: { start: number; end: number }[];
 }
 
 /**
@@ -187,6 +197,19 @@ export function evidenceOverlays(results: QuestionResult[]): Overlay[] {
         tone: result.is_correct ? "got" : "missed",
         key: result.question_id,
         labels: [`Q${result.number}`],
+        // The deciding words, where they fall inside THIS sentence. A
+        // statement answered in two places has its word in one of them,
+        // and drawing it in both would be the page inventing a second
+        // trap.
+        inner: (result.keywords ?? [])
+          .filter(
+            (word) =>
+              word.part_id === span.part_id &&
+              word.paragraph_index === span.paragraph_index &&
+              word.start >= span.start &&
+              word.end <= span.end,
+          )
+          .map((word) => ({ start: word.start, end: word.end })),
         title: result.is_correct
           ? `Question ${result.number} — you got this one`
           : `Question ${result.number} — the answer was here`,

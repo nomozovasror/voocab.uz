@@ -50,7 +50,7 @@ from app.core.database import async_session_factory
 from app.models.material import Material
 from app.models.part import Part
 from app.models.question import Question
-from app.models.question_group import QuestionGroup
+from app.models.question_group import FIXED_CHOICE_OPTIONS, QuestionGroup
 from app.models.user import User
 from app.services import difficulty as difficulty_service
 from app.services import vocabulary as vocabulary_service
@@ -264,10 +264,11 @@ async def import_evidence(session, part_id: uuid.UUID, passage_id: str) -> int:
             if question.evidence is not None:
                 question.evidence = None
                 session.add(question)
-            if (question.config or {}).get("option_evidence"):
+            stale = {"option_evidence", "key_words"} & set(question.config or {})
+            if stale:
                 question.config = {key: value
                                    for key, value in question.config.items()
-                                   if key != "option_evidence"}
+                                   if key not in stale}
                 session.add(question)
 
     written = 0
@@ -298,15 +299,37 @@ async def import_evidence(session, part_id: uuid.UUID, passage_id: str) -> int:
             for letter, given in (entry.get("options") or {}).items()
             if (kept := [one for one in (given or []) if fits(paragraphs, one)])
         }
+
+        # A NOT GIVEN statement's trap goes in the same place, under every
+        # answer that is not the right one.
+        #
+        # It belongs there because it IS a distractor — the sentence that
+        # made somebody answer TRUE — and because both wrong answers are
+        # pulled by the same sentence: whether they said TRUE or FALSE, what
+        # they read was this. Filing it as evidence instead is what the
+        # first run did, and a review then drew it green under "the answer
+        # was here", which is the opposite of what NOT GIVEN means.
+        near = [one for one in (entry.get("near") or []) if fits(paragraphs, one)]
+        if near:
+            right = {str(one).strip().lower() for one in question.correct_answers}
+            for word in FIXED_CHOICE_OPTIONS.get(group.type, ()):
+                if word.strip().lower() not in right:
+                    options[word.strip().lower()] = near
+
+        # The word or two the statement turns on, inside the sentence that
+        # settles it. Not a span of its own: it is drawn INSIDE the answer's
+        # mark, which is the only place it means anything.
+        keys = [one for one in (entry.get("keys") or []) if fits(paragraphs, one)]
+        # A re-run that placed nothing where it once placed something is a
+        # correction, not a gap to preserve — so both keys are written or
+        # cleared on every import.
+        config = {key: value for key, value in (question.config or {}).items()
+                  if key not in ("option_evidence", "key_words")}
         if options:
-            question.config = {**(question.config or {}),
-                               "option_evidence": options}
-        elif (question.config or {}).get("option_evidence"):
-            # A re-run that placed nothing where it once placed something is
-            # a correction, not a gap to preserve.
-            question.config = {key: value
-                               for key, value in question.config.items()
-                               if key != "option_evidence"}
+            config["option_evidence"] = options
+        if keys:
+            config["key_words"] = keys
+        question.config = config
 
         if not spans and not options:
             continue

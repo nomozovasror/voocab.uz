@@ -88,6 +88,51 @@ const WASH: Record<MarkColour, string> = {
   doubt: "bg-mark-doubt/40",
 };
 
+/** How a deciding word is drawn inside the mark around it. A stronger tint
+ *  of the mark's own colour — see where it is used. */
+const HARD: Record<Overlay["tone"], string> = {
+  chose: "bg-incorrect/35",
+  missed: "bg-correct/35",
+  got: "bg-correct/25",
+  word: "bg-mark-key/35",
+  saved: "bg-mark-found/35",
+};
+
+/**
+ * One mark's text, split around the stretches to draw harder.
+ *
+ * Offsets arrive in the PARAGRAPH's coordinates and the text is the mark's,
+ * so everything is measured from where the mark starts. Ranges outside it
+ * are ignored rather than clamped: a word that is not in this sentence is
+ * not this sentence's word, and clamping would draw it at the edge.
+ */
+function inside(
+  text: string,
+  at: number,
+  ranges: { start: number; end: number }[] | undefined,
+): { text: string; hard: boolean }[] {
+  const mine = (ranges ?? [])
+    .map((one) => ({ start: one.start - at, end: one.end - at }))
+    .filter(
+      (one) => one.start >= 0 && one.end <= text.length && one.end > one.start,
+    )
+    .sort((a, b) => a.start - b.start);
+  if (!mine.length) return [{ text, hard: false }];
+
+  const out: { text: string; hard: boolean }[] = [];
+  let cut = 0;
+  for (const one of mine) {
+    if (one.start < cut) continue;
+    if (one.start > cut) {
+      out.push({ text: text.slice(cut, one.start), hard: false });
+    }
+    out.push({ text: text.slice(one.start, one.end), hard: true });
+    cut = one.end;
+  }
+  if (cut < text.length) out.push({ text: text.slice(cut), hard: false });
+  return out;
+}
+
 /** What every mark wears, whatever colour it is. `box-decoration-clone` is
  *  the one that matters: a mark that wraps across a line break would
  *  otherwise get its padding and rounding only at the two outer ends, and
@@ -233,7 +278,32 @@ export function PassagePane({
                             LAYER_WASH[run.mark.tone].lit,
                         )}
                       >
-                        {run.text}
+                        {inside(run.text, run.at, run.mark.inner).map(
+                          (piece, n) =>
+                            piece.hard ? (
+                              // The word the statement turns on, inside the
+                              // sentence that settles it. A mark within a
+                              // mark, drawn by splitting the outer one's own
+                              // text — the only way to nest two, since one
+                              // run of prose gets one <mark>.
+                              //
+                              // Weight and a stronger tint of the SAME
+                              // colour, never a different one: it is not a
+                              // third kind of finding, it is the point of
+                              // the one already drawn.
+                              <strong
+                                key={n}
+                                className={cn(
+                                  "rounded-[0.15em] font-semibold",
+                                  HARD[run.mark!.tone],
+                                )}
+                              >
+                                {piece.text}
+                              </strong>
+                            ) : (
+                              <span key={n}>{piece.text}</span>
+                            ),
+                        )}
                         {/* The number, riding on the end of the mark.
                             Inside the <mark> so it travels with the wash
                             and cannot be separated from it by a line break,

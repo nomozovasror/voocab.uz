@@ -107,6 +107,31 @@ SHORTEST = 12
 BY_PROMPT = "matching_headings"      # the QUESTION names the paragraph
 BY_ANSWER = "matching_information"   # the ANSWER is the paragraph
 
+#: The two tasks answered TRUE / FALSE / NOT GIVEN, under their two names.
+#: They are asked a different pair of questions from everything else -- see
+#: the module docstring.
+FIXED_CHOICE = ("true_false_not_given", "yes_no_not_given")
+
+#: The answers that mean "the passage does not say", in both the spellings
+#: the corpus holds. Some books print the answer key in full and some print
+#: it as initials, and `build_questions.py` expands them on the way into
+#: `correct_answers` while `key` keeps what the page said. Reading only the
+#: long form missed every paper of the short kind -- four statements came
+#: back marked as having evidence for a claim the passage never makes.
+NOT_GIVEN = frozenset({"not given", "ng", "n/g"})
+
+#: How many decisive words one statement may turn on. Two or three is the
+#: truth of it -- `some` against `all`, `increased` against `fell` -- and a
+#: model asked for six starts underlining the nouns, which are the words the
+#: statement and the passage AGREE about and therefore decide nothing.
+KEYS = 3
+
+#: And how long one may be. A decisive word is a word, or two at most
+#: (`no longer`, `at least`). Past that the model has quoted the clause
+#: again, and a mark over the whole clause inside a mark over the whole
+#: sentence says nothing the outer one did not.
+KEY_WORDS = 3
+
 #: "Paragraph C", as a matching-headings question writes itself.
 NAMES_PARAGRAPH = re.compile(r"^\s*paragraph\s+([A-Z])\b", re.I)
 
@@ -146,12 +171,41 @@ the evidence a teacher would underline when explaining it.
   characters.
 - Where the answer genuinely turns on two separate places, give both as two
   quotes. At most {most}.
-- For a TRUE / FALSE / NOT GIVEN or YES / NO / NOT GIVEN question answered
-  NOT GIVEN, quote the place that comes CLOSEST to the claim -- the sentence
-  the candidate probably read and over-read. If the passage truly says
-  nothing on the subject, give an empty list for that question.
 - If you cannot find the evidence for a question, give an empty list for it.
   An empty list is a good answer; an invented quote is not.
+- A question marked `[not given]` has NO evidence, by definition — that is
+  what its answer means. Give it an empty `quotes` list and answer its
+  `near` instead, below.
+
+Some questions are marked `[true/false]`. Those turn on one or two WORDS,
+and the candidate who got one wrong read the right sentence and the wrong
+word in it. For each, give `deciding_words`: the words FROM YOUR OWN QUOTE
+that settle the answer — the ones the statement contradicts or matches.
+
+For example, for the statement "All the students were given copies" and the
+quote "He's given some of the students copies of No Fear Shakespeare", the
+answer is ["some"]: `some` against `all` is the whole of why the statement
+is false.
+
+They are almost always quantity, degree, time or direction — some / all,
+increased / declined, always / often, before / after, may / will. They are
+almost never the nouns, because the nouns are what the statement and the
+passage AGREE about.
+
+**Never the answer itself.** Do not write TRUE, FALSE, YES or NO: those are
+not in the passage and are not what this asks for. Each word must be copied
+exactly from the quote you have just given and be findable in it by exact
+search. At most {keys}, each at most {key_words} words. Where no single word
+settles it — the statement is contradicted by the sense of the whole
+sentence — give an empty list, which is an ordinary answer.
+
+Some questions are marked `[not given]`. The answer is that the passage does
+not say, so there is nothing to quote as evidence — but there is almost
+always a sentence that made the candidate think otherwise, and that sentence
+is the whole lesson. Give it as `near`: the place that comes CLOSEST to the
+statement without actually saying it — the same subject, the same people, a
+neighbouring claim. If the passage really is silent on the subject, give an
+empty list.
 
 Some questions are marked `[multiple choice]` and list their options. For
 those, ALSO say where each WRONG option came from — the words in the passage
@@ -168,11 +222,12 @@ what it is for.
 Reply with JSON only, and nothing else:
 
 {{"evidence": [{{"id": "...", "quotes": ["...", "..."],
+"deciding_words": ["..."], "near": ["..."],
 "options": {{"A": ["..."], "B": [], "C": ["..."]}}}}]}}
 
-`options` only for the questions marked `[multiple choice]`, and only for
-their WRONG options — never for the correct one, which `quotes` already
-answers.
+`deciding_words` only for `[true/false]`, `near` only for `[not given]`, and
+`options` only for `[multiple choice]` — and there, only for their WRONG
+options, never for the correct one, which `quotes` already answers.
 """
 
 
@@ -228,7 +283,29 @@ def asked(group: dict, question: dict) -> str:
     if options and group["type"] == "multiple_choice":
         letters = [f"{chr(97 + i).upper()}. {text}" for i, text in enumerate(options)]
         prompt = "[multiple choice] " + f"{prompt} / " + " / ".join(letters)
+    elif group["type"] in FIXED_CHOICE:
+        # Two tags, because the two are opposite questions. One asks where
+        # the deciding word is; the other asks where the trap is, having
+        # already been told there is no evidence to find.
+        prompt = ("[not given] " if is_not_given(question)
+                  else "[true/false] ") + prompt
     return prompt or "(no text)"
+
+
+def is_not_given(question: dict) -> bool:
+    """Whether the answer to this statement is that the passage does not say.
+
+    Read off the answer rather than off the type: a true/false GROUP holds
+    all three answers, and which of them a statement has is the whole
+    difference between "where is the evidence" and "where is the trap".
+
+    `correct_answers` first, because it is the expanded form and the one the
+    app grades against; `key` is what the book printed, which on some papers
+    is `NG`.
+    """
+    said = [*(question.get("correct_answers") or []), question.get("key")]
+    return any(" ".join(str(one or "").split()).lower() in NOT_GIVEN
+               for one in said)
 
 
 def wrong_options(group: dict, question: dict) -> list[str]:
@@ -259,10 +336,16 @@ def answer_of(group: dict, question: dict) -> str:
     wrote it, and the grader's variants are an implementation detail that
     reads as a list of near-synonyms.
     """
+    # The expanded form for a fixed-choice statement, whose printed key is
+    # `NG` on some papers: the model is being asked to reason about what the
+    # answer MEANS, and two letters do not say it.
+    expanded = " / ".join(question.get("correct_answers") or [])
+    if group["type"] in FIXED_CHOICE and expanded:
+        return expanded
     key = " ".join(str(question.get("key") or "").split())
     if key:
         return key
-    return " / ".join(question.get("correct_answers") or []) or "(unknown)"
+    return expanded or "(unknown)"
 
 
 def paragraph_known(group: dict, question: dict,
@@ -310,6 +393,50 @@ def locate(paragraphs: list[dict], quote: str,
     return None
 
 
+#: What counts as part of a word, for the boundary test below.
+WORDISH = re.compile(r"[^\W_]", re.UNICODE)
+
+
+def locate_within(paragraphs: list[dict], span: dict, word: str) -> dict | None:
+    """Where a decisive word stands INSIDE a span, or nothing.
+
+    Searched only in the span the model itself quoted, which is most of the
+    checking here: a word found anywhere else in the passage is not the word
+    this statement turns on, it is the same string somewhere it does not
+    matter.
+
+    And matched as a WHOLE word, which is the rest of it. The words that
+    decide a true/false statement are short -- `no`, `all`, `may`, `few` --
+    and a plain substring search puts `no` inside `not`, which is not a
+    near miss but the opposite word. That happened on the first run: a
+    statement turning on `not suffer` came back with `no` underlined in the
+    middle of it.
+    """
+    needle = " ".join(str(word).split())
+    if not needle or len(needle.split()) > KEY_WORDS:
+        return None
+    text = paragraphs[span["index"]].get("text") or ""
+    inside = text[span["start"]:span["end"]]
+    for lower in (False, True):
+        hay = inside.lower() if lower else inside
+        pin = needle.lower() if lower else needle
+        at = hay.find(pin)
+        while at >= 0:
+            if bounded(inside, at, len(pin)):
+                start = span["start"] + at
+                return {"index": span["index"], "start": start,
+                        "end": start + len(pin)}
+            at = hay.find(pin, at + 1)
+    return None
+
+
+def bounded(text: str, at: int, length: int) -> bool:
+    """Whether a match stands as a whole word rather than inside one."""
+    before = text[at - 1] if at > 0 else ""
+    after = text[at + length] if at + length < len(text) else ""
+    return not WORDISH.match(before or " ") and not WORDISH.match(after or " ")
+
+
 def whole(paragraphs: list[dict], index: int) -> dict:
     """The fallback for a task that names its own paragraph: all of it.
 
@@ -346,7 +473,8 @@ def ask(passage: dict, batch: list[dict], *, model: str) -> dict:
         passage=numbered(passage),
         questions="\n".join(
             f"{one['id']} | {one['asked']} | {one['answer']}" for one in batch),
-        shortest=SHORTEST, longest=LONGEST, most=MOST)
+        shortest=SHORTEST, longest=LONGEST, most=MOST,
+        keys=KEYS, key_words=KEY_WORDS)
     # Room for `MOST` quotes an entry at the length limit, and half as much
     # again. `ask_json`'s retry cannot rescue a reply cut off by the output
     # ceiling -- it asks the same question and dies in the same place.
@@ -384,6 +512,9 @@ def questions_of(payload: dict, passage: dict) -> list[dict]:
                 "answer": answer_of(group, question),
                 "paragraph": paragraph_known(group, question, letters),
                 "wrong_options": wrong_options(group, question),
+                "fixed": group["type"] in FIXED_CHOICE,
+                "not_given": (group["type"] in FIXED_CHOICE
+                              and is_not_given(question)),
             })
     return out
 
@@ -404,6 +535,8 @@ def read(passage_id: str, *, model: str) -> dict | None:
         return None
 
     said: dict[str, list[str]] = {}
+    keys_said: dict[str, list[str]] = {}
+    near_said: dict[str, list[str]] = {}
     options_said: dict[str, dict[str, list[str]]] = {}
     for start in range(0, len(questions), BATCH):
         batch = questions[start:start + BATCH]
@@ -414,6 +547,11 @@ def read(passage_id: str, *, model: str) -> dict | None:
             if isinstance(quotes, list):
                 said[key] = [
                     str(quote) for quote in quotes if str(quote).strip()]
+            for field, store in (("deciding_words", keys_said),
+                                 ("near", near_said)):
+                given = answer.get(field)
+                if isinstance(given, list):
+                    store[key] = [str(one) for one in given if str(one).strip()]
             options = answer.get("options")
             if isinstance(options, dict):
                 options_said[key] = {
@@ -425,6 +563,7 @@ def read(passage_id: str, *, model: str) -> dict | None:
                 }
 
     entries, dropped, fell_back, placed_options = [], 0, 0, 0
+    placed_keys = placed_near = 0
     for question in questions:
         spans = []
         for quote in said.get(question["id"], [])[: MOST * 2]:
@@ -433,6 +572,25 @@ def read(passage_id: str, *, model: str) -> dict | None:
                 dropped += 1
                 continue
             spans.append(found)
+
+        # A NOT GIVEN statement has no evidence, and anything the model
+        # quoted as evidence for one is the TRAP rather than the answer. It
+        # moves across; it is never left where a review would draw it green
+        # and say "the answer was here", which is the precise opposite of
+        # what NOT GIVEN means and the mistake this stage used to make.
+        near: list[dict] = []
+        if question["not_given"]:
+            for quote in ([*near_said.get(question["id"], []),
+                           *said.get(question["id"], [])])[: MOST * 2]:
+                found = locate(paragraphs, quote, None)
+                if found is None:
+                    dropped += 1
+                    continue
+                near.append(found)
+            spans = []
+            if near:
+                placed_near += 1
+
         if not spans and question["paragraph"] is not None:
             # The task named the paragraph and the model did not manage a
             # sentence inside it. What the answer key knows is still true.
@@ -460,7 +618,24 @@ def read(passage_id: str, *, model: str) -> dict | None:
                 options[letter.lower()] = tidy(found)
                 placed_options += 1
 
-        if not spans and not options:
+        # The word or two the statement turns on, inside the sentence that
+        # decides it. Located within the span and nowhere else -- see
+        # `locate_within` -- so a `some` from three paragraphs away can never
+        # be marked as the word that caught somebody out.
+        keys: list[dict] = []
+        if question["fixed"] and not question["not_given"] and spans:
+            for word in keys_said.get(question["id"], [])[:KEYS]:
+                for span in spans:
+                    found = locate_within(paragraphs, span, word)
+                    if found is not None:
+                        keys.append(found)
+                        break
+                else:
+                    dropped += 1
+            if keys:
+                placed_keys += 1
+
+        if not spans and not options and not near:
             continue
         entry = {
             "group": question["group"],
@@ -470,6 +645,10 @@ def read(passage_id: str, *, model: str) -> dict | None:
         }
         if options:
             entry["options"] = options
+        if near:
+            entry["near"] = tidy(near)
+        if keys:
+            entry["keys"] = tidy(keys)
         entries.append(entry)
 
     return {
@@ -488,8 +667,135 @@ def read(passage_id: str, *, model: str) -> dict | None:
         #: run where it is zero has stopped answering the second question
         #: without failing at the first.
         "placed_options": placed_options,
+        #: Statements whose TRAP was placed -- a NOT GIVEN with the sentence
+        #: that made somebody answer otherwise -- and statements whose
+        #: deciding word was found inside the sentence that settles them.
+        "placed_near": placed_near,
+        "placed_keys": placed_keys,
         "entries": entries,
     }
+
+
+#: What `read_fixed_choice` answers for a passage that has no fixed-choice
+#: statements in it. Not None, which means "this went wrong".
+NOTHING_TO_DO: dict = {}
+
+
+def read_fixed_choice(passage_id: str, *, model: str) -> dict | None:
+    """Ask the two TRUE / FALSE questions again, and fold the answers back in.
+
+    Here for the reason ``read_vocabulary.add_senses`` is: the questions were
+    written after the corpus had been read, and re-reading two hundred
+    passages to put them right would pay for the whole extraction again to
+    change a third of its output. This asks about the fixed-choice
+    statements alone and leaves every other entry exactly as it stands.
+
+    It is also the only honest way to fix them. The old prompt asked a NOT
+    GIVEN statement for "the place that comes closest" and filed the answer
+    under evidence, so a review drew it green and told the candidate the
+    answer was there -- which is the opposite of what NOT GIVEN means, and
+    the single hardest thing about the task to learn.
+    """
+    work = WORK / passage_id
+    path = work / "evidence.json"
+    passage_path, questions_path = work / "passage.json", work / "questions.json"
+    if not path.exists() or not passage_path.exists() or not questions_path.exists():
+        return None
+    result = json.loads(path.read_text())
+    passage = json.loads(passage_path.read_text())
+    payload = json.loads(questions_path.read_text())
+    paragraphs = passage["paragraphs"]
+
+    questions = [one for one in questions_of(payload, passage) if one["fixed"]]
+    if not questions:
+        # Nothing to do, which is not the same as nothing done. A third of
+        # the reading corpus carries no TRUE/FALSE or YES/NO group at all,
+        # and a run that called those failures would report seventy-three
+        # of them and bury the ones that really went wrong.
+        return NOTHING_TO_DO
+
+    said: dict[str, list[str]] = {}
+    keys_said: dict[str, list[str]] = {}
+    near_said: dict[str, list[str]] = {}
+    for start in range(0, len(questions), BATCH):
+        batch = questions[start:start + BATCH]
+        reply = ask(passage, batch, model=model)
+        for answer in reply.get("evidence") or []:
+            key = str(answer.get("id") or "").strip()
+            for field, store in (("quotes", said),
+                                 ("deciding_words", keys_said),
+                                 ("near", near_said)):
+                given = answer.get(field)
+                if isinstance(given, list):
+                    store[key] = [str(one) for one in given if str(one).strip()]
+
+    # Keyed the way the entries are, so a statement answered again replaces
+    # the one already on disk and nothing else is touched.
+    by_key = {(entry["group"], entry["number"]): entry
+              for entry in result.get("entries", [])}
+    dropped = near_count = keys_count = 0
+
+    for question in questions:
+        where = (question["group"], question["number"])
+        entry = by_key.get(where) or {
+            "group": question["group"], "number": question["number"],
+            "id": question["id"], "spans": [],
+        }
+        # Whatever the old run left on this statement goes, whichever field
+        # it was in: a re-ask that produces nothing is a correction too.
+        for field in ("near", "keys"):
+            entry.pop(field, None)
+
+        if question["not_given"]:
+            near = []
+            for quote in ([*near_said.get(question["id"], []),
+                           *said.get(question["id"], [])])[: MOST * 2]:
+                found = locate(paragraphs, quote, None)
+                if found is None:
+                    dropped += 1
+                    continue
+                near.append(found)
+            entry["spans"] = []
+            if near:
+                entry["near"] = tidy(near)
+                near_count += 1
+        else:
+            spans = []
+            for quote in said.get(question["id"], [])[: MOST * 2]:
+                found = locate(paragraphs, quote, question["paragraph"])
+                if found is None:
+                    dropped += 1
+                    continue
+                spans.append(found)
+            if spans:
+                entry["spans"] = tidy(spans)
+            keys = []
+            for word in keys_said.get(question["id"], [])[:KEYS]:
+                for span in entry["spans"]:
+                    found = locate_within(paragraphs, span, word)
+                    if found is not None:
+                        keys.append(found)
+                        break
+                else:
+                    dropped += 1
+            if keys:
+                entry["keys"] = tidy(keys)
+                keys_count += 1
+
+        if entry["spans"] or entry.get("near") or entry.get("options"):
+            by_key[where] = entry
+        else:
+            by_key.pop(where, None)
+
+    entries = sorted(by_key.values(), key=lambda one: (one["group"], one["number"]))
+    result["entries"] = entries
+    result["model"] = model
+    result["at"] = datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
+    result["placed"] = len(entries)
+    result["placed_near"] = near_count
+    result["placed_keys"] = keys_count
+    result["dropped_quotes"] = result.get("dropped_quotes", 0) + dropped
+    return result
 
 
 def passages(conn: sqlite3.Connection, where: str, args: tuple) -> list[str]:
@@ -499,7 +805,7 @@ def passages(conn: sqlite3.Connection, where: str, args: tuple) -> list[str]:
 
 
 def report(ids: list[str]) -> None:
-    done = placed = asked_for = wide = distractors = 0
+    done = placed = asked_for = wide = distractors = traps = keys = 0
     for passage_id in ids:
         path = WORK / passage_id / "evidence.json"
         if not path.exists():
@@ -510,9 +816,12 @@ def report(ids: list[str]) -> None:
         asked_for += result.get("questions", 0)
         wide += result.get("fell_back_to_paragraph", 0)
         distractors += result.get("placed_options", 0)
+        traps += result.get("placed_near", 0)
+        keys += result.get("placed_keys", 0)
     print(f"{done}/{len(ids)} passages placed | {placed} of {asked_for} questions"
           + (f" ({placed / asked_for:.0%})" if asked_for else "")
-          + f" | {distractors} distractors | {wide} whole-paragraph fallbacks")
+          + f" | {distractors} distractors, {traps} traps, {keys} deciding words"
+          + f" | {wide} whole-paragraph fallbacks")
 
 
 def main() -> int:
@@ -525,6 +834,9 @@ def main() -> int:
                     help="what is placed, then stop")
     ap.add_argument("--force", action="store_true",
                     help="place again a passage already done")
+    ap.add_argument("--fixed-choice-only", action="store_true",
+                    help="ask only the TRUE/FALSE and YES/NO statements "
+                         "again, and leave every other entry alone")
     ap.add_argument("--model", default=vision.DEFAULT_MODEL)
     args = ap.parse_args()
 
@@ -543,17 +855,29 @@ def main() -> int:
     done = skipped = failed = 0
     for passage_id in ids:
         out = WORK / passage_id / "evidence.json"
-        if out.exists() and not args.force:
+        if args.fixed_choice_only:
+            # The opposite test to the one below: this arm has nothing to do
+            # for a passage that was never placed, and everything to do for
+            # one that was.
+            if not out.exists():
+                skipped += 1
+                continue
+        elif out.exists() and not args.force:
             skipped += 1
             continue
         # `vision.ask_json` gives up by raising SystemExit, which is right for
         # a script asking one question and wrong for a loop over two hundred
         # passages -- see the same guard in `read_vocabulary.py`.
         try:
-            result = read(passage_id, model=args.model)
+            result = (read_fixed_choice(passage_id, model=args.model)
+                      if args.fixed_choice_only
+                      else read(passage_id, model=args.model))
         except SystemExit as stopped:
             print(f"{passage_id:16} FAILED  {stopped}", file=sys.stderr)
             failed += 1
+            continue
+        if result is NOTHING_TO_DO:
+            skipped += 1
             continue
         if result is None or not result["entries"]:
             failed += 1
@@ -562,8 +886,8 @@ def main() -> int:
         out.write_text(json.dumps(result, indent=2, ensure_ascii=False))
         print(f"{passage_id:16} {result['placed']}/{result['questions']} placed,"
               f" {result['placed_options']} distractors,"
-              f" {result['dropped_quotes']} quotes dropped,"
-              f" {result['fell_back_to_paragraph']} whole paragraphs")
+              f" {result['placed_near']} traps, {result['placed_keys']} key words,"
+              f" {result['dropped_quotes']} dropped")
         done += 1
 
     print(f"\n{done} placed, {skipped} left alone, {failed} failed")

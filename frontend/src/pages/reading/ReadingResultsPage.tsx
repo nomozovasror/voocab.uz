@@ -39,7 +39,7 @@ import {
 } from "@/features/reading/layers";
 import { ReviewVocabulary } from "@/features/vocabulary/components/ReviewVocabulary";
 import { vocabularyApi, vocabularyKey } from "@/features/vocabulary/api";
-import type { QuoteSource } from "@/features/paper/review";
+import type { QuoteSource, ReviewRow } from "@/features/paper/review";
 import type { AttemptResult } from "@/features/paper/types";
 
 /**
@@ -229,6 +229,17 @@ export default function ReadingResultsPage() {
    *  dropped: an option nothing supports, a word that appears four times,
    *  a hit some other mark already claimed. What the row's link promises
    *  has to match what the passage will show. */
+  /** Every question the answers layer marks at all, in any colour.
+   *
+   *  The row's link is offered off THIS rather than off the evidence,
+   *  because a NOT GIVEN statement has no evidence by definition and is
+   *  nonetheless the one most worth going to look at: what it has is the
+   *  sentence that made somebody answer otherwise. */
+  const marked = useMemo(
+    () => new Set(layers.answers.map((one) => one.key)),
+    [layers],
+  );
+
   const pulled = useMemo(
     () =>
       new Set(
@@ -432,6 +443,7 @@ export default function ReadingResultsPage() {
           <div>
             {shown.map((row) => {
               const spans = row.result.evidence ?? [];
+              const shown = marked.has(row.result.question_id);
               return (
                 <ReviewItem
                   key={row.result.question_id}
@@ -440,13 +452,12 @@ export default function ReadingResultsPage() {
                   // No onPlay: a passage has nothing to play, and ReviewItem
                   // draws the button only where one is handed to it.
                   evidence={
-                    spans.length > 0
+                    shown
                       ? {
-                          label: evidenceLabel(
-                            passages,
-                            spans[0],
-                            pulled.has(row.result.question_id),
-                          ),
+                          label: evidenceLabel(passages, row, {
+                            span: spans[0],
+                            pulled: pulled.has(row.result.question_id),
+                          }),
                           onGoTo: () => goToEvidence(row.result.question_id),
                         }
                       : undefined
@@ -455,9 +466,9 @@ export default function ReadingResultsPage() {
                   // reached: the quote's own paragraph. Withheld where the
                   // evidence is known, or the row would offer two ways to
                   // go to two different places.
-                  onGoTo={spans.length > 0 ? undefined : goToParagraph}
+                  onGoTo={shown ? undefined : goToParagraph}
                   onPoint={
-                    spans.length > 0
+                    shown
                       ? (on) => setLit(on ? row.result.question_id : null)
                       : undefined
                   }
@@ -635,12 +646,38 @@ function evidenceLabel(
     id: string;
     passage?: { paragraphs: { label: string | null }[] } | null;
   }[],
-  span: { part_id: string; paragraph_index: number },
-  pulled: boolean,
+  row: ReviewRow,
+  at: {
+    span?: { part_id: string; paragraph_index: number };
+    pulled: boolean;
+  },
 ): string {
-  if (pulled) return "What you read, and what it said";
-  const part = passages.find((one) => one.id === span.part_id);
-  const label = part?.passage?.paragraphs[span.paragraph_index]?.label;
+  const { result } = row;
+  const said = (one: string) => one.trim().toLowerCase();
+  const key = result.correct_answers.map(said);
+  const gave = said(result.given_answer);
+
+  // The three ways to get a TRUE / FALSE / NOT GIVEN statement wrong, named
+  // in the reader's own terms. They are not decoration: NOT GIVEN is the
+  // single hardest thing about the task to learn, and what makes it hard is
+  // that the passage always DOES mention the subject. Saying so, on the row
+  // that goes to the sentence, is the lesson.
+  if (!result.is_correct && key.includes("not given")) {
+    return "The passage mentions this — but never says it";
+  }
+  if (!result.is_correct && gave === "not given") {
+    return "The evidence was here all along";
+  }
+  if (!result.is_correct && (result.keywords?.length ?? 0) > 0) {
+    return result.keywords!.length === 1
+      ? "The answer turns on one word"
+      : "The answer turns on these words";
+  }
+
+  if (at.pulled) return "What you read, and what it said";
+  if (!at.span) return "Show me where it was";
+  const part = passages.find((one) => one.id === at.span!.part_id);
+  const label = part?.passage?.paragraphs[at.span.paragraph_index]?.label;
   return label ? `The answer is in paragraph ${label}` : "Show me where it was";
 }
 
