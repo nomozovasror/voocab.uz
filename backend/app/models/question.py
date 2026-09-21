@@ -35,7 +35,36 @@ class Question(SQLModel, table=True):
     answer is said, so a student reviewing a finished attempt can hear the
     moment they missed. Nullable: an author may never mark it, and a gap with
     no mark simply offers no replay. Never sent before an attempt is
-    submitted — knowing where to listen is most of the question."""
+    submitted — knowing where to listen is most of the question.
+
+    ``evidence`` is the same fact about a paper that is READ: where in the
+    passage the answer was. Listening had it from the first day and it turned
+    out to be the most valuable thing on its review screen — knowing you were
+    wrong is worth very little, and being shown the sentence you misread is
+    the whole of what a review is for. Reading had no counterpart at all, so
+    its review could only quote a line found by text-matching the answer, and
+    said nothing at all about the questions whose answer is not a string that
+    appears in the passage.
+
+    Stored in the coordinates the rest of the reading feature places things
+    in — a paragraph index and two character offsets into that paragraph's
+    plain text, exactly as :class:`app.models.vocabulary.MaterialVocabulary`
+    and the reader's own highlights are placed::
+
+        [{"index": 3, "start": 120, "end": 198}, ...]
+
+    A LIST, because the evidence for one question really is scattered
+    sometimes: a TRUE / FALSE / NOT GIVEN item is often decided by one clause
+    in one sentence and one in another, and a review pointing at half of it
+    points at half of why the candidate was wrong. Not a pair of columns, for
+    that reason and because a pair of columns could not say which paragraph
+    they were offsets into.
+
+    NULL for every question written before the extraction existed, for every
+    listening question, and for one the model could not place. The review
+    draws the marking where there is any and shows the mistake plainly where
+    there is not — see ``seed/read_evidence.py`` for how a span is found and
+    how its offsets are checked back against the text."""
 
     __tablename__ = "questions"
     __table_args__ = (
@@ -65,6 +94,13 @@ class Question(SQLModel, table=True):
     config: dict | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
     replay_start_ms: int | None = Field(default=None)
     replay_end_ms: int | None = Field(default=None)
+    #: Where in the passage this answer is found — see the class docstring.
+    #: ``[{"index": int, "start": int, "end": int}, ...]``. NULL rather than
+    #: ``[]`` where nothing is known, so "never extracted" and "extracted and
+    #: found nothing" stay two different facts.
+    evidence: list[dict] | None = Field(
+        default=None, sa_column=Column(JSONB, nullable=True)
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False),

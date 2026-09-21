@@ -1409,6 +1409,32 @@ class TranscriptLineOut(BaseModel):
     text: str
 
 
+class EvidenceSpanOut(BaseModel):
+    """Where in the passage one answer is found, in the coordinates the
+    reading feature places everything in: a paragraph, and two character
+    offsets into that paragraph's plain text.
+
+    Reading's counterpart to ``replay_start_ms``/``replay_end_ms``, and it
+    carries a part as well as a paragraph because a reading paper holds three
+    passages and each of them letters its paragraphs from A — a span that
+    said only "paragraph 3" would name three paragraphs. The part is the
+    question's own, filled in by the serializer: nothing the extraction
+    writes knows about parts.
+
+    Safe here for the same reason the answer key is: the attempt is already
+    committed, so pointing at the sentence is feedback rather than a hint.
+    Never present on a take payload."""
+
+    part_id: uuid.UUID
+    #: Which paragraph of that part's passage, by index. Index and not letter
+    #: — most passages are unlettered, and position is the only thing every
+    #: paragraph has.
+    paragraph_index: int = Field(ge=0)
+    #: Half-open offsets into the paragraph's text.
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+
+
 class QuestionResultOut(BaseModel):
     """Post-submit feedback. Unlike the take response, correct_answers here
     is intentional and correct (§7): the student has already committed their
@@ -1449,6 +1475,15 @@ class QuestionResultOut(BaseModel):
     replay_start_ms: int | None
     replay_end_ms: int | None
     option_replay: dict[str, list[int]] = Field(default_factory=dict)
+    #: Where in the PASSAGE the answer is — reading's half of the same
+    #: bargain, and released for the same reason.
+    #:
+    #: Empty for a listening question, for a reading question written before
+    #: the extraction ran, and for one the model could not place. The review
+    #: marks the passage where there is a span and shows the mistake without
+    #: any marking where there is not: a highlight two words off looks like a
+    #: bug in the highlighting, so nothing approximate is ever sent.
+    evidence: list[EvidenceSpanOut] = Field(default_factory=list)
     #: The transcript across this answer's moment — every line the marked
     #: range touches, in playback order. Empty when the author marked no
     #: range, or when the recording has no transcript yet (practice doesn't

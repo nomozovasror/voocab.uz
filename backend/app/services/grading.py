@@ -629,6 +629,26 @@ async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
                     letter: list(span)
                     for letter, span in (question.option_replay or {}).items()
                 },
+                # Where in the passage the answer was — reading's counterpart
+                # to the replay range above, and released on the same terms.
+                #
+                # The PART is stamped on here rather than stored on the row.
+                # A span is written by the seed extraction, which knows a
+                # passage and a paragraph and nothing about parts; the review
+                # needs the part because a paper holds three passages, each
+                # lettering its paragraphs from A. The question's group knows
+                # it, so this is the one place that has both.
+                "evidence": [
+                    {
+                        "part_id": group.part_id,
+                        "paragraph_index": span["index"],
+                        "start": span["start"],
+                        "end": span["end"],
+                    }
+                    for span in (question.evidence or [])
+                    if isinstance(span, dict)
+                    and {"index", "start", "end"} <= span.keys()
+                ],
                 "transcript": transcript_across(lines, ranges),
             }
         )

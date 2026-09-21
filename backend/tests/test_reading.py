@@ -533,3 +533,83 @@ async def test_each_paper_s_catalogue_shows_only_its_own():
     finally:
         await _cleanup(reading.id)
         await _cleanup(listening.id, email)
+
+
+@pytest.mark.asyncio
+async def test_evidence_reaches_the_review_and_never_the_take():
+    """Where in the passage the answer is: released with the marking, and
+    withheld while the paper is open.
+
+    The same bargain as a listening replay range, and the same reason —
+    knowing where to look is most of the question. What has to hold beyond
+    that is the part id: a reading paper can hold three passages, each
+    lettering its paragraphs from A, so a span that said only "paragraph 1"
+    would name three different paragraphs. It is stamped on by the serializer
+    from the question's own group, because nothing the extraction writes
+    knows that parts exist.
+    """
+    email = f"reading-evidence-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id)
+    headers = {"Cookie": f"access_token={create_access_token(str(user.id))}"}
+    try:
+        async with _client() as client:
+            part = await _passage_part(client, material.id, headers)
+            r = await client.post(
+                f"/api/parts/{part['id']}/question-groups",
+                json={
+                    "type": "true_false_not_given",
+                    "instructions": "Write TRUE, FALSE or NOT GIVEN.",
+                    "questions": [
+                        {"number": 1, "correct_answers": ["TRUE"],
+                         "prompt": "The beaver was hunted to extinction."},
+                        {"number": 2, "correct_answers": ["NOT GIVEN"],
+                         "prompt": "Knapdale is in the Highlands."},
+                    ],
+                },
+                headers=headers,
+            )
+            assert r.status_code == 201, r.text
+            group_id = uuid.UUID(r.json()["id"])
+
+            # Placed the way the seed places it: a paragraph and two offsets
+            # into that paragraph's plain text. Question 2 gets none, which
+            # is what a NOT GIVEN the model would not invent a place for
+            # looks like — and the review has to survive it.
+            async with async_session_factory() as session:
+                first = (await session.exec(
+                    select(Question).where(Question.group_id == group_id,
+                                           Question.number == 1))).one()
+                first.evidence = [{"index": 0, "start": 4, "end": 10}]
+                session.add(first)
+                await session.commit()
+
+            await _make_public(material.id)
+
+            r = await client.get(f"/api/materials/{material.id}/take", headers=headers)
+            assert r.status_code == 200, r.text
+            # Not a word of it before the paper is answered.
+            assert "evidence" not in r.text
+
+            questions = r.json()["parts"][0]["question_groups"][0]["questions"]
+            r = await client.post(
+                f"/api/materials/{material.id}/attempts",
+                json={"answers": [
+                    {"question_id": questions[0]["id"], "given_answer": "FALSE"},
+                    {"question_id": questions[1]["id"], "given_answer": "TRUE"},
+                ]},
+                headers=headers,
+            )
+            assert r.status_code == 200, r.text
+            results = {row["number"]: row for row in r.json()["results"]}
+
+            assert results[1]["evidence"] == [
+                {"part_id": part["id"], "paragraph_index": 0,
+                 "start": 4, "end": 10}
+            ]
+            # An empty list rather than a missing key: a review that has to
+            # check whether the field is there before reading it is a review
+            # with two ways of saying "nothing".
+            assert results[2]["evidence"] == []
+    finally:
+        await _cleanup(material.id, email)
