@@ -66,6 +66,26 @@ export function matchLabel(index: number, style: LabelStyle = "letters"): string
   return matchLetter(index);
 }
 
+/**
+ * The option a stored label names, in this box's own alphabet. -1 for a
+ * label the box does not have.
+ *
+ * The inverse of `matchLabel`, and it has to exist because the review turns
+ * a stored answer back into the words it stood for. Arithmetic on the
+ * character code is right for letters and silently wrong for numerals:
+ * `"i"` and `"iii"` both begin with `i`, so both came out as option 9, and a
+ * matching-headings review printed the same heading beside two different
+ * answers — one of which the candidate never chose. A review that tells
+ * somebody they picked a heading they did not pick is worse than one that
+ * prints the bare numeral.
+ */
+export function matchIndex(label: string, style: LabelStyle = "letters"): number {
+  const key = label.trim().toLowerCase();
+  if (!key) return -1;
+  if (style === "roman") return OPTION_ROMAN.indexOf(key);
+  return OPTION_LETTERS.indexOf(key);
+}
+
 // ── Letters drawn on a picture ───────────────────────────────────────────
 //
 // A map or diagram labelled A-H is answered from a box like any other; what

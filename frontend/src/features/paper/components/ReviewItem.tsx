@@ -59,9 +59,14 @@ export function ReviewItem({
 }) {
   const { result } = row;
   const right = result.is_correct;
-  const given = sayAnswer(result.given_answer, row.byLetter, row.options).trim();
+  const given = sayAnswer(
+    result.given_answer,
+    row.byLetter,
+    row.options,
+    row.labels,
+  ).trim();
   const key = row.byLetter
-    ? sayAnswer(result.correct_answers.join(","), true, row.options)
+    ? sayAnswer(result.correct_answers.join(","), true, row.options, row.labels)
     : result.correct_answers.join(" / ");
   const canPlay = onPlay && row.startMs != null;
 

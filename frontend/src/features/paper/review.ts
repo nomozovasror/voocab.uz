@@ -1,7 +1,9 @@
 import { parseTemplateLayout, type FormBlock, type FormLine } from "@/features/paper/form-syntax";
+import { matchIndex } from "@/features/paper/matching";
 import { sorted } from "@/features/paper/numbering";
 import { paperParts } from "@/features/paper/take-paper";
 import type {
+  LabelStyle,
   MaterialTake,
   MistakeKind,
   QuestionResult,
@@ -318,6 +320,10 @@ export interface ReviewRow {
   /** The box a letter answer is picked from, so a review can print what "C"
    *  actually said rather than the storage format. */
   options: string[];
+  /** Which alphabet that box is lettered in — matching headings is numbered
+   *  i to viii, everything else is A to H. Carried because the answer is
+   *  stored as its label and has to be looked back up. */
+  labels: LabelStyle;
   transcript: string;
   /** Which paragraph the quote was taken from, where the paper has lettered
    *  paragraphs and the quote was found in one. Null for listening, whose
@@ -436,6 +442,7 @@ export function reviewRows(
         result.transcript,
       );
       const options = found?.options ?? [];
+      const labels = found?.group.config.label_style ?? "letters";
       const quoted = quote
         ? quote(result)
         : { text: transcriptText(result.transcript), where: null };
@@ -453,6 +460,7 @@ export function reviewRows(
         context: context.get(result.question_id) ?? null,
         byLetter,
         options,
+        labels,
         transcript: quoted.text,
         where: quoted.where,
         startMs,
@@ -486,11 +494,19 @@ export function tallyMistakes(
 /** How an answer reads once it is not in a field any more. A letter answer is
  *  stored as "a,c" and means nothing printed that way, so it becomes "A and
  *  C" — and, where the box came back with the material, the option's own
- *  words. */
+ *  words.
+ *
+ *  **In the box's own alphabet**, which is why `labels` is here. Matching
+ *  headings is numbered i to viii and everything else is lettered A to H,
+ *  and `matchIndex` knows the difference; the arithmetic this used to do on
+ *  the first character does not. It read `i` and `iii` as the same option,
+ *  so a review printed one heading beside two answers and told a candidate
+ *  they had chosen something they never chose. */
 export function sayAnswer(
   value: string,
   byLetter: boolean,
   options: string[] = [],
+  labels: LabelStyle = "letters",
 ): string {
   if (!byLetter) return value.trim();
   return value
@@ -498,9 +514,11 @@ export function sayAnswer(
     .map((letter) => letter.trim().toLowerCase())
     .filter(Boolean)
     .map((letter) => {
-      const index = letter.charCodeAt(0) - 97;
-      const text = options[index];
-      return text ? `${letter.toUpperCase()} — ${text}` : letter.toUpperCase();
+      const text = options[matchIndex(letter, labels)];
+      // A roman numeral stays lowercase where it is printed on its own —
+      // "vii" is how the paper prints it — and a letter is capitalised.
+      const shown = labels === "roman" ? letter : letter.toUpperCase();
+      return text ? `${shown} — ${text}` : shown.toUpperCase();
     })
     .join(", ");
 }

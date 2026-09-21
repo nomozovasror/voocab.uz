@@ -73,6 +73,14 @@ Two families are worth knowing:
   matching headings, whose ITEMS are lettered paragraphs, so its box cannot be
   lettered too or an answer of "C" would name a heading and a paragraph at
   once.
+
+  **An answer is stored as its label and has to be read back in the same
+  alphabet.** `matchLabel` writes them and `matchIndex` reads them, and both
+  take the style. `sayAnswer` used to do arithmetic on the first character
+  instead, which is right for letters and silently wrong for numerals: `i`
+  and `iii` both begin with `i`, so the review printed one heading beside two
+  different answers and told a candidate they had chosen something they never
+  chose. `ReviewRow.labels` carries the style for exactly this.
 - **A true/false set stores no options.** Its three words come from its TYPE,
   on the server (`FIXED_CHOICE_OPTIONS`) and here. Storing them would let two
   groups of one type disagree, and — because a group with options in its
