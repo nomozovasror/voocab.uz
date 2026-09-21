@@ -33,6 +33,7 @@ import { loadHighlights } from "@/features/reading/highlights";
 import {
   evidenceOverlays,
   wordOverlays,
+  writtenDistractors,
   type LayerId,
   type Overlay,
 } from "@/features/reading/layers";
@@ -192,7 +193,22 @@ export default function ReadingResultsPage() {
    *  anything in them before the reader presses anything — a button that
    *  turns on an empty layer is a button that appears not to work. */
   const layers = useMemo(() => {
-    const evidence = evidenceOverlays(data?.results ?? []);
+    const results = data?.results ?? [];
+    // Every paragraph of the paper, flattened and carrying its part —
+    // what a written answer is searched for in. Built here rather than
+    // inside the search so three hundred questions do not each rebuild it.
+    const prose = passages.flatMap((part) =>
+      (part.passage?.paragraphs ?? []).map((one, index) => ({
+        partId: part.id,
+        index,
+        text: one.text,
+      })),
+    );
+    const answers = evidenceOverlays(results);
+    const evidence = [
+      ...answers,
+      ...writtenDistractors(results, prose, answers),
+    ];
     const words = vocabulary
       ? wordOverlays(vocabulary.entries, (lemma) => saved.has(lemma))
       : [];
@@ -202,7 +218,24 @@ export default function ReadingResultsPage() {
       saved: words.filter((o) => o.tone === "saved"),
       marks: [] as Overlay[],
     };
-  }, [data?.results, vocabulary, saved]);
+  }, [data?.results, vocabulary, saved, passages]);
+
+  /** The questions whose answer layer carries a red mark as well as a green
+   *  one — whatever put it there.
+   *
+   *  Taken from the marks that were actually drawn rather than from
+   *  `result.distractor`, because a written answer's distractor is found
+   *  here rather than sent with the paper, and because either kind can be
+   *  dropped: an option nothing supports, a word that appears four times,
+   *  a hit some other mark already claimed. What the row's link promises
+   *  has to match what the passage will show. */
+  const pulled = useMemo(
+    () =>
+      new Set(
+        layers.answers.filter((one) => one.tone === "chose").map((o) => o.key),
+      ),
+    [layers],
+  );
 
   const counts: Record<LayerId, number> = {
     // How many QUESTIONS the layer marks, not how many marks it draws: a
@@ -257,6 +290,11 @@ export default function ReadingResultsPage() {
   );
   useEffect(() => {
     if (!goingTo) return;
+    // The FIRST of this question's marks in the passage, which is the one
+    // higher up the page — for a wrong answer that is usually the sentence
+    // they were pulled by rather than the one that held the answer, and
+    // landing on what they read before what they should have read is the
+    // order the explanation is in.
     const found = document.querySelector(
       `[data-overlay="${goingTo.key}"], [data-overlay-also~="${goingTo.key}"]`,
     );
@@ -404,7 +442,11 @@ export default function ReadingResultsPage() {
                   evidence={
                     spans.length > 0
                       ? {
-                          label: evidenceLabel(passages, spans[0]),
+                          label: evidenceLabel(
+                            passages,
+                            spans[0],
+                            pulled.has(row.result.question_id),
+                          ),
                           onGoTo: () => goToEvidence(row.result.question_id),
                         }
                       : undefined
@@ -580,14 +622,23 @@ const PANE_TOP = "pt-19 pb-6";
  *  by naming one. Most passages carry no letters at all, and inventing one
  *  from the position would name a paragraph no question can — so those say
  *  what the link DOES instead, which is the honest half of the same
- *  sentence. */
+ *  sentence.
+ *
+ *  Neither of those where there is a DISTRACTOR, because then the link goes
+ *  to two places and lands on whichever comes first in the passage — which
+ *  is usually the sentence that pulled them, not the one holding the
+ *  answer. "The answer is in paragraph A" over a jump that lands in
+ *  paragraph C is the page lying about its own control, and the two marks
+ *  together say something better than either does alone. */
 function evidenceLabel(
   passages: {
     id: string;
     passage?: { paragraphs: { label: string | null }[] } | null;
   }[],
   span: { part_id: string; paragraph_index: number },
+  pulled: boolean,
 ): string {
+  if (pulled) return "What you read, and what it said";
   const part = passages.find((one) => one.id === span.part_id);
   const label = part?.passage?.paragraphs[span.paragraph_index]?.label;
   return label ? `The answer is in paragraph ${label}` : "Show me where it was";

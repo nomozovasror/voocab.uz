@@ -243,8 +243,35 @@ async def import_evidence(session, part_id: uuid.UUID, passage_id: str) -> int:
         .order_by(QuestionGroup.order_index))).all()
     by_index = {group.order_index: group for group in groups}
 
+    entries = read.get("entries") or []
+    if not entries:
+        return 0
+
+    # A re-import REPLACES what the extraction produced, exactly as the
+    # passage text and the glosses are replaced. A question the new run did
+    # not place is a question whose old spans were measured against a
+    # reading of the passage that no longer stands, and leaving them is how
+    # a corrected passage silently keeps pointing at the wrong words.
+    #
+    # Only the groups the file covers, so a part carrying a group the seed
+    # knows nothing about is left alone.
+    placed = {(entry.get("group"), entry.get("number")) for entry in entries}
+    for order_index, group in by_index.items():
+        for question in (await session.exec(
+                select(Question).where(Question.group_id == group.id))).all():
+            if (order_index, question.number) in placed:
+                continue
+            if question.evidence is not None:
+                question.evidence = None
+                session.add(question)
+            if (question.config or {}).get("option_evidence"):
+                question.config = {key: value
+                                   for key, value in question.config.items()
+                                   if key != "option_evidence"}
+                session.add(question)
+
     written = 0
-    for entry in read.get("entries") or []:
+    for entry in entries:
         group = by_index.get(entry.get("group"))
         if group is None:
             continue
@@ -255,9 +282,38 @@ async def import_evidence(session, part_id: uuid.UUID, passage_id: str) -> int:
             continue
         spans = [span for span in (entry.get("spans") or [])
                  if fits(paragraphs, span)]
-        if not spans:
+
+        # Where each WRONG option came from, for a multiple choice. Beside
+        # the question's own presentation rather than in a column of its
+        # own, exactly where ``option_replay`` sits for the listening half
+        # of the same idea -- see the Question model.
+        #
+        # MERGED into the config rather than assigned over it: the questions
+        # were written moments ago by ``import_questions`` and carry their
+        # prompt and their options in there. A fresh dict, because SQLAlchemy
+        # does not watch a JSONB column for mutation in place and a key added
+        # to the existing one would never be written.
+        options = {
+            str(letter).strip().lower(): kept
+            for letter, given in (entry.get("options") or {}).items()
+            if (kept := [one for one in (given or []) if fits(paragraphs, one)])
+        }
+        if options:
+            question.config = {**(question.config or {}),
+                               "option_evidence": options}
+        elif (question.config or {}).get("option_evidence"):
+            # A re-run that placed nothing where it once placed something is
+            # a correction, not a gap to preserve.
+            question.config = {key: value
+                               for key, value in question.config.items()
+                               if key != "option_evidence"}
+
+        if not spans and not options:
             continue
-        question.evidence = spans
+        # Set either way: a question the run placed but whose spans all
+        # failed the offset check has no evidence any more, and saying so is
+        # the point of the sweep above.
+        question.evidence = spans or None
         session.add(question)
         written += 1
     return written

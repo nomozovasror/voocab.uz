@@ -23,7 +23,7 @@ from app.models.attempt import Attempt, AttemptStatus
 from app.models.audio_blob import AudioBlob
 from app.models.material import Material
 from app.models.question import Question
-from app.models.question_group import QuestionGroup
+from app.models.question_group import QuestionGroup, QuestionGroupType
 from app.models.question_attempt import QuestionAttempt
 from app.schemas.listening import AttemptSubmit, ListenedSpanIn
 from app.services import answers as answers_service
@@ -583,6 +583,38 @@ async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
     # walk would have to arrive at 15 by agreeing with this one, and two walks
     # that must agree are two walks that eventually don't.
     scope = attempt.group_id
+    # Where every OPTION of a matching task is answered, by group.
+    #
+    # A matching box is a shared pool and — where it may not be re-used —
+    # each option is the right answer to exactly one item. So "where did the
+    # option you picked come from" needs no extraction and no second column:
+    # it is the evidence of the question that option actually belongs to.
+    #
+    # A candidate who wrote E against statement 14 is shown the sentence in
+    # paragraph E that statement 19 was about, which is the whole of why E
+    # was tempting and why it was wrong. Multiple choice cannot work this way
+    # — its options belong to one question and are the answer to nothing else
+    # — so its per-option spans come from the extraction instead.
+    from_option: dict[uuid.UUID, dict[str, list[dict]]] = {}
+    seen_option: dict[tuple[uuid.UUID, str], int] = {}
+    for question, group in questions:
+        if group.type not in listening_service.MATCHING_TYPES:
+            continue
+        for letter in question.correct_answers:
+            key = str(letter).strip().lower()
+            if not key:
+                continue
+            # Counted whether or not this question has evidence, because
+            # what disqualifies an option is being the answer to TWO items,
+            # not being placed. A box that may be re-used has the same
+            # letter against three statements, and pointing at one of the
+            # three would be picking a paragraph out of a hat.
+            place = from_option.setdefault(group.id, {})
+            times = seen_option[(group.id, key)] = (
+                seen_option.get((group.id, key), 0) + 1
+            )
+            place[key] = list(question.evidence or []) if times == 1 else []
+
     for question, group in questions:
         marks = listening_service.question_marks(group)
         if scope is not None and group.id != scope:
@@ -649,6 +681,21 @@ async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
                     if isinstance(span, dict)
                     and {"index", "start", "end"} <= span.keys()
                 ],
+                # Where the answer they PICKED came from, for a wrong
+                # answer that was picked at all.
+                #
+                # Withheld for a right answer, which has no distractor; for
+                # a true/false set, where both readings are the same
+                # sentence and a second mark would point at the first one
+                # again; and for anything written in words, whose distractor
+                # is not a fact about the paper at all — it is wherever the
+                # learner's own word happens to appear, which the review
+                # finds in the passage it already has.
+                "distractor": (
+                    []
+                    if correct
+                    else _distractor(question, group, row, from_option)
+                ),
                 "transcript": transcript_across(lines, ranges),
             }
         )
@@ -668,6 +715,50 @@ async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
         **(await _standing(session, attempt, skill=material.type if material else "")),
         "results": results,
     }
+
+
+def _distractor(question, group, row, from_option: dict) -> list[dict]:
+    """The spans behind the option this learner actually chose.
+
+    Empty wherever there is nothing honest to point at, which is most of the
+    time: an option the extraction could not place, a re-usable matching box,
+    a paper with no evidence at all. An empty list is a good answer here —
+    a mark over a sentence nobody was misled by teaches the opposite of what
+    this is for.
+    """
+    if row is None or not listening_service.answers_are_letters(group):
+        return []
+    right = {str(one).strip().lower() for one in question.correct_answers}
+    chosen = [
+        letter
+        for letter in (
+            part.strip().lower() for part in (row.given_answer or "").split(",")
+        )
+        if letter and letter not in right
+    ]
+    if not chosen:
+        return []
+
+    if group.type == QuestionGroupType.MULTIPLE_CHOICE:
+        # The question's own box, so the spans are the question's own —
+        # exactly where ``option_replay`` lives for the same reason.
+        source = (question.config or {}).get("option_evidence") or {}
+    else:
+        source = from_option.get(group.id) or {}
+
+    out: list[dict] = []
+    for letter in chosen:
+        for span in source.get(letter) or []:
+            if isinstance(span, dict) and {"index", "start", "end"} <= span.keys():
+                out.append(
+                    {
+                        "part_id": group.part_id,
+                        "paragraph_index": span["index"],
+                        "start": span["start"],
+                        "end": span["end"],
+                    }
+                )
+    return out
 
 
 async def _standing(session: AsyncSession, attempt: Attempt, *, skill: str) -> dict:

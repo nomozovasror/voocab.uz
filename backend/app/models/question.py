@@ -82,7 +82,18 @@ class Question(SQLModel, table=True):
     #: be matched TO is the group's box of options, so there is no ``options``
     #: key here and :attr:`options` below answers ``None``.
     #: ``multiple_choice``: ``{"prompt": str, "options": [str, ...],
-    #: "option_replay": {letter: [start_ms, end_ms]}}``. How many of those
+    #: "option_replay": {letter: [start_ms, end_ms]},
+    #: "option_evidence": {letter: [{"index", "start", "end"}, ...]}}``.
+    #: The last is reading's counterpart to ``option_replay`` and is what a
+    #: review marks a DISTRACTOR from: where in the passage the option a
+    #: candidate wrongly picked came from. It lives on the question because
+    #: a multiple choice owns its options — a matching item's belong to its
+    #: group, and are the answer to some other item, which is where that
+    #: family's distractors come from instead (see
+    #: ``app.services.grading._distractor``).
+    #: A letter with an empty list is an option the extraction found nothing
+    #: behind, which is ordinary: a distractor is often invented whole.
+    #: How many of those
     #: options the candidate picks is the group's business, not the
     #: question's — see :class:`app.schemas.listening.MultipleChoiceConfig`.
     #: Where each answer is given is the OPTION's, since a "choose two" has

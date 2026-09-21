@@ -1015,6 +1015,16 @@ export interface QuestionResult {
    *  approximate is ever sent: a mark two words off reads as a broken page
    *  rather than as a near miss. */
   evidence?: EvidenceSpan[];
+  /** Where the option this learner PICKED came from — the other half of
+   *  explaining a wrong answer. Being shown the right sentence says what was
+   *  true; being shown the one that pulled them says why they believed
+   *  something else.
+   *
+   *  Empty for a right answer, for a true/false item, for an option nothing
+   *  in the passage supports, and for every answer written in WORDS — that
+   *  last one is not a fact about the paper and the review finds it itself,
+   *  in the passage it already has. */
+  distractor?: EvidenceSpan[];
   /** Every transcript line this answer's moment touches, in playback order.
    *  Empty when the author marked no range, or when the recording has no
    *  transcript yet — practice doesn't wait for one. */

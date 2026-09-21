@@ -113,6 +113,12 @@ NAMES_PARAGRAPH = re.compile(r"^\s*paragraph\s+([A-Z])\b", re.I)
 #: A gap in a completion template: `{{3}}`.
 GAP = re.compile(r"\{\{\s*(\d+)\s*\}\}")
 
+#: How many of a multiple choice's wrong options may be placed. Three, which
+#: is every option of a four-way choice bar the right one. Asked about in the
+#: same request as everything else, because the passage is already in front
+#: of the model and sending it twice is paying twice for the same reading.
+DISTRACTORS = 3
+
 PROMPT = """You are preparing review feedback for an IELTS Reading passage.
 A candidate has answered these questions and is about to be shown which ones
 they got wrong. For each question, show them WHERE IN THE PASSAGE the answer
@@ -147,9 +153,26 @@ the evidence a teacher would underline when explaining it.
 - If you cannot find the evidence for a question, give an empty list for it.
   An empty list is a good answer; an invented quote is not.
 
+Some questions are marked `[multiple choice]` and list their options. For
+those, ALSO say where each WRONG option came from — the words in the passage
+that a candidate choosing it would have been misled by. Same rules: quoted
+exactly, findable by search, one sentence or less.
+
+**Most wrong options have no source at all.** A distractor is usually
+invented, or states the opposite of the passage, or is about something the
+passage never mentions. Give it an empty list. Only quote where the passage
+really does say something a reader could have taken for that option — a
+mark over a sentence nobody was misled by teaches the reader the opposite of
+what it is for.
+
 Reply with JSON only, and nothing else:
 
-{{"evidence": [{{"id": "...", "quotes": ["...", "..."]}}]}}
+{{"evidence": [{{"id": "...", "quotes": ["...", "..."],
+"options": {{"A": ["..."], "B": [], "C": ["..."]}}}}]}}
+
+`options` only for the questions marked `[multiple choice]`, and only for
+their WRONG options — never for the correct one, which `quotes` already
+answers.
 """
 
 
@@ -193,6 +216,9 @@ def asked(group: dict, question: dict) -> str:
     the options, because the evidence for "B" is the evidence for what B
     SAYS, and a model shown only the stem is being asked to find the answer
     rather than to find where it is written.
+
+    A multiple choice says so, because it is the one type this stage asks a
+    second question about: where the options it did NOT answer came from.
     """
     prompt = " ".join(str(question.get("prompt") or "").split())
     if not prompt:
@@ -201,8 +227,27 @@ def asked(group: dict, question: dict) -> str:
     options = question.get("options") or (group.get("config") or {}).get("options")
     if options and group["type"] == "multiple_choice":
         letters = [f"{chr(97 + i).upper()}. {text}" for i, text in enumerate(options)]
-        prompt = f"{prompt} / " + " / ".join(letters)
+        prompt = "[multiple choice] " + f"{prompt} / " + " / ".join(letters)
     return prompt or "(no text)"
+
+
+def wrong_options(group: dict, question: dict) -> list[str]:
+    """The option letters this question is NOT answered by, upper-cased.
+
+    Empty for everything but a multiple choice: a matching item's options are
+    the group's box, and where each of THOSE came from is the evidence of the
+    item it actually answers -- arithmetic the app does for itself, with no
+    request and no column. See ``app.services.grading._distractor``.
+    """
+    if group["type"] != "multiple_choice":
+        return []
+    options = question.get("options") or []
+    right = {str(one).strip().lower() for one in question.get("correct_answers") or []}
+    return [
+        chr(97 + index).upper()
+        for index in range(len(options))
+        if chr(97 + index) not in right
+    ][:DISTRACTORS]
 
 
 def answer_of(group: dict, question: dict) -> str:
@@ -305,8 +350,14 @@ def ask(passage: dict, batch: list[dict], *, model: str) -> dict:
     # Room for `MOST` quotes an entry at the length limit, and half as much
     # again. `ask_json`'s retry cannot rescue a reply cut off by the output
     # ceiling -- it asks the same question and dies in the same place.
+    # Room for every entry in the batch and half as much again, plus the
+    # distractors, which are up to three more quotes on a multiple choice.
+    # `ask_json`'s retry cannot rescue a reply cut off by the output ceiling
+    # -- it asks the same question and dies in the same place.
+    choices = sum(1 for one in batch if one["wrong_options"])
     return vision.ask_json(prompt, [], model=model,
-                           max_tokens=400 + 220 * len(batch)) or {}
+                           max_tokens=400 + 220 * len(batch)
+                           + 200 * DISTRACTORS * choices) or {}
 
 
 def questions_of(payload: dict, passage: dict) -> list[dict]:
@@ -332,6 +383,7 @@ def questions_of(payload: dict, passage: dict) -> list[dict]:
                 "asked": asked(group, question),
                 "answer": answer_of(group, question),
                 "paragraph": paragraph_known(group, question, letters),
+                "wrong_options": wrong_options(group, question),
             })
     return out
 
@@ -352,16 +404,27 @@ def read(passage_id: str, *, model: str) -> dict | None:
         return None
 
     said: dict[str, list[str]] = {}
+    options_said: dict[str, dict[str, list[str]]] = {}
     for start in range(0, len(questions), BATCH):
         batch = questions[start:start + BATCH]
         reply = ask(passage, batch, model=model)
         for answer in reply.get("evidence") or []:
+            key = str(answer.get("id") or "").strip()
             quotes = answer.get("quotes")
             if isinstance(quotes, list):
-                said[str(answer.get("id") or "").strip()] = [
+                said[key] = [
                     str(quote) for quote in quotes if str(quote).strip()]
+            options = answer.get("options")
+            if isinstance(options, dict):
+                options_said[key] = {
+                    str(letter).strip().lower(): [
+                        str(quote) for quote in (given or [])
+                        if str(quote).strip()]
+                    for letter, given in options.items()
+                    if isinstance(given, list)
+                }
 
-    entries, dropped, fell_back = [], 0, 0
+    entries, dropped, fell_back, placed_options = [], 0, 0, 0
     for question in questions:
         spans = []
         for quote in said.get(question["id"], [])[: MOST * 2]:
@@ -375,14 +438,39 @@ def read(passage_id: str, *, model: str) -> dict | None:
             # sentence inside it. What the answer key knows is still true.
             spans = [whole(paragraphs, question["paragraph"])]
             fell_back += 1
-        if not spans:
+
+        # Where each WRONG option came from, for the one type whose options
+        # belong to the question. Located by the same search and dropped by
+        # the same rule -- a distractor placed approximately is a red mark
+        # over a sentence nobody was misled by, which is worse than none.
+        #
+        # NOT narrowed to the question's own paragraph: a distractor's whole
+        # job is to come from somewhere else in the passage.
+        options: dict[str, list[dict]] = {}
+        for letter in question["wrong_options"]:
+            found = []
+            for quote in (options_said.get(question["id"], {})
+                          .get(letter.lower()) or [])[:MOST]:
+                at = locate(paragraphs, quote, None)
+                if at is None:
+                    dropped += 1
+                    continue
+                found.append(at)
+            if found:
+                options[letter.lower()] = tidy(found)
+                placed_options += 1
+
+        if not spans and not options:
             continue
-        entries.append({
+        entry = {
             "group": question["group"],
             "number": question["number"],
             "id": question["id"],
             "spans": tidy(spans),
-        })
+        }
+        if options:
+            entry["options"] = options
+        entries.append(entry)
 
     return {
         "passage": passage_id,
@@ -395,6 +483,11 @@ def read(passage_id: str, *, model: str) -> dict | None:
         # model invented leaves nothing behind once it has been dropped.
         "dropped_quotes": dropped,
         "fell_back_to_paragraph": fell_back,
+        #: How many wrong multiple-choice options were placed. The other
+        #: half of what this stage does, and worth counting separately: a
+        #: run where it is zero has stopped answering the second question
+        #: without failing at the first.
+        "placed_options": placed_options,
         "entries": entries,
     }
 
@@ -406,7 +499,7 @@ def passages(conn: sqlite3.Connection, where: str, args: tuple) -> list[str]:
 
 
 def report(ids: list[str]) -> None:
-    done = placed = asked_for = wide = 0
+    done = placed = asked_for = wide = distractors = 0
     for passage_id in ids:
         path = WORK / passage_id / "evidence.json"
         if not path.exists():
@@ -416,9 +509,10 @@ def report(ids: list[str]) -> None:
         placed += result.get("placed", 0)
         asked_for += result.get("questions", 0)
         wide += result.get("fell_back_to_paragraph", 0)
+        distractors += result.get("placed_options", 0)
     print(f"{done}/{len(ids)} passages placed | {placed} of {asked_for} questions"
           + (f" ({placed / asked_for:.0%})" if asked_for else "")
-          + f" | {wide} whole-paragraph fallbacks")
+          + f" | {distractors} distractors | {wide} whole-paragraph fallbacks")
 
 
 def main() -> int:
@@ -467,6 +561,7 @@ def main() -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(result, indent=2, ensure_ascii=False))
         print(f"{passage_id:16} {result['placed']}/{result['questions']} placed,"
+              f" {result['placed_options']} distractors,"
               f" {result['dropped_quotes']} quotes dropped,"
               f" {result['fell_back_to_paragraph']} whole paragraphs")
         done += 1

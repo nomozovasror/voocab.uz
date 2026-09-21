@@ -1484,6 +1484,23 @@ class QuestionResultOut(BaseModel):
     #: any marking where there is not: a highlight two words off looks like a
     #: bug in the highlighting, so nothing approximate is ever sent.
     evidence: list[EvidenceSpanOut] = Field(default_factory=list)
+    #: Where the option this learner actually PICKED came from.
+    #:
+    #: The other half of explaining a wrong answer, and the half a score can
+    #: never give: being shown the right sentence says what was true, and
+    #: being shown the sentence that pulled you says why you believed
+    #: something else. A candidate who chose B was not guessing — they read
+    #: something, and this is what they read.
+    #:
+    #: Empty for a right answer, for a true/false item (both readings are
+    #: the same sentence, and a second mark would point at the first one
+    #: again), for an option nothing in the passage supports — distractors
+    #: are often invented whole, and a mark over a sentence nobody was misled
+    #: by teaches the opposite of what this is for — and for every answer
+    #: written in WORDS, whose distractor is not a fact about the paper at
+    #: all but wherever the learner's own word happens to appear. The review
+    #: finds that one itself, in the passage it already has.
+    distractor: list[EvidenceSpanOut] = Field(default_factory=list)
     #: The transcript across this answer's moment — every line the marked
     #: range touches, in playback order. Empty when the author marked no
     #: range, or when the recording has no transcript yet (practice doesn't

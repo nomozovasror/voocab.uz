@@ -2640,6 +2640,41 @@ fallback where it does not. A free correctness check on a quarter of the
 corpus. Asked of C21 T2 P2's matching-information set, every one of the six
 quotes landed inside the paragraph the answer key names.
 
+### The second question: where the WRONG options came from
+
+Being shown the right sentence says what was true. Being shown the sentence
+that pulled you says why you believed something else, and only the second of
+those is news to the candidate — they already know they got it wrong.
+
+For multiple choice that needs asking, and it is asked in the same request:
+the passage is already in front of the model and sending it twice is paying
+twice for the same reading. Each question marked `[multiple choice]` lists
+its options, and the reply carries an `options` map alongside `quotes`.
+
+The prompt spends most of its words telling the model NOT to answer. **Most
+wrong options have no source at all** — a distractor is usually invented,
+or states the opposite of the passage, or is about something the passage
+never mentions — and an empty list is the right answer there. A red mark
+over a sentence nobody was misled by teaches the reader the opposite of what
+it is for. In practice about one wrong option in five gets a span, which is
+the restraint working.
+
+Asked of C18 T3 P3, on a question about a Romeo and Juliet lesson: option D,
+*how weaker students can disrupt their classmates' learning*, came back
+anchored to "Another girl simply can't focus and he gives her pens and paper
+to draw with." That is exactly the sentence a candidate choosing D had read.
+
+**Only multiple choice needs the model.** A matching box is a shared pool,
+and where it may not be re-used each option is the right answer to exactly
+one other item — so "where did the option you picked come from" is that
+item's own evidence, which the app works out for itself with no request and
+no column (``app.services.grading._distractor``). An option that answers two
+items is not pointed at: picking one of the two would be picking a paragraph
+out of a hat. And a gap-fill's distractor is not a fact about the paper at
+all — it is whatever word the learner happened to write — so the review
+searches the passage for it in the browser, and marks it only where it
+appears exactly once and nothing else has claimed that stretch.
+
 ### How wide a span may be
 
 One sentence, or a clause of one, between 12 and 320 characters. Not a
@@ -2665,8 +2700,9 @@ about a paper, not the paper.
 
 ### Cost
 
-One request a passage — the whole paper's questions together — at about
-1 500 tokens in and 900 out on `gemini-3.1-flash-lite`. Roughly the price of
+One request a passage — the whole paper's questions together, the wrong
+options among them — at about 1 500 tokens in and 900 out on
+`gemini-3.1-flash-lite`. Roughly the price of
 one `read_vocabulary` batch, of which there are four per passage. First run,
 C11 T1 P1: 12 of 13 questions placed, 0 quotes dropped, 0 fallbacks. The
 thirteenth was a NOT GIVEN the model would not invent a place for, which is

@@ -115,6 +115,40 @@ rather than a moment in a recording, several spans rather than one, found by
 position. Pointing at a mistake lights its sentence in the passage; pointing
 at that sentence lights the mistake; pressing scrolls to it.
 
+**A question got wrong is marked twice: what pulled you, and what was
+true.** The sentence the chosen option came from is red, the sentence that
+held the answer is green, and both carry the same number — they are one
+explanation, not two facts. Being shown the right line says what was true;
+being shown the wrong one says why you believed something else, and only the
+second of those is news to the reader.
+
+Where each comes from depends on the task, and only one of the three needs a
+model:
+
+- **Multiple choice** — extracted per option, stored on the question's own
+  config beside `option_replay`, which is the same field for the listening
+  half of the same idea. Usually empty: a distractor is normally invented
+  whole, and `seed/read_evidence.py` spends most of its prompt saying so.
+- **Matching, in every form** — arithmetic. The box is a shared pool and,
+  where it may not be re-used, each option is the right answer to exactly
+  one other item, so the distractor is that item's own evidence. No request,
+  no column. An option that answers TWO items is not pointed at, because
+  picking one of them would be picking a paragraph out of a hat.
+- **Written answers** — searched for in the passage, here, at render time
+  (`writtenDistractors`). It is not a fact about the paper; it is wherever
+  the learner's own word happens to appear. Refused unless it appears
+  exactly once and no other mark has claimed that stretch — one run of prose
+  gets one mark, so a red word inside a green sentence would be swallowed
+  and come back as part of a mark that says the opposite of what it means.
+- **True/false** — nothing. Both readings are the same sentence, and a
+  second mark would point at the first one again.
+
+**A question got RIGHT is marked once and quietly** — a thin green rule, no
+wash. Two washes per mistake plus a wash per success is a passage with no
+unmarked prose left in it, and a page where everything is marked has marked
+nothing. (`bg-transparent` is load-bearing there: a `<mark>` with no
+background of its own falls back to the browser's highlighter yellow.)
+
 **Every answer is marked, not only the missed ones, and each carries its
 number.** It began as the wrong ones alone, on the reasoning that a candidate
 who answered question 12 correctly does not need to be shown where question

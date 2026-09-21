@@ -644,3 +644,223 @@ def test_a_span_is_refused_unless_it_lands_on_text_that_is_there():
     assert not fits(paragraphs, {"index": 0, "start": 0})
     assert not fits(paragraphs, {"index": 0, "start": "0", "end": 3})
     assert not fits(paragraphs, [0, 1, 2])
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_match_points_at_where_its_option_actually_belongs():
+    """The other half of explaining a wrong answer, and it needs no
+    extraction at all.
+
+    A matching box is a shared pool, and where it may not be re-used each
+    option is the right answer to exactly one item. So "where did the option
+    you picked come from" is the evidence of the item it actually belongs to
+    — a candidate who wrote C against statement 1 is shown the sentence in
+    paragraph C that statement 2 was about, which is the whole of why C was
+    tempting and why it was wrong.
+
+    And the rule that keeps it honest: an option that answers TWO items is
+    not pointed at, because picking one of the two would be picking a
+    paragraph out of a hat.
+    """
+    email = f"reading-distractor-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id)
+    headers = {"Cookie": f"access_token={create_access_token(str(user.id))}"}
+    try:
+        async with _client() as client:
+            part = await _passage_part(client, material.id, headers)
+            r = await client.post(
+                f"/api/parts/{part['id']}/question-groups",
+                json={
+                    "type": "matching_information",
+                    "instructions": "Which paragraph contains the following?",
+                    "config": {"options": ["A", "B", "C"], "allow_reuse": False},
+                    "questions": [
+                        {"number": 1, "correct_answers": ["b"],
+                         "prompt": "when the reintroduction began"},
+                        {"number": 2, "correct_answers": ["c"],
+                         "prompt": "what the dams do to rainfall"},
+                    ],
+                },
+                headers=headers,
+            )
+            assert r.status_code == 201, r.text
+            group_id = uuid.UUID(r.json()["id"])
+
+            async with async_session_factory() as session:
+                rows = {
+                    row.number: row
+                    for row in (await session.exec(
+                        select(Question).where(Question.group_id == group_id))).all()
+                }
+                rows[1].evidence = [{"index": 1, "start": 0, "end": 20}]
+                rows[2].evidence = [{"index": 2, "start": 0, "end": 12}]
+                session.add(rows[1])
+                session.add(rows[2])
+                await session.commit()
+
+            await _make_public(material.id)
+            r = await client.get(f"/api/materials/{material.id}/take", headers=headers)
+            questions = r.json()["parts"][0]["question_groups"][0]["questions"]
+
+            # Statement 1 answered C — which is statement 2's paragraph.
+            r = await client.post(
+                f"/api/materials/{material.id}/attempts",
+                json={"answers": [
+                    {"question_id": questions[0]["id"], "given_answer": "c"},
+                    {"question_id": questions[1]["id"], "given_answer": "c"},
+                ]},
+                headers=headers,
+            )
+            assert r.status_code == 200, r.text
+            results = {row["number"]: row for row in r.json()["results"]}
+
+            assert results[1]["is_correct"] is False
+            # Where C actually belongs: statement 2's own evidence.
+            assert results[1]["distractor"] == [
+                {"part_id": part["id"], "paragraph_index": 2,
+                 "start": 0, "end": 12}
+            ]
+            # And its own answer is still pointed at, unchanged.
+            assert results[1]["evidence"][0]["paragraph_index"] == 1
+
+            # A right answer has no distractor: there is no option they were
+            # pulled by, and a mark saying otherwise would invent one.
+            assert results[2]["is_correct"] is True
+            assert results[2]["distractor"] == []
+    finally:
+        await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_an_option_that_answers_two_items_is_not_pointed_at():
+    """A re-usable matching box has the same letter against several
+    statements, so "where did B come from" has three answers and the review
+    has no way to choose. It says nothing rather than picking one — the
+    mistake still reads, and a mark over the wrong paragraph would teach a
+    candidate they misread something they never looked at."""
+    email = f"reading-reuse-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id)
+    headers = {"Cookie": f"access_token={create_access_token(str(user.id))}"}
+    try:
+        async with _client() as client:
+            part = await _passage_part(client, material.id, headers)
+            r = await client.post(
+                f"/api/parts/{part['id']}/question-groups",
+                json={
+                    "type": "matching_features",
+                    "instructions": "Match each statement to a researcher.",
+                    "config": {"options": ["Ito", "Marsh"], "allow_reuse": True},
+                    "questions": [
+                        {"number": 1, "correct_answers": ["a"], "prompt": "one"},
+                        {"number": 2, "correct_answers": ["a"], "prompt": "two"},
+                        {"number": 3, "correct_answers": ["b"], "prompt": "three"},
+                    ],
+                },
+                headers=headers,
+            )
+            assert r.status_code == 201, r.text
+            group_id = uuid.UUID(r.json()["id"])
+
+            async with async_session_factory() as session:
+                for row in (await session.exec(
+                        select(Question).where(Question.group_id == group_id))).all():
+                    row.evidence = [{"index": 0, "start": 0, "end": 10}]
+                    session.add(row)
+                await session.commit()
+
+            await _make_public(material.id)
+            r = await client.get(f"/api/materials/{material.id}/take", headers=headers)
+            questions = r.json()["parts"][0]["question_groups"][0]["questions"]
+
+            # Question 3 answered A — the letter two other items share.
+            r = await client.post(
+                f"/api/materials/{material.id}/attempts",
+                json={"answers": [
+                    {"question_id": questions[2]["id"], "given_answer": "a"},
+                ]},
+                headers=headers,
+            )
+            assert r.status_code == 200, r.text
+            results = {row["number"]: row for row in r.json()["results"]}
+            assert results[3]["is_correct"] is False
+            assert results[3]["distractor"] == []
+    finally:
+        await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_a_multiple_choice_distractor_comes_from_the_extraction():
+    """Multiple choice cannot borrow another item's evidence — its options
+    belong to one question and are the answer to nothing else — so its
+    per-option spans are extracted and stored beside the prompt, exactly
+    where ``option_replay`` lives for the listening half of the same idea.
+
+    An option with nothing behind it is the ordinary case and says nothing:
+    a distractor is usually invented whole, and a mark over a sentence
+    nobody was misled by teaches the opposite of what it is for.
+    """
+    email = f"reading-mcq-distractor-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id)
+    headers = {"Cookie": f"access_token={create_access_token(str(user.id))}"}
+    try:
+        async with _client() as client:
+            part = await _passage_part(client, material.id, headers)
+            r = await client.post(
+                f"/api/parts/{part['id']}/question-groups",
+                json={
+                    "type": "multiple_choice",
+                    "instructions": "Choose the correct letter.",
+                    "config": {"answers": 1},
+                    "questions": [
+                        {"number": 1, "correct_answers": ["a"],
+                         "prompt": "What does the writer say about beavers?",
+                         "options": ["They were hunted out",
+                                     "They were farmed",
+                                     "They slow rainfall"]},
+                    ],
+                },
+                headers=headers,
+            )
+            assert r.status_code == 201, r.text
+            group_id = uuid.UUID(r.json()["id"])
+
+            async with async_session_factory() as session:
+                row = (await session.exec(
+                    select(Question).where(Question.group_id == group_id))).one()
+                row.evidence = [{"index": 0, "start": 0, "end": 11}]
+                row.config = {
+                    **(row.config or {}),
+                    "option_evidence": {
+                        "c": [{"index": 2, "start": 0, "end": 8}],
+                        "b": [],
+                    },
+                }
+                session.add(row)
+                await session.commit()
+
+            await _make_public(material.id)
+            r = await client.get(f"/api/materials/{material.id}/take", headers=headers)
+            body = r.json()
+            # The option map never crosses before the submit, like every
+            # other thing that says where an answer is.
+            assert "option_evidence" not in r.text
+            question = body["parts"][0]["question_groups"][0]["questions"][0]
+
+            r = await client.post(
+                f"/api/materials/{material.id}/attempts",
+                json={"answers": [
+                    {"question_id": question["id"], "given_answer": "c"},
+                ]},
+                headers=headers,
+            )
+            assert r.status_code == 200, r.text
+            [result] = r.json()["results"]
+            assert result["distractor"] == [
+                {"part_id": part["id"], "paragraph_index": 2,
+                 "start": 0, "end": 8}
+            ]
+    finally:
+        await _cleanup(material.id, email)

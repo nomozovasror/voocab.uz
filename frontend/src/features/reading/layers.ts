@@ -113,7 +113,7 @@ export interface Overlay {
   /** How it is washed. Not the layer's id: `saved` and `vocabulary` are two
    *  layers and one of them draws a word in each of two states, and the
    *  answers layer draws two verdicts. */
-  tone: "right" | "wrong" | "word" | "saved";
+  tone: "got" | "missed" | "chose" | "word" | "saved";
   /** What this mark is about, so hovering a row on the right can light the
    *  matching marks on the left and nothing else. A question id for
    *  evidence, a lemma for a word. */
@@ -137,8 +137,8 @@ export interface Overlay {
 }
 
 /**
- * Where every answer was, marked green where it was got and red where it
- * was not.
+ * Where every answer was — and, for one got wrong, where the answer they
+ * gave instead came from.
  *
  * It began as the wrong ones only, on the reasoning that marking all forty
  * colours most of the passage and a candidate who answered question 12
@@ -158,6 +158,22 @@ export interface Overlay {
  * in the question map at the top of the same screen — the verdict — and not
  * what the reader's own three highlight colours mean, which is why those
  * three are never green or red.
+ *
+ * ## Three states, not two
+ *
+ * A question got wrong is marked TWICE: the sentence that held the answer,
+ * in green, and the sentence that pulled them to the one they gave, in red.
+ * Both carry the same number, because they are one explanation — *this is
+ * what you read, and this is what it actually said.* Being shown the right
+ * line says what was true; being shown the wrong one says why you believed
+ * something else, and only the second of those is news to the reader.
+ *
+ * A question got RIGHT is marked once and quietly: a thin green rule under
+ * the words, no wash at all. Two coloured blocks for every mistake plus a
+ * coloured block for every success is a passage with no unmarked prose left
+ * in it, and a page where everything is marked has marked nothing. The rule
+ * still says "this was question 9" to anybody looking for it, and says
+ * nothing to anybody who is not.
  */
 export function evidenceOverlays(results: QuestionResult[]): Overlay[] {
   const out: Overlay[] = [];
@@ -168,7 +184,7 @@ export function evidenceOverlays(results: QuestionResult[]): Overlay[] {
         index: span.paragraph_index,
         start: span.start,
         end: span.end,
-        tone: result.is_correct ? "right" : "wrong",
+        tone: result.is_correct ? "got" : "missed",
         key: result.question_id,
         labels: [`Q${result.number}`],
         title: result.is_correct
@@ -176,8 +192,126 @@ export function evidenceOverlays(results: QuestionResult[]): Overlay[] {
           : `Question ${result.number} — the answer was here`,
       });
     }
+    for (const span of result.distractor ?? []) {
+      out.push({
+        partId: span.part_id,
+        index: span.paragraph_index,
+        start: span.start,
+        end: span.end,
+        tone: "chose",
+        key: result.question_id,
+        labels: [`Q${result.number}`],
+        title: `Question ${result.number} — this is what pulled you`,
+      });
+    }
   }
   return out;
+}
+
+/**
+ * Where a WRITTEN answer came from, found in the passage rather than sent
+ * with the paper.
+ *
+ * A gap-fill's distractor is not a fact about the question. Nobody authored
+ * it and no extraction can predict it: it is whatever word the learner
+ * happened to write, and the only interesting thing about it is whether that
+ * word is in the passage at all. If it is, they took it from somewhere and
+ * the review can show them where; if it is not, they invented it, and there
+ * is nothing to point at.
+ *
+ * Matched exactly and refused where the match is not unique — the same rule
+ * `passageQuote` works under, and for the same reason. A word that appears
+ * four times gives four candidate places and no way to know which one they
+ * read, and a red mark over the wrong one teaches somebody they misread a
+ * sentence they never looked at.
+ *
+ * A hit inside a sentence some question's answer already claims is dropped,
+ * and that is the rule that decides most of them. Two reasons, and the
+ * second is the one that matters:
+ *
+ * A learner who wrote the right word in the wrong form — `centre` for
+ * `urban centres` — would have the answer's own sentence marked red as the
+ * thing that misled them, which is exactly backwards.
+ *
+ * And a word inside ANOTHER question's answer cannot be drawn. One stretch
+ * of prose gets one mark (`overlaysIn`), the longer wins, so the red word
+ * would be swallowed by the green sentence around it and come back as part
+ * of a mark that says the opposite of what it means. A mark whose colour
+ * lies is worse than no mark, so the honest answer is to say nothing — the
+ * row still names the answer they should have given, which is what it was
+ * always for.
+ */
+export function writtenDistractors(
+  results: QuestionResult[],
+  paragraphs: { partId: string; index: number; text: string }[],
+  /** Everything the answers layer has already claimed. */
+  taken: Overlay[],
+): Overlay[] {
+  const out: Overlay[] = [];
+  for (const result of results) {
+    if (result.is_correct) continue;
+    // Only where nothing better is known. A lettered answer's distractor
+    // comes from the paper and is already in `evidenceOverlays`.
+    if (result.answered_by === "letters" || result.distractor?.length) continue;
+    const wrote = result.given_answer.trim();
+    if (wrote.length < 3) continue;
+
+    const hits: { partId: string; index: number; start: number }[] = [];
+    for (const paragraph of paragraphs) {
+      const hay = paragraph.text.toLowerCase();
+      const needle = wrote.toLowerCase();
+      for (
+        let at = hay.indexOf(needle);
+        at >= 0;
+        at = hay.indexOf(needle, at + 1)
+      ) {
+        if (bounded(paragraph.text, at, needle.length)) {
+          hits.push({
+            partId: paragraph.partId,
+            index: paragraph.index,
+            start: at,
+          });
+        }
+      }
+    }
+    if (hits.length !== 1) continue;
+
+    const [hit] = hits;
+    const claimed = taken.some(
+      (span) =>
+        span.partId === hit.partId &&
+        span.index === hit.index &&
+        hit.start < span.end &&
+        hit.start + wrote.length > span.start,
+    );
+    if (claimed) continue;
+
+    out.push({
+      partId: hit.partId,
+      index: hit.index,
+      start: hit.start,
+      end: hit.start + wrote.length,
+      tone: "chose",
+      key: result.question_id,
+      labels: [`Q${result.number}`],
+      title: `Question ${result.number} — you wrote this`,
+    });
+  }
+  return out;
+}
+
+const WORDISH = /[\p{L}\p{N}]/u;
+
+/** Whether a match stands as a whole word. `art` inside `particular` is not
+ *  the reader's word, and marking it would be the page pointing at a
+ *  coincidence. */
+function bounded(text: string, at: number, length: number): boolean {
+  const before = text[at - 1];
+  const after = text[at + length];
+  return (
+    (before === undefined || !WORDISH.test(before)) &&
+    (after === undefined || !WORDISH.test(after))
+  );
 }
 
 /**
@@ -291,19 +425,32 @@ export const WASH: Record<
   Overlay["tone"],
   { rest: string; lit: string; tag: string }
 > = {
-  wrong: {
+  /** What pulled them: the option or the word they actually gave. */
+  chose: {
     rest: "bg-incorrect/20 decoration-incorrect/50 underline decoration-2 underline-offset-4",
     lit: "bg-incorrect/40 decoration-incorrect",
     tag: "text-incorrect",
   },
-  // Quieter than the red, deliberately. Both are on the page at once and
-  // they are not equally interesting: what a reader came here for is the
-  // ones they lost, and green at the same strength turns the passage into
-  // a stripe pattern with no figure in it.
-  right: {
-    rest: "bg-correct/12 decoration-correct/40 underline decoration-2 underline-offset-4",
-    lit: "bg-correct/30 decoration-correct",
+  /** The answer to a question they got wrong. A wash, because it is being
+   *  read against the red one beside it and a rule alone would lose that
+   *  comparison before it started. */
+  missed: {
+    rest: "bg-correct/18 decoration-correct/50 underline decoration-2 underline-offset-4",
+    lit: "bg-correct/35 decoration-correct",
     tag: "text-correct",
+  },
+  /** The answer to one they got right: a rule and nothing else. Two washes
+   *  per mistake plus a wash per success is a passage with no unmarked
+   *  prose left in it, and a page where everything is marked has marked
+   *  nothing. */
+  got: {
+    // `bg-transparent` is not redundant: a <mark> with no background of its
+    // own falls back to the browser's, which is a block of highlighter
+    // yellow — the one colour on this page that belongs to the vocabulary
+    // layer. Every other tone happens to cover it.
+    rest: "bg-transparent decoration-correct/45 underline decoration-2 underline-offset-4",
+    lit: "bg-correct/20 decoration-correct",
+    tag: "text-correct/70",
   },
   word: { rest: "bg-mark-key/25", lit: "bg-mark-key/50", tag: "text-primary" },
   saved: {
