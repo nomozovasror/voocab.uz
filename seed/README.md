@@ -2589,3 +2589,85 @@ exactly — **$0.0062**. The whole reading corpus is about **$1.20**, paid
 once. The estimate made before running it said two cents a passage, so the
 oldest lesson here holds again: the only honest number is the one in
 `work/usage.jsonl`.
+
+## Evidence: where in the passage each answer is
+
+`read_evidence.py` adds a seventh stage to `run_reading.py`, and it exists
+because of something the listening half proved by accident.
+
+A listening question has carried `replay_start_ms`/`replay_end_ms` since the
+first day — where in the recording the answer is said — and on the review
+screen that one field turned out to be worth more than the score printed
+above it. Knowing you were wrong teaches nobody anything. Being put back in
+front of the sentence you misread is the whole of what a review is for.
+
+Reading had no counterpart at all. Its review found a line by searching the
+passage for the answer string, which works for a gap-fill — the answer is
+literally in the text — and says nothing whatever about a TRUE / FALSE / NOT
+GIVEN item or a multiple choice, where the answer is a letter and the
+reasoning is three clauses the candidate did not weigh. Those are exactly the
+questions somebody most needs explained, and they were the ones the page had
+least to say about.
+
+### The model is asked for quotes, never for offsets
+
+The rule `read_vocabulary.py` arrived at, and it holds harder here. A model
+asked for character positions produces plausible numbers, and plausible
+numbers are the worst possible failure: a highlight two words off does not
+read as an approximation, it reads as a broken program — and a candidate who
+thinks the highlighting is broken has been given a reason to distrust every
+other mark on the page.
+
+So the model returns the sentence AS IT STANDS, `locate` finds it by exact
+search, and a quote that cannot be found is dropped. The offsets are
+therefore never anything but a real substring's real position, which is also
+why there is no verification pass to write: a span that did not come back out
+of the text was never made. The checking that does exist is the importer's,
+and it checks a different thing — whether the passage has been re-read since.
+
+### Two tasks know their own paragraph, and are used to check the model
+
+Matching headings asks about a paragraph by name ("Paragraph C") and matching
+information is ANSWERED by a paragraph letter. Both could be done without a
+model at all, and both are still put to one — because "which paragraph
+contains the following information" is answered by one sentence inside ninety
+words, and a mark over all ninety says *it is somewhere in here*, which the
+question already said.
+
+What the known paragraph buys is better than a saved request: the model's
+quote is refused unless it falls inside it, and the paragraph stands as the
+fallback where it does not. A free correctness check on a quarter of the
+corpus. Asked of C21 T2 P2's matching-information set, every one of the six
+quotes landed inside the paragraph the answer key names.
+
+### How wide a span may be
+
+One sentence, or a clause of one, between 12 and 320 characters. Not a
+paragraph — pointing at ninety words is not pointing. Up to three spans a
+question, because the evidence really is scattered sometimes: a NOT GIVEN is
+often decided by a clause in one sentence and a clause in another, and
+marking one of them marks half of why they were wrong.
+
+A question the model will not place gets nothing, and an empty list is a good
+answer. The review shows the mistake without any marking, which is the page
+it was before this stage existed.
+
+### Reaching a material somebody has already sat
+
+`import_evidence` in `scripts/import_passage.py` is the one thing written
+outside the authoring schemas, deliberately. `import_questions` refuses to
+rewrite the questions of a material anybody has answered (see *A corrected
+answer key* above) — and a material somebody has sat is exactly the material
+whose review page this feature is for. So evidence is applied on its own, by
+matching group `order_index` and question `number`, which is safe in a way
+rewriting the questions is not: evidence changes no score. It is feedback
+about a paper, not the paper.
+
+### Cost
+
+One request a passage — the whole paper's questions together — at about
+1 500 tokens in and 900 out on `gemini-3.1-flash-lite`. Roughly the price of
+one `read_vocabulary` batch, of which there are four per passage. First run,
+C11 T1 P1: 12 of 13 questions placed, 0 quotes dropped, 0 fallbacks. The
+thirteenth was a NOT GIVEN the model would not invent a place for, which is
+the answer the prompt asks for.

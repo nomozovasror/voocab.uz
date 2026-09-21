@@ -14,13 +14,14 @@ things that are not sections or carry a second bookkeeping scheme beside the
 first. This carries no bookkeeping at all: what a passage has done is what is
 on disk beside it, which is also what makes the run resumable for free.
 
-Six stages, and three of listening's are simply absent -- there is no
-recording, so nothing to align, nothing to trim, and no replay span to find:
+Seven stages, and three of listening's are simply absent -- there is no
+recording, so nothing to align and nothing to trim:
 
     text       read_passages.py            passage.json
     questions  read_passage_questions.py   questions.src.json
     build      build_questions.py          questions.json
     vocab      read_vocabulary.py          vocabulary.json
+    evidence   read_evidence.py            evidence.json
     picture    extract_image.py            image-group<N>.png
     import     scripts.import_passage      a Material, private
 
@@ -31,10 +32,17 @@ BACKEND venv, like its listening twin: extraction needs no database and the
 import needs nothing else.
 
 `vocab` needs only `passage.json` and could run second. It runs fourth
-because it is the only stage here that spends money: a passage whose
-questions could not be read is a passage that will not be imported, and
-glossing its eighty words first would be paying for a material nobody is
-going to sit.
+because it spends money: a passage whose questions could not be read is a
+passage that will not be imported, and glossing its eighty words first would
+be paying for a material nobody is going to sit.
+
+`evidence` is listening's replay span with the clock taken out of it -- where
+in the PASSAGE each answer is -- and it is the same bargain: one request a
+passage, paid once, for the thing the review page is actually for. It must
+come after `build` because it is asked about the built questions and their
+answer key, and it is optional for the same reason `vocab` is: a paper whose
+evidence could not be placed is still a paper worth sitting, and holding it
+back would be protesting about the help by withholding the work.
 
 Nothing is redone. A stage whose output is already on disk is skipped unless
 --force, so a run that stops halfway is simply run again.
@@ -57,7 +65,8 @@ WORK = SEED / "work"
 #: The order they depend on each other in. Not the order they are interesting
 #: in: `build` is the one that catches a misread page, and it can only run
 #: after both readings of it exist.
-STAGES = ("text", "questions", "build", "vocab", "picture", "import")
+STAGES = ("text", "questions", "build", "vocab", "evidence", "picture",
+          "import")
 
 #: A stage whose failure is a loss of quality rather than of content. A
 #: passage with no labelling group has no picture to cut and says so by
@@ -65,11 +74,11 @@ STAGES = ("text", "questions", "build", "vocab", "picture", "import")
 #: has twelve other questions worth practising, and stopping the run there
 #: would hold all of them back.
 #:
-#: `vocab` is optional on the same reading. A passage with no glosses is a
-#: passage a learner can still sit; it is the help around it that is missing,
-#: and holding the paper back to protest about the help would be a strange
-#: way to serve them.
-OPTIONAL = {"picture", "vocab"}
+#: `vocab` and `evidence` are optional on the same reading. A passage with no
+#: glosses and no marked evidence is a passage a learner can still sit; it is
+#: the help around it that is missing, and holding the paper back to protest
+#: about the help would be a strange way to serve them.
+OPTIONAL = {"picture", "vocab", "evidence"}
 
 
 def output(stage: str, passage_id: str) -> pathlib.Path | None:
@@ -86,6 +95,7 @@ def output(stage: str, passage_id: str) -> pathlib.Path | None:
         "questions": work / "questions.src.json",
         "build": work / "questions.json",
         "vocab": work / "vocabulary.json",
+        "evidence": work / "evidence.json",
     }.get(stage)
 
 
@@ -99,6 +109,8 @@ def command(stage: str, passage_id: str, owner: str) -> list[str]:
             return [str(PYTHON), str(SEED / "build_questions.py"), passage_id]
         case "vocab":
             return [str(PYTHON), str(SEED / "read_vocabulary.py"), passage_id]
+        case "evidence":
+            return [str(PYTHON), str(SEED / "read_evidence.py"), passage_id]
         case "picture":
             return [str(PYTHON), str(SEED / "extract_image.py"), passage_id]
         case "import":
