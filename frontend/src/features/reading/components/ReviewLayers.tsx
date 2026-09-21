@@ -2,14 +2,21 @@ import { cn } from "@/lib/utils";
 import { LAYERS, SWATCH, type LayerId } from "@/features/reading/layers";
 
 /**
- * Which marking is on the passage, as four buttons in the header's middle
- * island.
+ * Which marking is on the passage — and therefore what is listed beside it
+ * — as four buttons in the header's middle island.
  *
  * The same island the take screen's highlighter and text-size tools hold, and
  * that is the argument for putting it there: on the review the passage is
  * still half the screen, so a control that governs how the passage is drawn
  * belongs where the passage's controls were an hour ago. It also costs the
  * text nothing — the island is chrome.
+ *
+ * **It is the only control.** There was a second one — two tabs over the
+ * analysis panel, reading *Mistakes* and *Vocabulary* — and the two shared
+ * both their words and their effect, since pressing a tab already moved the
+ * layer with it. Two controls that do one thing is a reader deciding which
+ * of them is the real one. The counts came here when the tabs went, because
+ * *Vocabulary 88* is most of the reason to press it.
  *
  * **A radio group, not four checkboxes.** Exactly one layer is on, always
  * (`features/reading/layers.ts` says why), and `aria-pressed` on four
@@ -51,7 +58,7 @@ export function ReviewLayers({
           role="radio"
           aria-checked={layer === one.id}
           onClick={() => onLayer(one.id)}
-          title={`${one.meaning} (${counts[one.id]})`}
+          title={one.meaning}
           className={cn(
             "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs whitespace-nowrap transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
             // The same two tones as the take screen's tool row, measured
@@ -76,6 +83,22 @@ export function ReviewLayers({
               and a puzzle. */}
           <span className={layer === one.id ? "inline" : "hidden lg:inline"}>
             {one.label}
+          </span>
+          {/* How much is under it. Quiet, and beside the name rather than
+              in a pill: it is the size of the thing, not a badge saying
+              something needs attention.
+
+              Hidden with the label below the split, where the whole row has
+              to fit between the way out and the account — a bare number
+              floating beside a coloured square is not information anybody
+              can use. */}
+          <span
+            className={cn(
+              "tabular-nums opacity-55",
+              layer === one.id ? "inline" : "hidden lg:inline",
+            )}
+          >
+            {counts[one.id]}
           </span>
         </button>
       ))}

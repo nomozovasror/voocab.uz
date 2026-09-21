@@ -75,30 +75,37 @@ three islands, the same full-bleed pull under the chrome. The reader does not
 have to learn it — they were in it twenty minutes ago. What is different is
 what is written on the passage.
 
-**One layer at a time, never four** (`layers.ts`). Mistakes in red, the
-vocabulary in amber, the already-saved words in blue, and the reader's own
-marks. Four kinds of marking over nine hundred words at once is not four
-findings, it is a page of colour with prose underneath it. One at a time
-makes each a QUESTION somebody asked, and the toggle in the middle island is
-where they ask it.
+**One layer at a time, never four** (`layers.ts`). Every answer in green and
+red, the vocabulary in amber, the already-saved words in blue, and the
+reader's own marks. Four kinds of marking over nine hundred words at once is
+not four findings, it is a page of colour with prose underneath it. One at a
+time makes each a QUESTION somebody asked.
 
-- **A layer with nothing in it is not offered.** No mistakes on a clean
-  sheet, no vocabulary on a passage the extraction never reached, no marks
+**And one CONTROL, not two.** The toggle in the middle island decides both
+what is marked on the passage and what is listed beside it. It was two — the
+layers in the header and a pair of tabs over the analysis, with *Mistakes*
+and *Vocabulary* printed in both — and they did one thing between them, since
+pressing a tab already moved the layer with it. Two controls with one effect
+is a reader working out which is the real one.
+
+- **A layer with nothing in it is not offered.** No answers on a paper the
+  extraction never reached, no vocabulary where it was never run, no marks
   from a reader who highlighted nothing. Absence reads as "not this paper";
   a disabled button reads as "not you". The same fall-through picks the
-  opening layer, so a clean sheet opens on the vocabulary with no second
-  rule written for it.
+  opening layer, so a paper with no evidence opens on the vocabulary with no
+  second rule written for it.
+- **Every layer has an analysis.** Answers is the marked question list,
+  Vocabulary the word list, Saved the same list filtered to what the reader
+  had already met, My marks their own highlights grouped by what each colour
+  MEANS. A layer whose panel showed something else would be the page
+  contradicting its own control — which is what happened to *My marks*
+  before `ReviewMarks` existed.
 - **"My marks" is not an overlay.** It hands `PassagePane` the reader's own
   `Highlight`s and the existing code draws them, so they keep the three
   colours they were made in. Those colours mean something — the keyword,
   where the answer was, the line to come back to — and repainting them one
   neutral colour on the one page that exists to give that back would throw
   away the only part of a mark that carries information.
-- **The tab carries the layer; the layer does not carry the tab.** Pressing
-  *Vocabulary* marks the vocabulary, because the tab and the layer are the
-  same question asked twice. It is one-way because the layers are finer than
-  the tabs — Saved and My marks have no tab — and a control that silently
-  undid itself from the other side would make four buttons feel like two.
 
 ## Where the answer was: evidence, and its fallback
 
@@ -107,6 +114,27 @@ rather than a moment in a recording, several spans rather than one, found by
 `seed/read_evidence.py` and checked by being a real substring's real
 position. Pointing at a mistake lights its sentence in the passage; pointing
 at that sentence lights the mistake; pressing scrolls to it.
+
+**Every answer is marked, not only the missed ones, and each carries its
+number.** It began as the wrong ones alone, on the reasoning that a candidate
+who answered question 12 correctly does not need to be shown where question
+12 was. That is wrong twice: a passage worked through is a paper somebody
+wants to see MARKED, and half a marking is not one; and red marks only mean
+"you missed this" while the green ones are there to compare them with —
+alone they read as "here are the hard bits", which is a different claim. The
+green is drawn quieter than the red, because the two are not equally
+interesting.
+
+What keeps the passage from drowning in colour is the `Q12` in the margin of
+each mark rather than the wash: seventeen coloured sentences is not an answer
+to *where was question 31*, and `Q31` beside one of them is. Where one mark
+stands for two questions — a TRUE/FALSE pair often turns on one clause — it
+prints both numbers, because a mark labelled `Q31` that is also Q32's is
+lying by omission to whoever is looking for Q32.
+
+Green and red here mean what they mean in the question map at the top of the
+same screen: the verdict. That is exactly why the reader's own three
+highlight colours are never green or red.
 
 `passageQuote` is still here and is the FALLBACK for a paper the extraction
 never reached: it finds the answer string in the text and, where the book

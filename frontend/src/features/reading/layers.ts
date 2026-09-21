@@ -51,9 +51,21 @@ import type { VocabularyEntry } from "@/features/vocabulary/types";
  * the LAYER has no colour; its marks have three.
  */
 
-/** Which marking is on the passage. Exactly one, never none — a passage with
- *  nothing on it is what the take screen already showed. */
-export type LayerId = "mistakes" | "vocabulary" | "saved" | "marks";
+/**
+ * Which marking is on the passage — and, because they are one control,
+ * which analysis is beside it.
+ *
+ * It used to be two controls: four layers in the header for the passage, and
+ * two tabs over the panel for the analysis, with "Mistakes" and "Vocabulary"
+ * printed in both. Two places saying the same two words is a reader working
+ * out which one they are meant to press, and the answer was "either" — the
+ * tab already carried the layer with it. So there is one, it lives in the
+ * header where the take screen's tools were, and the panel follows it.
+ *
+ * Exactly one is on, never none: a passage with nothing on it is what the
+ * take screen already showed.
+ */
+export type LayerId = "answers" | "vocabulary" | "saved" | "marks";
 
 export interface LayerDescriptor {
   id: LayerId;
@@ -65,13 +77,13 @@ export interface LayerDescriptor {
 }
 
 /** In the order they are offered, which is the order they get further from
- *  this sitting: what you got wrong here, what this passage teaches, what
- *  you knew before it, what you did while you were in it. */
+ *  this sitting: how the paper went, what it teaches, what you knew before
+ *  it, what you did while you were in it. */
 export const LAYERS: LayerDescriptor[] = [
   {
-    id: "mistakes",
-    label: "Mistakes",
-    meaning: "Where the answers you missed were",
+    id: "answers",
+    label: "Answers",
+    meaning: "Where every answer was, right and wrong",
   },
   {
     id: "vocabulary",
@@ -99,8 +111,9 @@ export interface Overlay {
   start: number;
   end: number;
   /** How it is washed. Not the layer's id: `saved` and `vocabulary` are two
-   *  layers and one of them draws a word in each of two states. */
-  tone: "evidence" | "word" | "saved";
+   *  layers and one of them draws a word in each of two states, and the
+   *  answers layer draws two verdicts. */
+  tone: "right" | "wrong" | "word" | "saved";
   /** What this mark is about, so hovering a row on the right can light the
    *  matching marks on the left and nothing else. A question id for
    *  evidence, a lemma for a word. */
@@ -113,31 +126,54 @@ export interface Overlay {
   /** What it says on hover. The passage's own words are under the pointer,
    *  so this says what the MARK means, not what the text says. */
   title?: string;
+  /** What is printed in the margin of the mark — `Q12`, and both numbers
+   *  where one mark stands for two questions.
+   *
+   *  Without it the answers layer is a passage striped red and green, and
+   *  the reader has to guess which stripe belongs to the row they are
+   *  reading. Seventeen coloured sentences is not an answer to "where was
+   *  question 31"; `Q31` beside one of them is. */
+  labels?: string[];
 }
 
 /**
- * The evidence for every question that was got wrong.
+ * Where every answer was, marked green where it was got and red where it
+ * was not.
  *
- * Wrong answers only, and that is the layer's whole argument. Marking all
- * forty would colour most of the passage and say nothing: a candidate who
- * answered question 12 correctly does not need to be shown where question
- * 12 was. What they need is the ten places they did not read properly, and
- * ten marks in nine hundred words is something a reader can actually look
- * at one by one.
+ * It began as the wrong ones only, on the reasoning that marking all forty
+ * colours most of the passage and a candidate who answered question 12
+ * correctly does not need to be shown where question 12 was. That is wrong
+ * twice over.
+ *
+ * A passage worked through is a paper somebody wants to see MARKED, and half
+ * a marking is not one: the reader who got eleven of thirteen wants to see
+ * where the two they lost were AND that the eleven were where they thought.
+ * And the red marks only mean "you missed this" if the green ones are there
+ * to be compared with — alone on the page they read as "here are the hard
+ * bits", which is a different and less useful claim.
+ *
+ * The passage does not drown in colour, because what carries the mark is the
+ * NUMBER in its margin rather than the wash: `Q12` is legible against a tint
+ * that would be invisible on its own. Green and red mean here what they mean
+ * in the question map at the top of the same screen — the verdict — and not
+ * what the reader's own three highlight colours mean, which is why those
+ * three are never green or red.
  */
 export function evidenceOverlays(results: QuestionResult[]): Overlay[] {
   const out: Overlay[] = [];
   for (const result of results) {
-    if (result.is_correct) continue;
     for (const span of result.evidence ?? []) {
       out.push({
         partId: span.part_id,
         index: span.paragraph_index,
         start: span.start,
         end: span.end,
-        tone: "evidence",
+        tone: result.is_correct ? "right" : "wrong",
         key: result.question_id,
-        title: `The answer to question ${result.number} is here`,
+        labels: [`Q${result.number}`],
+        title: result.is_correct
+          ? `Question ${result.number} — you got this one`
+          : `Question ${result.number} — the answer was here`,
       });
     }
   }
@@ -215,9 +251,16 @@ export function overlaysIn(
     const last = out[out.length - 1];
     if (last && overlay.start < last.end) {
       last.also = [...(last.also ?? []), overlay.key];
+      // And its number. Two questions decided by one sentence is ordinary —
+      // a TRUE/FALSE pair often turns on the same clause — and a mark
+      // labelled `Q31` that is also where Q32 was is a mark lying by
+      // omission to whoever is looking for Q32.
+      if (overlay.labels?.length) {
+        last.labels = [...(last.labels ?? []), ...overlay.labels];
+      }
       continue;
     }
-    // Copied, because the line above writes to it and these come from a
+    // Copied, because the lines above write to it and these come from a
     // memo the page holds across renders.
     out.push({ ...overlay });
   }
@@ -244,20 +287,40 @@ export function points(overlay: Overlay, at: string | null): boolean {
  * the same. Brighter rather than a different colour — it is the same mark
  * being pointed at, not a different kind of mark.
  */
-export const WASH: Record<Overlay["tone"], { rest: string; lit: string }> = {
-  evidence: {
-    rest: "bg-incorrect/25 decoration-incorrect/60 underline decoration-2 underline-offset-4",
-    lit: "bg-incorrect/45 decoration-incorrect",
+export const WASH: Record<
+  Overlay["tone"],
+  { rest: string; lit: string; tag: string }
+> = {
+  wrong: {
+    rest: "bg-incorrect/20 decoration-incorrect/50 underline decoration-2 underline-offset-4",
+    lit: "bg-incorrect/40 decoration-incorrect",
+    tag: "text-incorrect",
   },
-  word: { rest: "bg-mark-key/25", lit: "bg-mark-key/50" },
-  saved: { rest: "bg-mark-found/25", lit: "bg-mark-found/50" },
+  // Quieter than the red, deliberately. Both are on the page at once and
+  // they are not equally interesting: what a reader came here for is the
+  // ones they lost, and green at the same strength turns the passage into
+  // a stripe pattern with no figure in it.
+  right: {
+    rest: "bg-correct/12 decoration-correct/40 underline decoration-2 underline-offset-4",
+    lit: "bg-correct/30 decoration-correct",
+    tag: "text-correct",
+  },
+  word: { rest: "bg-mark-key/25", lit: "bg-mark-key/50", tag: "text-primary" },
+  saved: {
+    rest: "bg-mark-found/25",
+    lit: "bg-mark-found/50",
+    tag: "text-mark-found",
+  },
 };
 
 /** The swatch a toggle wears, so the row of four says which colour means
  *  which without a legend under it. "My marks" has none of its own — its
  *  marks keep the colours the reader chose — so it wears the foreground. */
 export const SWATCH: Record<LayerId, string> = {
-  mistakes: "bg-incorrect",
+  // Two colours, because the layer draws two verdicts and a swatch that
+  // showed one of them would be the control claiming to mark only the
+  // mistakes — which is what it used to do.
+  answers: "bg-gradient-to-r from-correct to-incorrect",
   vocabulary: "bg-mark-key",
   saved: "bg-mark-found",
   marks: "bg-foreground/40",

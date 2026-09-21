@@ -100,9 +100,15 @@ passage a student struggled with.
 - **It sits beside the passage, marked.** It used to be a bordered panel at
   the bottom of a page, and a hundred and one entries of four lines each is
   ten screens of words with no text anywhere near them — a dictionary with
-  the one thing that made it worth reading taken out. It is now a tab
-  opposite the passage, the passage is washed amber over the words it is
-  talking about, and pointing at either lights the other.
+  the one thing that made it worth reading taken out. It is now one of the
+  review's layers, opposite the passage, the passage is washed amber over
+  the words it is talking about, and pointing at either lights the other.
+- **The Saved layer is this same panel filtered, never a second one.** A
+  word met again a fortnight after it was saved is not a different KIND of
+  entry — it is the same entry with a history — so `only="saved"` hides the
+  rest and changes the heading. The save buttons still count the WHOLE list:
+  "Save all 85" inside a panel showing only what is already saved would be a
+  button offering to save nothing.
 - **The list is fetched by the PAGE, not by the list.** The marking on the
   passage comes from the same rows, and two components asking the cache the
   same question is one of them holding a copy that stops agreeing with the

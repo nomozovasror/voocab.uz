@@ -101,6 +101,14 @@ export function paragraphId(partId: string, label: string): string {
   return `passage-${partId}-${label}`;
 }
 
+/** How one of the reader's own marks is named, so the list beside the
+ *  passage and the mark on it agree about which is which. Its own START
+ *  rather than the run's, because two touching marks are drawn as one shape
+ *  and a key taken from the wrong half would light nothing. */
+export function markKey(partId: string, index: number, start: number): string {
+  return `${partId}:${index}:${start}`;
+}
+
 /** The id the whole passage can be scrolled to by. The take screen brings
  *  the passage pane to it when the reader crosses into the questions that
  *  are answered from it. */
@@ -226,6 +234,28 @@ export function PassagePane({
                         )}
                       >
                         {run.text}
+                        {/* The number, riding on the end of the mark.
+                            Inside the <mark> so it travels with the wash
+                            and cannot be separated from it by a line break,
+                            and `sup` because that is what a marginal
+                            reference is — a teacher's pencil number beside
+                            the sentence, not a word in it.
+
+                            `select-none` so copying the passage does not
+                            take "Q12" out with it: the text under these
+                            marks is the book's, and a reader copying a
+                            sentence into their notes should get the
+                            sentence. */}
+                        {run.mark.labels?.length ? (
+                          <sup
+                            className={cn(
+                              "ml-0.5 text-[0.6em] font-semibold tracking-tight select-none",
+                              LAYER_WASH[run.mark.tone].tag,
+                            )}
+                          >
+                            {run.mark.labels.join(" ")}
+                          </sup>
+                        ) : null}
                       </mark>
                     ) : (
                       <span key={k}>{run.text}</span>
@@ -247,6 +277,19 @@ export function PassagePane({
                         onClick={
                           onUnmark ? () => onUnmark(index, run.at) : undefined
                         }
+                        // The reader's own marks join the hover link too,
+                        // keyed the way `ReviewMarks` keys its rows: the
+                        // merged mark's own start, since two touching marks
+                        // are one shape here and must be one row there.
+                        // Absent on the take screen, which hands in no
+                        // `onPoint` and has no list to light.
+                        onMouseEnter={
+                          onPoint
+                            ? () =>
+                                onPoint(markKey(partId, index, run.mark!.start))
+                            : undefined
+                        }
+                        onMouseLeave={onPoint ? () => onPoint(null) : undefined}
                         className={cn(
                           "text-foreground",
                           STROKE,
@@ -259,6 +302,8 @@ export function PassagePane({
                           run.mark.note &&
                             "decoration-dotted underline underline-offset-4",
                           onUnmark && "cursor-pointer",
+                          lit === markKey(partId, index, run.mark.start) &&
+                            "ring-2 ring-foreground/30",
                         )}
                       >
                         {run.text}

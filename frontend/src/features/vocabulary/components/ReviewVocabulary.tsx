@@ -77,6 +77,7 @@ const LEVELS = ["B1", "B2", "C1"] as const;
 export function ReviewVocabulary({
   materialId,
   data,
+  only,
   lookedUp,
   savedEarlier,
   lit,
@@ -89,6 +90,11 @@ export function ReviewVocabulary({
    *  components asking the same question of the same cache is one of them
    *  reading a copy it did not know it had. */
   data: VocabularyList;
+  /** Which of them to show. `"saved"` is the Saved layer's panel: the same
+   *  list with everything the learner has not met before taken out, and the
+   *  same rows — a word they saved a fortnight ago and have just met again
+   *  is not a different KIND of entry, it is the same entry with a history. */
+  only?: "saved";
   /** The lemmas this attempt spent its lookups on, from the attempt itself.
    *  Empty for a sitting before the measurement existed, and for anybody who
    *  looked nothing up. */
@@ -133,7 +139,8 @@ export function ReviewVocabulary({
   });
 
   const { opened, main, easiest } = useMemo(() => {
-    const entries = data.entries;
+    const entries =
+      only === "saved" ? data.entries.filter((e) => e.saved) : data.entries;
     const wanted = new Set(lookedUp);
     const byLevel = (a: VocabularyEntry, b: VocabularyEntry) =>
       LEVELS.indexOf(a.cefr_level as (typeof LEVELS)[number]) -
@@ -151,11 +158,16 @@ export function ReviewVocabulary({
       main: rest.filter((entry) => entry.cefr_level !== "B1"),
       easiest: rest.filter((entry) => entry.cefr_level === "B1"),
     };
-  }, [data, lookedUp]);
+  }, [data, lookedUp, only]);
 
+  // Off the WHOLE list, never the filtered one. "Save all 85" inside a
+  // panel showing only what is already saved would be a button offering to
+  // save nothing.
   const unsaved = data.entries.filter((entry) => !entry.saved);
   const openedUnsaved = opened.filter((entry) => !entry.saved);
   const hardest = unsaved.filter((entry) => entry.cefr_level === "C1");
+
+  const shownCount = opened.length + main.length + easiest.length;
 
   const row = (entry: VocabularyEntry) => (
     <Word
@@ -172,16 +184,35 @@ export function ReviewVocabulary({
   return (
     <section className={cn("min-w-0", className)}>
       <header className="rounded-xl bg-surface-sunken px-4 py-3">
-        <h2 className="text-sm font-semibold text-foreground">
-          {data.total} words worth learning here
-        </h2>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {LEVELS.filter((level) => data.levels[level])
-            .map((level) => `${level} ${data.levels[level]}`)
-            .join(" · ")}
-          {data.unusual > 0 &&
-            ` — ${data.unusual} of them in a sense you would not expect`}
-        </p>
+        {only === "saved" ? (
+          <>
+            <h2 className="text-sm font-semibold text-foreground">
+              {shownCount} of your saved {shownCount === 1 ? "word" : "words"}{" "}
+              {shownCount === 1 ? "is" : "are"} in this passage
+            </h2>
+            {/* The argument for the layer, said once. Meeting a word again
+                in a new context is the single most effective thing that can
+                happen to it, and it is the one thing on this page the
+                reader did not have to do anything to earn. */}
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Met again, in a text you have just read closely — which is worth
+              more than any number of times through a list.
+            </p>
+          </>
+        ) : (
+          <>
+            <h2 className="text-sm font-semibold text-foreground">
+              {data.total} words worth learning here
+            </h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {LEVELS.filter((level) => data.levels[level])
+                .map((level) => `${level} ${data.levels[level]}`)
+                .join(" · ")}
+              {data.unusual > 0 &&
+                ` — ${data.unusual} of them in a sense you would not expect`}
+            </p>
+          </>
+        )}
 
         {/* Three ways to save a handful at once, and each answers a
             different question somebody actually asks. "All of them" is the
@@ -190,7 +221,7 @@ export function ReviewVocabulary({
             the third is the one who only wants what beat them, and it is
             the one worth the most — nothing else on the platform knows
             which words those were. */}
-        {unsaved.length > 0 && (
+        {only !== "saved" && unsaved.length > 0 && (
           <div className="mt-2.5 flex flex-wrap items-center gap-1">
             {openedUnsaved.length > 0 && (
               <Button

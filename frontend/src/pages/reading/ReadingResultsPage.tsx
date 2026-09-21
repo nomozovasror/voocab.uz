@@ -28,6 +28,7 @@ import {
 } from "@/features/reading/components/PassagePane";
 import { SplitPanes } from "@/features/reading/components/SplitPanes";
 import { ReviewLayers } from "@/features/reading/components/ReviewLayers";
+import { ReviewMarks } from "@/features/reading/components/ReviewMarks";
 import { loadHighlights } from "@/features/reading/highlights";
 import {
   evidenceOverlays,
@@ -196,7 +197,7 @@ export default function ReadingResultsPage() {
       ? wordOverlays(vocabulary.entries, (lemma) => saved.has(lemma))
       : [];
     return {
-      mistakes: evidence,
+      answers: evidence,
       vocabulary: words,
       saved: words.filter((o) => o.tone === "saved"),
       marks: [] as Overlay[],
@@ -204,13 +205,16 @@ export default function ReadingResultsPage() {
   }, [data?.results, vocabulary, saved]);
 
   const counts: Record<LayerId, number> = {
-    mistakes: layers.mistakes.length,
+    // How many QUESTIONS the layer marks, not how many marks it draws: a
+    // question can be decided in two places, and "Answers 17" beside a paper
+    // of thirteen is a count of something nobody asked about.
+    answers: new Set(layers.answers.map((o) => o.key)).size,
     vocabulary: layers.vocabulary.length,
     saved: layers.saved.length,
     marks: marks.length,
   };
 
-  const [chosenLayer, setChosenLayer] = useState<LayerId>("mistakes");
+  const [chosenLayer, setChosenLayer] = useState<LayerId>("answers");
   // The layer that is actually on. A chosen layer with nothing in it is a
   // passage with no marking at all, which is the take screen again — so the
   // page falls through to the first that has something. That is also what
@@ -219,47 +223,21 @@ export default function ReadingResultsPage() {
   const layer: LayerId =
     counts[chosenLayer] > 0
       ? chosenLayer
-      : ((["mistakes", "vocabulary", "saved", "marks"] as LayerId[]).find(
+      : ((["answers", "vocabulary", "saved", "marks"] as LayerId[]).find(
           (id) => counts[id] > 0,
-        ) ?? "mistakes");
+        ) ?? "answers");
 
   /** What the pointer is on, wherever it is. One key, shared by both panes:
    *  a question id in the mistakes layer, a lemma in the other two. */
   const [lit, setLit] = useState<string | null>(null);
 
-  // --- The two tabs --------------------------------------------------------
-
-  const [chosenTab, setChosenTab] = useState<"mistakes" | "vocabulary">(
-    "mistakes",
-  );
-
-  /** Pressing a tab takes the passage's marking with it.
-   *
-   *  The tab and the layer are the same question asked twice — *what did I
-   *  get wrong* / *what is worth learning here* — and a page that answered
-   *  it one way on the right and the other way on the left would be two
-   *  half-answers side by side. Reading the vocabulary with the mistakes
-   *  still marked is the list talking about words the passage is not
-   *  pointing at.
-   *
-   *  One way only. The layer toggle does NOT move the tab back, because the
-   *  layers are finer than the tabs — Saved and My marks have no tab of
-   *  their own — and a control that silently undid itself from the other
-   *  side would make the four buttons feel like two. */
-  const showTab = useCallback((next: "mistakes" | "vocabulary") => {
-    setChosenTab(next);
-    setChosenLayer(next);
-  }, []);
-  const hasWords = (vocabulary?.total ?? 0) > 0;
-  // Same fall-through as the layer, and the same two states it covers: a
-  // clean sheet opens on the vocabulary, and a passage the extraction never
-  // reached has no vocabulary tab to open on.
-  const tab =
-    chosenTab === "vocabulary" && !hasWords
-      ? "mistakes"
-      : chosenTab === "mistakes" && wrong.length === 0 && hasWords
-        ? "vocabulary"
-        : chosenTab;
+  // --- The analysis beside it ----------------------------------------------
+  //
+  // There is no second control. The layer in the header decides both what is
+  // marked on the passage and what is listed beside it, because they are the
+  // same question — *how did the paper go* / *what is worth learning here* —
+  // and asking it twice, in two places, in the same two words, left a reader
+  // working out which of them to press.
 
   const [chosen, setChosen] = useState<ReviewScope>("mistakes");
   const scope: ReviewScope = wrong.length === 0 ? "all" : chosen;
@@ -287,7 +265,7 @@ export default function ReadingResultsPage() {
   }, [goingTo, layer]);
 
   const goToEvidence = useCallback((questionId: string) => {
-    setChosenLayer("mistakes");
+    setChosenLayer("answers");
     // The counter is what makes pressing the same link twice work: the value
     // alone would not change, so the effect would not run again.
     setGoingTo((was) => ({ key: questionId, nth: (was?.nth ?? 0) + 1 }));
@@ -323,15 +301,15 @@ export default function ReadingResultsPage() {
     (questionId: string) => {
       const row = rows.find((r) => r.result.question_id === questionId);
       const hidden = row?.result.is_correct && scope === "mistakes";
-      if (tab !== "mistakes" || hidden) {
-        showTab("mistakes");
+      if (layer !== "answers" || hidden) {
+        setChosenLayer("answers");
         if (hidden) setChosen("all");
         setPending(questionId);
         return;
       }
       scrollToQuestion(questionId);
     },
-    [rows, scope, tab, showTab],
+    [rows, scope, layer],
   );
 
   const nextMistake = useCallback(() => {
@@ -391,37 +369,19 @@ export default function ReadingResultsPage() {
   }
 
   const analysis = (
-    <div className={PANE_TOP}>
+    // `px-3` is not decoration: the rows inside reach OUT by the same three
+    // to draw their hover state full-bleed, and without the gutter to reach
+    // into they hung past the pane's right edge and gave the answers their
+    // own horizontal scrollbar. A pane that scrolls sideways on a page built
+    // out of two vertical scrollers reads as broken.
+    <div className={cn(PANE_TOP, "px-3")}>
       <ReviewScore data={data} rows={rows} onJump={jumpTo} />
 
       {wrong.length === 0 && <CleanSheet />}
 
-      {/* Two tabs, and only where there are two things to hold. A single
-          tab is a heading that has been made to look pressable. */}
-      {hasWords && (
-        <div
-          role="tablist"
-          aria-label="Mistakes or vocabulary"
-          className="mt-5 flex gap-1"
-        >
-          <Tab
-            on={tab === "mistakes"}
-            onClick={() => showTab("mistakes")}
-            label="Mistakes"
-            count={wrong.length}
-          />
-          <Tab
-            on={tab === "vocabulary"}
-            onClick={() => showTab("vocabulary")}
-            label="Vocabulary"
-            count={vocabulary?.total ?? 0}
-          />
-        </div>
-      )}
-
-      {tab === "mistakes" ? (
+      {layer === "answers" && (
         <>
-          <div className="mt-4 mb-1">
+          <div className="mt-5 mb-1">
             <ReviewFilter
               scope={scope}
               onScope={setChosen}
@@ -467,18 +427,34 @@ export default function ReadingResultsPage() {
 
           <ReviewMistakes groups={mistakes} skill="reading" className="mt-10" />
         </>
-      ) : (
-        vocabulary && (
-          <ReviewVocabulary
-            className="mt-4"
-            materialId={data.material_id}
-            data={vocabulary}
-            lookedUp={looked}
-            savedEarlier={savedEarlier ?? new Set()}
-            lit={lit}
-            onPoint={setLit}
-          />
-        )
+      )}
+
+      {(layer === "vocabulary" || layer === "saved") && vocabulary && (
+        <ReviewVocabulary
+          className="mt-5"
+          materialId={data.material_id}
+          data={vocabulary}
+          // The Saved layer is the same list with everything else taken
+          // out. Not a different panel: it is the same words, the same
+          // meanings and the same passage — what differs is which of them
+          // this reader had already met, which is a filter and reads like
+          // one.
+          only={layer === "saved" ? "saved" : undefined}
+          lookedUp={looked}
+          savedEarlier={savedEarlier ?? new Set()}
+          lit={lit}
+          onPoint={setLit}
+        />
+      )}
+
+      {layer === "marks" && (
+        <ReviewMarks
+          className="mt-5"
+          marks={marks}
+          passages={passages}
+          lit={lit}
+          onPoint={setLit}
+        />
       )}
     </div>
   );
@@ -508,31 +484,39 @@ export default function ReadingResultsPage() {
     // on `ReadingTakePage`, which this deliberately matches rather than
     // reasoning about again.
     <div className="-mt-23 -mb-8 mx-[calc(50%-50vw)] flex w-auto flex-col overflow-hidden px-4 sm:px-6">
+      {/* Both ways out of this result, together, in the corner people look
+          in when they want one — the same two the take screen puts there,
+          and the same argument: one leaves the paper and one starts it
+          again, so they are siblings and belong side by side.
+
+          It was in the right island, opposite the account menu, which is
+          where the take screen's CLOCK goes. A clock is a readout and this
+          is a door; putting a door in the readout's place meant the one
+          control on the page anybody presses after reading a review was the
+          furthest thing from the link they arrived by. */}
       <HeaderSlot side="left">
-        <Link
-          to="/reading"
-          className="inline-flex items-center gap-1.5 rounded-full px-1 text-sm text-foreground/70 transition-colors duration-fast hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-        >
-          <ArrowLeft className="size-4" aria-hidden />
-          Reading
-        </Link>
+        <div className="flex items-center gap-1">
+          <Link
+            to="/reading"
+            className="inline-flex items-center gap-1.5 rounded-full px-1 text-sm text-foreground/70 transition-colors duration-fast hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            <ArrowLeft className="size-4" aria-hidden />
+            Reading
+          </Link>
+          <span aria-hidden className="mx-1 h-4 w-px bg-border" />
+          {/* Amber, like every other "this is the action" in the app. */}
+          <Link
+            to={`/reading/${data.material_id}`}
+            className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-sm text-primary transition-colors duration-fast hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            <RotateCcw className="size-3.5" aria-hidden />
+            Take it again
+          </Link>
+        </div>
       </HeaderSlot>
 
       <HeaderSlot side="centre">
         <ReviewLayers layer={layer} onLayer={setChosenLayer} counts={counts} />
-      </HeaderSlot>
-
-      {/* The one thing somebody does after reading a review, in the place
-          the take screen's clock was. Amber, like every other "this is the
-          action" here. */}
-      <HeaderSlot side="right">
-        <Link
-          to={`/reading/${data.material_id}`}
-          className="mr-1 inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-sm text-primary transition-colors duration-fast hover:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-        >
-          <RotateCcw className="size-3.5" aria-hidden />
-          Take it again
-        </Link>
       </HeaderSlot>
 
       <SplitPanes
@@ -607,36 +591,6 @@ function evidenceLabel(
   const part = passages.find((one) => one.id === span.part_id);
   const label = part?.passage?.paragraphs[span.paragraph_index]?.label;
   return label ? `The answer is in paragraph ${label}` : "Show me where it was";
-}
-
-function Tab({
-  on,
-  onClick,
-  label,
-  count,
-}: {
-  on: boolean;
-  onClick: () => void;
-  label: string;
-  count: number;
-}) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={on}
-      onClick={onClick}
-      className={cn(
-        "rounded-full px-3.5 py-1.5 text-sm transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-        on
-          ? "bg-primary/15 text-primary"
-          : "bg-surface-sunken text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {label}
-      <span className="ml-2 tabular-nums opacity-60">{count}</span>
-    </button>
-  );
 }
 
 /** The crumb and title, for the one arrangement that has no passage over
