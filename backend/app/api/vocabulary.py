@@ -65,6 +65,7 @@ def _entry(
         cefr_level=entry.cefr_level,
         is_phrase=entry.is_phrase,
         unusual=entry.unusual,
+        part_id=entry.part_id,
         paragraph_index=entry.paragraph_index,
         offset_start=entry.offset_start,
         offset_end=entry.offset_end,

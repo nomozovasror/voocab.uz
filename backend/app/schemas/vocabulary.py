@@ -40,6 +40,14 @@ class VocabularyEntryOut(BaseModel):
     #: difficult, which is exactly what makes it the hardest kind to spot.
     unusual: bool = False
     #: Where it stands, in the coordinates the reading highlights use.
+    #:
+    #: The part as well as the paragraph, because a reading paper can hold
+    #: three passages: "paragraph 1" names three of them, and a review that
+    #: marks the word where it stands has to know which. Seeded materials
+    #: have one part and the client used to assume so — an assumption that
+    #: is true today, costs one field to stop relying on, and would have
+    #: gone wrong silently on the first whole paper anybody imported.
+    part_id: uuid.UUID
     paragraph_index: int
     offset_start: int
     offset_end: int

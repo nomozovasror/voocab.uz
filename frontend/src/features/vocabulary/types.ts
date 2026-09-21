@@ -43,7 +43,10 @@ export interface VocabularyEntry {
    *  finding neither measure reports alone: the frequency says easy and the
    *  level says C1, and the disagreement is the point. */
   unusual: boolean;
-  /** Where it stands, in the coordinates the reading highlights use. */
+  /** Where it stands, in the coordinates the reading highlights use — the
+   *  part as well as the paragraph, because a reading paper can hold three
+   *  passages and each letters its paragraphs from A. */
+  part_id: string;
   paragraph_index: number;
   offset_start: number;
   offset_end: number;
