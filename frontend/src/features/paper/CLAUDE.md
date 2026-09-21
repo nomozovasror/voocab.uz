@@ -117,3 +117,18 @@ One component either way, because it is one object under different
 conditions: where you were, what you put, and where the answer was. A second
 "review row" for reading would be two files that have to agree about what a
 marked question looks like.
+
+## A completion row quotes its own SENTENCE, never the document
+
+`lineAround` cuts the line holding a gap down to the sentence that gap is
+in. A sentence completion is one sentence a line already; a SUMMARY
+completion is a paragraph of prose carrying three or four gaps on one line,
+and without this each of those questions quoted the whole paragraph — three
+rows of the review, identical to one another, a hundred and twenty words
+each, with the answer to one of them somewhere inside.
+
+Another gap in the same sentence prints as `___ (33)`, named rather than
+blank. A second bare `___` makes two rows look alike again at the one place
+they most need telling apart, and an ellipsis ran into the punctuation
+beside it (`…have ….`). The number comes off `paperParts`, the same walk
+everything else here numbers by.

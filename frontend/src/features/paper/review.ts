@@ -1,4 +1,8 @@
-import { parseTemplateLayout, type FormBlock, type FormLine } from "@/features/paper/form-syntax";
+import {
+  parseTemplateLayout,
+  type FormBlock,
+  type FormLine,
+} from "@/features/paper/form-syntax";
 import { matchIndex } from "@/features/paper/matching";
 import { sorted } from "@/features/paper/numbering";
 import { paperParts } from "@/features/paper/take-paper";
@@ -51,9 +55,103 @@ export interface QuestionContext {
 /** What a gap is printed as once it is not a field any more. */
 const GAP = "___";
 
+/** A gap, while the line is being measured. One character, so the offsets
+ *  either side of it are the text's own, and one nothing else in a passage
+ *  or a template will contain. */
+const MARKER = "\uFFFC";
+
 function lineText(line: FormLine): string {
   return line.parts
     .map((part) => (part.kind === "text" ? part.text : GAP))
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Where one sentence ends and the next begins — a full stop, question mark
+ *  or exclamation, any closing quote or bracket after it, then a space.
+ *
+ *  The same rule and the same trade as `seed/read_vocabulary.py`'s: it gets
+ *  `Dr. Ito` and `e.g.` wrong, and splitting too early gives a fragment
+ *  where not splitting at all gives a paragraph. The first is occasionally
+ *  ugly; the second is what this exists to stop. */
+const SENTENCE = /(?<=[.!?]["'’”)\]])\s+|(?<=[.!?])\s+/;
+
+/**
+ * The line a gap sits in, cut down to that gap's own SENTENCE.
+ *
+ * A sentence completion is one sentence a line and this changes nothing for
+ * it. A summary completion is a paragraph of prose holding three or four
+ * gaps on ONE line, and without this every one of those questions quoted
+ * the whole paragraph: three rows of the review, identical to each other,
+ * each a hundred and twenty words long, with the answer to one of them
+ * somewhere inside. The question the row exists to ask — "what were you
+ * being asked here" — was answered three times with the same wall of text.
+ *
+ * So the sentence, and the sentence only. The row's own gap is `___` and
+ * any other gap sharing that sentence is `___ (33)` — named, because a
+ * second bare `___` would make two rows look alike again at the one place
+ * they most need telling apart, and because the gap is not missing from the
+ * sentence, it belongs to the row above or below.
+ *
+ * It was an ellipsis before the number, and a sentence ending in a gap then
+ * read `…and a large proportion of them have ….` — four dots, which is a
+ * typo rather than a blank. The number says whose blank it is and cannot
+ * collide with the punctuation beside it.
+ *
+ * Falls back to the whole line where the split finds nothing — a template
+ * with no full stop in it is one sentence by definition.
+ */
+function lineAround(
+  line: FormLine,
+  gap: number,
+  /** What the paper calls another gap in the same sentence. */
+  printed: (gap: number) => number | null,
+): string {
+  let text = "";
+  const at: number[] = [];
+  for (const part of line.parts) {
+    if (part.kind === "text") {
+      text += part.text;
+    } else {
+      at.push(text.length);
+      text += MARKER;
+    }
+  }
+  const which = line.parts
+    .filter((part) => part.kind === "gap")
+    .findIndex((part) => part.kind === "gap" && part.number === gap);
+  if (which < 0) return lineText(line);
+
+  let from = 0;
+  let to = text.length;
+  for (const piece of text.split(SENTENCE)) {
+    const end = from + piece.length;
+    if (at[which] < end) {
+      to = end;
+      break;
+    }
+    // Past this sentence and over the whitespace the split consumed. The
+    // separator is not a fixed width — one space, two, a newline — so it is
+    // stepped over rather than assumed, or every later sentence would be
+    // measured from one character out.
+    from = end;
+    while (from < text.length && /\s/.test(text[from])) from += 1;
+  }
+
+  const gaps = line.parts.filter((part) => part.kind === "gap");
+  const cut = text.slice(from, to);
+  const mine = at[which] - from;
+  let seen = at.filter((one) => one < from).length;
+  return cut
+    .split("")
+    .map((ch, i) => {
+      if (ch !== MARKER) return ch;
+      const part = gaps[seen++];
+      if (i === mine) return GAP;
+      const number = part?.kind === "gap" ? printed(part.number) : null;
+      return number == null ? GAP : `${GAP} (${number})`;
+    })
     .join("")
     .replace(/\s+/g, " ")
     .trim();
@@ -78,12 +176,13 @@ function holds(line: FormLine, gap: number): boolean {
 function contextInTemplate(
   blocks: FormBlock[],
   gap: number,
+  printed: (gap: number) => number | null,
 ): QuestionContext | null {
   for (const block of blocks) {
     if (block.kind === "row") {
       const line = block.lines.find((l) => holds(l, gap));
       if (line) {
-        const text = lineText(line);
+        const text = lineAround(line, gap, printed);
         return {
           label: block.label.trim() || null,
           line: text === GAP ? null : text,
@@ -108,7 +207,7 @@ function contextInTemplate(
     }
     if (block.kind === "flow") {
       const step = block.steps.find((l) => holds(l, gap));
-      if (step) return { label: null, line: lineText(step) };
+      if (step) return { label: null, line: lineAround(step, gap, printed) };
     }
   }
   return null;
@@ -132,11 +231,25 @@ export function questionContexts(
   const out = new Map<string, QuestionContext>();
   if (!material) return out;
 
+  // What the PAPER calls each question, so a sentence holding two gaps can
+  // name the one that is not this row's. The same walk everything else here
+  // numbers by — a second way of counting to 32 is a second chance to
+  // disagree about which question that is.
+  const printedOf = new Map(
+    paperParts(material).flatMap((part) =>
+      part.rows.map((row) => [row.id, row.number] as const),
+    ),
+  );
+
   for (const part of sorted(material.parts)) {
     for (const group of sorted(part.question_groups)) {
       const blocks = group.config.template
         ? parseTemplateLayout(group.config.template)
         : null;
+      const printed = (gap: number) =>
+        printedOf.get(
+          group.questions.find((one) => one.number === gap)?.id ?? "",
+        ) ?? null;
       for (const question of group.questions) {
         // A question with its own text — multiple choice, matching — already
         // carries its context and needs no template read.
@@ -145,7 +258,7 @@ export function questionContexts(
           continue;
         }
         const found = blocks
-          ? contextInTemplate(blocks, question.number)
+          ? contextInTemplate(blocks, question.number, printed)
           : null;
         if (found) out.set(question.id, found);
       }
@@ -164,7 +277,10 @@ export function questionContexts(
 export function questionOptions(
   material: MaterialTake | undefined,
 ): Map<string, { group: TakeQuestionGroup; options: string[] }> {
-  const out = new Map<string, { group: TakeQuestionGroup; options: string[] }>();
+  const out = new Map<
+    string,
+    { group: TakeQuestionGroup; options: string[] }
+  >();
   for (const part of material?.parts ?? []) {
     for (const group of part.question_groups) {
       for (const question of group.questions) {
@@ -240,7 +356,11 @@ export function markAnswer(text: string, answers: string[]): MarkedRun[] {
   for (const answer of wanted) {
     const needle = answer.toLowerCase();
     const found: number[] = [];
-    for (let at = hay.indexOf(needle); at >= 0; at = hay.indexOf(needle, at + 1)) {
+    for (
+      let at = hay.indexOf(needle);
+      at >= 0;
+      at = hay.indexOf(needle, at + 1)
+    ) {
       if (boundedAt(hay, at, needle.length)) found.push(at);
     }
     if (found.length !== 1) continue;
@@ -291,7 +411,8 @@ function spoken(
   endMs: number | null,
   lines: TranscriptLine[] | undefined,
 ): [number | null, number | null] {
-  if (startMs == null || endMs == null || !lines?.length) return [startMs, endMs];
+  if (startMs == null || endMs == null || !lines?.length)
+    return [startMs, endMs];
   let from = startMs;
   let to = endMs;
   for (const line of lines) {
@@ -425,9 +546,7 @@ export function reviewRows(
   const groups = questionOptions(material);
   const walk = material ? paperParts(material) : [];
   const place = new Map(
-    walk.flatMap((part) =>
-      part.rows.map((row) => [row.id, row] as const),
-    ),
+    walk.flatMap((part) => part.rows.map((row) => [row.id, row] as const)),
   );
 
   return results
