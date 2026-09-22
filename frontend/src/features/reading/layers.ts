@@ -1,5 +1,6 @@
 import type { QuestionResult } from "@/features/paper/types";
 import type { VocabularyEntry } from "@/features/vocabulary/types";
+import { toneOf } from "@/features/vocabulary/cefr";
 
 /**
  * The four things a finished passage can be marked with, and the rule that
@@ -42,13 +43,18 @@ import type { VocabularyEntry } from "@/features/vocabulary/types";
  * not an overlay at all: "My marks" hands the passage the reader's own
  * `Highlight`s, drawn by the same code that draws them on the take screen.
  *
- * That is deliberate rather than convenient. The reader chose amber, blue or
- * violet for each mark while they were reading, and those choices MEAN
- * something — the keyword, where the answer was, the line to come back to.
- * Repainting them one neutral colour here would throw away the only part of
- * a mark that carries information, on the one page whose whole purpose is to
- * give that information back. The swatch in the toggle is neutral because
- * the LAYER has no colour; its marks have three.
+ * That is deliberate rather than convenient. The reader chose a fill or a
+ * line for each mark while they were reading, and that choice MEANS
+ * something — this is the thing, versus I am not sure about this.
+ * Repainting them all one way here would throw away the only part of a mark
+ * that carries information, on the one page whose whole purpose is to give
+ * that information back.
+ *
+ * Both are amber, and that is the point rather than a compromise: the three
+ * hues the pen used to offer included this scale's blue and something close
+ * to its violet, and a reader who meets blue as "where the answer was" on
+ * one layer and blue as "B1" on the next has been handed two colour systems
+ * wearing one colour. See `features/reading/highlights.ts`.
  */
 
 /**
@@ -110,10 +116,31 @@ export interface Overlay {
   index: number;
   start: number;
   end: number;
-  /** How it is washed. Not the layer's id: `saved` and `vocabulary` are two
-   *  layers and one of them draws a word in each of two states, and the
-   *  answers layer draws two verdicts. */
-  tone: "got" | "missed" | "chose" | "word" | "saved";
+  /** How it is washed. Not the layer's id: the answers layer draws three
+   *  verdicts, and both word layers draw the same one. */
+  tone: "got" | "missed" | "chose" | "word";
+  /** For a `word`, the CEFR level it is washed as — and null where the
+   *  gloss never committed to one.
+   *
+   *  The wash says the LEVEL and nothing else, which is what makes the
+   *  passage readable as a map of its own difficulty. It used to say
+   *  "saved" in blue for a word already on the list, and that was a second
+   *  meaning on the same channel: a saved C1 word and an unsaved B1 word
+   *  came out the same colour, so the one thing the wash was for stopped
+   *  being true wherever the reader had done some work. Saved-ness is what
+   *  the Saved LAYER filters by; it is not a hue. */
+  level?: string;
+  /** For a `word`, one of the three this reader spent a look-up on.
+   *
+   *  Drawn as an underline UNDER the level's wash rather than as a colour
+   *  of its own, because it is a fact about the reader and not about the
+   *  word: `emergence` is C1 whether or not anybody looked it up, and a
+   *  different colour would say otherwise. */
+  lookedUp?: boolean;
+  /** For a `word`, already on this learner's list. Carried so the page can
+   *  build the Saved layer by filtering these rather than by walking the
+   *  entries a second time with a different predicate. */
+  saved?: boolean;
   /** What this mark is about, so hovering a row on the right can light the
    *  matching marks on the left and nothing else. A question id for
    *  evidence, a lemma for a word. */
@@ -340,11 +367,18 @@ function bounded(text: string, at: number, length: number): boolean {
 /**
  * The passage's glossed words, as marks over the words themselves.
  *
- * Two tones out of one list. A word this reader has already saved is drawn
- * as `saved` wherever it appears, in both layers — which is the point of the
- * Saved layer existing at all: somebody who saved `deepen` a fortnight ago
- * and meets it again in a new passage is having the single most effective
- * vocabulary lesson there is, and it costs nothing but the marking.
+ * **One tone, three colours.** Every word is washed in the colour of its
+ * CEFR level, and nothing else changes the wash — so the passage is a map
+ * of its own difficulty before a single entry on the right has been read.
+ * A text with three orange words in it and one with thirty are two
+ * different afternoons, and a reader can now see which they are in.
+ *
+ * Two other facts ride on top without taking the hue: a word the reader
+ * spent one of their three look-ups on is UNDERLINED, and a word already
+ * on their list is flagged for the Saved layer to filter by. Neither is a
+ * property of the word — they are facts about this reader — and giving
+ * either one a colour is what made the wash stop meaning "level" the first
+ * time somebody saved anything.
  *
  * `stale` entries are dropped. The passage has been edited since it was
  * glossed, so the offsets may no longer point at the words they were
@@ -354,19 +388,20 @@ function bounded(text: string, at: number, length: number): boolean {
 export function wordOverlays(
   entries: VocabularyEntry[],
   saved: (lemma: string) => boolean,
-  only?: "saved",
+  lookedUp: (lemma: string) => boolean,
 ): Overlay[] {
   const out: Overlay[] = [];
   for (const entry of entries) {
     if (entry.stale) continue;
-    const isSaved = saved(entry.lemma);
-    if (only === "saved" && !isSaved) continue;
     out.push({
       partId: entry.part_id,
       index: entry.paragraph_index,
       start: entry.offset_start,
       end: entry.offset_end,
-      tone: isSaved ? "saved" : "word",
+      tone: "word",
+      level: entry.cefr_level,
+      lookedUp: lookedUp(entry.lemma),
+      saved: saved(entry.lemma),
       key: entry.lemma,
       title: entry.meaning_uz || entry.meaning_en,
     });
@@ -475,23 +510,39 @@ export const WASH: Record<
     lit: "bg-correct/20 decoration-correct",
     tag: "text-correct/70",
   },
-  word: { rest: "bg-mark-key/25", lit: "bg-mark-key/50", tag: "text-primary" },
-  saved: {
-    rest: "bg-mark-found/25",
-    lit: "bg-mark-found/50",
-    tag: "text-mark-found",
-  },
+  /** A glossed word. Only the shape of the mark lives here: the COLOUR is
+   *  the word's level and comes from `cefr.ts`, which is why this one has
+   *  no classes of its own — see `wordStyle`. */
+  word: { rest: "", lit: "", tag: "text-foreground" },
 };
 
-/** The swatch a toggle wears, so the row of four says which colour means
- *  which without a legend under it. "My marks" has none of its own — its
- *  marks keep the colours the reader chose — so it wears the foreground. */
-export const SWATCH: Record<LayerId, string> = {
-  // Two colours, because the layer draws two verdicts and a swatch that
-  // showed one of them would be the control claiming to mark only the
-  // mistakes — which is what it used to do.
-  answers: "bg-gradient-to-r from-correct to-incorrect",
-  vocabulary: "bg-mark-key",
-  saved: "bg-mark-found",
-  marks: "bg-foreground/40",
-};
+/**
+ * How one glossed word is drawn: its level's wash, plus whatever this
+ * reader did to it.
+ *
+ * Three channels that cannot be confused for one another, because each is
+ * a different KIND of mark rather than a different colour:
+ *
+ * - the **wash** is the level, and never anything else;
+ * - an **underline** is one of the three look-ups this reader spent;
+ * - a **ring** is the pointer, on the row opposite, right now.
+ *
+ * The ring is deliberately not a stronger wash. A stronger wash of the same
+ * hue reads as a harder word, so hovering a row would appear to change what
+ * the level is — the one thing the colour is there to say.
+ */
+export function wordStyle(overlay: Overlay, lit: boolean): string {
+  const tone = toneOf(overlay.level);
+  return [
+    tone.wash,
+    overlay.lookedUp
+      ? // The reader's own underline, in the level's own colour: it marks
+        // WHICH words they stopped on without claiming they are a
+        // different kind of word.
+        `underline decoration-2 underline-offset-4 ${tone.line}`
+      : "",
+    lit ? tone.lit : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}

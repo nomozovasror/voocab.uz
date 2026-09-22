@@ -77,6 +77,49 @@ out how. What helps is the sentence.
 already has a feel for. "NGSL rank 2400" is a fact about a corpus. The band
 exists and stays on the server, where the arithmetic is.
 
+## The level is a colour, and the colour is a system
+
+`features/vocabulary/cefr.ts` is the one place it is decided: B1 blue, B2
+violet, C1 orange, cool to warm, which is the ordering people read as a
+scale without being told. Every screen that shows a level reads that table —
+the lookup popover mid-paper, the review's list, the saved-words page, the
+passage header's spread — because the whole value of a colour system is that
+the orange in the popover and the orange in the review an hour later are the
+same claim. Four private implementations of a badge is four things that
+drift on the first afternoon somebody adjusts one.
+
+- **Never green and never red.** They are the verdict on the review page —
+  right and wrong — and the vocabulary list sits on that same page, inches
+  from a passage striped in both. A learner shown their C1 words in red
+  reads the hardest words in the text as forty mistakes.
+- **The colour never travels alone.** Every use prints the letters beside
+  it, which is what `CefrTag` exists to make unforgettable. About one man in
+  twelve cannot separate the violet from the orange, and a scale he cannot
+  read is worse than none: it is a page that looks organised and is not.
+- **An unrated word gets no chip, not a grey one.** A grey chip in a row of
+  coloured ones reads as a fourth, easiest level; what it actually means is
+  that nobody said.
+- **It took the pen's blue and violet, on purpose.** The reader's highlight
+  tool used to offer amber, `#5b9bd5` and a violet — and `#5b9bd5` is
+  exactly B1. On the review page those two systems land on the same passage
+  one layer apart. The scale won on reach and the pen now separates by
+  STYLE; see `features/reading/CLAUDE.md`.
+
+## The passage's marking says the level, and only the level
+
+The wash over a glossed word is its CEFR colour. Two other things ride on
+top without taking the hue, because neither is a property of the word:
+
+- **an underline** — one of the three this reader spent a look-up on;
+- **a ring** — the entry opposite is under the pointer right now. A ring
+  rather than a stronger wash, because a stronger wash of the same hue reads
+  as a harder word, and hovering a row must not appear to change the level.
+
+The wash used to say "saved" in blue for a word already on the list, which
+meant a saved C1 word and an unsaved B1 word came out the same colour — the
+one thing the wash was for stopped being true the moment the reader did any
+work. Saved-ness is what the Saved LAYER filters by. It is not a hue.
+
 ## The review: the words, not the number
 
 "You looked up three words" is a score for something nobody was being scored
@@ -84,31 +127,67 @@ on. The three words, with what they mean in the passage that defeated them,
 is homework — and it is the homework an IELTS teacher actually sets after a
 passage a student struggled with.
 
-- **The opened words come first and separately.** Every other word in the
-  list is one the frequency lists think is hard; those two or three are the
-  ones that stopped THIS reader badly enough to spend one of three on.
-  Nothing else on the platform knows which they were.
+- **The opened words come first.** Every other word in the list is one the
+  frequency lists think is hard; those two or three are the ones that
+  stopped THIS reader badly enough to spend one of three on. Nothing else on
+  the platform knows which they were. They carry that in a tag on the row
+  and a toggle in the filter card — it used to be a heading over a block,
+  which said the same thing and could not be asked for.
 - **They come from the ATTEMPT, not from `lookups.ts`.** That list remembers
   across sittings on purpose, so on a retake it holds words from a paper
   that is over, and the review is about one sitting.
-- **The rest is collapsed and sorted by LEVEL**, which is the opposite of the
-  lookup panel's passage order and right for the opposite reason: mid-paper
-  the question is what this one means, and here it is which to learn first.
-- **Every entry carries its sentence from the passage.** It is the passage's
-  own sentence, cut from the text rather than written by a model, and it is
-  the whole argument for saving words from a paper instead of from a list.
+- **The rest is sorted by LEVEL**, which is the opposite of the lookup
+  panel's passage order and right for the opposite reason: mid-paper the
+  question is what this one means, and here it is which to learn first.
+- **One bar does what three headings did.** The list used to be cut into
+  sections — look-ups, then the rest, then the B1 words folded into a
+  `<details>`. Each cut was defensible; together they were four headings and
+  one opinion, none of which could be UNDONE. The proportional bar is a
+  legend, a distribution (*this passage is half B2* — before a word is read)
+  and the filter, in one object. Chips would be the same control minus the
+  distribution, which is the part nothing else on the page says.
+- **Nothing selected shows everything.** A filter that starts by hiding
+  things is a page that looks broken until it is understood.
+- **The filter lives on the PAGE and governs both halves**
+  (`features/vocabulary/filter.ts`). Press `C1` and the list shows the C1
+  words while the passage keeps only their marks — a list filtered under a
+  passage that was not is the page answering half the question. Both sides
+  call the same `keeps()`; two implementations of one rule is one rule and a
+  bug waiting for the first entry they disagree about.
+- **The layer's COUNT is what the layer holds, not what the filter lets
+  through.** Otherwise narrowing to a combination that matches nothing reads
+  as an empty layer and the page falls through to a different one — the
+  control doing something nobody pressed.
+- **One save button, and it saves exactly what is on screen.** There were
+  three — all, just C1, just my look-ups — answering three questions the
+  filter now answers better, because the reader can see what they are about
+  to save before they press it.
+- **Every entry carries its sentence from the passage, one press away.** It
+  is the passage's own sentence, cut from the text rather than written by a
+  model, and it is the whole argument for saving words from a paper instead
+  of from a list. Folded, because two extra lines on a hundred entries is
+  the wall of words this panel was rebuilt to stop being — and the ROW is
+  the control, with only a chevron beside the save button. An `Example ▸`
+  button on its own line cost the very line the folding was for. `＋` stops
+  the press reaching the row: saving a word and reading its sentence are two
+  intentions, and the buttons are a centimetre apart.
+- **Hover still means WHERE.** Pointing at a row lights the word in the
+  passage and vice versa; the press means what it meant there. The
+  disclosure must not spend the hover.
 - **It sits beside the passage, marked.** It used to be a bordered panel at
   the bottom of a page, and a hundred and one entries of four lines each is
   ten screens of words with no text anywhere near them — a dictionary with
   the one thing that made it worth reading taken out. It is now one of the
-  review's layers, opposite the passage, the passage is washed amber over
-  the words it is talking about, and pointing at either lights the other.
+  review's layers, opposite the passage, the passage is washed over the
+  words it is talking about, and pointing at either lights the other.
 - **The Saved layer is this same panel filtered, never a second one.** A
   word met again a fortnight after it was saved is not a different KIND of
   entry — it is the same entry with a history — so `only="saved"` hides the
-  rest and changes the heading. The save buttons still count the WHOLE list:
-  "Save all 85" inside a panel showing only what is already saved would be a
-  button offering to save nothing.
+  rest and changes the heading — and takes the save button away with it: a
+  "Save all 85" inside a panel showing only what is already saved would be
+  offering to save nothing. The bar there is counted off the SAVED words
+  rather than off `data.levels`, which is the whole passage's: a picture of
+  a list that is not on screen.
 - **The list is fetched by the PAGE, not by the list.** The marking on the
   passage comes from the same rows, and two components asking the cache the
   same question is one of them holding a copy that stops agreeing with the
@@ -119,11 +198,17 @@ passage a student struggled with.
   and here it is again. A badge that appeared on a word two seconds after
   somebody saved it would be the page congratulating them on remembering
   what they had just done. `entry.saved` is the live fact and drives the
-  button and the blue mark; this is the other one.
-- **"Save my look-ups" is the smallest button and the most valuable.** Every
-  other word here is one a frequency list thinks is hard. Those two or three
-  are the ones that stopped THIS reader, and nothing else on the platform
-  knows which they were.
+  button; this is the other one.
+- **The row's three flags are outlined, never filled.** `looked up`, `saved
+  earlier`, `unusual sense` are facts about the READER's history with the
+  word; the one filled chip in that line is the level. A second filled chip
+  would read as a second level. Each is named in the words the filter card
+  uses, or pressing a toggle appears to do nothing.
+
+  (The mid-paper panel still says `unusual` in a sentence rather than a
+  badge — see above. That rule is about the two seconds a look-up has to pay
+  for itself, and it does not reach a review where the same word now sits
+  beside a filter with that name on it.)
 
 ## A saved word is one word with several contexts
 

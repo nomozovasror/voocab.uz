@@ -46,6 +46,11 @@ import {
 } from "@/features/reading/layers";
 import { ReviewVocabulary } from "@/features/vocabulary/components/ReviewVocabulary";
 import { vocabularyApi, vocabularyKey } from "@/features/vocabulary/api";
+import {
+  keeps,
+  NO_FILTER,
+  type WordFilter,
+} from "@/features/vocabulary/filter";
 import type { QuoteSource, ReviewRow } from "@/features/paper/review";
 import { isFixedChoice, type AttemptResult } from "@/features/paper/types";
 
@@ -199,6 +204,18 @@ export default function ReadingResultsPage() {
     [vocabulary],
   );
 
+  const openedWords = useMemo(() => new Set(looked), [looked]);
+
+  /** Which of the passage's words are being looked at.
+   *
+   *  Held here rather than inside the panel that draws the control, because
+   *  it governs BOTH halves of the screen: pressing `C1` filters the list
+   *  and takes every other mark off the passage at the same time. That is
+   *  the whole value of it — a reader asking "what is above me here?" gets
+   *  the answer as a shape on the text, and a list filtered under a passage
+   *  that was not would be the page answering half the question. */
+  const [filter, setFilter] = useState<WordFilter>(NO_FILTER);
+
   // --- What is written on the passage --------------------------------------
 
   /** Every layer's marks, built once. Built for ALL of them rather than for
@@ -222,16 +239,26 @@ export default function ReadingResultsPage() {
       ...answers,
       ...writtenDistractors(results, prose, answers),
     ];
+    // Filtered HERE rather than in the panel, and with the panel's own
+    // predicate — see `features/vocabulary/filter.ts`. Two halves of one
+    // screen reading two implementations of one rule is one rule and a bug
+    // waiting for the first entry they disagree about.
     const words = vocabulary
-      ? wordOverlays(vocabulary.entries, (lemma) => saved.has(lemma))
+      ? wordOverlays(
+          vocabulary.entries.filter((entry) =>
+            keeps(filter, entry, (lemma) => openedWords.has(lemma)),
+          ),
+          (lemma) => saved.has(lemma),
+          (lemma) => openedWords.has(lemma),
+        )
       : [];
     return {
       answers: evidence,
       vocabulary: words,
-      saved: words.filter((o) => o.tone === "saved"),
+      saved: words.filter((o) => o.saved),
       marks: [] as Overlay[],
     };
-  }, [data?.results, vocabulary, saved, passages]);
+  }, [data?.results, vocabulary, saved, passages, filter, openedWords]);
 
   /** Every question the answers layer marks at all, in any colour.
    *
@@ -249,8 +276,15 @@ export default function ReadingResultsPage() {
     // question can be decided in two places, and "Answers 17" beside a paper
     // of thirteen is a count of something nobody asked about.
     answers: new Set(layers.answers.map((o) => o.key)).size,
-    vocabulary: layers.vocabulary.length,
-    saved: layers.saved.length,
+    // What the layer HOLDS, not what the filter is letting through. A
+    // reader who narrows to "C1 + looked up" and matches nothing has asked
+    // a question with no answer in it; a page that read these counts would
+    // treat that as an empty layer and switch to a different one under
+    // them, which is the control doing something nobody pressed.
+    vocabulary: vocabulary?.entries.filter((e) => !e.stale).length ?? 0,
+    saved:
+      vocabulary?.entries.filter((e) => !e.stale && saved.has(e.lemma))
+        .length ?? 0,
     marks: marks.length,
   };
 
@@ -536,6 +570,8 @@ export default function ReadingResultsPage() {
           savedEarlier={savedEarlier ?? new Set()}
           lit={lit}
           onPoint={setLit}
+          filter={filter}
+          onFilter={setFilter}
         />
       )}
 

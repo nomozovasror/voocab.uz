@@ -1,11 +1,24 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, Plus } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
 import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
 import { vocabularyApi, vocabularyKey } from "@/features/vocabulary/api";
+import {
+  CEFR_LEVELS,
+  CEFR_TONE,
+  asLevel,
+  levelRank,
+  type CefrLevel,
+} from "@/features/vocabulary/cefr";
+import { CefrTag } from "@/features/vocabulary/components/CefrTag";
+import {
+  isFiltering,
+  keeps,
+  toggleLevel,
+  type WordFilter,
+} from "@/features/vocabulary/filter";
 import type {
   VocabularyEntry,
   VocabularyList,
@@ -41,38 +54,40 @@ import type {
  * entry. That is the whole argument for saving vocabulary from a paper
  * rather than from a list, made visible instead of written down.
  *
- * ## The words they looked up come first, and separately
+ * ## One bar, doing the work three headings used to
  *
- * They are not a subset worth a badge — they are a different fact. Every
- * other word here is one the frequency lists think is hard. Those two or
- * three are the ones that stopped THIS reader, mid-paper, badly enough to
- * spend one of three on. Nothing else on the platform knows which words
- * those were, which is why "Save my look-ups" is the most valuable of the
- * three save buttons and reads as the smallest.
+ * The list was cut into sections: the looked-up words first under their own
+ * heading, then the rest, then the B1 words folded into a `<details>`. Each
+ * cut was defensible and together they were a page with four headings and
+ * one opinion, and none of them could be UNDONE — a reader who wanted only
+ * the C1 words had no way to ask for that, and one who wanted the easy
+ * words had to find a disclosure triangle at the bottom.
  *
- * ## B2 and up are open; B1 is folded away
+ * The proportional bar is the same information in a shape that can be
+ * pressed. It is a legend (this is what B2 looks like), a distribution (this
+ * passage is half B2 and a third C1 — before a word of the list is read),
+ * and the filter, all in one object thirty-four pixels high. Chips would
+ * have been the same control minus the distribution, which is the part
+ * nothing else on the page says.
  *
- * Not a single collapsed block. Sorting by level and then hiding all of it
- * gets the ordering right and the emphasis wrong — what somebody sitting a
- * band 6 paper should be studying is the B2 and C1 words, and making them
- * press something to reach those while the B1 list has equal billing is the
- * page having no opinion.
+ * **Nothing selected shows everything.** A filter that starts empty-handed
+ * is a page that looks broken until it is understood.
  *
- * Sorted by level rather than by where the words stand in the passage,
- * which is the opposite of the lookup panel's order and right for the
- * opposite reason: mid-paper the question is "what does this one mean", and
- * here it is "which of these should I learn first".
+ * ## What survived the sections
  *
- * ## The trap count
+ * The looked-up words still come FIRST. They are not a subset worth a
+ * badge, they are a different fact: every other word here is one the
+ * frequency lists think is hard, and those two or three are the ones that
+ * stopped THIS reader, mid-paper, badly enough to spend one of three on.
+ * Nothing else on the platform knows which words those were. They now carry
+ * that in a tag on the row and a toggle in the card instead of a heading
+ * over a block, which costs a line and gains the ability to ask for them.
  *
- * "Six of them are common words in an unexpected sense" is the one figure
- * neither measure reports alone — the frequency says easy, the level says
- * C1, and the disagreement is the finding. It goes in the header rather than
- * on the rows, because what a candidate takes from it is a habit ("a word I
- * know can still be the wrong word here") rather than six facts.
+ * Everything else is sorted by LEVEL, which is the opposite of the lookup
+ * panel's passage order and right for the opposite reason: mid-paper the
+ * question is "what does this one mean", and here it is "which of these
+ * should I learn first".
  */
-
-const LEVELS = ["B1", "B2", "C1"] as const;
 
 export function ReviewVocabulary({
   materialId,
@@ -82,6 +97,8 @@ export function ReviewVocabulary({
   savedEarlier,
   lit,
   onPoint,
+  filter,
+  onFilter,
   className,
 }: {
   materialId: string;
@@ -110,6 +127,10 @@ export function ReviewVocabulary({
   /** The lemma being pointed at, from either side. */
   lit: string | null;
   onPoint: (lemma: string | null) => void;
+  /** Which words are being looked at. Held by the PAGE, because the same
+   *  filter decides what the passage is marked with — see `filter.ts`. */
+  filter: WordFilter;
+  onFilter: (next: WordFilter) => void;
   className?: string;
 }) {
   const qc = useQueryClient();
@@ -138,180 +159,294 @@ export function ReviewVocabulary({
     onError: (e) => toast(getErrorMessage(e)),
   });
 
-  const { opened, main, easiest } = useMemo(() => {
-    const entries =
+  const opened = useMemo(() => new Set(lookedUp), [lookedUp]);
+
+  const { base, shown, levels, openedCount, unusualCount } = useMemo(() => {
+    const base =
       only === "saved" ? data.entries.filter((e) => e.saved) : data.entries;
-    const wanted = new Set(lookedUp);
-    const byLevel = (a: VocabularyEntry, b: VocabularyEntry) =>
-      LEVELS.indexOf(a.cefr_level as (typeof LEVELS)[number]) -
-        LEVELS.indexOf(b.cefr_level as (typeof LEVELS)[number]) ||
-      a.paragraph_index - b.paragraph_index ||
-      a.offset_start - b.offset_start;
-    const rest = entries
-      .filter((entry) => !wanted.has(entry.lemma))
-      .sort(byLevel);
+
+    // Counted off the panel's OWN words rather than off `data.levels`, which
+    // is the whole passage's. In the Saved panel those are two different
+    // numbers, and a bar drawn from the wrong one would be a picture of a
+    // list that is not on screen.
+    const levels = {} as Record<CefrLevel, number>;
+    for (const level of CEFR_LEVELS) levels[level] = 0;
+    for (const entry of base) {
+      const level = asLevel(entry.cefr_level);
+      if (level) levels[level] += 1;
+    }
+
+    const shown = base
+      .filter((entry) => keeps(filter, entry, (lemma) => opened.has(lemma)))
+      .sort(
+        (a, b) =>
+          // The words that beat this reader, first. See the header comment:
+          // it is the one ordering nothing else on the platform can make.
+          Number(opened.has(b.lemma)) - Number(opened.has(a.lemma)) ||
+          levelRank(a.cefr_level) - levelRank(b.cefr_level) ||
+          a.paragraph_index - b.paragraph_index ||
+          a.offset_start - b.offset_start,
+      );
+
     return {
-      opened: entries.filter((entry) => wanted.has(entry.lemma)),
-      // An entry with no level sits with the harder ones rather than being
-      // folded away: unrated is not the same as easy, and hiding it would
-      // be the page making a claim it has no basis for.
-      main: rest.filter((entry) => entry.cefr_level !== "B1"),
-      easiest: rest.filter((entry) => entry.cefr_level === "B1"),
+      base,
+      shown,
+      levels,
+      openedCount: base.filter((e) => opened.has(e.lemma)).length,
+      unusualCount: base.filter((e) => e.unusual).length,
     };
-  }, [data, lookedUp, only]);
+  }, [data, filter, only, opened]);
 
-  // Off the WHOLE list, never the filtered one. "Save all 85" inside a
-  // panel showing only what is already saved would be a button offering to
-  // save nothing.
-  const unsaved = data.entries.filter((entry) => !entry.saved);
-  const openedUnsaved = opened.filter((entry) => !entry.saved);
-  const hardest = unsaved.filter((entry) => entry.cefr_level === "C1");
-
-  const shownCount = opened.length + main.length + easiest.length;
-
-  const row = (entry: VocabularyEntry) => (
-    <Word
-      key={entry.id}
-      entry={entry}
-      earlier={savedEarlier.has(entry.lemma)}
-      lit={lit === entry.lemma}
-      onPoint={onPoint}
-      busy={save.isPending}
-      onSave={() => save.mutate([entry.lemma])}
-    />
-  );
+  const unsaved = shown.filter((entry) => !entry.saved);
+  const filtering = isFiltering(filter);
 
   return (
     <section className={cn("min-w-0", className)}>
       <header className="rounded-xl bg-surface-sunken px-4 py-3">
-        {only === "saved" ? (
-          <>
-            <h2 className="text-sm font-semibold text-foreground">
-              {shownCount} of your saved {shownCount === 1 ? "word" : "words"}{" "}
-              {shownCount === 1 ? "is" : "are"} in this passage
-            </h2>
-            {/* The argument for the layer, said once. Meeting a word again
-                in a new context is the single most effective thing that can
-                happen to it, and it is the one thing on this page the
-                reader did not have to do anything to earn. */}
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Met again, in a text you have just read closely — which is worth
-              more than any number of times through a list.
-            </p>
-          </>
-        ) : (
-          <>
-            <h2 className="text-sm font-semibold text-foreground">
-              {data.total} words worth learning here
-            </h2>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {LEVELS.filter((level) => data.levels[level])
-                .map((level) => `${level} ${data.levels[level]}`)
-                .join(" · ")}
-              {data.unusual > 0 &&
-                ` — ${data.unusual} of them in a sense you would not expect`}
-            </p>
-          </>
-        )}
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          {only === "saved" ? (
+            <>
+              <h2 className="text-sm font-semibold text-foreground">
+                {/* "words" stays plural either way: the list being counted
+                    against is the learner's whole vocabulary, and "1 of
+                    your saved word" is a sentence about nothing. */}
+                {base.length === 1 ? "One" : base.length} of your saved words{" "}
+                {base.length === 1 ? "is" : "are"} in this passage
+              </h2>
+              {/* The argument for the layer, said once. Meeting a word again
+                  in a new context is the single most effective thing that can
+                  happen to it, and it is the one thing on this page the
+                  reader did not have to do anything to earn. */}
+              <p className="text-xs text-muted-foreground">
+                Met again, in a text you have just read closely.
+              </p>
+            </>
+          ) : (
+            <>
+              <h2 className="text-sm font-semibold text-foreground">
+                {data.total} words worth learning here
+              </h2>
+              {/* Said rather than discovered. A coloured bar reads as a
+                  chart, and nothing about a chart suggests pressing it —
+                  the one sentence is cheaper than the readers who never
+                  find out the control is there. */}
+              <p className="text-xs text-muted-foreground">
+                click a level to filter
+              </p>
+            </>
+          )}
+        </div>
 
-        {/* Three ways to save a handful at once, and each answers a
-            different question somebody actually asks. "All of them" is the
-            reader who wants the passage's whole vocabulary; "just C1" is the
-            one who already knows most of it and wants the top of the list;
-            the third is the one who only wants what beat them, and it is
-            the one worth the most — nothing else on the platform knows
-            which words those were. */}
-        {only !== "saved" && unsaved.length > 0 && (
-          <div className="mt-2.5 flex flex-wrap items-center gap-1">
-            {openedUnsaved.length > 0 && (
-              <Button
-                variant="ghost"
-                size="xs"
-                disabled={save.isPending}
+        <LevelBar levels={levels} chosen={filter.levels} onFilter={onFilter} />
+
+        <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap gap-1.5">
+            {openedCount > 0 && (
+              <Toggle
+                on={filter.lookedUp}
                 onClick={() =>
-                  save.mutate(openedUnsaved.map((entry) => entry.lemma))
+                  onFilter({ ...filter, lookedUp: !filter.lookedUp })
                 }
               >
-                Save my {openedUnsaved.length} look-up
-                {openedUnsaved.length === 1 ? "" : "s"}
-              </Button>
+                Looked up · {openedCount}
+              </Toggle>
             )}
-            {hardest.length > 1 && hardest.length < unsaved.length && (
-              <Button
-                variant="ghost"
-                size="xs"
-                disabled={save.isPending}
-                onClick={() => save.mutate(hardest.map((entry) => entry.lemma))}
+            {/* "Six of them are common words in an unexpected sense" is the
+                one figure neither measure reports alone — the frequency
+                says easy, the level says C1, and the disagreement IS the
+                finding. It was a clause in the subtitle; as a toggle it is
+                the same fact and also a way to read the six. */}
+            {unusualCount > 0 && (
+              <Toggle
+                on={filter.unusual}
+                onClick={() => onFilter({ ...filter, unusual: !filter.unusual })}
               >
-                Save the {hardest.length} C1
-              </Button>
+                Unusual · {unusualCount}
+              </Toggle>
             )}
-            <Button
-              variant="ghost"
-              size="xs"
+          </div>
+
+          {/* One save button where there were three.
+              "All of them", "just the C1" and "just my look-ups" were three
+              buttons answering three questions the filter now answers
+              itself — and answering them better, because the reader can see
+              what they are about to save before they press it. What it
+              saves is exactly what is on screen. */}
+          {only !== "saved" && unsaved.length > 0 && (
+            <button
+              type="button"
               disabled={save.isPending}
               onClick={() => save.mutate(unsaved.map((entry) => entry.lemma))}
+              className="flex items-center gap-1 rounded-md bg-surface-hover px-2.5 py-1 text-xs text-foreground transition-colors duration-fast hover:bg-foreground/15 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50"
             >
-              Save all {unsaved.length}
-            </Button>
-          </div>
-        )}
+              <Plus className="size-3" aria-hidden />
+              {filtering ? "Save these" : "Save all"} {unsaved.length}
+            </button>
+          )}
+        </div>
       </header>
 
-      {opened.length > 0 && (
-        <div className="mt-4">
-          <h3 className="mb-1 text-xs tracking-caps text-muted-foreground uppercase">
-            The {opened.length === 1 ? "word" : `${opened.length} words`} you
-            looked up
-          </h3>
-          <ul>{opened.map(row)}</ul>
-        </div>
-      )}
-
-      {main.length > 0 && (
-        <div className="mt-4">
-          <h3 className="mb-1 text-xs tracking-caps text-muted-foreground uppercase">
-            {opened.length > 0
-              ? "The rest of the passage"
-              : "From this passage"}
-          </h3>
-          <ul>{main.map(row)}</ul>
-        </div>
-      )}
-
-      {/* The B1 words, behind one line. Not junk — somebody who wants them
-          is one press away — but not what this passage taught a reader
-          sitting for band 6 or 7, and giving them equal billing is the page
-          declining to have an opinion. */}
-      {easiest.length > 0 && (
-        <details className="mt-4 border-t border-border">
-          <summary className="cursor-pointer py-3 text-sm text-muted-foreground transition-colors hover:text-foreground">
-            {easiest.length} easier {easiest.length === 1 ? "word" : "words"}{" "}
-            (B1)
-          </summary>
-          <ul>{easiest.map(row)}</ul>
-        </details>
+      {shown.length > 0 ? (
+        <ul className="mt-3">
+          {shown.map((entry) => (
+            <Word
+              key={entry.id}
+              entry={entry}
+              earlier={savedEarlier.has(entry.lemma)}
+              opened={opened.has(entry.lemma)}
+              lit={lit === entry.lemma}
+              onPoint={onPoint}
+              busy={save.isPending}
+              onSave={() => save.mutate([entry.lemma])}
+            />
+          ))}
+        </ul>
+      ) : (
+        // Only reachable by asking for it — two toggles that do not overlap,
+        // say C1 and unusual. It names the filter rather than the list, so
+        // the reader knows it is their own question that came back empty and
+        // not the passage.
+        <p className="mt-6 text-center text-xs text-muted-foreground">
+          No words here match that.
+        </p>
       )}
     </section>
   );
 }
 
 /**
- * One word, with the sentence it was met in.
+ * The distribution, the legend and the filter, as one bar.
  *
- * The example is the reason this is worth more than a word list, so it is
- * printed rather than hidden behind the row: what a learner will remember is
- * the passage, and the sentence is the handle on it. It is the passage's own
- * sentence, cut from the text rather than written by a model — see
- * `seed/read_vocabulary.py`.
+ * Each level takes the width its COUNT deserves — `flex-grow` off the
+ * number, with a basis of zero so the numbers alone decide — which means
+ * the bar is a picture of the passage before it is a control. A text that
+ * is half B2 looks like one; a text that is nearly all C1 looks like a
+ * different afternoon's work.
  *
- * Beside a marked passage the example earns its place twice over: pointing
- * at the row lights the word where it stands, so the sentence in the row and
- * the paragraph on the left are visibly the same place.
+ * A floor on the width, because a level with two words in a hundred would
+ * otherwise be a sliver too narrow to read its own name, let alone press.
+ * That makes the proportions approximate at the extremes and it is the
+ * right trade: the bar's job is to be read, and an honest sliver nobody can
+ * hit is a control that does not exist.
+ *
+ * A level with nothing in it is absent rather than empty. A zero-width
+ * segment is a rendering artefact; a missing one is a passage with no C1
+ * words in it, which is worth knowing.
+ */
+function LevelBar({
+  levels,
+  chosen,
+  onFilter,
+}: {
+  levels: Record<CefrLevel, number>;
+  chosen: CefrLevel[];
+  onFilter: (next: WordFilter) => void;
+}) {
+  const present = CEFR_LEVELS.filter((level) => levels[level] > 0);
+  if (!present.length) return null;
+  return (
+    <div className="mt-3 flex h-8 gap-1">
+      {present.map((level) => {
+        const on = chosen.includes(level);
+        return (
+          <button
+            key={level}
+            type="button"
+            aria-pressed={on}
+            aria-label={`${levels[level]} ${level} words`}
+            onClick={() =>
+              onFilter(
+                toggleLevel(
+                  { levels: chosen, lookedUp: false, unusual: false },
+                  level,
+                ),
+              )
+            }
+            style={{ flexGrow: levels[level], flexBasis: 0 }}
+            className={cn(
+              "flex min-w-16 items-center justify-between rounded-md px-2.5 font-mono text-xs transition-[filter,box-shadow] duration-fast hover:brightness-125 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+              CEFR_TONE[level].chip,
+              // Inset, so a pressed segment does not grow by two pixels and
+              // shove its neighbours along the bar.
+              on && "inset-ring-2 inset-ring-current",
+            )}
+          >
+            <span className="font-medium">{level}</span>
+            <span className="tabular-nums opacity-75">{levels[level]}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** One of the two filters that is not a level. Quiet by default and wearing
+ *  the app's accent when it is on, which is the same "this is the thing"
+ *  the accent says everywhere else. */
+function Toggle({
+  on,
+  onClick,
+  children,
+}: {
+  on: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={onClick}
+      className={cn(
+        "rounded-full px-2.5 py-1 text-[0.7rem] transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+        on
+          ? "bg-primary/20 text-primary"
+          : "bg-surface-hover text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+/**
+ * One word, with the sentence it was met in a press away.
+ *
+ * ## The example is folded, and the ROW is what unfolds it
+ *
+ * The sentence is the reason this beats a word list — what a learner will
+ * remember is the passage, and the sentence is the handle on it — but it is
+ * also two lines on every one of a hundred entries, and a hundred entries
+ * four lines deep is the wall of words this panel was rebuilt to stop
+ * being. Folded, the same list is a page and a half and the sentence is
+ * there for the words somebody actually stops on.
+ *
+ * It was a small `Example ▸` button on a line of its own under each entry,
+ * which is the worst of both: it cost the line the folding was meant to
+ * save. The row itself opens it now, and all that is left of the control is
+ * a chevron beside the save button — in the column that already exists, at
+ * the size of a hint rather than a button.
+ *
+ * `＋` stops the press going through to the row. Saving a word and reading
+ * its sentence are two different intentions and the buttons are a
+ * centimetre apart; a save that also opened a paragraph would be the page
+ * doing something nobody asked for every single time.
+ *
+ * An entry with no example is not a disclosure at all — no chevron, no
+ * pointer, nothing to press. A control that opens nothing is worse than the
+ * absence it is hiding.
+ *
+ * ## Hover is unchanged, and it is the point of the whole panel
+ *
+ * Pointing at the row lights the word where it stands in the passage, and
+ * pointing at the passage lights the row. That is the two-pane review's one
+ * argument made visible, and it must not be spent on the disclosure: the
+ * hover says WHERE, the press says WHAT IT MEANT THERE.
  */
 function Word({
   entry,
   earlier,
+  opened,
   lit,
   onPoint,
   busy,
@@ -319,12 +454,18 @@ function Word({
 }: {
   entry: VocabularyEntry;
   earlier: boolean;
+  /** One of the three this reader spent a look-up on, mid-paper. */
+  opened: boolean;
   lit: boolean;
   onPoint: (lemma: string | null) => void;
   busy: boolean;
   onSave: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
+  const [open, setOpen] = useState(false);
+  const canOpen = Boolean(entry.example);
+  const toggle = () => canOpen && setOpen((was) => !was);
+
   return (
     <li
       onMouseEnter={() => {
@@ -336,80 +477,127 @@ function Word({
         onPoint(null);
       }}
       className={cn(
-        "-mx-2 flex items-start gap-3 rounded-lg border-b border-border/60 px-2 py-2.5 transition-colors duration-fast last:border-b-0",
+        "-mx-2 rounded-lg border-b border-border/60 transition-colors duration-fast last:border-b-0",
         (hovered || lit) && "bg-surface-hover",
       )}
     >
-      <div className="min-w-0 flex-1">
-        <p className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
-          <span className="text-sm font-semibold text-foreground">
-            {entry.lemma}
-          </span>
-          {entry.pos && (
-            <span className="text-[0.7rem] text-muted-foreground italic">
-              {entry.pos}
-            </span>
-          )}
-          {entry.cefr_level && (
-            <span className="rounded border border-border px-1 text-[0.65rem] font-medium text-muted-foreground">
-              {entry.cefr_level}
-            </span>
-          )}
-          {/* The blue of the Saved layer, because it is the same claim: this
-              is a word you have met before, and there it is in the passage.
-              A reader who has turned that layer on should recognise the
-              colour without being told they are the same thing. */}
-          {earlier && (
-            <span className="rounded border border-mark-found/40 px-1 text-[0.65rem] text-mark-found">
-              Saved earlier
-            </span>
-          )}
-          {/* Named rather than badged. A badge says "this one is special"
-              and leaves the reader to work out how; the sentence says what
-              is actually going on, which is the only part that helps. */}
-          {entry.unusual && (
-            <span className="text-[0.7rem] text-muted-foreground">
-              · not the usual sense
-            </span>
-          )}
-        </p>
-        {/* English in the mono face the rest of the paper's own words are
-            set in, Uzbek in the sans — the app's global rule, and here it
-            also does the work of telling two one-line definitions apart at
-            a glance without a label in front of either. */}
-        <p className="mt-0.5 font-mono text-xs text-foreground/80">
-          {entry.meaning_en}
-        </p>
-        <p className="text-xs text-muted-foreground">{entry.meaning_uz}</p>
-        {entry.example && (
-          <p className="mt-1 border-l-2 border-border pl-2 text-xs leading-relaxed text-muted-foreground italic">
-            {entry.example}
-          </p>
-        )}
-      </div>
-      <button
-        type="button"
-        disabled={entry.saved || busy}
-        onClick={onSave}
-        title={entry.saved ? "On your list" : "Add to your vocabulary"}
-        aria-label={entry.saved ? "On your list" : `Save ${entry.lemma}`}
+      {/* The disclosure is a div inside the li rather than the li itself:
+          `role="button"` on an <li> takes `listitem` off it, and a list of a
+          hundred words that does not announce itself as a list is a
+          regression a screen reader user cannot work around. */}
+      <div
+        role={canOpen ? "button" : undefined}
+        tabIndex={canOpen ? 0 : undefined}
+        aria-expanded={canOpen ? open : undefined}
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          toggle();
+        }}
         className={cn(
-          "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-          entry.saved
-            ? "text-correct"
-            : "text-muted-foreground hover:bg-surface-hover hover:text-foreground",
-          // Present but quiet until the row is under the pointer. Eighty of
-          // these at full contrast is a column of buttons with a vocabulary
-          // list behind it.
-          !entry.saved && !hovered && "opacity-40",
+          "flex items-start gap-3 px-2 py-2.5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+          canOpen && "cursor-pointer",
         )}
       >
-        {entry.saved ? (
-          <Check className="size-3.5" aria-hidden />
-        ) : (
-          <Plus className="size-3.5" aria-hidden />
-        )}
-      </button>
+        <div className="min-w-0 flex-1">
+          <p className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+            <span className="text-sm font-semibold text-foreground">
+              {entry.lemma}
+            </span>
+            {entry.pos && (
+              <span className="text-[0.7rem] text-muted-foreground italic">
+                {entry.pos}
+              </span>
+            )}
+            <CefrTag level={entry.cefr_level} />
+            {/* The two facts that are about the READER rather than about the
+                word, so they are outlined rather than filled: the colour in
+                this row belongs to the level, and a second filled chip would
+                read as a second level. Both are named in the words the
+                filter above uses, or a toggle would appear to do nothing. */}
+            {opened && <Flag>looked up</Flag>}
+            {earlier && <Flag>saved earlier</Flag>}
+            {entry.unusual && <Flag>unusual sense</Flag>}
+          </p>
+          {/* English in the mono face the rest of the paper's own words are
+              set in, Uzbek in the sans — the app's global rule, and here it
+              also does the work of telling two one-line definitions apart at
+              a glance without a label in front of either. */}
+          <p className="mt-0.5 font-mono text-xs text-foreground/80">
+            {entry.meaning_en}
+          </p>
+          <p className="text-xs text-muted-foreground">{entry.meaning_uz}</p>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            disabled={entry.saved || busy}
+            // See the component comment: the row opens the sentence, and a
+            // save that also did that would be the page acting twice on one
+            // press.
+            onClick={(e) => {
+              e.stopPropagation();
+              onSave();
+            }}
+            title={entry.saved ? "On your list" : "Add to your vocabulary"}
+            aria-label={entry.saved ? "On your list" : `Save ${entry.lemma}`}
+            className={cn(
+              "flex size-7 items-center justify-center rounded-lg transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+              entry.saved
+                ? "text-correct"
+                : "text-muted-foreground hover:bg-surface-hover hover:text-foreground",
+              // Present but quiet until the row is under the pointer. Eighty
+              // of these at full contrast is a column of buttons with a
+              // vocabulary list behind it.
+              !entry.saved && !hovered && "opacity-40",
+            )}
+          >
+            {entry.saved ? (
+              <Check className="size-3.5" aria-hidden />
+            ) : (
+              <Plus className="size-3.5" aria-hidden />
+            )}
+          </button>
+          {/* A hint, not a control: it is inside the thing that already is
+              one, so it takes no row of its own and no tab stop. */}
+          {canOpen &&
+            (open ? (
+              <ChevronDown
+                className="size-3.5 text-muted-foreground"
+                aria-hidden
+              />
+            ) : (
+              <ChevronRight
+                className={cn(
+                  "size-3.5 text-muted-foreground transition-opacity duration-fast",
+                  !hovered && "opacity-40",
+                )}
+                aria-hidden
+              />
+            ))}
+        </div>
+      </div>
+
+      {/* Under the whole entry rather than inside the text column, with the
+          rule the app uses everywhere for "these are somebody else's
+          words". It is the passage's own sentence, cut from the text rather
+          than written by a model — see `seed/read_vocabulary.py`. */}
+      {open && entry.example && (
+        <p className="mx-2 mb-2.5 border-l-2 border-border pl-2 text-xs leading-relaxed text-muted-foreground italic">
+          {entry.example}
+        </p>
+      )}
     </li>
+  );
+}
+
+/** A fact about this reader's history with the word, not about the word. */
+function Flag({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded border border-border px-1 text-[0.65rem] text-muted-foreground">
+      {children}
+    </span>
   );
 }
