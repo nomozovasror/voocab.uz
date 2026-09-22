@@ -203,9 +203,8 @@ export function LookupPopover({
   word,
   where,
   rect,
-  spent,
-  isKnown,
-  onFound,
+  budget,
+  onKept,
   onClose,
 }: {
   materialId: string;
@@ -218,23 +217,47 @@ export function LookupPopover({
    *  selection went away between the press and the render, and then it
    *  falls back to the top-right corner rather than to nowhere. */
   rect?: DOMRect | null;
-  spent: number;
-  /** Whether this lemma was already opened on this passage, asked BEFORE
-   *  anything is charged.
+  /**
+   * The three-a-passage budget, where there is one.
    *
-   *  A function rather than a boolean, and that is the fix for a real bug:
-   *  the caller only has the raw selected text, and what gets charged is the
-   *  LEMMA the server returns. Tapping `proponents` charges `proponent`, and
-   *  a boolean computed from `proponents` would say "not free" for ever on a
-   *  word the budget was quietly treating as free. */
-  isKnown: (lemma: string) => boolean;
-  /** Charged only when something came back. */
-  onFound: (lemma: string) => void;
+   * Absent on the REVIEW page, and that absence is the whole rule rather
+   * than a relaxation of it. Three lookups exist to protect an exam habit:
+   * a candidate who can look anything up is reading with a dictionary,
+   * which is not the skill being scored. Once the paper is submitted there
+   * is no habit left to protect, and rationing a learner's own curiosity
+   * after the fact teaches nothing.
+   *
+   * One object rather than three props because they are one thing: with no
+   * budget there is nothing to charge, nothing to ask whether a word was
+   * free, and no counter to print. A caller in review mode passes nothing
+   * and the card simply has no last line.
+   */
+  budget?: {
+    spent: number;
+    /** Whether this lemma was already opened on this passage, asked BEFORE
+     *  anything is charged.
+     *
+     *  A function rather than a boolean, and that is the fix for a real bug:
+     *  the caller only has the raw selected text, and what gets charged is
+     *  the LEMMA the server returns. Tapping `proponents` charges
+     *  `proponent`, and a boolean computed from `proponents` would say "not
+     *  free" for ever on a word the budget was quietly treating as free. */
+    isKnown: (lemma: string) => boolean;
+    /** Charged only when something came back. */
+    onFound: (lemma: string) => void;
+  };
+  /** A word was glossed that this material did not have. The review page
+   *  refreshes its list on this, so the word joins the passage's marking
+   *  and the panel beside it at once rather than after a reload — it IS
+   *  part of the passage's vocabulary now, and a page that knew and did not
+   *  say would be asking the reader to look it up twice. */
+  onKept?: () => void;
   onClose: () => void;
 }) {
   const found = useQuery({
     queryKey: ["lookup", materialId, word.toLowerCase(), where?.offset ?? -1],
-    queryFn: () => vocabularyApi.lookUp(materialId, word, where),
+    queryFn: () =>
+      vocabularyApi.lookUp(materialId, word, where, budget ? "take" : "review"),
     // A word looked up twice in one sitting is the same word: the budget
     // says so, and re-asking the server would contradict it.
     staleTime: Infinity,
@@ -263,10 +286,22 @@ export function LookupPopover({
   // idempotent — `opened()` ignores a word already on the list — so a
   // re-render or a refetch cannot spend twice.
   useEffect(() => {
-    if (!charged) return;
-    setWasFree((was) => was ?? isKnown(charged.lemma));
-    onFound(charged.lemma);
-  }, [charged, isKnown, onFound]);
+    if (!charged || !budget) return;
+    setWasFree((was) => was ?? budget.isKnown(charged.lemma));
+    budget.onFound(charged.lemma);
+  }, [charged, budget]);
+
+  // Told once, and only where something was actually made. An answer that
+  // came out of the extraction changes nothing about the material's list;
+  // one that was generated here has just been added to it.
+  const told = useRef(false);
+  useEffect(() => {
+    if (!onKept || told.current) return;
+    const fresh = found.data?.word ?? found.data?.phrase;
+    if (!fresh) return;
+    told.current = true;
+    onKept();
+  }, [found.data, onKept]);
 
   useEffect(() => {
     const escape = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -430,11 +465,16 @@ export function LookupPopover({
                 </>
               )}
             </button>
-            {/* Short. The rule that a repeat is free belongs in the tool
-                row's tooltip, not on every card a reader opens. */}
-            <span className="ml-auto text-[0.68rem] tabular-nums text-muted-foreground/70">
-              {wasFree ? "free" : `${spent} of ${LOOKUP_BUDGET}`}
-            </span>
+            {/* Short, and absent entirely where nothing is being counted.
+                The rule that a repeat is free belongs in the tool row's
+                tooltip, not on every card a reader opens — and on the review
+                page there is no count at all, so printing "unlimited" there
+                would be the page congratulating itself. */}
+            {budget && (
+              <span className="ml-auto text-[0.68rem] tabular-nums text-muted-foreground/70">
+                {wasFree ? "free" : `${budget.spent} of ${LOOKUP_BUDGET}`}
+              </span>
+            )}
           </div>
         )}
       </div>

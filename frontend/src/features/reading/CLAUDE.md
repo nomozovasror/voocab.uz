@@ -134,6 +134,16 @@ is a reader working out which is the real one.
   one page that exists to give that back would throw away the only part of a
   mark that carries information.
 
+**Every word in the passage is clickable, and only here.** `PassagePane`
+takes an `onWord`; its absence on the take screen is the three-lookup budget,
+and its presence here is that budget having finished. One delegated handler
+on the article rather than nine hundred closures — each word span carries its
+offset and nothing else — and a dotted underline on hover, at rest nothing,
+because nine hundred permanent hints is a passage nobody can read. Said once
+above the passages, since an affordance that only appears under the pointer
+is one nobody finds by accident. See `features/vocabulary/CLAUDE.md` for what
+it is for and what it writes down.
+
 ## Where the answer was: evidence, and its fallback
 
 `questions.evidence` is reading's `replay_start_ms`: paragraph and offsets

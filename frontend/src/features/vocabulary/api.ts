@@ -38,17 +38,27 @@ export const vocabularyApi = {
    *  `paragraphIndex` and `offset` are what make the answer exact — an entry
    *  whose span contains that point needs no string matching, and a phrase is
    *  recognised by the same test. Sent whenever the caller knows them, which
-   *  is nearly always. */
+   *  is nearly always.
+   *
+   *  `context` says which screen asked. It buys nothing the caller can see
+   *  and is not a permission — the budget is the browser's and always was —
+   *  but it is the only way the platform can ever learn the difference
+   *  between "this word stopped me mid-paper" and "I read straight past this
+   *  word and found out afterwards that I had not understood it". The second
+   *  of those is what says the extraction's filter is cutting in the wrong
+   *  place, and it cannot be recovered later from anything else. */
   lookUp: (
     materialId: string,
     word: string,
     where?: { paragraphIndex: number; offset: number },
+    context: "take" | "review" = "take",
   ) =>
     api.post<Lookup>(`/api/materials/${materialId}/lookups`, {
       json: {
         word,
         paragraph_index: where?.paragraphIndex,
         offset: where?.offset,
+        context,
       },
     }),
 

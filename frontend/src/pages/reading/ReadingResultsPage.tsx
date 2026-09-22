@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks/use-media-query";
@@ -36,6 +36,7 @@ import {
   useTextSize,
 } from "@/features/reading/components/PassageTools";
 import { ReviewMarks } from "@/features/reading/components/ReviewMarks";
+import { LookupPopover } from "@/features/reading/components/ReadingPanels";
 import { loadHighlights } from "@/features/reading/highlights";
 import {
   evidenceOverlays,
@@ -137,6 +138,7 @@ export default function ReadingResultsPage() {
   // to go back over it, and having to set it twice would be the app
   // forgetting something it is holding.
   const [textSize, setTextSize] = useTextSize();
+  const qc = useQueryClient();
 
   const quote = useCallback(
     (result: Parameters<typeof passageQuote>[1]) =>
@@ -309,6 +311,48 @@ export default function ReadingResultsPage() {
   /** What the pointer is on, wherever it is. One key, shared by both panes:
    *  a question id in the mistakes layer, a lemma in the other two. */
   const [lit, setLit] = useState<string | null>(null);
+
+  /**
+   * The word somebody just asked about, and where it stands on screen.
+   *
+   * The review's own lookup, and it exists because the extraction has
+   * EDGES. `appropriate` is NGSL rank 1019, so the frequency filter calls
+   * it known and never glosses it; a reader who did not know it, did not
+   * spend one of three on it during the paper and did not highlight it had
+   * no way at all to find out what it meant afterwards. The system's own
+   * ignorance was being handed to the learner as theirs, on the one screen
+   * built for learning.
+   *
+   * Unrationed here — see `LookupPopover`'s `budget` prop — and the answer
+   * is the same popover the take screen opens, because it is the same
+   * question. A second panel saying the same four things would be a second
+   * place for them to drift.
+   */
+  const [asked, setAsked] = useState<{
+    word: string;
+    where: { paragraphIndex: number; offset: number };
+    rect: DOMRect;
+  } | null>(null);
+
+  const askAbout = useCallback(
+    (
+      word: string,
+      where: { paragraphIndex: number; offset: number },
+      rect: DOMRect,
+    ) => setAsked({ word, where, rect }),
+    [],
+  );
+
+  /** A word was glossed that this passage did not have a row for. It is
+   *  part of the material's vocabulary from that moment, so the list and
+   *  the marking over the passage are refetched: the reader closes the card
+   *  and the word is there, in its level's colour, like every other. Not
+   *  doing this would make them look it up a second time to see it. */
+  const onKept = useCallback(() => {
+    if (data?.material_id) {
+      qc.invalidateQueries({ queryKey: vocabularyKey(data.material_id) });
+    }
+  }, [qc, data?.material_id]);
 
   // --- The analysis beside it ----------------------------------------------
   //
@@ -701,6 +745,19 @@ export default function ReadingResultsPage() {
                     {data.material_reference}
                   </p>
                 )}
+              {/* Said once, above the whole paper, and quietly.
+              
+                  A passage where every word is clickable looks exactly like
+                  one where none of them is, and the affordance only appears
+                  under the pointer — which nobody finds by accident on a
+                  page they are reading rather than poking at. One line is
+                  cheaper than the readers who never discover the feature.
+              
+                  Above all three passages rather than above each, because
+                  three copies of one sentence is a page repeating itself. */}
+              <p className="mt-2 text-[0.75em] text-muted-foreground/70">
+                Click any word to look it up — no limit here.
+              </p>
             </div>
             <div className="space-y-10">
               {passages.map((part, index) =>
@@ -719,6 +776,7 @@ export default function ReadingResultsPage() {
                     overlays={layer === "marks" ? undefined : overlays}
                     lit={lit}
                     onPoint={setLit}
+                    onWord={askAbout}
                     className="max-w-none"
                   />
                 ) : null,
@@ -728,6 +786,20 @@ export default function ReadingResultsPage() {
         }
         right={analysis}
       />
+
+      {/* The same card the take screen opens, with no budget behind it.
+          Portalled out of the pane by the component itself, so a passage
+          scrolled to the bottom of a 700px scroller does not clip it. */}
+      {asked && data.material_id && (
+        <LookupPopover
+          materialId={data.material_id}
+          word={asked.word}
+          where={asked.where}
+          rect={asked.rect}
+          onKept={onKept}
+          onClose={() => setAsked(null)}
+        />
+      )}
     </div>
   );
 }

@@ -68,6 +68,26 @@ interface PassagePaneProps {
    *  it in the other pane. The hover link works both ways or it is a trick
    *  the reader has to learn the direction of. */
   onPoint?: (key: string | null) => void;
+  /**
+   * Asking what ONE word means — any word, not only a marked one.
+   *
+   * Absent while the paper is being sat, and that absence is the feature
+   * rather than an omission: mid-paper a lookup costs one of three and goes
+   * through the selection popover, because the budget exists to make
+   * somebody choose. Afterwards there is no exam habit left to protect and
+   * the passage becomes a text a learner can interrogate.
+   *
+   * It is what closes the hole this was built for. `appropriate` is NGSL
+   * rank 1019, so the frequency filter calls it known and never glosses it;
+   * a reader who did not know it, did not look it up during the paper and
+   * did not highlight it had NO way to find out what it meant afterwards.
+   * The extraction's edges were being handed to the learner as their own.
+   */
+  onWord?: (
+    word: string,
+    where: { paragraphIndex: number; offset: number },
+    rect: DOMRect,
+  ) => void;
   className?: string;
 }
 
@@ -121,27 +141,89 @@ function inside(
   text: string,
   at: number,
   ranges: { start: number; end: number }[] | undefined,
-): { text: string; hard: boolean }[] {
+): { text: string; hard: boolean; at: number }[] {
   const mine = (ranges ?? [])
     .map((one) => ({ start: one.start - at, end: one.end - at }))
     .filter(
       (one) => one.start >= 0 && one.end <= text.length && one.end > one.start,
     )
     .sort((a, b) => a.start - b.start);
-  if (!mine.length) return [{ text, hard: false }];
+  if (!mine.length) return [{ text, hard: false, at }];
 
-  const out: { text: string; hard: boolean }[] = [];
+  // Every piece carries where it starts in the PARAGRAPH, not in the mark.
+  // Nothing needed that until any word became clickable; now a word inside
+  // a marked sentence has to report the same offset as the same word
+  // outside one, or the server is asked about the wrong occurrence.
+  const out: { text: string; hard: boolean; at: number }[] = [];
   let cut = 0;
   for (const one of mine) {
     if (one.start < cut) continue;
     if (one.start > cut) {
-      out.push({ text: text.slice(cut, one.start), hard: false });
+      out.push({ text: text.slice(cut, one.start), hard: false, at: at + cut });
     }
-    out.push({ text: text.slice(one.start, one.end), hard: true });
+    out.push({
+      text: text.slice(one.start, one.end),
+      hard: true,
+      at: at + one.start,
+    });
     cut = one.end;
   }
-  if (cut < text.length) out.push({ text: text.slice(cut), hard: false });
+  if (cut < text.length) {
+    out.push({ text: text.slice(cut), hard: false, at: at + cut });
+  }
   return out;
+}
+
+/** Letters and digits, plus the two marks that live INSIDE English words.
+ *  The apostrophe in both its shapes, because a passage read off a printed
+ *  page carries the typographic one and one typed by an author carries the
+ *  straight one — and `Earth's` has to be one word either way. */
+const WORD = /[\p{L}\p{N}][\p{L}\p{N}'\u2019-]*/gu;
+
+/** What a word wears when it can be asked about.
+ *
+ *  A dotted underline on hover and a pointer, and nothing at rest. Nine
+ *  hundred words each carrying a permanent hint is a passage nobody can
+ *  read; the affordance only has to exist at the moment somebody is
+ *  pointing at a word, which is the moment they are wondering about it.
+ *
+ *  Dotted rather than solid because solid is taken twice over on this page
+ *  — the look-up underline under a glossed word, and the reader's own line
+ *  mark — and a hover state that looks like a permanent mark is a page
+ *  telling the reader they have already done something. */
+const WORDABLE =
+  "cursor-pointer hover:underline hover:decoration-dotted hover:decoration-muted-foreground hover:underline-offset-[0.25em]";
+
+/**
+ * One run of prose, with each word made a target.
+ *
+ * Plain text where nothing can be asked — the take screen — so the passage
+ * there carries not one extra element. Where it can, every word becomes a
+ * `<span>` carrying only its OFFSET, and the click is caught once on the
+ * article by delegation. Nine hundred spans each closing over a handler is
+ * nine hundred closures rebuilt on every render of a page that re-renders
+ * on every hover; nine hundred spans carrying a number is a number each.
+ *
+ * The gaps between words stay bare text. Punctuation and spaces are not
+ * things anybody wants the meaning of, and wrapping them would double the
+ * element count to make the space between two words hoverable.
+ */
+function Words({ text, at, on }: { text: string; at: number; on: boolean }) {
+  if (!on) return <>{text}</>;
+  const out: React.ReactNode[] = [];
+  let cut = 0;
+  for (const found of text.matchAll(WORD)) {
+    const start = found.index;
+    if (start > cut) out.push(text.slice(cut, start));
+    out.push(
+      <span key={start} data-word={at + start} className={WORDABLE}>
+        {found[0]}
+      </span>,
+    );
+    cut = start + found[0].length;
+  }
+  if (cut < text.length) out.push(text.slice(cut));
+  return <>{out}</>;
 }
 
 /** What every mark wears, whatever colour it is. `box-decoration-clone` is
@@ -183,12 +265,38 @@ export function PassagePane({
   overlays,
   lit,
   onPoint,
+  onWord,
   className,
 }: PassagePaneProps) {
   return (
     <article
       id={passageId(partId)}
       aria-label={title}
+      // One handler for nine hundred words. Every word span carries its own
+      // offset and nothing else, and the paragraph it is in is found by
+      // walking up to the element that already had to know — so adding this
+      // costs the passage one listener rather than one per word.
+      onClick={
+        onWord
+          ? (e) => {
+              const span = (e.target as HTMLElement).closest<HTMLElement>(
+                "[data-word]",
+              );
+              const para = span?.closest<HTMLElement>(
+                "[data-paragraph-index]",
+              );
+              if (!span || !para) return;
+              onWord(
+                span.textContent ?? "",
+                {
+                  paragraphIndex: Number(para.dataset.paragraphIndex),
+                  offset: Number(span.dataset.word),
+                },
+                span.getBoundingClientRect(),
+              );
+            }
+          : undefined
+      }
       className={cn("max-w-prose", className)}
     >
       {/* No heading of its own where there is only one passage on the page.
@@ -353,15 +461,31 @@ export function PassagePane({
                                   HARD[run.mark!.tone],
                                 )}
                               >
-                                {piece.text}
+                                <Words
+                                  text={piece.text}
+                                  at={piece.at}
+                                  on={Boolean(onWord)}
+                                />
                               </strong>
                             ) : (
-                              <span key={n}>{piece.text}</span>
+                              <span key={n}>
+                                <Words
+                                  text={piece.text}
+                                  at={piece.at}
+                                  on={Boolean(onWord)}
+                                />
+                              </span>
                             ),
                         )}
                       </mark>
                     ) : (
-                      <span key={k}>{run.text}</span>
+                      <span key={k}>
+                        <Words
+                          text={run.text}
+                          at={run.at}
+                          on={Boolean(onWord)}
+                        />
+                      </span>
                     ),
                   )
                 : runsOf(
@@ -416,10 +540,20 @@ export function PassagePane({
                             "ring-2 ring-foreground/30",
                         )}
                       >
-                        {run.text}
+                        <Words
+                          text={run.text}
+                          at={run.at}
+                          on={Boolean(onWord)}
+                        />
                       </mark>
                     ) : (
-                      <span key={k}>{run.text}</span>
+                      <span key={k}>
+                        <Words
+                          text={run.text}
+                          at={run.at}
+                          on={Boolean(onWord)}
+                        />
+                      </span>
                     ),
                   )}
             </p>

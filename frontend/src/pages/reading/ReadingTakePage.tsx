@@ -1106,9 +1106,14 @@ export default function ReadingTakePage() {
           word={panel.word}
           where={panel.where}
           rect={panel.rect}
-          spent={lookups.spent}
-          isKnown={(lemma: string) => known(lookups, lemma)}
-          onFound={spend}
+          // The budget, which only the take screen has. See the prop's own
+          // comment: its absence on the review page is the rule finishing,
+          // not the rule being waived.
+          budget={{
+            spent: lookups.spent,
+            isKnown: (lemma: string) => known(lookups, lemma),
+            onFound: spend,
+          }}
           onClose={() => setPanel(null)}
         />
       )}

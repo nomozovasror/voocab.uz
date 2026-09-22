@@ -46,6 +46,51 @@ first unfamiliar noun in paragraph A.
   dictionary is a page telling a candidate, every minute of the hour, what
   they are not allowed to do.
 
+## After the paper: any word, no budget
+
+On the review page every word in the passage is clickable and nothing is
+rationed. That is not the rule being relaxed, it is the rule FINISHING.
+Three lookups exist to protect an exam habit — a candidate who can look
+anything up is reading with a dictionary, which is not the skill being
+scored. Once the paper is submitted there is no habit left to protect, and
+rationing a learner's own curiosity after the fact teaches nothing.
+
+**It closes a hole, and the hole is the extraction's edges showing.**
+`appropriate` is NGSL rank 1019, so the frequency filter calls it known and
+never glosses it. A reader who did not know it, did not spend one of three
+on it during the paper and did not highlight it had NO way to find out what
+it meant afterwards — on the one screen built for learning. The system's own
+ignorance was being handed to the learner as theirs, which is the thing the
+first rule in this file forbids.
+
+- **The same popover, not a second panel.** It is the same question, so it
+  is the same four lines and the same Save button. `LookupPopover` takes an
+  optional `budget`; with none there is nothing to charge, nothing to ask
+  whether a word was free, and no counter printed.
+- **What is generated JOINS the material's vocabulary at once.** The page
+  invalidates `vocabularyKey` on a fresh gloss, so the reader closes the
+  card and the word is there in its level's colour, marked on the passage
+  and listed beside it. Not doing that would make them look it up twice to
+  see it.
+- **And filed under `review_lookup`**, apart from `extracted`. Both are
+  machine-made and both may be replaced by a later seed run; the
+  distinction costs nothing and answers a question nothing else can — which
+  words the extraction declined to offer and a learner went looking for
+  anyway.
+- **`lookup_events.context` says which screen asked.** A `take` lookup means
+  *this word stopped me badly enough to spend one of three.* A `review`
+  lookup means something the platform cannot otherwise learn at all: *I did
+  not know this word, and I did not know that I did not know it.* Words
+  many readers look up in review which the extraction never offered are the
+  evidence for where the frequency cut is wrong.
+- **A caveat worth watching.** The budget is what used to bound how much a
+  curious reader could add to a SHARED list. With it gone, every casual
+  click on a common word can add a row that every future learner then sees
+  in "106 words worth learning here". `whether` came back B1 and joined the
+  list on the first test click. If the list starts drifting, the guard is
+  `MaterialVocabulary.hidden`, which exists for exactly this — keeping an
+  entry without showing it.
+
 ## Two ways in, and the popover is the one they use
 
 The tool row is where somebody LEARNS the feature exists; the popover at the
