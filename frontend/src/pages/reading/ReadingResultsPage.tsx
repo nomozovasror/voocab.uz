@@ -439,7 +439,27 @@ export default function ReadingResultsPage() {
             {reviewRuns(shown).map((run, at) => (
               <div key={at}>
                 {run.heading && (
-                  <h3 className="mt-6 mb-1 px-3 text-[0.7rem] tracking-caps text-muted-foreground/80 uppercase first:mt-4">
+                  // Legible, and with a rule over it.
+                  //
+                  // It was `muted-foreground/80` at 0.7rem, which on this
+                  // ground comes to about 2:1 — not quiet, invisible — and
+                  // it sat between rows that each carry a hairline of their
+                  // own, so nothing about it read as a boundary. What says
+                  // a new task has started is the RULE; the words say which
+                  // task.
+                  //
+                  // `-mx-3 px-3` so the rule lines up with the borders
+                  // between rows, which reach out by the same three to draw
+                  // their hover state full-bleed. A divider inset from every
+                  // line above and below it reads as a mistake.
+                  <h3
+                    className={cn(
+                      "-mx-3 px-3 text-[0.72rem] font-medium tracking-caps text-foreground/55 uppercase",
+                      at === 0
+                        ? "mt-4 mb-2"
+                        : "mt-7 mb-2 border-t border-border pt-6",
+                    )}
+                  >
                     {run.heading}
                   </h3>
                 )}
