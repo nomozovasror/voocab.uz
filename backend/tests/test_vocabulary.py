@@ -97,9 +97,12 @@ ENTRIES = [
     # meaning an assertion rather than a demand, and that is the shape the
     # third question looks for. NGSL-frequent, rated hard.
     {"lemma": "claim", "surface": "claim", "pos": "n",
+     "meaning_core_en": "a demand for something you have a right to",
+     "meaning_core_uz": "talab",
      "meaning_en": "a statement that something is true, without proof",
      "meaning_uz": "da'vo, tasdiq", "index": 0, "cefr_level": "C1",
-     "frequency_band": "core", "is_phrase": False, "unusual": True},
+     "frequency_band": "core", "is_phrase": False, "unusual": True,
+     "sense_differs": True},
 ]
 
 
@@ -157,8 +160,12 @@ async def _make_passage(author_id: uuid.UUID) -> tuple[Material, Part]:
                 MaterialVocabulary(
                     material_id=material.id, part_id=part.id,
                     lemma=entry["lemma"], surface=entry["surface"],
-                    pos=entry["pos"], meaning_en=entry["meaning_en"],
+                    pos=entry["pos"],
+                    meaning_core_en=entry.get("meaning_core_en", ""),
+                    meaning_core_uz=entry.get("meaning_core_uz", ""),
+                    meaning_en=entry["meaning_en"],
                     meaning_uz=entry["meaning_uz"],
+                    sense_differs=bool(entry.get("sense_differs")),
                     example=text, paragraph_index=entry["index"],
                     offset_start=at, offset_end=at + len(entry["surface"]),
                     cefr_level=entry["cefr_level"],
@@ -279,14 +286,24 @@ async def test_a_tapped_word_is_found_four_different_ways() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tapping_inside_a_phrase_returns_the_phrase_as_well() -> None:
+async def test_tapping_inside_a_phrase_returns_the_phrase_as_well(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The brief's rule, exactly: does the tapped offset fall inside some
     ``is_phrase`` entry's span. `rise` is one of the commonest words in
     English and no frequency filter would ever offer it -- `give rise to` is
-    what actually stopped the reader."""
+    what actually stopped the reader.
+
+    The dictionary is silenced, and that is not decoration. `rise` has no
+    entry of its own, so the lookup goes on to ask a model about it -- and
+    a model asked about `rise` in this sentence quite correctly answers
+    "this is part of `give rise to`", which is the term rule doing its job
+    and has nothing to do with what this test is checking.
+    """
     email = f"vocab-phrase-{uuid.uuid4()}@test.local"
     user = await _make_user(email)
     material, _ = await _make_passage(user.id)
+    monkeypatch.setattr(dictionary_service, "providers", lambda: [_Silent()])
     try:
         async with async_session_factory() as session:
             loaded = await session.get(Material, material.id)
@@ -964,5 +981,236 @@ async def test_a_re_extraction_survives_a_word_somebody_saved() -> None:
             assert rows[0].meaning_uz == "moda"
             # And the pointer, gone with the row it pointed at.
             assert rows[0].vocabulary_id is None
+    finally:
+        await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_a_word_carries_its_usual_meaning_as_well_as_this_one() -> None:
+    """Both meanings reach the client, and the flag that says whether to
+    print the second one.
+
+    `claim` in the fixture is a demand for something you have a right to,
+    and in paragraph A it is an assertion made without proof. The first is
+    what a learner should carry away; the second is what is true here. An
+    entry that only ever carried the second is what put "a computer process
+    of finding patterns in data" on somebody's list under the verb `learn`.
+    """
+    email = f"vocab-core-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material, _ = await _make_passage(user.id)
+    await _submit_something(material.id, user.id)
+    try:
+        async with _client() as client:
+            answer = await client.get(
+                f"/api/materials/{material.id}/vocabulary",
+                headers=_headers(user),
+            )
+        assert answer.status_code == 200
+        body = answer.json()
+        by_lemma = {entry["lemma"]: entry for entry in body["entries"]}
+
+        claim = by_lemma["claim"]
+        assert claim["meaning_core_en"] == "a demand for something you have a right to"
+        assert claim["meaning_core_uz"] == "talab"
+        assert claim["sense_differs"] is True
+        # And the contextual one is still exactly where it was. The usual
+        # meaning is an addition, not a replacement -- a reader stuck on
+        # this sentence still needs the sense this sentence uses.
+        assert claim["meaning_en"].startswith("a statement that something is true")
+
+        # An ordinary word says so, and the client then prints one meaning
+        # rather than the same line twice.
+        assert by_lemma["hectare"]["sense_differs"] is False
+
+        # The header figure counts the same thing the toggle under it
+        # filters by, which is `sense_differs` and no longer the narrower
+        # `unusual` column.
+        assert body["unusual"] == 1
+    finally:
+        await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_a_live_gloss_of_a_word_inside_a_term_answers_for_the_term(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The worst gloss this feature has produced, and the fix for it.
+
+    A reader tapped `learning` in a passage about artificial intelligence.
+    What came back was "a computer process of finding patterns in data",
+    filed under the lemma `learn` and marked a noun -- a faithful reading of
+    `machine learning` and a false statement about the verb they then had on
+    their list for ever.
+
+    So a model may answer about something WIDER than the word, and says so
+    by naming the term as the paragraph writes it. The entry is stored over
+    the term's span, which is also what makes the next tap on any word in it
+    land on the right row.
+    """
+
+    class _Term:
+        async def look_up(self, word: str, context: str):
+            return dictionary_service.Gloss(
+                lemma="vertical farming", pos="phr",
+                meaning_en="growing crops in stacked layers indoors",
+                meaning_uz="ko'p qavatli dehqonchilik",
+                meaning_core_en="growing crops in stacked layers indoors",
+                meaning_core_uz="ko'p qavatli dehqonchilik",
+                cefr_level="C1",
+                term="vertical farming",
+            )
+
+    email = f"vocab-term-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material, _ = await _make_passage(user.id)
+    monkeypatch.setattr(dictionary_service, "providers", lambda: [_Term()])
+    try:
+        async with async_session_factory() as session:
+            loaded = await session.get(Material, material.id)
+            made = await vocabulary_service.look_up(
+                session, loaded, user_id=user.id, word="farming"
+            )
+        entry = made["word"]
+        assert entry is not None
+        assert entry.lemma == "vertical farming"
+        # Stored over the TERM, not over the word that was tapped. The
+        # surface slices back out of the passage, which is the property
+        # every offset in this feature has to have.
+        text = PASSAGE["paragraphs"][entry.paragraph_index]["text"]
+        assert text[entry.offset_start : entry.offset_end] == "vertical farming"
+        assert entry.surface == "vertical farming"
+        assert entry.is_phrase is True
+    finally:
+        await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_a_term_the_passage_already_has_is_not_written_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model that says "this is part of `give rise to`" is right, and the
+    passage already knows.
+
+    This is the common case rather than a corner: the reader tapped a word
+    inside a phrase the extraction found long ago, and the caller is already
+    showing that phrase. A second row would break one lemma per material on
+    the way in, and showing it underneath as "the word on its own" would
+    print the same gloss twice in one card.
+    """
+
+    class _Term:
+        async def look_up(self, word: str, context: str):
+            return dictionary_service.Gloss(
+                lemma="give rise to", pos="phr",
+                meaning_en="to cause something to happen",
+                meaning_uz="sabab bo'lmoq",
+                cefr_level="B2", term="give rise to",
+            )
+
+    email = f"vocab-dupe-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material, _ = await _make_passage(user.id)
+    monkeypatch.setattr(dictionary_service, "providers", lambda: [_Term()])
+    try:
+        async with async_session_factory() as session:
+            loaded = await session.get(Material, material.id)
+            text = PASSAGE["paragraphs"][0]["text"]
+            inside = text.find("rise")
+            answer = await vocabulary_service.look_up(
+                session, loaded, user_id=user.id, word="rise",
+                paragraph_index=0, offset=inside,
+            )
+            assert answer["phrase"].lemma == "give rise to"
+            assert answer["word"] is None, "the phrase is already the answer"
+
+        async with async_session_factory() as session:
+            rows = await vocabulary_service.entries(session, material.id)
+            assert [row.lemma for row in rows].count("give rise to") == 1
+    finally:
+        await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_a_saved_word_gains_the_usual_meaning_without_losing_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A field that did not exist when somebody saved a word is a gap, not a
+    correction.
+
+    A saved context copies its gloss and is deliberately never refreshed:
+    a material can be re-glossed, and a learner's word quietly changing
+    meaning underneath them is worse than one that has aged. That rule
+    stands. What `enrich_saved_contexts` does is fill an EMPTY field and
+    write over nothing -- otherwise a card somebody saved before the usual
+    meaning existed shows one line for ever, which is the failure the field
+    was added to stop.
+    """
+    email = f"vocab-enrich-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material, part = await _make_passage(user.id)
+    try:
+        async with _client() as client:
+            kept = await client.post(
+                "/api/vocabulary/words",
+                json={"material_id": str(material.id), "lemmas": ["vogue"]},
+                headers=_headers(user),
+            )
+            assert kept.status_code == 201
+
+        # Saved before the field existed: the fixture's `vogue` has no usual
+        # meaning on it.
+        async with async_session_factory() as session:
+            saved = [
+                row
+                for row in (await session.exec(select(SavedWordContext))).all()
+                if row.material_id == material.id
+            ]
+            assert saved[0].meaning_core_en == ""
+
+        # The pipeline runs again, with the new fields this time.
+        async with async_session_factory() as session:
+            await vocabulary_service.replace_extracted(
+                session,
+                material_id=material.id,
+                part_id=part.id,
+                rows=[
+                    {"lemma": "vogue", "surface": "vogue",
+                     "meaning_core_en": "a fashion that is popular now",
+                     "meaning_core_uz": "moda",
+                     "meaning_en": "in fashion at this moment",
+                     "meaning_uz": "urfda",
+                     "sense_differs": False,
+                     "index": 0, "start": 0, "end": 5, "cefr_level": "B2"},
+                ],
+            )
+            filled = await vocabulary_service.enrich_saved_contexts(
+                session, material_id=material.id)
+            await session.commit()
+            assert filled == 1
+
+        async with async_session_factory() as session:
+            saved = [
+                row
+                for row in (await session.exec(select(SavedWordContext))).all()
+                if row.material_id == material.id
+            ]
+            assert len(saved) == 1
+            # Gained.
+            assert saved[0].meaning_core_en == "a fashion that is popular now"
+            assert saved[0].meaning_core_uz == "moda"
+            # And kept: the meaning they MET, not the one the re-run wrote.
+            assert saved[0].meaning_en == "popular fashion at a particular time"
+            assert saved[0].meaning_uz == "moda"
+            # The pointer the re-extraction nulled, put back.
+            assert saved[0].vocabulary_id is not None
+
+        # Running it again changes nothing, which is what "fills where empty"
+        # has to mean for a pass that runs on every single import.
+        async with async_session_factory() as session:
+            again = await vocabulary_service.enrich_saved_contexts(
+                session, material_id=material.id)
+            await session.commit()
+            assert again == 0
     finally:
         await _cleanup(material.id, email)

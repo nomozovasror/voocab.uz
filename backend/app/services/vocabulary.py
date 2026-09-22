@@ -269,7 +269,7 @@ async def look_up(
     # Nothing extracted for this one. It is a word the frequency filter did
     # not think was hard, and this reader does -- which is worth an answer
     # and worth keeping, so the next reader who taps it gets it for free.
-    made = await _generate(session, material, asked,
+    made = await _generate(session, material, asked, known=found,
                            paragraph_index=paragraph_index, context=context)
     return await _answered(
         session, material, user_id, asked, started,
@@ -354,7 +354,11 @@ async def claim_lookups(
 
 
 def _covering(
-    found: list[MaterialVocabulary], index: int, offset: int, *, phrases: bool
+    found: list[MaterialVocabulary],
+    index: int,
+    offset: int,
+    *,
+    phrases: bool | None = None,
 ) -> MaterialVocabulary | None:
     """The entry whose span contains this point, if one does.
 
@@ -362,9 +366,16 @@ def _covering(
     at all. It is also the whole of how a phrase is recognised: the brief's
     rule -- does the tapped offset fall inside some ``is_phrase`` entry's
     span -- is this function with ``phrases=True``.
+
+    ``None`` asks about both kinds, which is what "is this span spoken for
+    at all" means. The lookup itself always asks about one or the other,
+    because it is building an answer with two slots and needs to know which
+    slot an entry goes in.
     """
     for entry in found:
-        if entry.is_phrase != phrases or entry.paragraph_index != index:
+        if phrases is not None and entry.is_phrase != phrases:
+            continue
+        if entry.paragraph_index != index:
             continue
         if entry.offset_start <= offset < entry.offset_end:
             return entry
@@ -396,6 +407,7 @@ async def _generate(
     material: Material,
     word: str,
     *,
+    known: list[MaterialVocabulary],
     paragraph_index: int | None,
     context: str = "take",
 ) -> MaterialVocabulary | None:
@@ -443,14 +455,41 @@ async def _generate(
     if gloss is None:
         return None
 
+    # A word that turned out to be part of a term is stored as the TERM.
+    # See `dictionary.Gloss.term`: the answer is about something wider than
+    # what was tapped, and an entry over the word's own span would file a
+    # term's meaning under a word that does not have it -- which is the
+    # failure this whole pair of fields exists to stop.
+    #
+    # Widened only where the term is actually found AROUND the tap. A model
+    # that names a term the paragraph does not contain, or one somewhere
+    # else in it, has not answered about the word in front of the reader,
+    # and an entry placed on a guess is a highlight over the wrong words.
+    span = _term_span(prose, gloss.term, start, end)
+    if span is not None:
+        # And where the material already HAS that term, there is nothing to
+        # add. This is not a rare case, it is the commonest one: a reader
+        # taps `rise` inside `give rise to`, the extraction found the phrase
+        # long ago, and the caller is already showing it. Writing a second
+        # row for the same expression would break the one-lemma-per-material
+        # rule on the way in, and showing it as "the word on its own" under
+        # the phrase would print the same gloss twice.
+        if _covering(known, index, span[0]) is not None:
+            return None
+        start, end = span
+        surface = prose[start:end]
+
     entry = MaterialVocabulary(
         material_id=material.id,
         part_id=part.id,
         lemma=gloss.lemma,
         surface=surface,
         pos=gloss.pos,
+        meaning_core_en=gloss.meaning_core_en,
+        meaning_core_uz=gloss.meaning_core_uz,
         meaning_en=gloss.meaning_en,
         meaning_uz=gloss.meaning_uz,
+        sense_differs=gloss.sense_differs,
         example=_sentence_at(prose, start, end),
         paragraph_index=index,
         offset_start=start,
@@ -505,6 +544,42 @@ async def _place(
             if at >= 0:
                 return part, index, at, at + len(word), text
     return None, 0, 0, 0, ""
+
+
+def _term_span(
+    prose: str, term: str, start: int, end: int
+) -> tuple[int, int] | None:
+    """Where a multi-word term stands, when it is the one around this tap.
+
+    Located in the paragraph by exact search and then case-insensitively --
+    the same two tries, in the same order, that `seed/read_vocabulary.py`
+    uses for a phrase, and nothing cleverer for the same reason: a fuzzy
+    match places a highlight over words nobody meant.
+
+    Accepted only where the term CONTAINS the tapped word. The model is
+    being asked a leading question -- "is this inside a term?" -- and a
+    model asked a leading question finds one; requiring the answer to cover
+    the span the reader actually pointed at is the check that costs nothing
+    and refuses every term the paragraph has somewhere else.
+
+    Returns nothing where the term is empty, unfindable, or elsewhere, and
+    the caller then stores the word on its own, which is the ordinary case.
+    """
+    needle = (term or "").strip()
+    if not needle or " " not in needle:
+        return None
+    for matcher in (str.find, lambda hay, pin: hay.lower().find(pin.lower())):
+        at = 0
+        while True:
+            found = matcher(prose[at:], needle)
+            if found < 0:
+                break
+            left = at + found
+            right = left + len(needle)
+            if left <= start and end <= right:
+                return left, right
+            at = left + 1
+    return None
 
 
 #: Where one sentence ends and the next begins. The same rough rule the seed
@@ -585,8 +660,11 @@ async def save(
                 vocabulary_id=entry.id,
                 surface=entry.surface,
                 pos=entry.pos,
+                meaning_core_en=entry.meaning_core_en,
+                meaning_core_uz=entry.meaning_core_uz,
                 meaning_en=entry.meaning_en,
                 meaning_uz=entry.meaning_uz,
+                sense_differs=entry.sense_differs,
                 example=entry.example,
                 cefr_level=entry.cefr_level,
                 is_phrase=entry.is_phrase,
@@ -733,8 +811,11 @@ async def replace_extracted(
                 lemma=lemma,
                 surface=row.get("surface") or lemma,
                 pos=row.get("pos") or "",
+                meaning_core_en=row.get("meaning_core_en") or "",
+                meaning_core_uz=row.get("meaning_core_uz") or "",
                 meaning_en=row.get("meaning_en") or "",
                 meaning_uz=row.get("meaning_uz") or "",
+                sense_differs=bool(row.get("sense_differs")),
                 example=row.get("example") or "",
                 paragraph_index=int(row.get("index") or 0),
                 offset_start=int(row.get("start") or 0),
@@ -750,3 +831,80 @@ async def replace_extracted(
         written += 1
     await session.flush()
     return written, len(kept)
+
+
+async def enrich_saved_contexts(
+    session: AsyncSession, *, material_id: uuid.UUID
+) -> int:
+    """Give the words people have already saved the field they were saved
+    without. Returns how many contexts gained one.
+
+    ## Why this exists at all, when the copy rule says leave them alone
+
+    A saved context COPIES its gloss and is never refreshed from the entry
+    it came from -- see :class:`SavedWordContext`, which argues the case at
+    length: a material can be re-glossed, and a learner's word quietly
+    changing meaning underneath them is worse than one that has aged. That
+    rule is not being relaxed.
+
+    What is being fixed is different in kind. The usual meaning is not a
+    correction to what they saved; it is a field that did not exist when
+    they saved it, and a card with only "here" on it is exactly the failure
+    ``meaning_core_en`` was added to stop. Somebody who saved ``learn`` from
+    a passage about artificial intelligence has "a computer process of
+    finding patterns in data" and nothing else, for ever, unless something
+    goes back and fills the gap.
+
+    So: filled where empty, never written over. Every meaning, example,
+    level and part of speech they saved stays exactly as it was, and a
+    context that already has a usual meaning is left entirely alone --
+    including one enriched by an earlier run, so running this twice is the
+    same as running it once.
+
+    ``vocabulary_id`` is re-pointed at the same time, and that is the same
+    kind of repair. A re-extraction deletes the machine-made row a context
+    was taken from, and the foreign key sets the pointer to null (see the
+    model); finding the new row for the same lemma puts the provenance back
+    where it can be followed. The pointer is not what the card shows, so
+    nothing a learner sees moves with it.
+
+    Flushes; the CALLER commits, like :func:`replace_extracted` beside it
+    and for the same reason -- the one caller is the passage importer,
+    part-way through writing a material.
+    """
+    rows = await session.exec(
+        select(SavedWordContext, SavedWord.lemma)
+        .join(SavedWord, SavedWord.id == SavedWordContext.saved_word_id)
+        .where(SavedWordContext.material_id == material_id)
+    )
+    contexts = list(rows.all())
+    if not contexts:
+        return 0
+
+    fresh = await session.exec(
+        select(MaterialVocabulary).where(
+            MaterialVocabulary.material_id == material_id,
+            MaterialVocabulary.lemma.in_([lemma for _, lemma in contexts]),
+        )
+    )
+    by_lemma = {entry.lemma: entry for entry in fresh.all()}
+
+    filled = 0
+    for context, lemma in contexts:
+        entry = by_lemma.get(lemma)
+        if entry is None:
+            continue
+        if context.vocabulary_id is None:
+            context.vocabulary_id = entry.id
+        if context.meaning_core_en or not entry.meaning_core_en:
+            continue
+        context.meaning_core_en = entry.meaning_core_en
+        context.meaning_core_uz = entry.meaning_core_uz
+        # Only meaningful beside a usual meaning, so it travels with one and
+        # never on its own: a context marked "not the usual sense" with no
+        # usual sense to show is a promise the card cannot keep.
+        context.sense_differs = entry.sense_differs
+        session.add(context)
+        filled += 1
+    await session.flush()
+    return filled

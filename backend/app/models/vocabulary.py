@@ -112,12 +112,59 @@ class MaterialVocabulary(SQLModel, table=True):
     #: where the model would not commit to one, which is rare and is better
     #: than a guess printed in italics beside the word.
     pos: str = Field(default="", max_length=8)
+    #: What the word USUALLY means -- its commonest general sense, wherever
+    #: it is met -- and the field a learner is shown first.
+    #:
+    #: ## Why an entry carries two meanings now
+    #:
+    #: For a long time it carried one, and that one was contextual, for the
+    #: reason written at the top of this class: a global dictionary row has
+    #: to pick a sense and picks wrong for two thirds of the passages. All
+    #: of that is still true and none of it is being undone.
+    #:
+    #: What it missed is that a learner does not stop at this passage. A
+    #: passage about artificial intelligence gave `learn` the gloss "a
+    #: computer process of finding patterns in data" -- which is a correct
+    #: reading of `machine learning` and a false statement about the verb
+    #: `learn`. Somebody who studies that entry has learnt something that is
+    #: wrong in every other sentence they will ever write with the word. A
+    #: word list that only ever says *here* teaches the passage and not the
+    #: language.
+    #:
+    #: So both are stored, and the ordinary sense LEADS: it is the one worth
+    #: carrying away. The passage's sense follows it, under "Here:", and
+    #: only where the two genuinely differ -- see :attr:`sense_differs`.
+    #:
+    #: Empty on an entry written before the field existed, and on one whose
+    #: model would not answer for it. Every reader falls back to
+    #: :attr:`meaning_en`, because a missing usual sense is help that is
+    #: narrower than intended and a missing contextual sense is no help at
+    #: all.
+    meaning_core_en: str = Field(default="", max_length=200)
+    #: The same usual sense in Uzbek. Filled and emptied together with
+    #: :attr:`meaning_core_en` -- an English line with no Uzbek beside it is
+    #: a heading promising a meaning the reader cannot read.
+    meaning_core_uz: str = Field(default="", max_length=200)
     #: One line, in simpler English than the word itself, for the sense THIS
     #: passage uses.
     meaning_en: str = Field(max_length=200)
     #: The same sense in Uzbek. The reason the whole stage exists: an English
     #: gloss of a C1 word is regularly harder than the word.
     meaning_uz: str = Field(max_length=200)
+    #: Whether this passage's sense is NOT the word's usual one.
+    #:
+    #: The switch that decides whether a reader is shown one meaning or two.
+    #: Most words in most passages are used ordinarily and a second line
+    #: under them would be the same sentence twice; the minority where it is
+    #: false are where the passage is doing something worth pointing at.
+    #:
+    #: Stored rather than derived from the two strings being different,
+    #: because "different wording" and "different meaning" are not the same
+    #: question and only something that has read both can answer the second.
+    #: It is nonetheless refused where the two strings ARE the same -- see
+    #: `seed/read_vocabulary.py`, `judged` -- because a mark on every row is
+    #: a mark that means nothing.
+    sense_differs: bool = Field(default=False)
     #: The sentence from the passage that contains it, cut from the passage
     #: rather than written by anyone. It is what makes a saved word worth
     #: more than a word from a list: the learner met it here.
@@ -258,8 +305,21 @@ class SavedWordContext(SQLModel, table=True):
 
     surface: str = Field(default="", max_length=120)
     pos: str = Field(default="", max_length=8)
+    #: The word's usual sense, copied like everything else here.
+    #:
+    #: This one is ALSO filled in later, and it is the single exception to
+    #: the copy rule above. A context saved before the field existed has an
+    #: empty one, and the card for it would show only the sense one passage
+    #: gave the word -- which is the failure the field was added to stop.
+    #: Filling an empty one from a fresh extraction adds a meaning the
+    #: learner did not have and changes none they did:
+    #: ``enrich_saved_contexts`` never writes over a meaning, an example or
+    #: a level. What they saved stays what they met.
+    meaning_core_en: str = Field(default="", max_length=200)
+    meaning_core_uz: str = Field(default="", max_length=200)
     meaning_en: str = Field(max_length=200)
     meaning_uz: str = Field(max_length=200)
+    sense_differs: bool = Field(default=False)
     example: str = Field(default="", max_length=600)
     cefr_level: str = Field(default="", max_length=4)
     is_phrase: bool = Field(default=False)

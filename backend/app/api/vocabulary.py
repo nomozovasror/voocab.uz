@@ -72,12 +72,14 @@ def _entry(
         lemma=entry.lemma,
         surface=entry.surface,
         pos=entry.pos,
+        meaning_core_en=entry.meaning_core_en,
+        meaning_core_uz=entry.meaning_core_uz,
         meaning_en=entry.meaning_en,
         meaning_uz=entry.meaning_uz,
+        sense_differs=entry.sense_differs,
         example=entry.example,
         cefr_level=entry.cefr_level,
         is_phrase=entry.is_phrase,
-        unusual=entry.unusual,
         part_id=entry.part_id,
         paragraph_index=entry.paragraph_index,
         offset_start=entry.offset_start,
@@ -158,7 +160,12 @@ async def material_vocabulary(
         material_id=material_id,
         total=len(entries),
         levels=levels,
-        unusual=sum(1 for entry in entries if entry.unusual),
+        # Counted over `sense_differs` rather than `unusual`, so the figure
+        # in the header is the one the toggle beneath it filters by. The
+        # narrower column still exists and still feeds the arithmetic that
+        # compares passages; what a reader is offered is every word whose
+        # sense here is not the one they know, common or not.
+        unusual=sum(1 for entry in entries if entry.sense_differs),
         entries=[
             _entry(entry, material, saved=entry.lemma in saved)
             for entry in entries
@@ -232,8 +239,11 @@ async def _saved(session: AsyncSession, user_id: uuid.UUID) -> SavedWordsOut:
                         material_title=titles.get(context.material_id, ""),
                         surface=context.surface,
                         pos=context.pos,
+                        meaning_core_en=context.meaning_core_en,
+                        meaning_core_uz=context.meaning_core_uz,
                         meaning_en=context.meaning_en,
                         meaning_uz=context.meaning_uz,
+                        sense_differs=context.sense_differs,
                         example=context.example,
                         cefr_level=context.cefr_level,
                         is_phrase=context.is_phrase,

@@ -181,6 +181,16 @@ async def import_vocabulary(session, material_id: uuid.UUID,
     if kept:
         logger.info("kept %d author-edited entries", kept)
 
+    # And the words somebody has already put on their own list. A saved
+    # context copies its gloss and is deliberately never refreshed, but a
+    # FIELD that did not exist when it was saved is a gap rather than a
+    # change -- see `vocabulary.enrich_saved_contexts`, which fills the
+    # empty ones and writes over nothing.
+    filled = await vocabulary_service.enrich_saved_contexts(
+        session, material_id=material_id)
+    if filled:
+        logger.info("filled the usual meaning on %d saved contexts", filled)
+
     # How much of the passage is outside the frequency lists. Measured while
     # the text was being read and recoverable from nowhere else -- the lists
     # live in the seed venv, not the backend's -- so this is the one chance

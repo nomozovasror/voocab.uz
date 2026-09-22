@@ -220,6 +220,31 @@ word changing meaning underneath somebody is worse than one that has aged.
 - **`source` is never overwritten unless it is `extracted`.** The column
   exists from the first day so that nobody discovers, months later, that a
   re-run reverted their correction.
+- **An entry carries TWO meanings, and the usual one leads.**
+  `meaning_core_*` is what the word means wherever it is met;
+  `meaning_en`/`meaning_uz` keep their old job and are shown under `Here:`
+  only where `sense_differs`. The per-material argument above is unchanged
+  and still right — what it could not do alone is teach the language. A
+  passage about artificial intelligence glossed `learn` as "a computer
+  process of finding patterns in data", marked `n`: a faithful reading of
+  `machine learning` and a false statement about the verb somebody then had
+  on their list. Empty is legal and readers fall back to the contextual
+  line; a missing usual sense is narrower help, a missing contextual one is
+  none.
+- **A live lookup may answer about something wider than the word.**
+  `dictionary.Gloss.term` names the compound the tapped word stands inside,
+  as the paragraph writes it, and `_generate` stores the entry over the
+  term's span — accepted only where the term is FOUND and actually contains
+  the tap, because a model asked a leading question finds one. A term the
+  material already has is not written again: the caller is already showing
+  it as the phrase.
+- **`enrich_saved_contexts` is the one thing allowed near a saved gloss, and
+  it only fills.** The copy rule stands — a re-glossed material must not
+  change somebody's saved word underneath them — but a field that did not
+  exist when they saved is a gap rather than a correction. It writes only
+  where empty, never over a meaning, an example or a level, and it re-points
+  the `vocabulary_id` the re-extraction nulled. Idempotent by construction,
+  because it runs on every import.
 
 ## Two difficulty measures, and they do not merge
 
@@ -240,6 +265,12 @@ being derived at read time — `frequency_band == "core" AND cefr_level ==
 "C1"` identifies exactly those rows today, but only because the candidate
 filter drops everything under NGSL rank 2000, so it is a rule holding by
 accident of one constant.
+
+It stays on the server. What a client is shown instead is `sense_differs`,
+which asks the same question of EVERY entry rather than only of the common
+ones: a rare word in an unexpected sense is just as much of a trap and
+`unusual` was never marking it. Two near-identical flags on the wire is how
+one of them stops being maintained, so only one travels.
 
 `material_difficulty.vocabulary_load` is the one column in that table that is
 not a function of the attempts — it is a function of the TEXT, written by the

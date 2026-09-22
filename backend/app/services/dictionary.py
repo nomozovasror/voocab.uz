@@ -25,10 +25,19 @@ behind it on a separate account with a separate quota, which is the only
 kind of backstop worth having — a second model on the same key fails at the
 same moment.
 
-## Why the answer is still contextual
+## Why the answer is still contextual -- and why it is no longer only that
 
-The paragraph goes with the word, and what comes back is one sense: the one
-that is true here.
+The paragraph goes with the word, and what comes back is the sense that is
+true here. It now comes back beside the sense the word usually has, because
+the contextual one alone taught the wrong thing: a passage about artificial
+intelligence glossed ``learn`` as "a computer process of finding patterns in
+data", and a learner who saves that has it wrong in every other sentence.
+
+The same failure has a second half. The word tapped was ``learning``, inside
+``machine learning`` -- so the honest answer was not a narrower meaning of
+``learn`` but a meaning of something WIDER than the word. :class:`Gloss`
+carries ``term`` for exactly that, and the caller stores the entry over the
+term's span.
 
 ## There is no plain-dictionary fallback, and that is a decision
 
@@ -107,17 +116,39 @@ The paragraph it stands in:
 
 {context}
 
-Give the meaning the word has IN THIS PARAGRAPH -- one sense, not a
-dictionary entry. If the paragraph uses a common word in an unusual sense,
-that unusual sense is the one to give.
+Give two meanings: what the word USUALLY means, and what it means IN THIS
+PARAGRAPH. One sense each, not a dictionary entry. If the paragraph uses a
+common word in an unusual sense, that unusual sense is the one to give as
+the second.
+
+If the word stands inside a fixed multi-word term -- "machine learning",
+"climate change", "public sector" -- answer for the TERM: put the term as
+it is written in the paragraph in "term", give the term's dictionary form
+as the lemma, and give the term's meanings. The meaning of a term is not a
+meaning of any word in it, and filing it under one of them teaches the
+learner something wrong about that word everywhere else.
+
+The lemma is the dictionary form of the word AS IT IS USED HERE. If the form
+in the paragraph belongs to a different part of speech from the base word --
+"learning" the noun beside "learn" the verb -- give the lemma of the form
+that is actually here, never the base word carrying the other form's part of
+speech.
 
 Reply with JSON only:
 
-{{"lemma": "dictionary form of the word",
-  "pos": "one of {parts}",
-  "meaning_en": "one short line, under {meaning} characters, in simpler
-English than the word itself",
+{{"lemma": "dictionary form of the word, or of the term",
+  "term": "the multi-word term exactly as written in the paragraph, or an
+empty string when the word does not stand inside one",
+  "pos": "one of {parts}, for the lemma you gave",
+  "meaning_core_en": "what it usually means -- one short line, under
+{meaning} characters, in simpler English than the word itself",
+  "meaning_core_uz": "that usual sense in natural Uzbek, latin script",
+  "meaning_en": "what it means in this paragraph, under {meaning}
+characters -- the same as meaning_core_en where the paragraph uses it in the
+ordinary way",
   "meaning_uz": "the same sense in natural Uzbek, latin script",
+  "sense_differs": true only where this paragraph's sense is genuinely not
+the usual one,
   "cefr": "one of {levels}"}}
 
 If the word is a name, a number or not an English word at all, reply
@@ -130,13 +161,46 @@ class Gloss:
     """One word, in one passage's sense. The shape a row of
     ``material_vocabulary`` is built from, minus everything about WHERE --
     the offsets are the caller's to supply, because only the caller knows
-    which occurrence was tapped."""
+    which occurrence was tapped.
+
+    ``term`` is the exception and the reason it exists is the worst gloss
+    this feature has produced. A reader tapped ``learning`` in a passage
+    about artificial intelligence; what came back was "a computer process of
+    finding patterns in data", filed under the lemma ``learn`` and marked a
+    noun. Every part of that is a faithful reading of ``machine learning``
+    and a false statement about the verb the learner then had on their list.
+
+    So the model is allowed to answer about something WIDER than what was
+    tapped, and says so by naming the term as the paragraph writes it. The
+    caller locates that string and stores the entry over the term's span --
+    which is also what makes the tap work next time, because an entry whose
+    span covers three words answers a tap on any of them.
+
+    Empty for the overwhelming majority of words, which stand on their own.
+    """
 
     lemma: str
     pos: str
     meaning_en: str
     meaning_uz: str
     cefr_level: str
+    #: What the word usually means, wherever it is met.
+    #:
+    #: Optional, and last with the other optional fields, because it is an
+    #: improvement on the answer rather than the answer. :func:`parse` falls
+    #: back to ``meaning_en`` where the model would not give one separately:
+    #: the contextual sense is what the reader is waiting for, and refusing
+    #: the whole gloss over the improvement would be the tail wagging the
+    #: dog.
+    meaning_core_en: str = ""
+    meaning_core_uz: str = ""
+    #: Whether the two are genuinely different senses rather than two
+    #: wordings of one. False whenever the core meaning fell back, because
+    #: there is then nothing to differ from.
+    sense_differs: bool = False
+    #: The multi-word term this word stands inside, exactly as the paragraph
+    #: writes it, or empty. See the class docstring.
+    term: str = ""
 
 
 class DictionaryProvider(Protocol):
@@ -175,16 +239,31 @@ def parse(reply: str) -> Gloss | None:
 
     lemma = line("lemma", 80).lower()
     meaning_en, meaning_uz = line("meaning_en"), line("meaning_uz")
+    core_en, core_uz = line("meaning_core_en"), line("meaning_core_uz")
     level = str(said.get("cefr") or "").strip().upper()
     part = str(said.get("pos") or "").strip().lower().rstrip(".")
     if not (lemma and meaning_en and meaning_uz) or level not in LEVELS:
         return None
+    # Both halves of the usual meaning or neither: one English line with no
+    # Uzbek beside it is a heading promising a meaning the reader cannot
+    # read, which is the same half-entry this function refuses everywhere
+    # else. Unlike the rest it falls back instead of refusing, because the
+    # reader is waiting on the CONTEXTUAL sense and that one arrived.
+    if not (core_en and core_uz):
+        core_en = core_uz = ""
+    differs = bool(said.get("sense_differs")) and bool(core_en)
+    if differs and core_en.casefold() == meaning_en.casefold():
+        differs = False
     return Gloss(
         lemma=lemma,
         pos=part if part in PARTS else "",
+        meaning_core_en=core_en or meaning_en,
+        meaning_core_uz=core_uz or meaning_uz,
         meaning_en=meaning_en,
         meaning_uz=meaning_uz,
+        sense_differs=differs,
         cefr_level=level,
+        term=" ".join(str(said.get("term") or "").split()),
     )
 
 
@@ -234,10 +313,15 @@ class ChatDictionary:
                 json={
                     "model": self._model,
                     "messages": [{"role": "user", "content": prompt}],
-                    # One sense, five short fields. A ceiling this low is
-                    # also the cheapest guard against a model that decides
-                    # to write an essay about the etymology.
-                    "max_tokens": 400,
+                    # Two senses in two languages, and a handful of short
+                    # fields around them. Raised from 400 when the usual
+                    # meaning was added: a ceiling that cuts the reply off
+                    # mid-string does not parse, and the reader gets "we
+                    # couldn't find a meaning" for a word the model knew
+                    # perfectly well. Still low enough to be the cheapest
+                    # guard against a model that decides to write an essay
+                    # about the etymology.
+                    "max_tokens": 800,
                     "temperature": 0.0,
                 },
             )

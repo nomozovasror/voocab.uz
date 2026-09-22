@@ -9,6 +9,14 @@ What the wire deliberately does NOT carry is ``frequency_band``. It is the
 figure the difficulty arithmetic reads and it means nothing to a learner:
 "NGSL rank 2400" is a fact about a corpus. ``cefr_level`` is the one that
 travels, because B2 is a scale they already have a feel for.
+
+``unusual`` has left it for a related reason. The column still exists and
+still means what it meant -- a COMMON word in an unexpected sense, which is
+the disagreement between the two difficulty measures and the input to
+arithmetic over passages -- but what a reader is shown is
+``sense_differs``, which is the same question asked of every entry rather
+than only of the common ones. Two nearly-identical flags on one row is how
+one of them quietly stops being maintained.
 """
 
 import uuid
@@ -28,18 +36,33 @@ class VocabularyEntryOut(BaseModel):
     #: occurrence without asking again.
     surface: str
     pos: str
+    #: What the word USUALLY means, and the line every screen shows first.
+    #:
+    #: The contextual meaning below it is still the one this whole feature
+    #: exists to produce, and it is still where the value is. What it could
+    #: not do on its own is teach the LANGUAGE: `learn`, glossed from a
+    #: passage about artificial intelligence as "a computer process of
+    #: finding patterns in data", is a true sentence about `machine
+    #: learning` and a false one about the verb somebody then studied.
+    #:
+    #: Empty on an entry written before the field existed. Readers fall
+    #: back to `meaning_en`, because a missing usual sense is narrower help
+    #: and a missing contextual sense is none.
+    meaning_core_en: str = ""
+    meaning_core_uz: str = ""
     meaning_en: str
     meaning_uz: str
+    #: Whether this passage's sense is genuinely not the usual one — the
+    #: switch that decides whether a reader is shown one meaning or two.
+    #: Most words in most passages are used ordinarily, and a second line
+    #: under those would be the same sentence twice.
+    sense_differs: bool = False
     #: The sentence from the passage that contains it. Absent from the lookup
     #: panel by design (the reader is looking at it) and the whole value of a
     #: saved word on the review page.
     example: str
     cefr_level: str
     is_phrase: bool
-    #: A common word used in a sense a reader would not expect — `bank` as
-    #: the side of a river. Marked because nothing about such a word looks
-    #: difficult, which is exactly what makes it the hardest kind to spot.
-    unusual: bool = False
     #: Where it stands, in the coordinates the reading highlights use.
     #:
     #: The part as well as the paragraph, because a reading paper can hold
@@ -138,8 +161,11 @@ class SavedContextOut(BaseModel):
     material_title: str = ""
     surface: str
     pos: str
+    meaning_core_en: str = ""
+    meaning_core_uz: str = ""
     meaning_en: str
     meaning_uz: str
+    sense_differs: bool = False
     example: str
     cefr_level: str
     is_phrase: bool
