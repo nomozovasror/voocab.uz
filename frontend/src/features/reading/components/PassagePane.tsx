@@ -279,6 +279,13 @@ export function PassagePane({
       onClick={
         onWord
           ? (e) => {
+              // A drag to SELECT ends in a click, over whichever word the
+              // mouse was released on. Without this, every reader copying a
+              // sentence out of the passage gets a dictionary card for its
+              // last word — and the selection they were making is what the
+              // card's own arrival collapses.
+              const picked = window.getSelection();
+              if (picked && !picked.isCollapsed) return;
               const span = (e.target as HTMLElement).closest<HTMLElement>(
                 "[data-word]",
               );
