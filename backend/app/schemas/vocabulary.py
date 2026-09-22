@@ -13,6 +13,7 @@ travels, because B2 is a scale they already have a feel for.
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -73,6 +74,12 @@ class LookupIn(BaseModel):
     word: str = Field(min_length=1, max_length=80)
     paragraph_index: int | None = Field(default=None, ge=0)
     offset: int | None = Field(default=None, ge=0)
+    #: ``take`` while the paper is open, ``review`` afterwards. Logged
+    #: rather than enforced -- the budget that makes the difference matter
+    #: lives in the browser, and always has -- and it also decides what a
+    #: newly generated entry is filed under. Defaults to ``take`` so a
+    #: client written before this field existed keeps meaning what it meant.
+    context: Literal["take", "review"] = "take"
 
 
 class LookupOut(BaseModel):

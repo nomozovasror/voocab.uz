@@ -222,6 +222,7 @@ async def look_up(
     word: str,
     paragraph_index: int | None = None,
     offset: int | None = None,
+    context: str = "take",
 ) -> dict:
     """What to show for the word a reader just tapped.
 
@@ -236,6 +237,12 @@ async def look_up(
     and becomes indistinguishable from an extracted one, so whether this
     lookup was served from the extraction is a fact that erases itself
     within milliseconds unless it is written down here.
+
+    ``context`` says which screen asked -- ``take`` mid-paper, ``review``
+    afterwards -- and this function treats the two identically on purpose.
+    The budget that makes them different is the browser's, and it always
+    was (see ``app/api/vocabulary.py``); what changes here is only what
+    gets WRITTEN DOWN, on the event and on any entry generated to answer.
     """
     started = time.monotonic()
     found = await entries(session, material.id)
@@ -248,26 +255,28 @@ async def look_up(
         if exact is not None:
             return await _answered(
                 session, material, user_id, asked, started, "cache",
-                {"word": exact, "phrase": phrase}, paragraph_index, offset)
+                {"word": exact, "phrase": phrase}, paragraph_index, offset,
+                context)
 
     matched = _by_string(found, asked)
     if matched is not None:
         return await _answered(
             session, material, user_id, asked, started, "cache",
-            {"word": matched, "phrase": phrase}, paragraph_index, offset)
+            {"word": matched, "phrase": phrase}, paragraph_index, offset,
+            context)
 
     # Nothing extracted for this one. It is a word the frequency filter did
     # not think was hard, and this reader does -- which is worth an answer
     # and worth keeping, so the next reader who taps it gets it for free.
     made = await _generate(session, material, asked,
-                           paragraph_index=paragraph_index)
+                           paragraph_index=paragraph_index, context=context)
     return await _answered(
         session, material, user_id, asked, started,
         # `cache` where the phrase answered and the word did not: nothing was
         # generated, and calling it live would inflate the one number this
         # table exists to report.
         "live" if made is not None or phrase is None else "cache",
-        {"word": made, "phrase": phrase}, paragraph_index, offset)
+        {"word": made, "phrase": phrase}, paragraph_index, offset, context)
 
 
 async def _answered(
@@ -280,6 +289,7 @@ async def _answered(
     answer: dict,
     paragraph_index: int | None,
     offset: int | None,
+    context: str,
 ) -> dict:
     """Write down what just happened, and hand the answer back unchanged.
 
@@ -298,6 +308,7 @@ async def _answered(
                 source=source,
                 latency_ms=int((time.monotonic() - started) * 1000),
                 found=entry is not None,
+                context=context,
                 paragraph_index=paragraph_index,
                 offset=offset,
             )
@@ -385,14 +396,23 @@ async def _generate(
     word: str,
     *,
     paragraph_index: int | None,
+    context: str = "take",
 ) -> MaterialVocabulary | None:
     """Gloss a word the extraction missed, and keep what comes back.
 
-    Kept, and marked ``extracted`` like the rest, because that is what it is:
-    the same process, run later, for a word the frequency filter did not
-    flag. The list therefore grows towards what readers actually find hard,
-    which is a better list than any frequency table can describe -- and it
-    grows at a few words a passage, so the cost stays where it was put.
+    Kept, because it is the same process run later for a word the frequency
+    filter did not flag. The list therefore grows towards what readers
+    actually find hard, which is a better list than any frequency table can
+    describe -- and it grows at a few words a passage, so the cost stays
+    where it was put. The next reader of this passage meets the word already
+    glossed and already marked in its CEFR colour, for free.
+
+    Filed under the CONTEXT that caused it. Both are machine-made and both
+    may be replaced by a later seed run, so the distinction costs nothing to
+    keep and answers a question nothing else can: a ``review_lookup`` row is
+    a word the extraction declined to offer and a learner went looking for
+    anyway, which is the evidence for where the filter's cut is wrong. See
+    ``SOURCES`` in ``app/models/vocabulary.py``.
 
     Everything here is guarded, and the guard is the last of several. Each
     provider in the chain is tried in turn (``dictionary.look_up``); this
@@ -400,18 +420,22 @@ async def _generate(
     is told about in the panel's own voice rather than as a fact about a
     list they cannot see.
     """
-    part, index, start, end, context = await _place(session, material, word,
-                                                    paragraph_index)
-    if part is None or not context:
+    # `prose` rather than `context`, which is what this held until the
+    # lookup grew a context of its own. Two meanings on one name in one
+    # function is how `source=` silently became "the paragraph text is not
+    # the string 'review'", which is always true.
+    part, index, start, end, prose = await _place(session, material, word,
+                                                  paragraph_index)
+    if part is None or not prose:
         return None
     # The form as the PASSAGE writes it, not as the query arrived. The search
     # is case-insensitive, so a reader who tapped `Vertical` at the start of
     # a sentence would otherwise have stored a surface that does not match
     # the text its own offsets point at -- and the surface is the one field
     # that makes those offsets checkable.
-    surface = context[start:end]
+    surface = prose[start:end]
     try:
-        gloss = await dictionary_service.look_up(word, context)
+        gloss = await dictionary_service.look_up(word, prose)
     except Exception:  # noqa: BLE001 - one word is not worth a 500
         logger.exception("dictionary lookup of %r failed", word)
         return None
@@ -426,7 +450,7 @@ async def _generate(
         pos=gloss.pos,
         meaning_en=gloss.meaning_en,
         meaning_uz=gloss.meaning_uz,
-        example=_sentence_at(context, start, end),
+        example=_sentence_at(prose, start, end),
         paragraph_index=index,
         offset_start=start,
         offset_end=end,
@@ -436,7 +460,7 @@ async def _generate(
         # reads. Empty says "not measured", which is true.
         frequency_band="",
         is_phrase=" " in surface,
-        source="extracted",
+        source="review_lookup" if context == "review" else "extracted",
     )
     session.add(entry)
     try:

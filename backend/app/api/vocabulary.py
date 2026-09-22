@@ -21,6 +21,19 @@ formality. :func:`material_vocabulary` hands out the whole list, and it is
 refused to anybody who has not submitted the paper. One word at a time while
 the clock is running; eighty-six of them on the review page, which is what
 the list is for.
+
+## And no budget at all after the paper is over
+
+The review page lets a reader tap ANY word in the passage, unrationed. That
+is not a relaxation of the rule -- it is the rule finishing. Three lookups
+exist to protect an exam habit: a candidate who can look anything up is
+reading with a dictionary, which is not the skill being scored. Once the
+paper is submitted there is no habit left to protect and what remains is
+studying, where rationing a learner's own curiosity teaches nothing.
+
+The endpoint does not have to know any of that, and deliberately does not
+enforce it either way. ``LookupIn.context`` is written down rather than
+checked.
 """
 
 import uuid
@@ -87,6 +100,16 @@ async def look_up_word(
     screen is allowed to ask for while the paper is open. An empty answer is
     ordinary rather than an error -- a name, a number, or a word nothing can
     gloss -- and the panel says so.
+
+    The same endpoint serves the REVIEW page, where any word in the passage
+    can be tapped and nothing is rationed. Nothing had to be opened for that
+    and nothing had to be guarded: the budget was never enforced here (see
+    the module docstring), and the one rule this file does enforce -- the
+    whole list is refused until the paper is submitted -- is about the whole
+    list. A reader on the review page has submitted by definition.
+
+    ``data.context`` is therefore not a permission. It is what the event is
+    logged under, and what a newly generated entry is filed as.
     """
     material = await _load_owned_or_public(session, material_id, user.id)
     found = await vocabulary_service.look_up(
@@ -96,6 +119,7 @@ async def look_up_word(
         word=data.word,
         paragraph_index=data.paragraph_index,
         offset=data.offset,
+        context=data.context,
     )
     return LookupOut(
         word=_entry(found["word"], material) if found["word"] else None,

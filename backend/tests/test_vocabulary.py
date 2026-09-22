@@ -16,7 +16,11 @@ query:
 * a re-extraction replaces what the pipeline wrote and keeps what a person
   edited, which is the entire reason ``source`` exists;
 * the words a candidate looked up survive the submit and come back on the
-  review.
+  review;
+* a lookup from the REVIEW page is answered like any other and filed apart,
+  because "this word stopped me mid-paper" and "I read past this word and
+  found out afterwards that I had not understood it" are two different
+  facts and only the second says the extraction's filter is wrong.
 
 Nothing here calls Groq. The live-generation path is exercised by swapping
 the provider, because a test that depends on somebody's API being up is a
@@ -721,3 +725,116 @@ async def test_one_provider_being_down_does_not_repeal_the_rule() -> None:
         # reported as ours rather than as a fact about a list.
         patch.setattr(dictionary_service, "providers", lambda: [_Down(), _Down()])
         assert await dictionary_service.look_up("scheme", "the scheme here") is None
+
+
+@pytest.mark.asyncio
+async def test_a_review_lookup_is_answered_and_filed_apart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The review page lets a reader tap ANY word, unrationed, and what comes
+    back is kept under a source of its own.
+
+    This is the hole the feature was built for. `appropriate` is NGSL rank
+    1019, so the frequency filter calls it known and never glosses it — and a
+    reader who did not know it, did not spend one of three on it during the
+    paper and did not highlight it had no way at all to find out afterwards
+    what it meant. The system's own ignorance was being handed to the learner
+    as theirs, on the one screen built for learning.
+
+    Two things have to be true, and neither is enforcement: the answer must
+    arrive, and it must be distinguishable afterwards from a mid-paper one.
+    """
+
+    class _Knows:
+        async def look_up(self, word: str, context: str):
+            return dictionary_service.Gloss(
+                lemma="scheme", pos="n",
+                meaning_en="a plan for doing something",
+                meaning_uz="reja", cefr_level="B2",
+            )
+
+    email = f"vocab-review-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material, _ = await _make_passage(user.id)
+    monkeypatch.setattr(dictionary_service, "providers", lambda: [_Knows()])
+    try:
+        async with _client() as client:
+            answered = await client.post(
+                f"/api/materials/{material.id}/lookups",
+                json={"word": "hothouse", "context": "review"},
+                headers=_headers(user),
+            )
+            assert answered.status_code == 200
+            assert answered.json()["word"]["lemma"] == "scheme"
+
+            # And a word the extraction DID prepare, from the same screen.
+            # Nothing is generated, so nothing new is filed — but the event
+            # still records which screen asked.
+            await client.post(
+                f"/api/materials/{material.id}/lookups",
+                json={"word": "vogue", "context": "review"},
+                headers=_headers(user),
+            )
+
+        async with async_session_factory() as session:
+            entry = (
+                await session.exec(
+                    select(MaterialVocabulary).where(
+                        MaterialVocabulary.material_id == material.id,
+                        MaterialVocabulary.lemma == "scheme",
+                    )
+                )
+            ).first()
+            # Machine-made like an extracted entry, and overwritable on the
+            # same terms — but countable on its own, which is the point.
+            assert entry is not None
+            assert entry.source == "review_lookup"
+
+            events = (
+                await session.exec(
+                    select(LookupEvent)
+                    .where(LookupEvent.material_id == material.id)
+                    .order_by(LookupEvent.created_at)
+                )
+            ).all()
+            assert [event.context for event in events] == ["review", "review"]
+            # The screen and the SOURCE are two different questions and both
+            # are still answered: one says where the reader was, the other
+            # whether the extraction had reached this word.
+            assert [event.source for event in events] == ["live", "cache"]
+    finally:
+        await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_a_take_lookup_stays_the_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A client that sends no context means what it has always meant.
+
+    Every row written before the column existed is a mid-paper lookup, and
+    so is every request from a client built before the review could ask.
+    """
+    email = f"vocab-default-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material, _ = await _make_passage(user.id)
+    monkeypatch.setattr(dictionary_service, "providers", lambda: [_Silent()])
+    try:
+        async with _client() as client:
+            await client.post(
+                f"/api/materials/{material.id}/lookups",
+                json={"word": "vogue"},
+                headers=_headers(user),
+            )
+        async with async_session_factory() as session:
+            event = (
+                await session.exec(
+                    select(LookupEvent).where(
+                        LookupEvent.material_id == material.id
+                    )
+                )
+            ).first()
+            assert event is not None
+            assert event.context == "take"
+    finally:
+        await _cleanup(material.id, email)

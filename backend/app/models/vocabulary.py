@@ -7,16 +7,26 @@ from sqlmodel import Field, SQLModel
 #: Where an entry came from, and therefore what a re-generation may do to it.
 #:
 #: ``extracted`` is the pipeline's; a later run replaces it without asking.
-#: ``author_edited`` is one the pipeline wrote and a person then corrected;
-#: ``author_added`` is one no pipeline ever produced. Neither of the last two
-#: is ever overwritten, which is the whole reason the column exists.
+#: ``review_lookup`` is one a LEARNER caused, by tapping a word on the review
+#: page that the pipeline never offered -- machine-made like ``extracted``,
+#: and overwritable on the same terms, but kept apart because it answers a
+#: question nothing else can: which words the frequency filter is wrong
+#: about. ``author_edited`` is one the pipeline wrote and a person then
+#: corrected; ``author_added`` is one no pipeline ever produced. Neither of
+#: the last two is ever overwritten, which is the whole reason the column
+#: exists.
 #:
 #: Nothing edits vocabulary yet -- there is no authoring screen for it. The
 #: column is here from the start anyway, because the alternative is that the
 #: first person to correct a wrong translation discovers that the next seed
 #: run silently threw their correction away, and the fix for that is a
 #: migration plus a conversation about what happened to the data.
-SOURCES: tuple[str, ...] = ("extracted", "author_edited", "author_added")
+SOURCES: tuple[str, ...] = (
+    "extracted",
+    "review_lookup",
+    "author_edited",
+    "author_added",
+)
 
 
 class MaterialVocabulary(SQLModel, table=True):
@@ -318,6 +328,21 @@ class LookupEvent(SQLModel, table=True):
     #: Whether anything came back at all. False is a name, a number, a word
     #: in another language -- or a minute when the provider was down.
     found: bool = Field(default=False)
+
+    #: ``take`` -- asked while the paper was open, out of a budget of three.
+    #: ``review`` -- asked afterwards, on the review page, where there is no
+    #: budget because the exam is over and this is studying.
+    #:
+    #: The distinction is the reason the column exists, and it is not a
+    #: detail about which screen was on. A ``take`` lookup says *this word
+    #: stopped me badly enough to spend one of three.* A ``review`` lookup
+    #: says something the platform could not otherwise learn at all: *I did
+    #: not know this word, and I did not know that I did not know it* --
+    #: they read past it, answered the questions, and only found out
+    #: afterwards. Words that many readers look up in REVIEW and that the
+    #: extraction never offered are the candidates for fixing the filter,
+    #: because the frequency lists and the learners disagree about them.
+    context: str = Field(default="take", max_length=8, index=True)
 
     #: Where in the passage they tapped, in the coordinates the highlights
     #: use. Null where the client did not send a position.
