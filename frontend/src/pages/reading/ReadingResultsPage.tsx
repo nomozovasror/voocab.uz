@@ -343,16 +343,24 @@ export default function ReadingResultsPage() {
     [],
   );
 
-  /** A word was glossed that this passage did not have a row for. It is
-   *  part of the material's vocabulary from that moment, so the list and
-   *  the marking over the passage are refetched: the reader closes the card
-   *  and the word is there, in its level's colour, like every other. Not
-   *  doing this would make them look it up a second time to see it. */
-  const onKept = useCallback(() => {
-    if (data?.material_id) {
+  /** A lookup was answered. Where the lemma is one this page has never
+   *  heard of, it was glossed on the spot and is part of the material's
+   *  vocabulary from that moment — so the list and the marking over the
+   *  passage are refetched, and the reader closes the card to find the word
+   *  there in its level's colour like every other. Not doing that would
+   *  make them look it up a second time to see it.
+   *
+   *  The check is what keeps this off the common case. Most taps are
+   *  answered from the extraction, and refetching a hundred entries to
+   *  learn that none of them changed is a round trip per curious click. */
+  const onKept = useCallback(
+    (lemma: string) => {
+      if (!data?.material_id) return;
+      if (vocabulary?.entries.some((entry) => entry.lemma === lemma)) return;
       qc.invalidateQueries({ queryKey: vocabularyKey(data.material_id) });
-    }
-  }, [qc, data?.material_id]);
+    },
+    [qc, data?.material_id, vocabulary],
+  );
 
   // --- The analysis beside it ----------------------------------------------
   //

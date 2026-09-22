@@ -246,12 +246,20 @@ export function LookupPopover({
     /** Charged only when something came back. */
     onFound: (lemma: string) => void;
   };
-  /** A word was glossed that this material did not have. The review page
-   *  refreshes its list on this, so the word joins the passage's marking
-   *  and the panel beside it at once rather than after a reload — it IS
-   *  part of the passage's vocabulary now, and a page that knew and did not
-   *  say would be asking the reader to look it up twice. */
-  onKept?: () => void;
+  /** A word was answered, with the lemma that answered it.
+   *
+   *  The review page uses it to refresh its list, so a word glossed on the
+   *  spot joins the passage's marking and the panel beside it at once
+   *  rather than after a reload — it IS part of the passage's vocabulary
+   *  now, and a page that knew and did not say would be asking the reader
+   *  to look it up twice.
+   *
+   *  The LEMMA rather than a "this was generated" flag, because the wire
+   *  does not carry one and should not have to: the caller holds the list
+   *  and can see for itself whether this lemma is new to it. Which also
+   *  keeps the refetch off every cached answer, where there is nothing to
+   *  fetch. */
+  onKept?: (lemma: string) => void;
   onClose: () => void;
 }) {
   const found = useQuery({
@@ -291,16 +299,16 @@ export function LookupPopover({
     budget.onFound(charged.lemma);
   }, [charged, budget]);
 
-  // Told once, and only where something was actually made. An answer that
-  // came out of the extraction changes nothing about the material's list;
-  // one that was generated here has just been added to it.
+  // Told once per answer. Whether it is NEWS is the caller's to decide —
+  // see the prop — and the ref is here so a re-render of an open card does
+  // not say it again.
   const told = useRef(false);
   useEffect(() => {
     if (!onKept || told.current) return;
-    const fresh = found.data?.word ?? found.data?.phrase;
-    if (!fresh) return;
+    const answer = found.data?.word ?? found.data?.phrase;
+    if (!answer) return;
     told.current = true;
-    onKept();
+    onKept(answer.lemma);
   }, [found.data, onKept]);
 
   useEffect(() => {
