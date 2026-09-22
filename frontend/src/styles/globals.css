@@ -255,7 +255,8 @@
      Never on its own, anywhere. Every use of these is accompanied by the
      letters — `C1` beside the colour — because about one man in twelve
      cannot tell the violet from the orange, and a scale he cannot read is
-     worse than no scale at all.
+     worse than no scale at all. The wash below carries a second, ordered
+     channel for the same reason: see the strength ramp.
 
      The ink is mixed TOWARDS the theme's own foreground rather than
      declared per theme: the hue is the identity and has to survive, but
@@ -269,14 +270,68 @@
   --cefr-b2-ink: color-mix(in srgb, var(--cefr-b2) 62%, var(--foreground));
   --cefr-c1-ink: color-mix(in srgb, var(--cefr-c1) 62%, var(--foreground));
 
-  /* And the wash each one lays over the passage. A token rather than an
-     opacity modifier at the call site, because the three ratios are not
-     the same number: the orange carries further than the blue at equal
-     alpha, so equal alpha would draw the C1 words louder than the C1
-     words are. Deciding that once is what a token is for. */
-  --cefr-b1-wash: color-mix(in srgb, var(--cefr-b1) 20%, transparent);
-  --cefr-b2-wash: color-mix(in srgb, var(--cefr-b2) 22%, transparent);
-  --cefr-c1-wash: color-mix(in srgb, var(--cefr-c1) 24%, transparent);
+  /* And the wash each one lays over the passage — which is the part that
+     had to be rebuilt, because a scale carried by hue ALONE does not
+     survive contact with a coloured background.
+
+     It was 20/22/24% of the raw hue, and it measured 1.34–1.45:1 against
+     serika-dark, 1.37–1.48 against dracula and 1.17–1.19 against
+     serika-light. Two things were wrong with that. The first is that
+     those numbers are all the SAME number: three levels drawn at one
+     strength is a scale with no magnitude, so the only thing separating
+     B1 from B2 was fifty degrees of hue at a fifth of its strength — and
+     fifty degrees is not much when the hues are a blue and a violet. The
+     second is dracula, which is where it showed: its background is itself
+     a dark blue-violet, so the blue wash and the violet wash both sank
+     into the ground they were laid on and the hue channel carried nothing
+     at all.
+
+     So the wash now varies in STRENGTH as well as hue, and the strength
+     is the scale: 24 / 34 / 42%, faint to firm, easy to hard. Two
+     ordered channels instead of one. Somebody who cannot separate the
+     violet from the orange can still see which mark is louder, and on a
+     background that eats one of the hues the ramp is still there.
+
+     The top of the ramp is pinned to the reader's OWN highlighter, which
+     is --mark-key at 40% and measures 2.13–2.28:1 depending on the theme.
+     Nothing the page says about a passage should shout louder than what
+     the reader said about it, so 40% is where C1 stops — level with the
+     pen on the dark themes rather than above it.
+
+     The tint is mixed towards --foreground first, like the ink and for a
+     sharper version of the same reason: mixing toward the foreground is
+     mixing AWAY from the background, so every wash is guaranteed to step
+     off its own ground — lighter on a dark theme, darker on a light one —
+     whatever colour that ground happens to be. That is what makes this
+     survive the next theme rather than just the three that exist.
+
+     What it measures now, ground by ground:
+
+       serika-dark   1.50  1.76  2.02   (the pen: 2.28)
+       dracula       1.58  1.92  2.22   (the pen: 2.13)
+       serika-light  1.27  1.42  1.48   (the pen: 1.18)
+
+     serika-light is still the weakest and that is inherent: a tint laid
+     on a near-white ground has less room to move than one laid on black.
+     It is ordered there too, which is the part that had to be true — and
+     it is the theme where the reader's own amber is weakest as well, so
+     the whole page is quiet there rather than this one thing being lost
+     in it. */
+  --cefr-b1-wash: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--cefr-b1) 78%, var(--foreground)) 24%,
+    transparent
+  );
+  --cefr-b2-wash: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--cefr-b2) 78%, var(--foreground)) 34%,
+    transparent
+  );
+  --cefr-c1-wash: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--cefr-c1) 78%, var(--foreground)) 40%,
+    transparent
+  );
 
   /* What a drag of the mouse looks like before it becomes anything.
      Left to the browser it is the platform blue, which is the one colour on

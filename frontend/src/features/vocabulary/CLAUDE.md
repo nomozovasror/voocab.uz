@@ -107,8 +107,24 @@ drift on the first afternoon somebody adjusts one.
 
 ## The passage's marking says the level, and only the level
 
-The wash over a glossed word is its CEFR colour. Two other things ride on
-top without taking the hue, because neither is a property of the word:
+The wash over a glossed word is its CEFR colour **and its CEFR strength** —
+24 / 34 / 40%, faint to firm, easy to hard.
+
+The strength is not decoration. Hue alone was 20/22/24% and measured
+1.34–1.48:1 on every theme: three levels drawn at one weight, so the whole
+scale rested on fifty degrees of hue between a blue and a violet, at a fifth
+of its strength. It failed first on dracula, whose background is itself a
+dark blue-violet — both washes sank into the ground they were laid on and
+the hue channel carried nothing at all. Two ordered channels instead of one
+is what makes it survive a coloured ground, and a reader who cannot separate
+the violet from the orange can still see which mark is louder.
+
+C1 stops at the weight of the reader's OWN highlighter, because nothing the
+page says about a passage should shout louder than what the reader said
+about it. The numbers and the derivation are in `globals.css`.
+
+Two other things ride on top without taking the hue, because neither is a
+property of the word:
 
 - **an underline** — one of the three this reader spent a look-up on;
 - **a ring** — the entry opposite is under the pointer right now. A ring
