@@ -1,5 +1,4 @@
 import {
-  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -13,7 +12,6 @@ import { toast } from "@/lib/toast";
 import { timeAgo } from "@/lib/time";
 import { getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { CEFR_LEVELS, CEFR_TONE } from "@/features/vocabulary/cefr";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { HeaderSlot, useHeaderTask } from "@/components/layout/header-task";
 import {
@@ -204,11 +202,6 @@ export default function ReadingTakePage() {
   // survives as that control's tooltip.
 
   const [confirming, setConfirming] = useState(false);
-
-  // Only a whole paper has one; a drill is one group cut out of a passage,
-  // and the passage's word count is not a fact about it.
-  const vocabulary =
-    material && "vocabulary" in material ? material.vocabulary : null;
 
   const parts = useMemo(
     () => (material ? paperParts(material) : []),
@@ -966,48 +959,19 @@ export default function ReadingTakePage() {
                     : null,
                   sorted.length > 1 ? `${sorted.length} passages` : null,
                   `${total} ${total === 1 ? "question" : "questions"}`,
-                  // How much there is to learn here, beside how much there
-                  // is to answer. It is a reason to have chosen this
-                  // passage, and the only place a reader can see it before
-                  // the review — the words themselves stay shut until the
-                  // paper is finished.
+                  // No vocabulary count here, and it was here.
                   //
-                  // Absent on a drill, which carries no vocabulary field:
-                  // one question group cut out of a paper is not the paper,
-                  // and counting the whole passage's words beside six
-                  // questions would be a number about something else.
-                  // The count and the spread are one segment, not two
-                  // lines. They answer the same question at two
-                  // magnifications — how much there is to learn, and
-                  // whether it is pitched at this reader — and a second
-                  // row under the title pushed the passage down for
-                  // something read once.
+                  // "151 words to learn (B1 8 · B2 88 · C1 55)" is a fact
+                  // about the passage and a good one — it is a reason to
+                  // have chosen it — but this is the screen where the
+                  // reader is about to be timed. What it tells somebody at
+                  // minute zero is that a hundred and fifty-five of the
+                  // words in front of them are above their level, which is
+                  // a thing to worry about rather than a thing to do. It
+                  // belongs where the words themselves are, on the review.
                 ]
                   .filter(Boolean)
                   .join(" · ")}
-                {/* The spread, and the only part of this line that is not
-                    a string: each level is printed in its own colour, so
-                    the header says how hard this passage is at a glance
-                    rather than after three numbers have been read and
-                    compared. Same colours the review will use on the same
-                    words — see `features/vocabulary/cefr.ts`, including
-                    why the letters are always printed beside them. */}
-                {vocabulary && vocabulary.total > 0 && (
-                  <>
-                    {` · ${vocabulary.total} words to learn (`}
-                    {CEFR_LEVELS.filter(
-                      (level) => vocabulary.levels[level],
-                    ).map((level, n) => (
-                      <Fragment key={level}>
-                        {n > 0 ? " · " : null}
-                        <span className={CEFR_TONE[level].ink}>
-                          {level} {vocabulary.levels[level]}
-                        </span>
-                      </Fragment>
-                    ))}
-                    {")"}
-                  </>
-                )}
               </p>
             </div>
             <div className="space-y-10">

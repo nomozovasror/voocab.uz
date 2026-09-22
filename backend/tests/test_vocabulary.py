@@ -1363,3 +1363,96 @@ async def test_a_tap_on_a_later_occurrence_finds_the_phrase() -> None:
             assert again["phrase"].lemma == "give rise to"
     finally:
         await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_a_lookup_says_whether_the_word_is_already_saved() -> None:
+    """The card's button is a question about the learner's list, and it was
+    being answered from a field nobody filled in.
+
+    A reader saved a word from the card, closed it, opened the same word
+    again and was offered Save a second time — the page having forgotten
+    what they had just done two seconds earlier. Confirmed from the event
+    log: `infiltrated` was looked up, saved, and looked up again a minute
+    later.
+    """
+    email = f"vocab-saved-flag-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material, _ = await _make_passage(user.id)
+    try:
+        async with _client() as client:
+            before = await client.post(
+                f"/api/materials/{material.id}/lookups",
+                json={"word": "vogue"},
+                headers=_headers(user),
+            )
+            assert before.status_code == 200
+            assert before.json()["word"]["saved"] is False
+
+            kept = await client.post(
+                "/api/vocabulary/words",
+                json={"material_id": str(material.id), "lemmas": ["vogue"]},
+                headers=_headers(user),
+            )
+            assert kept.status_code == 201
+
+            after = await client.post(
+                f"/api/materials/{material.id}/lookups",
+                json={"word": "vogue"},
+                headers=_headers(user),
+            )
+            assert after.json()["word"]["saved"] is True
+
+            # And somebody else's list is their own.
+            other = await _make_user(f"vocab-other-{uuid.uuid4()}@test.local")
+            theirs = await client.post(
+                f"/api/materials/{material.id}/lookups",
+                json={"word": "vogue"},
+                headers=_headers(other),
+            )
+            assert theirs.json()["word"]["saved"] is False
+    finally:
+        await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_a_saved_word_can_be_taken_off_the_list_again() -> None:
+    """A button that can only be pressed one way is a decision the reader
+    cannot take back, and the whole invitation is to press it on a hunch."""
+    email = f"vocab-unsave-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material, _ = await _make_passage(user.id)
+    await _submit_something(material.id, user.id)
+    try:
+        async with _client() as client:
+            head = {"material_id": str(material.id), "lemmas": ["vogue"]}
+            assert (await client.post("/api/vocabulary/words", json=head,
+                                      headers=_headers(user))).status_code == 201
+
+            gone = await client.delete(
+                "/api/vocabulary/words/vogue", headers=_headers(user)
+            )
+            assert gone.status_code == 204
+
+            # The list beside the passage says so too, which is what the
+            # button on the row is reading.
+            listed = await client.get(
+                f"/api/materials/{material.id}/vocabulary",
+                headers=_headers(user),
+            )
+            by_lemma = {e["lemma"]: e for e in listed.json()["entries"]}
+            assert by_lemma["vogue"]["saved"] is False
+
+            # And it can go back on, which is the half that makes it a
+            # toggle rather than a delete.
+            assert (await client.post("/api/vocabulary/words", json=head,
+                                      headers=_headers(user))).status_code == 201
+            again = await client.get(
+                f"/api/materials/{material.id}/vocabulary",
+                headers=_headers(user),
+            )
+            assert {e["lemma"]: e for e in again.json()["entries"]}["vogue"][
+                "saved"
+            ] is True
+    finally:
+        await _cleanup(material.id, email)

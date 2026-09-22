@@ -206,6 +206,7 @@ export function LookupPopover({
   rect,
   budget,
   onKept,
+  onSaved,
   onClose,
 }: {
   materialId: string;
@@ -261,6 +262,13 @@ export function LookupPopover({
    *  keeps the refetch off every cached answer, where there is nothing to
    *  fetch. */
   onKept?: (lemma: string) => void;
+  /** The reader put this word on their list, or took it off.
+   *
+   *  Told so the page can move the list beside the passage without a round
+   *  trip. Without it the card was the only thing that knew: press Save,
+   *  close the card, and the row on the right still offered `＋` — which is
+   *  a save that looks as though it did not happen. */
+  onSaved?: (lemma: string, saved: boolean) => void;
   onClose: () => void;
 }) {
   const found = useQuery({
@@ -319,15 +327,33 @@ export function LookupPopover({
     return () => document.removeEventListener("keydown", escape);
   }, [onClose]);
 
+  // Saved, or not, for as long as this card is open. Seeded from the
+  // server's answer rather than from false, because a reader who saves a
+  // word, closes the card and opens it again was being offered Save a
+  // second time, as though the page had forgotten.
+  const [saved, setSaved] = useState<boolean | null>(null);
+  const on = saved ?? Boolean(lead?.saved);
+
   const keep = useMutation({
     mutationFn: (lemma: string) => vocabularyApi.save(materialId, [lemma]),
+    onSuccess: (_answer, lemma) => {
+      setSaved(true);
+      onSaved?.(lemma, true);
+    },
     onError: (e) => toast(getErrorMessage(e)),
   });
-  // Saved for as long as this popover is open. Not read back from the
-  // server: the answer to "is this on my list" is one round trip for a
-  // button that has just been pressed, and the review page is where the
-  // real state is shown.
-  const [saved, setSaved] = useState(false);
+
+  // And off it again. A button that can only be pressed one way is a
+  // decision the reader cannot take back, and the whole invitation here is
+  // to press it on a hunch.
+  const drop = useMutation({
+    mutationFn: (lemma: string) => vocabularyApi.forget(lemma),
+    onSuccess: (_answer, lemma) => {
+      setSaved(false);
+      onSaved?.(lemma, false);
+    },
+    onError: (e) => toast(getErrorMessage(e)),
+  });
 
   const box = place(rect ?? null);
 
@@ -470,21 +496,28 @@ export function LookupPopover({
           <div className="mt-2.5 flex items-center gap-2.5 border-t border-border pt-2">
             <button
               type="button"
-              disabled={saved || keep.isPending}
+              disabled={keep.isPending || drop.isPending}
+              title={on ? "Take it off your list" : "Add to your vocabulary"}
               onClick={() =>
-                keep.mutate(lead.lemma, { onSuccess: () => setSaved(true) })
+                on ? drop.mutate(lead.lemma) : keep.mutate(lead.lemma)
               }
               className={cn(
-                "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[0.7rem] transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-                saved || lead.saved
-                  ? "bg-correct/10 text-correct"
+                "group flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[0.7rem] transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50",
+                on
+                  ? "bg-correct/10 text-correct hover:bg-destructive/10 hover:text-destructive"
                   : "bg-surface-hover text-foreground hover:bg-surface-hover/70",
               )}
             >
-              {saved || lead.saved ? (
+              {on ? (
                 <>
-                  <Check className="size-3" aria-hidden />
-                  Saved
+                  {/* The tick until the pointer is on it, and then what
+                      pressing would do. A button that says `Saved` and
+                      removes on press is a button nobody presses twice on
+                      purpose. */}
+                  <Check className="size-3 group-hover:hidden" aria-hidden />
+                  <X className="hidden size-3 group-hover:block" aria-hidden />
+                  <span className="group-hover:hidden">Saved</span>
+                  <span className="hidden group-hover:inline">Remove</span>
                 </>
               ) : (
                 <>

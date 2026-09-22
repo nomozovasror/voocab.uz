@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronRight, Plus } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
@@ -100,6 +100,7 @@ export function ReviewVocabulary({
   onPoint,
   filter,
   onFilter,
+  onGoTo,
   className,
 }: {
   materialId: string;
@@ -132,6 +133,10 @@ export function ReviewVocabulary({
    *  filter decides what the passage is marked with — see `filter.ts`. */
   filter: WordFilter;
   onFilter: (next: WordFilter) => void;
+  /** Take the passage to a word. Pointing at a row lights the word where it
+   *  stands, which is worth nothing when it stands four screens down — and
+   *  in a list of a hundred, most of them do. */
+  onGoTo: (lemma: string) => void;
   className?: string;
 }) {
   const qc = useQueryClient();
@@ -152,6 +157,30 @@ export function ReviewVocabulary({
                 lemmas.includes(entry.lemma)
                   ? { ...entry, saved: true }
                   : entry,
+              ),
+            }
+          : was,
+      );
+    },
+    onError: (e) => toast(getErrorMessage(e)),
+  });
+
+  /** And off the list again.
+   *
+   *  `forget` takes the word off the learner's whole vocabulary, not just
+   *  off this passage, which is what the button on this row means: it is
+   *  the same word wherever they met it. Patched in place like the save,
+   *  for the same reason — the server's answer is their entire list, which
+   *  is not what this page is showing. */
+  const drop = useMutation({
+    mutationFn: (lemma: string) => vocabularyApi.forget(lemma),
+    onSuccess: (_result, lemma) => {
+      qc.setQueryData<VocabularyList>(key, (was) =>
+        was
+          ? {
+              ...was,
+              entries: was.entries.map((entry) =>
+                entry.lemma === lemma ? { ...entry, saved: false } : entry,
               ),
             }
           : was,
@@ -298,8 +327,13 @@ export function ReviewVocabulary({
               opened={opened.has(entry.lemma)}
               lit={lit === entry.lemma}
               onPoint={onPoint}
-              busy={save.isPending}
-              onSave={() => save.mutate([entry.lemma])}
+              busy={save.isPending || drop.isPending}
+              onSave={() =>
+                entry.saved
+                  ? drop.mutate(entry.lemma)
+                  : save.mutate([entry.lemma])
+              }
+              onGoTo={onGoTo}
             />
           ))}
         </ul>
@@ -453,6 +487,7 @@ function Word({
   onPoint,
   busy,
   onSave,
+  onGoTo,
 }: {
   entry: VocabularyEntry;
   earlier: boolean;
@@ -462,12 +497,21 @@ function Word({
   onPoint: (lemma: string | null) => void;
   busy: boolean;
   onSave: () => void;
+  /** Take the passage to this word. */
+  onGoTo: (lemma: string) => void;
 }) {
   const [hovered, setHovered] = useState(false);
   const [open, setOpen] = useState(false);
   const sense = meanings(entry);
   const canOpen = Boolean(entry.example);
-  const toggle = () => canOpen && setOpen((was) => !was);
+  const press = () => {
+    // Both, and in this order. Hover already lights the word where it
+    // stands, which is worth nothing when it stands four screens down —
+    // and a list of a hundred words is mostly four screens down. A press
+    // is the reader saying "that one", so the passage goes there.
+    onGoTo(entry.lemma);
+    if (canOpen) setOpen((was) => !was);
+  };
 
   return (
     <li
@@ -489,19 +533,16 @@ function Word({
           hundred words that does not announce itself as a list is a
           regression a screen reader user cannot work around. */}
       <div
-        role={canOpen ? "button" : undefined}
-        tabIndex={canOpen ? 0 : undefined}
+        role="button"
+        tabIndex={0}
         aria-expanded={canOpen ? open : undefined}
-        onClick={toggle}
+        onClick={press}
         onKeyDown={(e) => {
           if (e.key !== "Enter" && e.key !== " ") return;
           e.preventDefault();
-          toggle();
+          press();
         }}
-        className={cn(
-          "flex items-start gap-3 px-2 py-2.5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-          canOpen && "cursor-pointer",
-        )}
+        className="flex cursor-pointer items-start gap-3 px-2 py-2.5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
       >
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
@@ -549,34 +590,46 @@ function Word({
           )}
         </div>
 
-        <div className="flex shrink-0 items-center gap-0.5">
+        {/* The two controls stacked rather than side by side: the button is
+            the one that does something and gets the width, and the chevron
+            is a hint sitting under it rather than competing for the same
+            line. */}
+        <div className="flex shrink-0 flex-col items-center gap-0.5">
           <button
             type="button"
-            disabled={entry.saved || busy}
-            // See the component comment: the row opens the sentence, and a
-            // save that also did that would be the page acting twice on one
-            // press.
+            disabled={busy}
+            // See the component comment: the row opens the sentence and
+            // takes the passage to the word, and a save that also did that
+            // would be the page acting twice on one press.
             onClick={(e) => {
               e.stopPropagation();
               onSave();
             }}
-            title={entry.saved ? "On your list" : "Add to your vocabulary"}
-            aria-label={entry.saved ? "On your list" : `Save ${entry.lemma}`}
-            className={cn(
-              "flex size-7 items-center justify-center rounded-lg transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+            title={
               entry.saved
-                ? "text-correct"
-                : "text-muted-foreground hover:bg-surface-hover hover:text-foreground",
-              // Present but quiet until the row is under the pointer. Eighty
-              // of these at full contrast is a column of buttons with a
-              // vocabulary list behind it.
-              !entry.saved && !hovered && "opacity-40",
+                ? "Take it off your list"
+                : "Add to your vocabulary"
+            }
+            aria-label={
+              entry.saved ? `Remove ${entry.lemma}` : `Save ${entry.lemma}`
+            }
+            className={cn(
+              "group flex size-9 items-center justify-center rounded-lg border transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50",
+              entry.saved
+                ? "border-correct/40 bg-correct/10 text-correct hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+                : "border-border bg-surface-hover text-foreground hover:border-primary/50 hover:bg-primary/15 hover:text-primary",
             )}
           >
             {entry.saved ? (
-              <Check className="size-3.5" aria-hidden />
+              <>
+                {/* The tick until the pointer is on it, then what pressing
+                    would do — or `Saved` is a button that removes, which
+                    nobody presses twice on purpose. */}
+                <Check className="size-4 group-hover:hidden" aria-hidden />
+                <X className="hidden size-4 group-hover:block" aria-hidden />
+              </>
             ) : (
-              <Plus className="size-3.5" aria-hidden />
+              <Plus className="size-4" aria-hidden />
             )}
           </button>
           {/* A hint, not a control: it is inside the thing that already is

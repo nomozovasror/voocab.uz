@@ -47,6 +47,7 @@ import {
 } from "@/features/reading/layers";
 import { ReviewVocabulary } from "@/features/vocabulary/components/ReviewVocabulary";
 import { vocabularyApi, vocabularyKey } from "@/features/vocabulary/api";
+import type { VocabularyList } from "@/features/vocabulary/types";
 import {
   keeps,
   NO_FILTER,
@@ -362,6 +363,42 @@ export default function ReadingResultsPage() {
     [qc, data?.material_id, vocabulary],
   );
 
+  /** The card saved a word, or took one off. Moved in the list beside the
+   *  passage without a round trip.
+   *
+   *  Without this the card was the only thing that knew: press Save, close
+   *  it, and the row on the right still offered `＋`. A save whose effect
+   *  is invisible everywhere except the thing that is about to be closed
+   *  is a save the reader has no reason to believe happened. */
+  const onSaved = useCallback(
+    (lemma: string, saved: boolean) => {
+      if (!data?.material_id) return;
+      qc.setQueryData<VocabularyList>(
+        vocabularyKey(data.material_id),
+        (was) =>
+          was
+            ? {
+                ...was,
+                entries: was.entries.map((entry) =>
+                  entry.lemma === lemma ? { ...entry, saved } : entry,
+                ),
+              }
+            : was,
+      );
+    },
+    [qc, data?.material_id],
+  );
+
+  /** Take the passage to a word, and light it.
+   *
+   *  The same two-step the evidence links make, and here for the same
+   *  reason written on `goingTo`: the vocabulary layer may not be the one
+   *  showing, and scrolling to a mark React has not drawn yet scrolls to
+   *  nothing. The key is the lemma, which is what the mark carries. */
+  const goToWord = useCallback((lemma: string) => {
+    setGoingTo((was) => ({ key: lemma, nth: (was?.nth ?? 0) + 1 }));
+  }, []);
+
   // --- The analysis beside it ----------------------------------------------
   //
   // There is no second control. The layer in the header decides both what is
@@ -652,6 +689,7 @@ export default function ReadingResultsPage() {
           onPoint={setLit}
           filter={filter}
           onFilter={setFilter}
+          onGoTo={goToWord}
         />
       )}
 
@@ -753,19 +791,17 @@ export default function ReadingResultsPage() {
                     {data.material_reference}
                   </p>
                 )}
-              {/* Said once, above the whole paper, and quietly.
+              {/* No line here saying that every word is clickable.
               
-                  A passage where every word is clickable looks exactly like
-                  one where none of them is, and the affordance only appears
-                  under the pointer — which nobody finds by accident on a
-                  page they are reading rather than poking at. One line is
-                  cheaper than the readers who never discover the feature.
-              
-                  Above all three passages rather than above each, because
-                  three copies of one sentence is a page repeating itself. */}
-              <p className="mt-2 text-[0.75em] text-muted-foreground/70">
-                Click any word to look it up — no limit here.
-              </p>
+                  There was one, and the argument for it still holds on
+                  paper: the affordance only appears under the pointer, so
+                  nobody finds it by accident. What it cost was a sentence
+                  of instructions over a passage somebody has just spent
+                  twenty minutes inside, every time they open the review —
+                  and the words that matter are already marked, so the ones
+                  worth pressing are not the ones the line was pointing at.
+                  The dotted underline on hover teaches it once, to whoever
+                  happens to sweep the text, and asks nothing of the rest. */}
             </div>
             <div className="space-y-10">
               {passages.map((part, index) =>
@@ -805,6 +841,7 @@ export default function ReadingResultsPage() {
           where={asked.where}
           rect={asked.rect}
           onKept={onKept}
+          onSaved={onSaved}
           onClose={() => setAsked(null)}
         />
       )}

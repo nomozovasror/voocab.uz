@@ -124,9 +124,26 @@ async def look_up_word(
         offset=data.offset,
         context=data.context,
     )
+    # Whether it is already on their list, which the card's button is. It
+    # used to be left at its default of false, so a reader who saved a word,
+    # closed the card and opened it again was offered Save a second time --
+    # the page having forgotten what they had just done. One query over at
+    # most two lemmas.
+    answers = [entry for entry in found.values() if entry is not None]
+    saved = await vocabulary_service.saved_lemmas(
+        session, user.id, [entry.lemma for entry in answers]
+    )
     return LookupOut(
-        word=_entry(found["word"], material) if found["word"] else None,
-        phrase=_entry(found["phrase"], material) if found["phrase"] else None,
+        word=(
+            _entry(found["word"], material,
+                   saved=found["word"].lemma in saved)
+            if found["word"] else None
+        ),
+        phrase=(
+            _entry(found["phrase"], material,
+                   saved=found["phrase"].lemma in saved)
+            if found["phrase"] else None
+        ),
     )
 
 

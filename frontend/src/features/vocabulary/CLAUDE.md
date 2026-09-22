@@ -190,6 +190,26 @@ senses, no synonyms.** Each lookup has about two seconds to pay for itself,
 and a panel that reads like a dictionary page is a panel somebody closes and
 goes back to guessing, having spent one of three for the privilege.
 
+**Saving is a toggle, in both places it is offered.** The row's `＋` and
+the card's `Save` both become a tick, and pressing the tick takes the word
+off the learner's whole list — the icon changes to `✕` under the pointer,
+because a button that says `Saved` and removes on press is one nobody
+presses twice on purpose. `forget` is per lemma rather than per passage,
+which is what the button means: it is the same word wherever they met it.
+
+**The card has to say what the list says.** Its Save button is a question
+about the learner's list, and the lookup endpoint was answering it from a
+field nobody filled in — so a reader saved a word, closed the card, opened
+the same word again and was offered Save a second time. It reads back
+`saved` now, and it tells the page (`onSaved`) so the row beside the
+passage moves too. A save whose only visible effect is on the thing about
+to be closed is a save the reader has no reason to believe happened.
+
+**Pressing a row takes the passage to the word.** Hover lights the mark,
+which is worth nothing when the word is four screens down — and in a list
+of a hundred, most of them are. The press scrolls through the same
+`goingTo` two-step the evidence links use.
+
 **A word in an unexpected sense says so in words, not with a badge.** It is
 a word used in a sense the reader would not expect — `bank` as the side of a
 river — and a badge would say "this one is special" and leave them to work

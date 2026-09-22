@@ -134,6 +134,14 @@ is a reader working out which is the real one.
   one page that exists to give that back would throw away the only part of a
   mark that carries information.
 
+**No line on the review says that every word is clickable.** There was one
+— "Click any word to look it up" — and the argument for it holds on paper:
+the affordance only appears under the pointer, so nobody finds it by
+accident. What it cost was a sentence of instructions over a passage
+somebody has just spent twenty minutes inside, on every visit, when the
+words that matter are already marked. The dotted underline teaches it once
+to whoever sweeps the text and asks nothing of the rest.
+
 **Every word in the passage is clickable, and only here.** `PassagePane`
 takes an `onWord`; its absence on the take screen is the three-lookup budget,
 and its presence here is that budget having finished. One delegated handler
