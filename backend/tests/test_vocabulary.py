@@ -838,3 +838,60 @@ async def test_a_take_lookup_stays_the_default(
             assert event.context == "take"
     finally:
         await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_a_re_extraction_replaces_a_learner_generated_entry() -> None:
+    """`review_lookup` is machine-made, and a re-read throws it away.
+
+    The other half of the rule above, and the easier one to get wrong: the
+    test that kept an author's edit was `source != "extracted"`, which
+    quietly promoted every learner-generated row to the status of a human
+    correction the moment that source existed.
+
+    It has to go for two reasons. A fresh extraction knows more about the
+    word — a frequency band, a sentence cut properly — and the old row's
+    offsets were measured against the text as it stood then. A re-import is
+    a passage RE-READ, and a kept row from the previous reading points at
+    the wrong words.
+    """
+    email = f"vocab-relook-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material, part = await _make_passage(user.id)
+    try:
+        async with async_session_factory() as session:
+            found = (
+                await session.exec(
+                    select(MaterialVocabulary).where(
+                        MaterialVocabulary.material_id == material.id,
+                        MaterialVocabulary.lemma == "vogue",
+                    )
+                )
+            ).one()
+            found.source = "review_lookup"
+            found.meaning_uz = "STALE"
+            session.add(found)
+            await session.commit()
+
+        async with async_session_factory() as session:
+            written, kept = await vocabulary_service.replace_extracted(
+                session,
+                material_id=material.id,
+                part_id=part.id,
+                rows=[
+                    {"lemma": "vogue", "surface": "vogue",
+                     "meaning_en": "in fashion", "meaning_uz": "moda",
+                     "index": 0, "start": 0, "end": 5, "cefr_level": "B2"},
+                ],
+            )
+            await session.commit()
+            # Nothing kept: the learner's row is the pipeline's to replace.
+            assert (written, kept) == (1, 0)
+
+        async with async_session_factory() as session:
+            rows = await vocabulary_service.entries(session, material.id)
+            by_lemma = {row.lemma: row for row in rows}
+            assert by_lemma["vogue"].meaning_uz == "moda"
+            assert by_lemma["vogue"].source == "extracted"
+    finally:
+        await _cleanup(material.id, email)

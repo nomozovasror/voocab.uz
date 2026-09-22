@@ -67,6 +67,7 @@ from app.models.material import Material
 from app.models.part import Part
 from app.models.vocabulary import (
     LookupEvent,
+    MACHINE_MADE,
     MaterialVocabulary,
     SavedWord,
     SavedWordContext,
@@ -675,11 +676,19 @@ async def replace_extracted(
 ) -> tuple[int, int]:
     """Put a fresh extraction in, keeping whatever an author has touched.
 
-    Returns ``(written, kept)``. What is kept is every entry whose ``source``
-    is not ``extracted``: a person's correction outlives the process that
-    produced the thing they corrected, and the alternative -- a re-run that
-    silently reverts an edit -- is the failure the ``source`` column exists
-    to prevent.
+    Returns ``(written, kept)``. What is kept is what a PERSON touched: a
+    correction outlives the process that produced the thing it corrected,
+    and the alternative -- a re-run that silently reverts an edit -- is the
+    failure the ``source`` column exists to prevent.
+
+    What is replaced is everything machine-made, which is ``extracted`` and
+    ``review_lookup`` both. The second of those is a word a learner tapped
+    on the review page and a model glossed on the spot, and it has to go for
+    two reasons: a fresh extraction knows more about it (a frequency band, a
+    sentence cut properly), and its offsets were measured against the text
+    as it stood THEN. A re-import is a passage re-read, and a kept row from
+    the previous reading points at the wrong words -- which is the whole
+    reason this function replaces rather than merges.
 
     Flushes; the CALLER commits. The one caller is the passage importer,
     which is part-way through writing a material when it gets here, and a
@@ -693,7 +702,7 @@ async def replace_extracted(
     )
     kept: dict[str, MaterialVocabulary] = {}
     for entry in existing.all():
-        if entry.source == "extracted":
+        if entry.source in MACHINE_MADE:
             await session.delete(entry)
         else:
             kept[entry.lemma] = entry

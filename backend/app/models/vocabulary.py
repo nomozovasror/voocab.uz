@@ -28,6 +28,12 @@ SOURCES: tuple[str, ...] = (
     "author_added",
 )
 
+#: The ones a re-extraction may throw away, which is the whole question the
+#: column answers. Named rather than tested as ``!= author_*`` so that the
+#: next source added has to decide which side it is on instead of landing on
+#: whichever default the test happened to give it.
+MACHINE_MADE: frozenset[str] = frozenset({"extracted", "review_lookup"})
+
 
 class MaterialVocabulary(SQLModel, table=True):
     """One word or phrase of one material, glossed in that material's sense.

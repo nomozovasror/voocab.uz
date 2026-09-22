@@ -399,6 +399,47 @@ async def place_evidence(passage_id: str, owner_id: uuid.UUID) -> None:
     print(f"{passage_id} -> material {material.id} ({marked} placed)")
 
 
+async def place_vocabulary(passage_id: str, owner_id: uuid.UUID) -> None:
+    """Re-import this passage's glossed words, and nothing else.
+
+    ``--vocabulary-only``, and the same argument as ``--evidence-only`` one
+    stage over: rolling a new stage out across a corpus that is being USED
+    is a different act from importing a passage.
+
+    The second candidate layer (``seed/vocabulary.py``, ``ASK_RANK``) adds
+    twenty-odd words to a passage already glossed. Those words change no
+    score, no text and no answer key — they are help beside a passage — so
+    they can go out on their own, and going out on their own is the version
+    of the change that cannot break anything. A full re-import would rewrite
+    the questions, which the importer refuses to do to a paper somebody has
+    already answered.
+
+    It goes through ``replace_extracted`` like every other import, so an
+    author's correction survives and a learner's own review lookup does not:
+    see that function on why the second of those is the pipeline's to
+    replace.
+    """
+    reference = read_passage(passage_id)[2]
+    async with async_session_factory() as session:
+        material = (await session.exec(
+            select(Material).where(Material.author_id == owner_id,
+                                   Material.type == "reading",
+                                   Material.reference == reference))).first()
+        if material is None:
+            print(f"{passage_id} -> not imported yet; nothing to gloss")
+            return
+        part = (await session.exec(
+            select(Part).where(Part.material_id == material.id)
+            .order_by(Part.order_index))).first()
+        if part is None:
+            print(f"{passage_id} -> material {material.id} has no part")
+            return
+        glossed = await import_vocabulary(session, material.id, part.id,
+                                          passage_id)
+        await session.commit()
+    print(f"{passage_id} -> material {material.id} ({glossed} glossed)")
+
+
 async def import_passage(passage_id: str, owner_id: uuid.UUID) -> None:
     row, passage, reference, title = read_passage(passage_id)
     first_number = FIRST_NUMBER[row["passage_no"]]
@@ -494,7 +535,7 @@ async def import_passage(passage_id: str, owner_id: uuid.UUID) -> None:
 
 
 async def run_all(ids: list[str], owner_id: uuid.UUID, *,
-                  evidence_only: bool) -> list[str]:
+                  evidence_only: bool, vocabulary_only: bool) -> list[str]:
     """Every passage, in ONE event loop, reporting what could not be done.
 
     One loop and not one per passage, which is what this was. ``asyncio.run``
@@ -517,6 +558,8 @@ async def run_all(ids: list[str], owner_id: uuid.UUID, *,
         try:
             if evidence_only:
                 await place_evidence(passage_id, owner_id)
+            elif vocabulary_only:
+                await place_vocabulary(passage_id, owner_id)
             else:
                 await import_passage(passage_id, owner_id)
         except (Exception, SystemExit) as failure:  # noqa: BLE001
@@ -538,6 +581,9 @@ def main() -> int:
     ap.add_argument("--evidence-only", action="store_true",
                     help="place the evidence spans on materials that are "
                          "already imported, and change nothing else")
+    ap.add_argument("--vocabulary-only", action="store_true",
+                    help="re-import the glossed words onto materials that "
+                         "are already imported, and change nothing else")
     args = ap.parse_args()
 
     if args.passage_id:
@@ -564,7 +610,8 @@ def main() -> int:
             return 1
 
     failed = asyncio.run(run_all(ids, args.owner,
-                                 evidence_only=args.evidence_only))
+                                 evidence_only=args.evidence_only,
+                                 vocabulary_only=args.vocabulary_only))
     if failed:
         print(f"\n{len(failed)} passage(s) failed: {', '.join(failed)}",
               file=sys.stderr)
