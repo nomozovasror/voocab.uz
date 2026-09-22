@@ -2549,11 +2549,20 @@ The cost is one extra request a passage. 800 rather than lower because below
 it the words are the first eight hundred of English, where a B2 reading is
 the model being agreeable rather than right.
 
-**For a passage already glossed:** `--extra-only` asks about the provisional
-band alone and folds in what comes back, leaving every existing entry
-untouched — the same arm, for the same reason, as `--senses-only`. It
-decides what to ask by which candidate POSITIONS the file does not already
-hold, so it is idempotent: run twice and the second run finds nothing.
+**For a passage already glossed:** `--extra-only` asks about the candidates
+the file does not already cover and folds them in, leaving every existing
+entry untouched — the same arm, for the same reason, as `--senses-only`.
+That is how a change to the candidate filter reaches a corpus already
+glossed, and it is what carried the 485 words above back into 203 passages
+for a fiftieth of a re-extraction.
+
+Two things it deliberately does not do. It skips the **provisional** band: a
+provisional word missing from the file was asked and answered B1 and dropped
+on purpose, and asking again buys a second roll of the dice rather than an
+answer. And it counts only **word** entries as coverage — a phrase standing
+at the same offset is not the word having been glossed, which is how
+`sedentary` stayed missing under `sedentary lifestyle` through a first pass
+that thought it had covered it.
 
 ### Two meanings an entry, and the usual one leads
 
@@ -2590,6 +2599,32 @@ other's meaning. `deduped` cleans up the remaining case the span rule cannot
 see: a passage that writes both `machine learning` and `machine-learning`,
 where the hyphenated form is a single token and so a word as far as the scan
 is concerned.
+
+**Only a provisional word surrenders its place to a term**, and the first
+shape of this rule got that wrong. Claiming every span cost **745 lemmas**
+across the corpus, and 485 of them were `wider`, `academic` or off-list:
+`sedentary` lost to `sedentary lifestyle`, `indignation` to `righteous
+indignation`, `algorithm` to `genetic algorithm`, `syrup` to `high-fructose
+corn syrup`, `cohesion`, `hormone`, `spectrum`, `stimulus`, `deficiency`.
+
+Those are backwards. In a genuine compound — `climate change`, `ice age`,
+`food chain`, `machine learning` — the parts are common words and the whole
+is the idea, so dropping the part costs nothing. In a collocation the hard
+word IS the half the reader cannot read, and the phrase becomes transparent
+the moment they know it; dropping the word to keep the phrase teaches the
+collocation to somebody who cannot read either end of it.
+
+The frequency band separates the two exactly. A word below `KNOWN_RANK` was
+only ever a candidate on suspicion and belongs to the term; a word above it
+keeps its own entry, preferring an occurrence outside the term where the
+passage offers one. With the split the loss is **260 lemmas, every one of
+them `core` or `common`** — which are the ones worth losing.
+
+The word's entry standing beside the term's is the shape this feature always
+had: `rise` and `give rise to` are two entries over overlapping spans, and a
+tap inside both offers the phrase first with the word underneath. What must
+never happen is the word's entry carrying the TERM's meaning, and that is a
+rule about the prompt, not about which words exist.
 
 The part of speech follows the lemma too. `learning` the noun is its own
 entry rather than `learn` wearing an `n`.

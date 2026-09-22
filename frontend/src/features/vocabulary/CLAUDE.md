@@ -150,8 +150,12 @@ and each meeting prints its own meaning as it always did.
 
 **Compound terms are entries in their own right.** `machine learning`,
 `climate change`, `public sector` — the seed stage asks about terms BEFORE
-it builds the word list, and a word standing only inside terms is left to
-them (`seed/vocabulary.py`, `candidates(claimed=…)`). The live lookup does
+it builds the word list, and a COMMON word standing only inside terms is
+left to them (`seed/vocabulary.py`, `candidates(claimed=…)`). A hard one
+keeps its own entry beside the term: `sedentary` and `sedentary lifestyle`,
+`indignation` and `righteous indignation`, the way `rise` has always stood
+beside `give rise to`. Surrendering those cost 485 of the corpus's hardest
+words before the rule was split — the measurement is in `seed/README.md`. The live lookup does
 the same thing from the other end: `dictionary.Gloss.term` lets a model
 answer about something wider than what was tapped, and the entry is stored
 over the term's span. A term the passage already has is not written again —

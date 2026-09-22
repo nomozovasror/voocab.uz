@@ -769,20 +769,28 @@ def add_senses(passage_id: str, *, model: str, most: int) -> dict | None:
     return result
 
 
-def add_provisional(passage_id: str, *, model: str) -> dict | None:
-    """The second candidate layer, run over a passage already glossed.
+def add_missing(passage_id: str, *, model: str) -> dict | None:
+    """The candidates a passage's file does not cover, asked about and
+    folded in. Everything already written is copied through untouched.
 
-    Same shape as :func:`add_senses` and here for the same reason: the layer
-    was written after the corpus had been read, and re-glossing two hundred
-    passages to add a handful of words each would spend the whole extraction
-    again for a fraction of its output.
+    Same shape as :func:`add_senses` and here for the same reason: a rule
+    that changes which words are candidates would otherwise mean re-glossing
+    two hundred passages to add a handful of words each, spending the whole
+    extraction again for a fraction of its output.
 
-    Only the PROVISIONAL candidates are asked about -- the band between
-    `vocabulary.ASK_RANK` and `vocabulary.KNOWN_RANK` that the first run
-    never saw -- and only the ones this passage does not already have a
-    place taken at. Everything already written is copied through untouched,
-    including any entry a person has since corrected: a stage that improves
-    a list by rewriting it is a stage nobody can run twice.
+    ## Provisional words are NOT asked about again, and that is the point
+
+    A candidate missing from the file is missing for one of two reasons. It
+    was never asked -- which is what this arm is for -- or it was asked,
+    came back B1, and was dropped on purpose because a provisional word
+    agreeing with the frequency list is the answer that was already assumed
+    (`vocabulary.ASK_RANK`, and `glossed` above).
+
+    The two are indistinguishable by position, and asking again costs more
+    than a request: the same word at the same temperature comes back B2
+    often enough that a second pass quietly rescues words on nothing but a
+    second roll of the dice. So the provisional band is skipped, and what
+    is asked about is only what the filter has newly decided to offer.
     """
     path = WORK / passage_id / "vocabulary.json"
     passage_path = WORK / passage_id / "passage.json"
@@ -795,16 +803,22 @@ def add_provisional(passage_id: str, *, model: str) -> dict | None:
     # is the model's and the candidate's is this stage's, and comparing the
     # two would re-ask about every word the model had corrected the spelling
     # of.
-    taken = {(entry["index"], entry["start"]) for entry in entries}
-    # And the spans the passage's multi-word terms already hold, so this arm
-    # cannot reintroduce the split `read` now prevents: a provisional word
-    # standing inside `machine learning` belongs to the term.
+    # What is already covered: the positions of the WORD entries. A phrase
+    # standing at the same offset is not a word having been glossed --
+    # `sedentary lifestyle` begins where `sedentary` begins, and counting
+    # the phrase as coverage is how the hardest word of a collocation stays
+    # missing while the collocation sits on top of it.
+    taken = {(entry["index"], entry["start"])
+             for entry in entries if not entry.get("is_phrase")}
+    # The spans the passage's multi-word terms already hold, so this arm
+    # reaches the same candidate list `read` would: a provisional word
+    # standing only inside `machine learning` belongs to the term.
     claimed = {(entry["index"], entry["start"], entry["end"])
                for entry in entries if entry.get("is_phrase")}
     candidates = [entry
                   for entry in vocabulary.candidates(passage["paragraphs"],
                                                      claimed)
-                  if entry["provisional"]
+                  if not entry["provisional"]
                   and (entry["index"], entry["start"]) not in taken]
     if not candidates:
         return None
@@ -898,10 +912,10 @@ def main() -> int:
                     help="add the unusual senses to passages already glossed, "
                          "without asking about anything else again")
     ap.add_argument("--extra-only", action="store_true",
-                    help="ask about the second candidate layer only -- the "
-                         "common-by-frequency words the first run never "
-                         "offered -- and fold in whatever comes back B2 or "
-                         "higher, leaving every existing entry alone")
+                    help="ask only about the candidates a passage's file "
+                         "does not already cover, and fold them in, leaving "
+                         "every existing entry alone. How a change to the "
+                         "candidate filter reaches a corpus already glossed")
     ap.add_argument("--model", default=vision.DEFAULT_MODEL)
     args = ap.parse_args()
 
@@ -948,7 +962,7 @@ def main() -> int:
                 result = add_senses(passage_id, model=args.model,
                                     most=args.senses)
             elif args.extra_only:
-                result = add_provisional(passage_id, model=args.model)
+                result = add_missing(passage_id, model=args.model)
             else:
                 result = read(passage_id, model=args.model,
                               most=args.phrases, senses=args.senses)

@@ -419,19 +419,41 @@ def candidates(paragraphs: list[dict],
     reads as a walk through the text, which is also the order the review
     shows them in.
 
-    ``claimed`` is the spans a MULTI-WORD term has already taken, and it is
-    what stops a compound being taken apart. `machine learning` is one idea
-    with one meaning, and a word list that also carries `learn` glossed as
-    "a computer process of finding patterns in data" has written the
-    compound's meaning onto a verb that does not have it -- which is then
-    what the learner studies, and uses wrongly in the next sentence they
-    write.
+    ``claimed`` is the spans a MULTI-WORD term has already taken, and what
+    it does is decide WHERE a word is offered from -- and, for one class of
+    word, whether it is offered at all.
 
-    A lemma is not dropped for being INSIDE a term, only for having nowhere
-    else to stand: the first occurrence outside every claimed span is the
-    one offered, so a passage that says `machine learning` in paragraph 1
-    and `children learn quickly` in paragraph 4 still teaches `learn`, from
-    paragraph 4. A lemma that occurs only inside terms belongs to the terms.
+    Every lemma prefers an occurrence outside every claimed span, so a
+    passage that says `machine learning` in paragraph 1 and `children learn
+    quickly` in paragraph 4 teaches `learn` from paragraph 4. What happens
+    when there is no such occurrence depends on the word:
+
+    * A **provisional** word -- one the frequency lists call known, below
+      `KNOWN_RANK` -- belongs to the term and is dropped. It was only ever
+      here on suspicion, and a common word whose single appearance is
+      inside `climate change` or `ice age` is not teaching anybody
+      anything on its own.
+    * Any **other** word keeps its place inside the term. It is a word the
+      frequency filter offers outright, and it is the half of the term the
+      reader actually cannot read: `sedentary lifestyle`, `righteous
+      indignation`, `genetic algorithm`, `high-fructose corn syrup`. The
+      phrase is transparent the moment the word is known, and dropping the
+      word to keep the phrase teaches the collocation to somebody who
+      cannot read either half of it.
+
+    Measured before the split was put in: claiming every span cost 745
+    lemmas across the corpus, and 485 of them were `wider`, `academic` or
+    off-list -- `sedentary`, `indignation`, `algorithm`, `hormone`,
+    `spectrum`, `stimulus`, `deficiency`. The 260 that were `core` or
+    `common` are the ones worth losing, and they are exactly the ones this
+    rule still loses.
+
+    The word's entry standing beside the term's is the shape this feature
+    has always had -- `rise` and `give rise to` are two entries over
+    overlapping spans, and a tap inside both offers the phrase first with
+    the word underneath. What must never happen is the word's entry
+    carrying the TERM's meaning, and that is a rule about the prompt (see
+    `read_vocabulary.WORDS_PROMPT`) rather than about which words exist.
     """
     taken = claimed or set()
 
@@ -444,15 +466,18 @@ def candidates(paragraphs: list[dict],
     for lemma, places in scan(paragraphs).items():
         if len(lemma) < SHORTEST or is_name(places):
             continue
-        standing = [place for place in places if free(place)]
-        if not standing:
-            continue
-        where = standing[0]
         rank = lists().ngsl.get(lemma)
         if rank is not None and rank <= ASK_RANK:
             continue
         if lemma in lists().supplementary:
             continue
+        provisional = rank is not None and rank <= KNOWN_RANK
+        standing = [place for place in places if free(place)]
+        if not standing:
+            if provisional:
+                continue
+            standing = places
+        where = standing[0]
         keep.append({
             "lemma": lemma,
             "surface": where.surface,
@@ -466,7 +491,7 @@ def candidates(paragraphs: list[dict],
             # higher -- see ASK_RANK. Never a reason to skip the ASK: the
             # cost of asking is a line in a batch, and the cost of not
             # asking is the word being invisible for ever.
-            "provisional": rank is not None and rank <= KNOWN_RANK,
+            "provisional": provisional,
         })
     keep.sort(key=lambda entry: (entry["index"], entry["start"]))
     return keep
