@@ -411,18 +411,43 @@ def is_name(places: list[Occurrence]) -> bool:
             and any(not place.sentence_start for place in places))
 
 
-def candidates(paragraphs: list[dict]) -> list[dict]:
+def candidates(paragraphs: list[dict],
+               claimed: set[tuple[int, int, int]] | None = None) -> list[dict]:
     """The words in this passage worth asking a model about.
 
     In passage order: a list ordered by where the reader meets each word
     reads as a walk through the text, which is also the order the review
     shows them in.
+
+    ``claimed`` is the spans a MULTI-WORD term has already taken, and it is
+    what stops a compound being taken apart. `machine learning` is one idea
+    with one meaning, and a word list that also carries `learn` glossed as
+    "a computer process of finding patterns in data" has written the
+    compound's meaning onto a verb that does not have it -- which is then
+    what the learner studies, and uses wrongly in the next sentence they
+    write.
+
+    A lemma is not dropped for being INSIDE a term, only for having nowhere
+    else to stand: the first occurrence outside every claimed span is the
+    one offered, so a passage that says `machine learning` in paragraph 1
+    and `children learn quickly` in paragraph 4 still teaches `learn`, from
+    paragraph 4. A lemma that occurs only inside terms belongs to the terms.
     """
+    taken = claimed or set()
+
+    def free(place: "Occurrence") -> bool:
+        return not any(index == place.index
+                       and place.start < end and start < place.end
+                       for index, start, end in taken)
+
     keep: list[dict] = []
     for lemma, places in scan(paragraphs).items():
         if len(lemma) < SHORTEST or is_name(places):
             continue
-        where = places[0]
+        standing = [place for place in places if free(place)]
+        if not standing:
+            continue
+        where = standing[0]
         rank = lists().ngsl.get(lemma)
         if rank is not None and rank <= ASK_RANK:
             continue
@@ -435,7 +460,7 @@ def candidates(paragraphs: list[dict]) -> list[dict]:
             "start": where.start,
             "end": where.end,
             "frequency_band": band(lemma),
-            "occurrences": len(places),
+            "occurrences": len(standing),
             # Asked about on suspicion rather than on evidence. The caller
             # keeps a provisional entry only where the model answers B2 or
             # higher -- see ASK_RANK. Never a reason to skip the ASK: the

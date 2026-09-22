@@ -23,7 +23,37 @@ the transcript: it works offline, it costs nothing per reader, the price is
 known in advance, and the site does not stop teaching vocabulary on a morning
 when Groq is down.
 
-## Thirty words at a time, because eighty-five did not come back
+## Two meanings for every word, because one of them teaches the wrong thing
+
+Every entry carries the sense the passage uses AND the sense the word
+usually has. Only the first is contextual, and for a long time only the
+first was stored -- which is right about this passage and wrong about the
+language. `learn` in a passage about artificial intelligence came back as
+"a computer process of finding patterns in data", tagged `n`: a correct
+reading of `machine learning` filed under a verb that does not mean that.
+A learner who studies that entry has learnt something they will use wrongly
+in the next sentence they write.
+
+So the model answers both, and says whether they differ (`sense_differs`).
+The word's ordinary meaning leads wherever an entry is shown, and the
+passage's sense follows it under "Here:" only where the two are genuinely
+not the same -- which is a small minority of entries and exactly the
+minority worth pointing at.
+
+## The terms are asked about FIRST, and the word list is drawn afterwards
+
+`machine learning`, `climate change`, `public sector`: two words naming one
+thing, whose meaning is not in either word. The phrase question finds them,
+and it now runs BEFORE the candidate list is built so that the spans it
+claims can be taken out of that list -- see `vocabulary.candidates`. A word
+that stands only inside terms belongs to the terms; a word that also stands
+on its own elsewhere is offered from there instead.
+
+Running it the other way round -- words first, phrases appended -- is what
+produced `learn` and `machine learning` as two entries, one of them carrying
+the other's meaning.
+
+## Twenty words at a time, because eighty-five did not come back
 
 The first shape of this stage asked one question covering the whole candidate
 list. It does not work, and the way it fails is worth writing down: the reply
@@ -32,7 +62,7 @@ characters in, mid-string, three times at three temperatures. Eighty-five
 entries of six fields each is more output than the model will produce in one
 turn, and `ask_json`'s retry cannot help with a ceiling.
 
-So the words go in batches of thirty, and the passage goes with each one.
+So the words go in batches of twenty, and the passage goes with each one.
 That repeats about 1 200 input tokens per batch, which at Groq's rates is a
 tenth of a cent for the whole corpus -- the input side of this stage was
 never where the money was. What it buys is a question the model finishes, and
@@ -148,9 +178,16 @@ SENSES = 6
 
 #: How many words one request may cover. See the module docstring: eighty-five
 #: is more than the model will finish, and the reply arrives cut off mid-string
-#: rather than short and well-formed. Thirty leaves room to spare under any
-#: provider's output ceiling.
-BATCH = 30
+#: rather than short and well-formed.
+#:
+#: Twenty, down from thirty, because an entry now carries FOUR meanings
+#: rather than two -- the word's ordinary sense as well as the one this
+#: passage uses -- and the ceiling that killed a batch of thirty at 8 581
+#: characters is a ceiling on characters, not on entries. The arithmetic is
+#: the same one that set thirty: whatever number leaves the reply room to
+#: finish, because a reply cut off mid-string does not parse and the retry
+#: spends two more requests failing in the same place.
+BATCH = 20
 
 #: How many candidates may go unglossed before the stage asks again for the
 #: ones it missed. Even inside a batch a model occasionally skips one, and a
@@ -175,32 +212,59 @@ entries can be matched back.
 
 Each entry:
 - "id": the id, copied exactly
-- "lemma": the dictionary form of the word (undertaken -> undertake,
-  phenomena -> phenomenon)
-- "pos": one of {parts}
+- "lemma": the dictionary form of the word AS IT IS USED HERE (undertaken ->
+  undertake, phenomena -> phenomenon). If the form in the passage belongs to
+  a different part of speech from the base word -- "learning" the noun
+  beside "learn" the verb, "findings" beside "find" -- give the lemma of the
+  form that is actually here ("learning"). Never the base word carrying the
+  other form's part of speech.
+- "pos": one of {parts}, for the lemma you just gave.
+- "meaning_core_en": what the word USUALLY means -- its commonest general
+  sense, the one worth carrying to every other text. One short line, under
+  {meaning} characters, in simpler English than the word itself.
+- "meaning_core_uz": the Uzbek for that usual sense. Natural Uzbek, latin
+  script. Not a transliteration of the English word.
 - "meaning_en": what the word means IN THIS PASSAGE. One short line, under
-  {meaning} characters, in simpler English than the word itself. Not a
-  dictionary entry with several senses -- the one sense used here. If the
-  passage uses a common word in an unusual sense, that unusual sense is the
-  one to give.
-- "meaning_uz": the Uzbek for that same sense. Natural Uzbek, latin script.
-  Not a transliteration of the English word.
+  {meaning} characters. Not a dictionary entry with several senses -- the
+  one sense used here. Where the passage uses the word in its ordinary way,
+  write "meaning_core_en" out again word for word. Never write "same as
+  above" or "same as core".
+- "meaning_uz": the Uzbek for that same sense.
+- "sense_differs": true when the passage's sense is genuinely not the usual
+  one, false when the word is being used ordinarily. Most words are false.
 - "cefr": one of {levels}, for the word in THIS sense. A common word used in
   an unusual sense is harder than the same word used ordinarily.
+
+If the word stands inside a fixed multi-word term -- "machine learning",
+"climate change", "public sector" -- gloss the WORD ON ITS OWN and not the
+term. The term is asked about separately, and a word carrying a term's
+meaning is a word the learner will then use wrongly everywhere else.
 
 Answer for every word in the list and for no other word.
 
 Reply with JSON only, and nothing else:
 
-{{"words": [{{"id": "...", "lemma": "...", "pos": "...", "meaning_en": "...",
-"meaning_uz": "...", "cefr": "..."}}]}}
+{{"words": [{{"id": "...", "lemma": "...", "pos": "...",
+"meaning_core_en": "...", "meaning_core_uz": "...", "meaning_en": "...",
+"meaning_uz": "...", "sense_differs": false, "cefr": "..."}}]}}
 """
 
 PHRASES_PROMPT = PASSAGE + """
 Find the multi-word expressions in the passage that a band 5-6 reader would
-not understand from the separate words: phrasal verbs and fixed academic
-expressions such as "give rise to", "account for", "in light of", "bring
-about", "in the wake of", "at the expense of".
+not understand from the separate words. Two kinds, and both count:
+
+1. Phrasal verbs and fixed academic expressions: "give rise to", "account
+   for", "in light of", "bring about", "in the wake of", "at the expense
+   of".
+2. COMPOUND TERMS -- two or three words naming one thing, where the meaning
+   is the term's and not the separate words': "machine learning", "climate
+   change", "public sector", "greenhouse gas", "life expectancy", "birth
+   rate", "social media".
+
+The second kind matters as much as the first. A compound term left out is a
+term whose meaning gets written onto one of its words instead -- "learn"
+glossed as a computer finding patterns in data -- and that is worse than no
+entry at all, because the learner then carries it into every other sentence.
 
 Only expressions that are actually in the passage. Between {low} and {high}
 words each. At most {most} of them -- the strongest ones. If the passage has
@@ -211,15 +275,23 @@ Each entry:
   character for character, including its inflection ("gives rise to" if that
   is what is written). It must be findable in the text above by exact search.
 - "lemma": its dictionary form ("give rise to")
-- "meaning_en": what it means here. One short line, under {meaning}
-  characters, in simpler English.
-- "meaning_uz": the Uzbek for that same sense. Natural Uzbek, latin script.
+- "meaning_core_en": what the expression usually means, wherever it is met.
+  One short line, under {meaning} characters, in simpler English.
+- "meaning_core_uz": the Uzbek for that usual sense. Natural Uzbek, latin
+  script.
+- "meaning_en": what it means HERE. Where the passage uses it in its
+  ordinary way, which is most of the time, write "meaning_core_en" out again
+  word for word. Never write "same as above".
+- "meaning_uz": the Uzbek for that same sense.
+- "sense_differs": true only where the passage's sense is genuinely not the
+  usual one.
 - "cefr": one of {levels}
 
 Reply with JSON only, and nothing else:
 
-{{"phrases": [{{"surface": "...", "lemma": "...", "meaning_en": "...",
-"meaning_uz": "...", "cefr": "..."}}]}}
+{{"phrases": [{{"surface": "...", "lemma": "...", "meaning_core_en": "...",
+"meaning_core_uz": "...", "meaning_en": "...", "meaning_uz": "...",
+"sense_differs": false, "cefr": "..."}}]}}
 """
 
 SENSES_PROMPT = PASSAGE + """
@@ -242,6 +314,10 @@ Each entry:
   search in the text above
 - "lemma": its dictionary form
 - "pos": one of {parts}
+- "meaning_core_en": the sense the reader ALREADY knows -- the everyday
+  meaning of this word, the one that is not being used here. One short line,
+  under {meaning} characters.
+- "meaning_core_uz": that everyday sense in natural Uzbek, latin script.
 - "meaning_en": the sense it has HERE. One short line, under {meaning}
   characters
 - "meaning_uz": the same sense in natural Uzbek, latin script
@@ -251,7 +327,8 @@ Each entry:
 Reply with JSON only, and nothing else:
 
 {{"senses": [{{"surface": "...", "lemma": "...", "pos": "...",
-"meaning_en": "...", "meaning_uz": "...", "cefr": "..."}}]}}
+"meaning_core_en": "...", "meaning_core_uz": "...", "meaning_en": "...",
+"meaning_uz": "...", "cefr": "..."}}]}}
 """
 
 #: Where one sentence ends and the next begins: a full stop, question mark or
@@ -306,6 +383,15 @@ def one_line(value: object, limit: int) -> str:
     return text if 0 < len(text) <= limit else ""
 
 
+#: A model answering "Same as core." where a meaning was asked for.
+#:
+#: The prompt now says to write the line out again rather than refer back to
+#: it, and this is here because the prompt said something close to that the
+#: first time and got `machine-learning` glossed "Same as core." A prompt is
+#: a request; what the reader sees has to survive it being declined.
+SAME_AGAIN = re.compile(r"^(the )?same( as| like)?\b.{0,24}$", re.I)
+
+
 def numbered(passage: dict) -> str:
     """The passage as the model sees it: paragraphs with their index.
 
@@ -329,8 +415,14 @@ def ask_words(passage: dict, batch: list[dict], *, model: str) -> dict:
     # requests failing in exactly the same place -- which is how a batch of
     # thirty still managed to die at 8 581 characters: the model pretty-
     # printed six lines an entry where the estimate allowed for two.
+    #
+    # 260 rather than 150 an entry since the entries grew the word's
+    # ordinary meaning alongside the passage's. Two more lines of English
+    # and Uzbek is not quite double, and the allowance is generous for the
+    # same reason it always was: the cost of over-allowing is nothing, and
+    # the cost of under-allowing is three requests and no answer.
     return vision.ask_json(prompt, [], model=model,
-                           max_tokens=600 + 150 * len(batch)) or {}
+                           max_tokens=600 + 260 * len(batch)) or {}
 
 
 def ask_phrases(passage: dict, *, model: str, most: int) -> dict:
@@ -338,7 +430,7 @@ def ask_phrases(passage: dict, *, model: str, most: int) -> dict:
         passage=numbered(passage), levels=", ".join(LEVELS), meaning=MEANING,
         low=PHRASE_WORDS[0], high=PHRASE_WORDS[1], most=most)
     return vision.ask_json(prompt, [], model=model,
-                           max_tokens=600 + 150 * most) or {}
+                           max_tokens=600 + 260 * most) or {}
 
 
 def ask_senses(passage: dict, *, model: str, most: int) -> dict:
@@ -346,10 +438,11 @@ def ask_senses(passage: dict, *, model: str, most: int) -> dict:
         passage=numbered(passage), parts=", ".join(PARTS),
         levels=", ".join(LEVELS), meaning=MEANING, most=most)
     return vision.ask_json(prompt, [], model=model,
-                           max_tokens=600 + 150 * most) or {}
+                           max_tokens=600 + 260 * most) or {}
 
 
-def glossed(reply: dict, candidates: list[dict], passage: dict) -> list[dict]:
+def glossed(reply: dict, candidates: list[dict],
+            passage: dict) -> tuple[list[dict], set[tuple[int, int]]]:
     """The model's word entries, checked and joined back to their places.
 
     Joined on the id this stage gave out -- the deterministic lemma -- and
@@ -357,13 +450,24 @@ def glossed(reply: dict, candidates: list[dict], passage: dict) -> list[dict]:
     it is the better one: the rule-based stripper in `vocabulary.py` leaves
     `sacrificed` alone when neither list has heard of `sacrifice`, and the
     model does not.
+
+    Returns the entries AND the candidate positions the reply covered, which
+    are two different sets and were treated as one for too long. A
+    provisional word that comes back B1 has been answered and deliberately
+    dropped; a word the model skipped has not been answered at all. Judging
+    "did it answer?" by which entries survived made the first look like the
+    second, so the retry pass re-asked about every provisional B1 in the
+    passage -- three extra requests a passage, spent to be told the same
+    thing and drop them again.
     """
     places = {entry["lemma"]: entry for entry in candidates}
     entries = []
+    seen: set[tuple[int, int]] = set()
     for said in reply.get("words") or []:
         where = places.get(str(said.get("id") or "").strip().lower())
         if where is None:
             continue
+        seen.add((where["index"], where["start"]))
         entry = judged(said, where["frequency_band"])
         if entry is None:
             continue
@@ -384,7 +488,7 @@ def glossed(reply: dict, candidates: list[dict], passage: dict) -> list[dict]:
             "example": sentence_at(text, where["start"], where["end"]),
             "is_phrase": False,
         })
-    return entries
+    return entries, seen
 
 
 def phrased(reply: dict, passage: dict) -> list[dict]:
@@ -464,6 +568,15 @@ def sensed(reply: dict, passage: dict, taken: set) -> list[dict]:
             # easy, the model says C1, and neither figure on its own can
             # report the disagreement.
             "unusual": True,
+            # And the same finding said in the field the whole list uses.
+            # This question asked for the everyday sense and the passage's
+            # sense as two separate answers, so a difference between them is
+            # what the entry IS -- but it is read off the two strings rather
+            # than asserted, because a model that gave the same line twice
+            # has told us it could not find a difference, and marking that
+            # entry anyway is how the mark stops meaning anything.
+            "sense_differs": (entry["meaning_core_en"].casefold()
+                              != entry["meaning_en"].casefold()),
         })
     return entries
 
@@ -490,21 +603,60 @@ def judged(said: dict, frequency_band: str) -> dict | None:
     the model meant; a meaning that runs to a paragraph is a meaning nobody
     reads mid-paper. Dropping one entry of eighty-five costs the reader one
     word. Keeping a bad one costs them their trust in all of them.
+
+    ## Two meanings, and why only one of them is required
+
+    ``meaning_en`` is what the word means HERE and ``meaning_core_en`` is
+    what it usually means. The contextual one is what this whole stage
+    exists to produce and an entry without it is refused; the core one is
+    an improvement on it and an entry without it FALLS BACK rather than
+    dying, because the failure it prevents is the smaller of the two.
+
+    The failure it prevents is real enough to be worth the fields. `learn`
+    glossed as "a computer process of finding patterns in data" -- the sense
+    `machine learning` gave it -- is not a wrong gloss of this passage, it
+    is a right gloss of this passage that the learner then carries into
+    every other sentence they write. A word list that only ever says "here"
+    teaches the passage and not the language.
+
+    ``sense_differs`` is the model's own answer to "are these two the same",
+    trusted where it says yes and CHECKED where it says no: two identical
+    strings are not a difference whatever was ticked, and a tick on every
+    row would make the mark mean nothing. Where the core meaning is missing
+    there is nothing to differ from, so it is false.
     """
     level = str(said.get("cefr") or "").strip().upper()
     part = str(said.get("pos") or "").strip().lower().rstrip(".")
     meaning_en = one_line(said.get("meaning_en"), MEANING)
     meaning_uz = one_line(said.get("meaning_uz"), MEANING)
+    core_en = one_line(said.get("meaning_core_en"), MEANING)
+    core_uz = one_line(said.get("meaning_core_uz"), MEANING)
     lemma = one_line(said.get("lemma"), 60).lower()
     if not (lemma and meaning_en and meaning_uz):
         return None
     if level not in LEVELS:
         return None
+    # Both halves or neither. One core meaning in English with no Uzbek
+    # beside it is the half-entry this file refuses everywhere else: the
+    # panel would print an English line the reader cannot read under a
+    # heading that promises the sense they already know.
+    if not (core_en and core_uz):
+        core_en = core_uz = ""
+    # "Same as core." is a reference, not a meaning, and printing it where
+    # the meaning goes is worse than printing the meaning twice.
+    if core_en and SAME_AGAIN.match(meaning_en):
+        meaning_en, meaning_uz = core_en, core_uz
+    differs = bool(said.get("sense_differs")) and bool(core_en)
+    if differs and core_en.casefold() == meaning_en.casefold():
+        differs = False
     return {
         "lemma": lemma,
         "pos": part if part in PARTS else "",
+        "meaning_core_en": core_en or meaning_en,
+        "meaning_core_uz": core_uz or meaning_uz,
         "meaning_en": meaning_en,
         "meaning_uz": meaning_uz,
+        "sense_differs": differs,
         "cefr_level": level,
         "frequency_band": frequency_band,
     }
@@ -517,16 +669,37 @@ def read(passage_id: str, *, model: str, most: int,
         print(f"{passage_id:16} no passage.json", file=sys.stderr)
         return None
     passage = json.loads(path.read_text())
-    candidates = vocabulary.candidates(passage["paragraphs"])
-    if not candidates:
+    if not vocabulary.candidates(passage["paragraphs"]):
         print(f"{passage_id:16} nothing worth glossing", file=sys.stderr)
         return None
 
     entries: list[dict] = []
+
+    # The phrases go FIRST, and that order is the whole fix for compound
+    # terms. `machine learning` has to be known to be a term before the word
+    # list is drawn, because otherwise `learning` is drawn as a candidate,
+    # glossed in the only sense it has in this passage -- the term's -- and
+    # the term's meaning ends up filed under a word that does not have it.
+    # The learner then studies "learn: a computer process of finding
+    # patterns in data", which is wrong everywhere except the sentence they
+    # read it in.
+    #
+    # It used to run last, as a second question whose answers were simply
+    # appended, and that is what made both entries appear side by side.
+    if most:
+        entries += phrased(ask_phrases(passage, model=model, most=most),
+                           passage)
+    claimed = {(entry["index"], entry["start"], entry["end"])
+               for entry in entries}
+    candidates = vocabulary.candidates(passage["paragraphs"], claimed)
+
+    answered: set[tuple[int, int]] = set()
     for start in range(0, len(candidates), BATCH):
         batch = candidates[start:start + BATCH]
-        entries += glossed(ask_words(passage, batch, model=model),
-                           batch, passage)
+        said, seen = glossed(ask_words(passage, batch, model=model),
+                             batch, passage)
+        entries += said
+        answered |= seen
 
     # Even a batch this size comes back one or two short sometimes -- not
     # refused, not malformed, just skipped. Asked again, narrowly, for
@@ -535,8 +708,10 @@ def read(passage_id: str, *, model: str, most: int,
     #
     # By POSITION, not by lemma: the model's lemma is allowed to differ from
     # the one this stage sent out, and comparing the two would report every
-    # correction (`sacrificed` -> `sacrifice`) as a word it had missed.
-    answered = {(entry["index"], entry["start"]) for entry in entries}
+    # correction (`sacrificed` -> `sacrifice`) as a word it had missed. And
+    # by what the reply COVERED rather than by what survived it -- see
+    # `glossed`, where the difference is a provisional word answered B1 and
+    # dropped on purpose.
     missing = [entry for entry in candidates
                if (entry["index"], entry["start"]) not in answered]
     if len(missing) > MISSING_TOLERANCE:
@@ -545,16 +720,13 @@ def read(passage_id: str, *, model: str, most: int,
         for start in range(0, len(missing), BATCH):
             batch = missing[start:start + BATCH]
             entries += glossed(ask_words(passage, batch, model=model),
-                               batch, passage)
+                               batch, passage)[0]
 
-    if most:
-        entries += phrased(ask_phrases(passage, model=model, most=most),
-                           passage)
     if senses:
         taken = {(entry["index"], entry["start"]) for entry in entries}
         entries += sensed(ask_senses(passage, model=model, most=senses),
                           passage, taken)
-    entries.sort(key=lambda entry: (entry["index"], entry["start"]))
+    entries = deduped(entries)
     return {
         "passage": passage_id,
         "model": model,
@@ -593,8 +765,7 @@ def add_senses(passage_id: str, *, model: str, most: int) -> dict | None:
     taken = {(entry["index"], entry["start"]) for entry in entries}
     entries += sensed(ask_senses(passage, model=model, most=most),
                       passage, taken)
-    entries.sort(key=lambda entry: (entry["index"], entry["start"]))
-    result["entries"] = entries
+    result["entries"] = deduped(entries)
     return result
 
 
@@ -625,8 +796,14 @@ def add_provisional(passage_id: str, *, model: str) -> dict | None:
     # two would re-ask about every word the model had corrected the spelling
     # of.
     taken = {(entry["index"], entry["start"]) for entry in entries}
+    # And the spans the passage's multi-word terms already hold, so this arm
+    # cannot reintroduce the split `read` now prevents: a provisional word
+    # standing inside `machine learning` belongs to the term.
+    claimed = {(entry["index"], entry["start"], entry["end"])
+               for entry in entries if entry.get("is_phrase")}
     candidates = [entry
-                  for entry in vocabulary.candidates(passage["paragraphs"])
+                  for entry in vocabulary.candidates(passage["paragraphs"],
+                                                     claimed)
                   if entry["provisional"]
                   and (entry["index"], entry["start"]) not in taken]
     if not candidates:
@@ -636,15 +813,48 @@ def add_provisional(passage_id: str, *, model: str) -> dict | None:
     for start in range(0, len(candidates), BATCH):
         batch = candidates[start:start + BATCH]
         fresh += glossed(ask_words(passage, batch, model=model),
-                         batch, passage)
+                         batch, passage)[0]
     if not fresh:
         return None
 
     entries += fresh
-    entries.sort(key=lambda entry: (entry["index"], entry["start"]))
-    result["entries"] = entries
+    result["entries"] = deduped(entries)
     result["candidates"] = result.get("candidates", 0) + len(candidates)
     return result
+
+
+def deduped(entries: list[dict]) -> list[dict]:
+    """One entry per idea, where a term is written two ways in one passage.
+
+    `machine learning` and `machine-learning` are the same term, and a
+    passage that uses both gives two entries: the phrase question finds the
+    spaced one and the deterministic scan finds the hyphenated one, which is
+    a single token and therefore a word as far as it is concerned. The span
+    rule cannot see it -- the two stand in different sentences -- so the
+    passage ends up teaching one idea twice, once as a phrase and once as a
+    noun, with two meanings a learner has to reconcile.
+
+    Matched on the lemma with its hyphens read as spaces, and the PHRASE
+    kept where there is a choice: it is the entry that says what the thing
+    is, and it is the one whose span covers the words a reader is likely to
+    tap. Passage order otherwise, so which of two words survives is not a
+    question about which question found it.
+
+    `replace_extracted` on the app side deduplicates too, and exactly on the
+    lemma. That is the constraint the database enforces and it cannot see
+    this one, which is why this is here rather than there.
+    """
+    def idea(entry: dict) -> str:
+        return entry["lemma"].replace("-", " ")
+
+    best: dict[str, dict] = {}
+    for entry in entries:
+        key = idea(entry)
+        held = best.get(key)
+        if held is None or (entry["is_phrase"] and not held["is_phrase"]):
+            best[key] = entry
+    return sorted(best.values(),
+                  key=lambda entry: (entry["index"], entry["start"]))
 
 
 def passages(conn: sqlite3.Connection, where: str, args: tuple) -> list[str]:

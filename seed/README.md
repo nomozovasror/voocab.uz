@@ -2555,6 +2555,45 @@ untouched — the same arm, for the same reason, as `--senses-only`. It
 decides what to ask by which candidate POSITIONS the file does not already
 hold, so it is idempotent: run twice and the second run finds nothing.
 
+### Two meanings an entry, and the usual one leads
+
+Every entry carries `meaning_core_en`/`meaning_core_uz` — what the word
+usually means, wherever it is met — as well as the sense this passage gives
+it, plus `sense_differs` saying whether the two are genuinely different.
+
+The contextual meaning was the whole point of this stage and still is; what
+it could not do alone is teach the language. A passage about artificial
+intelligence glossed `learn` as "a computer process of finding patterns in
+data" and marked it a noun: a faithful reading of `machine learning`, a
+false statement about the verb, and the only line a learner who saved that
+word would ever see. `judged` refuses an entry with no contextual meaning
+and FALLS BACK where the usual one is missing, because the first is the
+answer and the second is an improvement on it.
+
+`sense_differs` is the model's own answer, trusted where it says no and
+checked where it says yes: two identical strings are not a difference, and a
+mark on every row means nothing. Across a sample passage it came back true
+on 4 entries of 147.
+
+### The terms are asked about first, and the word list is drawn afterwards
+
+`machine learning`, `climate change`, `public sector`: two words naming one
+thing whose meaning is in neither of them. The phrase question was widened
+to find compound terms as well as phrasal verbs, and it now runs BEFORE
+`vocabulary.candidates`, whose `claimed` argument takes the spans it found
+out of the word list. A lemma standing only inside terms belongs to the
+terms; one that also stands alone elsewhere is offered from there instead.
+
+Run the other way round — words first, phrases appended — it produced
+`learn` and `machine learning` as two entries, one of them carrying the
+other's meaning. `deduped` cleans up the remaining case the span rule cannot
+see: a passage that writes both `machine learning` and `machine-learning`,
+where the hyphenated form is a single token and so a word as far as the scan
+is concerned.
+
+The part of speech follows the lemma too. `learning` the noun is its own
+entry rather than `learn` wearing an `n`.
+
 ### Lemmatisation without a parser
 
 The lists ship lemmatised, so most surface forms map home by lookup, and that
@@ -2568,21 +2607,33 @@ so `outdoors` stays as it is and counts as off-list, which is true.
 That acceptance test is what makes rules this crude safe. No spaCy, no model
 download, and no gamble on a compiled wheel for Python 3.14.
 
-### Thirty words a request, because eighty-five did not come back
+### Twenty words a request, because eighty-five did not come back
 
 The first shape asked one question covering the whole candidate list. The
 reply is not refused and not malformed — it simply STOPS, eighteen thousand
 characters in, mid-string, three times at three temperatures. `ask_json`'s
 retry cannot help with a ceiling.
 
-So the words go in batches of thirty and the passage goes with each one.
-That repeats about 1 200 input tokens a batch, which was never where the
-money was. A later batch of thirty died the same way at 8 581 characters,
-because the model pretty-printed six lines an entry where the estimate
-allowed two; the ceiling is now 150 tokens an entry.
+So the words go in batches and the passage goes with each one. That repeats
+about 1 200 input tokens a batch, which was never where the money was. A
+later batch of thirty died the same way at 8 581 characters, because the
+model pretty-printed six lines an entry where the estimate allowed two.
+
+Twenty a batch, at 260 output tokens an entry, since an entry grew the
+word's usual meaning alongside the passage's. The ceiling is on characters
+rather than on entries, so doubling what an entry says halves what a batch
+may hold.
 
 A passage the model will not answer cleanly is skipped and the run carries
 on. Before that, one bad page took the other hundred and sixty down with it.
+
+**The retry pass asks about what was SKIPPED, not about what was dropped.**
+It used to judge "did the model answer?" by which entries survived, which
+made a provisional word answered B1 and deliberately dropped look identical
+to one the model had missed — so every passage spent three extra requests
+re-asking about its own provisional B1s, and the occasional second roll came
+back B2 and got kept on nothing but temperature. `glossed` now returns the
+positions the reply COVERED as well as the entries it produced.
 
 ### Neither the example sentence nor the offsets are asked for
 
