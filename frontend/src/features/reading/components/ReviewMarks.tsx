@@ -3,8 +3,9 @@ import type { Passage } from "@/features/paper/types";
 import {
   marksIn,
   MARK_MEANING,
+  MARK_STYLES,
   type Highlight,
-  type MarkColour,
+  type MarkStyle,
 } from "@/features/reading/highlights";
 
 /**
@@ -20,12 +21,12 @@ import {
  * its own control.
  *
  * And it turns out to be worth having on its own terms. A candidate
- * highlights for three reasons and the colours keep them apart
- * (`highlights.ts`); what the colours cannot do is answer *what did I mark
- * as "come back to this" and never come back to?* Six violet stretches
+ * highlights for two reasons and the two strokes keep them apart
+ * (`highlights.ts`); what the strokes cannot do is answer *what did I mark
+ * as "come back to this" and never come back to?* Six underlined stretches
  * scattered through nine hundred words are six stretches nobody can count.
  * Grouped by what they MEAN, they are a short list of decisions, and the
- * third group is a list of things the reader knew they were unsure of.
+ * second group is a list of things the reader knew they were unsure of.
  *
  * ## Read-only, and that is the point
  *
@@ -40,15 +41,17 @@ import {
  * words attached" and this is where the words are.
  */
 
-/** In the order they are worth reading back: what the question asked, where
- *  the answer was, and the one the reader is still not sure about — which is
- *  the group that has something left to do in it. */
-const ORDER: MarkColour[] = ["key", "found", "doubt"];
+/** In the order they are worth reading back: what the reader settled, then
+ *  what they did not — which is the group with something left to do in it,
+ *  and therefore the one that belongs at the bottom where reading stops. */
+const ORDER: MarkStyle[] = MARK_STYLES;
 
-const INK: Record<MarkColour, string> = {
-  key: "bg-mark-key",
-  found: "bg-mark-found",
-  doubt: "bg-mark-doubt",
+/** The heading's swatch, which is the mark itself at heading size: both are
+ *  amber now, so a dot each would be two identical dots labelling two
+ *  different groups. */
+const INK: Record<MarkStyle, string> = {
+  fill: "h-2 w-3.5 rounded-[0.15rem] bg-mark-key/70",
+  line: "h-2 w-3.5 rounded-[0.15rem] border-b-2 border-mark-key bg-mark-key/10",
 };
 
 export function ReviewMarks({
@@ -70,7 +73,7 @@ export function ReviewMarks({
   const rows = ORDER.map((colour) => ({
     colour,
     marks: read(marks, passages).filter(
-      (one) => (one.mark.colour ?? "key") === colour,
+      (one) => (one.mark.style ?? "fill") === colour,
     ),
   })).filter((group) => group.marks.length > 0);
 
@@ -88,10 +91,7 @@ export function ReviewMarks({
       {rows.map((group) => (
         <div key={group.colour} className="mt-4">
           <h3 className="mb-1 flex items-center gap-2 text-xs tracking-caps text-muted-foreground uppercase">
-            <span
-              aria-hidden
-              className={cn("size-2 rounded-full", INK[group.colour])}
-            />
+            <span aria-hidden className={cn("shrink-0", INK[group.colour])} />
             {MARK_MEANING[group.colour]}
           </h3>
           <ul>

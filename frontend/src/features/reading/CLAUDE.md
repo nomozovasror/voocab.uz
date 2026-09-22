@@ -76,10 +76,10 @@ have to learn it — they were in it twenty minutes ago. What is different is
 what is written on the passage.
 
 **One layer at a time, never four** (`layers.ts`). Every answer in green and
-red, the vocabulary in amber, the already-saved words in blue, and the
-reader's own marks. Four kinds of marking over nine hundred words at once is
-not four findings, it is a page of colour with prose underneath it. One at a
-time makes each a QUESTION somebody asked.
+red, the vocabulary in the CEFR colours, the already-saved words as those
+same words filtered, and the reader's own marks. Four kinds of marking over
+nine hundred words at once is not four findings, it is a page of colour with
+prose underneath it. One at a time makes each a QUESTION somebody asked.
 
 **And one CONTROL, not two.** The toggle in the middle island decides both
 what is marked on the passage and what is listed beside it. It was two — the
@@ -96,10 +96,15 @@ is a reader working out which is the real one.
   second rule written for it.
 - **Every layer has an analysis.** Answers is the marked question list,
   Vocabulary the word list, Saved the same list filtered to what the reader
-  had already met, My marks their own highlights grouped by what each colour
+  had already met, My marks their own highlights grouped by what each stroke
   MEANS. A layer whose panel showed something else would be the page
   contradicting its own control — which is what happened to *My marks*
   before `ReviewMarks` existed.
+- **The vocabulary layer's filter comes from the panel and reaches the
+  passage.** See `features/vocabulary/CLAUDE.md`: pressing `C1` narrows both
+  halves, and the layer's own count is deliberately NOT the filtered one, or
+  a filter that matches nothing would read as an empty layer and switch the
+  page to a different one.
 - **The text size ZOOMS both panes; it does not set a font size.** The take
   screen sets `fontSize` on the split and its prose, written in `em`,
   follows — which works there because the prose is the thing being resized.
@@ -115,11 +120,11 @@ is a reader working out which is the real one.
   CONTENT and never on the split, whose height is measured in real pixels to
   keep the page itself from scrolling.
 - **"My marks" is not an overlay.** It hands `PassagePane` the reader's own
-  `Highlight`s and the existing code draws them, so they keep the three
-  colours they were made in. Those colours mean something — the keyword,
-  where the answer was, the line to come back to — and repainting them one
-  neutral colour on the one page that exists to give that back would throw
-  away the only part of a mark that carries information.
+  `Highlight`s and the existing code draws them, so they keep the stroke
+  they were made with. That choice means something — *this is the thing*
+  versus *I am not sure about this* — and repainting them all one way on the
+  one page that exists to give that back would throw away the only part of a
+  mark that carries information.
 
 ## Where the answer was: evidence, and its fallback
 
@@ -224,8 +229,8 @@ about. It has to be what they meet first, at the left edge where the eye
 already is.
 
 Green and red here mean what they mean in the question map at the top of the
-same screen: the verdict. That is exactly why the reader's own three
-highlight colours are never green or red.
+same screen: the verdict. That is exactly why the reader's own highlights
+are never green or red.
 
 **The row points rather than quotes: `¶3` in the corner**, invisible until
 the row is under the pointer, and pressing anywhere on the row goes there. A
@@ -281,15 +286,39 @@ into one `⋯`; the two it holds are the two reached for least often.
 - **Two paths to the same few actions, on purpose.** The row in the header is
   the one a reader can SEE, before they have selected anything; the popover
   at the selection is the one they use once they know it is there. The
-  popover carries only what is done to a STRETCH OF PROSE — three colours, a
+  popover carries only what is done to a STRETCH OF PROSE — two strokes, a
   note, a copy. Size, side and help are about the page, and a popover
   carrying those would be the row again, in the way.
-- **Three colours, and never green or red.** Amber is a keyword in the
-  question, blue is where the answer was found, violet is a line to come
-  back to — three different reasons somebody marks something, and they have
-  to stay apart at a glance twenty minutes later. Green and red mean right
-  and wrong on the review page, where these same marks are shown: a line
-  highlighted green while reading would come back as a verdict nobody made.
+- **One amber, two strokes, and never green or red.** A fill means *this is
+  the thing*; an underline means *I am not sure about this*. Green and red
+  mean right and wrong on the review page, where these same marks are shown:
+  a line highlighted green while reading would come back as a verdict nobody
+  made.
+
+  It was three HUES — amber, `#5b9bd5`, a violet — until the CEFR scale
+  needed colours of its own, and `#5b9bd5` is exactly B1. Blue meaning
+  "where the answer was" on one review layer and "this word is B1" on the
+  next is two colour systems wearing one colour. CEFR won on reach: it is
+  printed on four screens and is a ladder learners already have a feel for,
+  where the pen is one reader's annotation on one screen.
+
+  The cost is named rather than hidden: two strokes carry two meanings, so
+  "the keyword in the question" and "where the answer was" are now one mark
+  between them. They were always the same gesture — *this matters, here* —
+  differing only in which half of the screen the reader was looking at. "I
+  am not sure" was never like those two, so it kept a channel of its own.
+
+  A fill and a line, not two tints of amber: two strengths of one colour is
+  a thing to compare, and a reader scanning back through nine hundred words
+  has to RECOGNISE a mark, not measure it. The line needs an explicit
+  `bg-transparent` — a `<mark>` with no ground of its own falls back to the
+  browser's highlighter yellow, and it came out as a solid amber block,
+  which is the OTHER mark. Any style with no background has to say so.
+
+  Marks made before the change are RESTYLED on load, not dropped
+  (`loadHighlights`): they live in the browser, so there is no migration and
+  no moment at which the old ones are gone. Amber and blue become the fill,
+  violet becomes the line.
 - **A note IS a mark with words on it**, not a second kind of object beside
   one. Same anchor, same persistence, same click-to-remove — every one of
   which would otherwise be written twice — and an empty note removes the

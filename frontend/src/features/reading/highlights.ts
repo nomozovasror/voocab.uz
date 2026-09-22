@@ -34,29 +34,56 @@
  */
 
 /**
- * What a mark MEANS, which is the point of having three of them.
+ * What a mark MEANS — and why there are two of them rather than three.
  *
- * A candidate working a forty-question paper marks for different reasons and
- * needs them apart at a glance twenty minutes later: the word the question
- * turns on, the place the answer was found, and the line they are not sure
- * about and mean to come back to. One colour makes all three the same
- * decision, which is the same as making none of them.
+ * A candidate working a forty-question paper marks for two different
+ * reasons and needs them apart at a glance twenty minutes later: *this is
+ * the thing* and *I am not sure about this*. One mark makes both the same
+ * decision, which is the same as making neither.
+ *
+ * ## It was three, in three colours
+ *
+ * Amber for the keyword, blue for where the answer was found, violet for
+ * the line to come back to. The blue was `#5b9bd5` — which is exactly the
+ * B1 colour on the CEFR scale — and the violet was a shade off B2. On the
+ * review page those two systems land on the same passage one layer apart,
+ * so blue meant "the answer was here" while the reader was working and
+ * "this word is B1" ten minutes later. A colour that means two things is
+ * not a colour system.
+ *
+ * The scale won, on reach: CEFR is printed on four screens and is a ladder
+ * learners already have a feel for, where the pen is one reader's private
+ * annotation on one screen. So the pen kept the amber — the app's own
+ * accent, already saying "this is the thing" everywhere else — and
+ * separates by STYLE instead of hue.
+ *
+ * ## What that cost, said plainly
+ *
+ * Two styles carry two meanings, so "the keyword in the question" and
+ * "where the answer was" are now one mark between them. That is a real
+ * loss and it is the right one of the three to take: both were always the
+ * same gesture — *this matters, here* — differing only in which end of the
+ * page the reader was looking at. "I am not sure" is the one that was
+ * never like the other two, so it is the one that kept a channel.
+ *
+ * A fill and a line, and not two tints of amber: two strengths of one
+ * colour is a thing to compare, and a reader scanning back through nine
+ * hundred words has to RECOGNISE a mark, not measure it.
  *
  * Never green and never red. Those two mean "right" and "wrong" on the
  * review page, and the marks are shown there — a line a candidate
  * highlighted green while reading would come back as a verdict they never
  * made.
  */
-export type MarkColour = "key" | "found" | "doubt";
+export type MarkStyle = "fill" | "line";
 
-export const MARK_COLOURS: MarkColour[] = ["key", "found", "doubt"];
+export const MARK_STYLES: MarkStyle[] = ["fill", "line"];
 
 /** What each is for, in the reader's own words — the popover and the tool
- *  row both label them, because a row of three swatches is a puzzle. */
-export const MARK_MEANING: Record<MarkColour, string> = {
-  key: "Keyword in the question",
-  found: "Answer found here",
-  doubt: "Come back to this",
+ *  row both label them, because two unlabelled swatches is a puzzle. */
+export const MARK_MEANING: Record<MarkStyle, string> = {
+  fill: "Something that matters here",
+  line: "Not sure — come back to this",
 };
 
 export interface Highlight {
@@ -69,8 +96,8 @@ export interface Highlight {
   start: number;
   end: number;
   /** Absent in a mark made before there was a choice, which reads as the
-   *  amber it was drawn in. */
-  colour?: MarkColour;
+   *  fill it was drawn as. */
+  style?: MarkStyle;
   /** What the reader wrote about this stretch, where they wrote anything.
    *
    *  A note IS a mark with words attached rather than a second kind of
@@ -86,12 +113,33 @@ export function loadHighlights(materialId: string): Highlight[] {
   try {
     const raw = localStorage.getItem(key(materialId));
     const said = raw ? JSON.parse(raw) : null;
-    return Array.isArray(said) ? (said as Highlight[]) : [];
+    return Array.isArray(said) ? (said as unknown[]).map(restyle) : [];
   } catch {
     // A private window, storage switched off, or something written by an
     // older shape. An unmarked passage is a correct passage.
     return [];
   }
+}
+
+/**
+ * One stored mark, in today's shape.
+ *
+ * These live in the browser and nowhere else, so there is no migration to
+ * run and no moment at which the old ones are all gone: somebody who
+ * marked up a passage last week and comes back to it next month arrives
+ * here with `colour: "doubt"` on every mark, and a page that dropped them
+ * would have thrown away an hour of their reading.
+ *
+ * The two that meant *this matters* — the keyword and where the answer was
+ * — become the fill; the one that meant *I am not sure* becomes the line.
+ * That is the same collapse the pen itself made, applied to what the pen
+ * already wrote.
+ */
+function restyle(said: unknown): Highlight {
+  const mark = said as Highlight & { colour?: string };
+  if (mark.style || !mark.colour) return mark;
+  const { colour, ...rest } = mark;
+  return { ...rest, style: colour === "doubt" ? "line" : "fill" };
 }
 
 export function saveHighlights(materialId: string, marks: Highlight[]): void {
@@ -124,10 +172,10 @@ export function marksIn(
   const out: Highlight[] = [];
   for (const mark of mine) {
     const last = out[out.length - 1];
-    // Merged only where they agree. Two marks of one colour that touch are
-    // one mark; two of DIFFERENT colours that touch are two things the
-    // reader said, and running them together would turn "the keyword" and
-    // "where the answer is" into one stripe of whichever came first.
+    // Merged only where they agree. Two marks of one style that touch are
+    // one mark; a fill and a line that touch are two things the reader
+    // said, and running them together would turn "this matters" and "I am
+    // not sure" into one stripe of whichever came first.
     if (last && mark.start <= last.end && sameKind(last, mark)) {
       last.end = Math.max(last.end, mark.end);
     } else {
@@ -138,7 +186,7 @@ export function marksIn(
 }
 
 function sameKind(a: Highlight, b: Highlight): boolean {
-  return (a.colour ?? "key") === (b.colour ?? "key") && !a.note && !b.note;
+  return (a.style ?? "fill") === (b.style ?? "fill") && !a.note && !b.note;
 }
 
 export interface Run<T = Highlight> {

@@ -4,11 +4,12 @@ import {
   marksIn,
   runsOf,
   type Highlight,
-  type MarkColour,
+  type MarkStyle,
 } from "@/features/reading/highlights";
 import {
   overlaysIn,
   points,
+  wordStyle,
   WASH as LAYER_WASH,
   type Overlay,
 } from "@/features/reading/layers";
@@ -70,32 +71,42 @@ interface PassagePaneProps {
   className?: string;
 }
 
-/** How each mark is washed over the prose.
+/** How each mark is drawn over the prose — one amber, two strokes.
  *
- *  A wash rather than a block, so the words underneath stay the foreground
- *  — a passage with six marks in it has to still read as a passage.
+ *  The fill is a wash rather than a block, so the words underneath stay the
+ *  foreground: a passage with six marks in it has to still read as a
+ *  passage. It was a quarter of the colour and that was too little to read
+ *  as a highlight at all — against a dark ground a 25% tint of amber is a
+ *  change in shade, not a mark, and a reader scanning back through nine
+ *  hundred words could not find what they had marked. Two fifths, with the
+ *  padding and the small radius of a real marker stroke, which is what
+ *  carries most of it: what says "highlighted" is the shape of the block
+ *  around the words rather than the strength of the colour in it.
  *
- *  It was a quarter of the colour and that was too little to read as a
- *  highlight at all: against a dark ground a 25% tint of amber is a change
- *  in shade, not a mark, and a reader scanning back through nine hundred
- *  words could not find what they had marked. Two fifths, with the padding
- *  and the small radius of a real marker stroke — which is what carries
- *  most of it, because what says "highlighted" is the shape of the block
- *  around the words rather than the strength of the colour in it. */
-const WASH: Record<MarkColour, string> = {
-  key: "bg-mark-key/40",
-  found: "bg-mark-found/40",
-  doubt: "bg-mark-doubt/40",
+ *  The line is the same amber with no ground at all, which is why the two
+ *  are told apart across a page of prose at a glance where two tints of
+ *  one colour would have to be compared. It is also what the doubt mark
+ *  should always have looked like: an underline is what somebody draws
+ *  when they are not sure, and a block is what they draw when they are. */
+const WASH: Record<MarkStyle, string> = {
+  fill: "bg-mark-key/40",
+  // `bg-transparent` is load-bearing, and the same trap the `got` overlay
+  // fell into: a <mark> with no background of its own falls back to the
+  // BROWSER's, which is a block of highlighter yellow — so the line mark
+  // came out as a solid amber block, which is the other mark. Every style
+  // with no ground of its own has to say so.
+  line: "bg-transparent decoration-mark-key underline decoration-2 underline-offset-4",
 };
 
 /** How a deciding word is drawn inside the mark around it. A stronger tint
- *  of the mark's own colour — see where it is used. */
+ *  of the mark's own colour — see where it is used. Only the answers layer
+ *  sets `inner` at all, so the word tone has nothing to say here and wears
+ *  weight alone. */
 const HARD: Record<Overlay["tone"], string> = {
   chose: "bg-incorrect/35",
   missed: "bg-correct/35",
   got: "bg-correct/25",
-  word: "bg-mark-key/35",
-  saved: "bg-mark-found/35",
+  word: "",
 };
 
 /**
@@ -273,9 +284,20 @@ export function PassagePane({
                         className={cn(
                           "text-foreground transition-colors duration-fast",
                           STROKE,
-                          LAYER_WASH[run.mark.tone].rest,
-                          points(run.mark, lit ?? null) &&
-                            LAYER_WASH[run.mark.tone].lit,
+                          // A glossed word is coloured by its LEVEL and
+                          // not by its layer, so it is the one tone whose
+                          // classes are not in the table — see
+                          // `wordStyle`.
+                          run.mark.tone === "word"
+                            ? wordStyle(
+                                run.mark,
+                                points(run.mark, lit ?? null),
+                              )
+                            : cn(
+                                LAYER_WASH[run.mark.tone].rest,
+                                points(run.mark, lit ?? null) &&
+                                  LAYER_WASH[run.mark.tone].lit,
+                              ),
                         )}
                       >
                         {/* The number, at the FRONT of the mark and in
@@ -374,14 +396,21 @@ export function PassagePane({
                         className={cn(
                           "text-foreground",
                           STROKE,
-                          WASH[run.mark.colour ?? "key"],
+                          WASH[run.mark.style ?? "fill"],
                           // A note is a mark that says something, and it has to
                           // look like one or the reader cannot tell which of
                           // their own marks they wrote on. An underline rather
                           // than an icon: an icon inside running prose is a
                           // character the sentence did not have.
+                          //
+                          // Dotted, which is what keeps it apart from the
+                          // line mark now that the line mark is also an
+                          // underline — a note on a line mark is the one
+                          // case where both are on the same words, and it
+                          // reads as the dotted one winning, which is
+                          // right: the note is the more specific claim.
                           run.mark.note &&
-                            "decoration-dotted underline underline-offset-4",
+                            "decoration-mark-key decoration-dotted underline decoration-2 underline-offset-4",
                           onUnmark && "cursor-pointer",
                           lit === markKey(partId, index, run.mark.start) &&
                             "ring-2 ring-foreground/30",

@@ -13,10 +13,10 @@ import { cn } from "@/lib/utils";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { selectionIn, type Selected } from "@/features/reading/selection";
 import {
-  MARK_COLOURS,
   MARK_MEANING,
+  MARK_STYLES,
   type Highlight,
-  type MarkColour,
+  type MarkStyle,
 } from "@/features/reading/highlights";
 import {
   LOOKUP_BUDGET,
@@ -71,7 +71,12 @@ import {
  *  that nothing reflows alarmingly, large enough to be worth pressing. */
 const SIZES = [100, 115, 130] as const;
 const SIZE_KEY = "voocab-reading-text-size";
-const COLOUR_KEY = "voocab-reading-mark-colour";
+/** A new key rather than a migration of the old one. It held `"key"`,
+ *  `"found"` or `"doubt"`, none of which is a style, and what it was
+ *  remembering — which of three colours this reader had settled on — is a
+ *  choice that no longer exists. The default is the fill, which is what
+ *  two of the three used to mean. */
+const STYLE_KEY = "voocab-reading-mark-style";
 
 export function useTextSize(): [number, (next: number) => void] {
   return useRemembered<number>(SIZE_KEY, SIZES[0], (raw) =>
@@ -79,11 +84,12 @@ export function useTextSize(): [number, (next: number) => void] {
   );
 }
 
-/** The colour the next mark takes. Remembered, because a reader who has
- *  decided blue means "the answer is here" means it for the whole paper. */
-export function useMarkColour(): [MarkColour, (next: MarkColour) => void] {
-  return useRemembered<MarkColour>(COLOUR_KEY, "key", (raw) =>
-    MARK_COLOURS.includes(raw as MarkColour) ? (raw as MarkColour) : null,
+/** The stroke the next mark takes. Remembered, because a reader who has
+ *  decided the line means "come back to this" means it for the whole
+ *  paper. */
+export function useMarkStyle(): [MarkStyle, (next: MarkStyle) => void] {
+  return useRemembered<MarkStyle>(STYLE_KEY, "fill", (raw) =>
+    MARK_STYLES.includes(raw as MarkStyle) ? (raw as MarkStyle) : null,
   );
 }
 
@@ -119,8 +125,8 @@ export interface PassageToolsProps {
   onMarks: (next: Highlight[]) => void;
   size: number;
   onSize: (next: number) => void;
-  colour: MarkColour;
-  onColour: (next: MarkColour) => void;
+  colour: MarkStyle;
+  onColour: (next: MarkStyle) => void;
   /** Ask for a note on the current selection. The page owns the writing of
    *  it: the panel that opens belongs to the page, not to a row of buttons
    *  in the header. */
@@ -163,10 +169,10 @@ export function PassageTools({
   const roomy = useMediaQuery("(min-width: 80rem)");
   const [more, setMore] = useState(false);
 
-  const mark = (which: MarkColour) => {
+  const mark = (which: MarkStyle) => {
     onColour(which);
     if (selected) {
-      onMarks([...marks, { ...selected.where, colour: which }]);
+      onMarks([...marks, { ...selected.where, style: which }]);
       window.getSelection()?.removeAllRanges();
     }
     setPicking(false);
@@ -212,13 +218,17 @@ export function PassageTools({
           beside a word is a bullet — it reads as punctuation, and at this
           size it was louder than the label it was qualifying. Tinting the
           icon says the same thing in the space the icon already occupies:
-          this is the colour the next mark will be. */}
+          the pen is loaded.
+
+          It no longer says WHICH mark is next, because both are the same
+          amber now and an amber icon cannot distinguish them. The tray
+          under it does, and it is one press away. */}
       <Tool
         icon={Highlighter}
         label="Highlight"
         pressed={picking}
         onClick={() => setPicking((was) => !was)}
-        inked={colour}
+        inked
       />
       <Tool
         icon={StickyNote}
@@ -270,10 +280,10 @@ export function PassageTools({
         </>
       )}
 
-      {/* The colours, under the button that opens them. */}
+      {/* The two strokes, under the button that opens them. */}
       {picking && (
         <Tray onClose={() => setPicking(false)} className="right-auto left-0">
-          {MARK_COLOURS.map((which) => (
+          {MARK_STYLES.map((which) => (
             <button
               key={which}
               type="button"
@@ -292,7 +302,7 @@ export function PassageTools({
             // before selecting anything is the natural order, and it does
             // nothing visible.
             <p className="mt-1 border-t border-border px-2 pt-1.5 text-[0.7rem] text-muted-foreground">
-              Select the words first, then pick a colour.
+              Select the words first, then pick a mark.
             </p>
           )}
         </Tray>
@@ -398,9 +408,11 @@ function Tool({
   dim?: boolean;
   title?: string;
   onClick: () => void;
-  /** Paints the ICON in one of the mark colours. What the reader has chosen
-   *  for the next highlight, said in the space the icon already takes. */
-  inked?: MarkColour;
+  /** Paints the ICON in the mark colour: the pen is loaded, said in the
+   *  space the icon already takes. A boolean rather than a style, because
+   *  both marks are the same amber — which of the two is next is what the
+   *  tray under this button is for. */
+  inked?: boolean;
   /** A bigger box for an icon that needs one. Most are a single shape; the
    *  size stepper's pack a letter AND an arrow into the same square, so at
    *  a shared size they read as half the weight of everything beside them. */
@@ -441,7 +453,11 @@ function Tool({
     >
       {Icon && (
         <Icon
-          className={cn("shrink-0", iconClass ?? "size-4", inked && INK[inked])}
+          className={cn(
+            "shrink-0",
+            iconClass ?? "size-4",
+            inked && "text-mark-key",
+          )}
           aria-hidden
         />
       )}
@@ -497,19 +513,25 @@ export function TextSize({
   );
 }
 
-/** The mark colours as a foreground, for the pen that carries one. */
-const INK: Record<MarkColour, string> = {
-  key: "text-mark-key",
-  found: "text-mark-found",
-  doubt: "text-mark-doubt",
-};
-
+/**
+ * What a mark looks like, at the size of a swatch.
+ *
+ * It was a filled circle in one of three colours, which is the right shape
+ * for a palette and the wrong one now: both marks are the same amber, so a
+ * circle of it twice would be a control offering the same thing twice. A
+ * swatch has to show the STROKE — a filled block against an underlined
+ * one — because that is the only thing that differs, and it is exactly
+ * what the reader will see on the passage.
+ *
+ * Wider than it is tall for the same reason: a stroke is a thing with a
+ * length, and an underline under a circle is a hyphen.
+ */
 export function Swatch({
   colour,
   ring,
   small,
 }: {
-  colour: MarkColour;
+  colour: MarkStyle;
   ring?: boolean;
   small?: boolean;
 }) {
@@ -517,15 +539,13 @@ export function Swatch({
     <span
       aria-hidden
       className={cn(
-        "shrink-0 rounded-full",
-        small ? "size-2" : "size-3",
+        "shrink-0 rounded-[0.15rem]",
+        small ? "h-2 w-3.5" : "h-2.5 w-4.5",
         ring &&
           "ring-2 ring-foreground/30 ring-offset-1 ring-offset-background",
-        colour === "key"
-          ? "bg-mark-key"
-          : colour === "found"
-            ? "bg-mark-found"
-            : "bg-mark-doubt",
+        colour === "fill"
+          ? "bg-mark-key/70"
+          : "border-b-2 border-mark-key bg-mark-key/10",
       )}
     />
   );

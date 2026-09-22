@@ -3,8 +3,8 @@ import { createPortal } from "react-dom";
 import { BookOpen, Check, Copy, StickyNote } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Swatch } from "@/features/reading/components/PassageTools";
-import { MARK_COLOURS, MARK_MEANING } from "@/features/reading/highlights";
-import type { MarkColour } from "@/features/reading/highlights";
+import { MARK_MEANING, MARK_STYLES } from "@/features/reading/highlights";
+import type { MarkStyle } from "@/features/reading/highlights";
 import { LOOKUP_BUDGET, LOOKUP_WORDS } from "@/features/reading/lookups";
 import type { Selected } from "@/features/reading/selection";
 
@@ -90,7 +90,7 @@ export function SelectionPopover({
   allowLookup,
 }: {
   selected: Selected | null;
-  onMark: (colour: MarkColour) => void;
+  onMark: (style: MarkStyle) => void;
   onNote: (at: Selected) => void;
   onLookup: (
     word: string,
@@ -148,7 +148,7 @@ export function SelectionPopover({
         // else collapses it, and the panel would then be acting on nothing.
         onMouseDown={(e) => e.preventDefault()}
       >
-        {MARK_COLOURS.map((colour) => (
+        {MARK_STYLES.map((colour) => (
           <button
             key={colour}
             type="button"
