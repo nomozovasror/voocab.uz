@@ -1,5 +1,24 @@
 # The learner's listening pages
 
+## These pages serve BOTH papers
+
+`PracticePage` takes a `Skill` descriptor and reading renders the same
+component (`features/paper/skill.ts`). So nothing under here may write
+`/listening` into a link, a label or a count — it will be read by somebody
+on the reading page, where it is simply false.
+
+It was, in the one place hardest to see: the right-hand column's links.
+`PracticeStats` showed reading's own figures — the API was always right —
+under `See your answers` → `/listening/attempts/<a reading attempt id>`,
+`Sit again` → `/listening/<a reading material id>`, and `Full statistics`
+→ listening's. A reader on the reading page pressed a card about the
+passage they had just sat and arrived in the other paper. It also offered
+`Start with Part 1` where a reading paper has passages.
+
+The column takes `basePath` and `partWord` now, from the same descriptor
+everything else does. The rule to keep: **a route or a part word in this
+directory comes from the skill, never from a string.**
+
 The take screen's own rules (one scroll, the question strip, the travelling
 player, the waveform) live in
 `frontend/src/features/listening/CLAUDE.md` — read that too before changing

@@ -390,6 +390,18 @@ async def test_a_thin_part_gets_a_dash_rather_than_a_percentage() -> None:
             # hole rather than as "not started".
             assert [row["part"] for row in stats["by_part"]] == [1, 2, 3, 4]
             assert stats["materials_done"] == 1
+
+            # And a reading paper has THREE. The count used to be a constant
+            # of four for both, so the reading page reported a fourth passage
+            # that no reading paper has, sitting at the bottom of every
+            # distribution with nothing in it for ever.
+            reading = await client.get(
+                "/api/reading/stats", cookies={"access_token": token}
+            )
+            assert reading.status_code == 200, reading.text
+            assert [
+                row["part"] for row in reading.json()["by_part"]
+            ] == [1, 2, 3]
     finally:
         await _cleanup([material.id], email)
 

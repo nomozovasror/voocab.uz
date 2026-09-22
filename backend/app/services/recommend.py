@@ -147,7 +147,11 @@ def _steady(by_part: list[dict]) -> bool:
     scored = [
         row["accuracy_pct"] for row in by_part if row["accuracy_pct"] is not None
     ]
-    if len(scored) < len(learner_stats.PARTS):
+    # Against the rows it was HANDED rather than against a constant. The
+    # distribution already holds exactly this paper's parts -- four for
+    # listening, three for reading -- and the constant knew only about the
+    # first of those, so no reading candidate could ever be steady.
+    if not by_part or len(scored) < len(by_part):
         return False
     return min(scored) >= WEAK_CEILING and max(scored) - min(scored) < DECISIVE_GAP
 

@@ -33,6 +33,7 @@ from app.models.part import Part
 from app.models.question import Question
 from app.models.question_attempt import QuestionAttempt
 from app.models.question_group import QuestionGroup
+from app.services import listening as listening_service
 from app.services import mistakes as mistakes_service
 from app.services.listening import answers_are_chosen
 
@@ -49,8 +50,17 @@ MIN_MISTAKES = 10
 #: joining up noise.
 TREND_WINDOW = 10
 
-#: The four parts of a listening paper, always reported, in order.
-PARTS = (1, 2, 3, 4)
+#: A paper's parts, always reported and in order, however few of them were
+#: answered. Four for listening and THREE for reading -- forty questions
+#: over three passages -- and the number comes from the one place that
+#: already knows it rather than being written down a second time here.
+#:
+#: It used to be a constant of four for both, so the reading page reported
+#: a fourth passage that no reading paper has, sitting at the bottom of
+#: every distribution with nothing in it. A row that can never fill is a row
+#: the reader spends time wondering about.
+def parts_of(skill: str) -> tuple[int, ...]:
+    return tuple(range(1, listening_service.full_test_parts(skill) + 1))
 
 
 def _pct(value: float) -> int:
@@ -207,7 +217,7 @@ def _trend(first_attempts: list[Attempt]) -> dict | None:
 
 
 async def _by_part(
-    session: AsyncSession, first_attempt_ids: list[uuid.UUID]
+    session: AsyncSession, first_attempt_ids: list[uuid.UUID], *, skill: str
 ) -> list[dict]:
     """Accuracy by part, over first attempts only.
 
@@ -217,10 +227,11 @@ async def _by_part(
     what a row is worth to this reader, and because the full statistics page
     will want it.
     """
-    tally: dict[int, list[int]] = {n: [0, 0] for n in PARTS}
+    parts = parts_of(skill)
+    tally: dict[int, list[int]] = {n: [0, 0] for n in parts}
     if not first_attempt_ids:
         return [
-            {"part": n, "answered": 0, "accuracy_pct": None} for n in PARTS
+            {"part": n, "answered": 0, "accuracy_pct": None} for n in parts
         ]
 
     rows = (
@@ -255,7 +266,7 @@ async def _by_part(
                 else None
             ),
         }
-        for n in PARTS
+        for n in parts
     ]
 
 
@@ -401,7 +412,7 @@ async def first_attempt_profile(
         # a recommendation off one paper is a guess with a confident voice.
         "materials_done": len(first_by_material),
         "average_pct": _mean(scores),
-        "by_part": await _by_part(session, first_ids),
+        "by_part": await _by_part(session, first_ids, skill=skill),
     }
 
 
@@ -499,5 +510,5 @@ async def listening_stats(
         ),
         "mistakes": await _mistakes(session, first_ids),
         "trend": _trend(first_attempts),
-        "by_part": await _by_part(session, first_ids),
+        "by_part": await _by_part(session, first_ids, skill=skill),
     }

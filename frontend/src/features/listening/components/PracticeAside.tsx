@@ -67,6 +67,8 @@ function Label({ children }: { children: React.ReactNode }) {
 interface PracticeAsideProps {
   /** Where this paper's pages live. See PracticeRow. */
   basePath: string;
+  /** What one part of it is called, capitalised: `Passage`, `Part`. */
+  partWord: string;
   stats: LearnerStats | undefined;
   statsLoading: boolean;
   /** The row under the pointer, or with keyboard focus. */
@@ -78,6 +80,7 @@ interface PracticeAsideProps {
 export function PracticeAside({
   stats,
   basePath,
+  partWord,
   statsLoading,
   preview,
   onPractisePart,
@@ -90,7 +93,12 @@ export function PracticeAside({
     // make a failed side request look like the page is broken.
     return (
       <Face key="stats">
-        <PracticeStats stats={stats} onBrowsePart={onPractisePart} />
+        <PracticeStats
+          stats={stats}
+          basePath={basePath}
+          partWord={partWord}
+          onBrowsePart={onPractisePart}
+        />
       </Face>
     );
   }

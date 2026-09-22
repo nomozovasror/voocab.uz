@@ -936,6 +936,7 @@ export function PracticePage({ skill }: { skill: Skill }) {
         >
           <PracticeAside
             basePath={skill.basePath}
+            partWord={skill.part.title}
             stats={stats.data}
             statsLoading={stats.isLoading}
             preview={preview}

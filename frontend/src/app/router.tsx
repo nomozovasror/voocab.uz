@@ -79,6 +79,16 @@ export const router = createBrowserRouter([
             ...page(() => import("@/pages/reading/ReadingResultsPage")),
           },
           {
+            // Above ``reading/:id`` for the reason every one of these is:
+            // "statistics" is not a material id. The page is the same stub
+            // listening reaches, and it reads which paper it is about off
+            // the path — the sidebar linked here from the reading page long
+            // before this route existed, and landed the reader in the other
+            // paper.
+            path: "reading/statistics",
+            ...page(() => import("@/pages/listening/ListeningStatsPage")),
+          },
+          {
             // Above ``reading/:id``, like every other one of these: a path
             // segment that is not a material id has to be matched before the
             // route that would read it as one. It renders the take page,

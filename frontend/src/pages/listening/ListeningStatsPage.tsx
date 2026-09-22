@@ -1,8 +1,15 @@
 import { ArrowLeft } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
+import { SKILLS } from "@/features/paper/skill";
 
 /**
  * Full statistics — the room the sidebar's numbers don't fit in.
+ *
+ * One stub for both papers, which paper it is taken from the path it was
+ * reached by. It was listening's alone, and the sidebar on the reading page
+ * linked to it anyway — so somebody reading about their reading was offered
+ * "Back to listening", which is the page telling them they are somewhere
+ * they are not.
  *
  * A stub, and deliberately an honest one. The sidebar links here from two
  * places ("Review your mistakes", "Full statistics"), and a link that 404s is
@@ -20,7 +27,11 @@ import { Link } from "react-router-dom";
  * No band score. The IELTS scale is calibrated to a 40-question paper, and
  * quoting a band off a six-question Part 1 is precision that isn't there.
  */
-export default function ListeningStatsPage() {
+export default function PaperStatsPage() {
+  const { pathname } = useLocation();
+  const skill = pathname.startsWith(SKILLS.reading.basePath)
+    ? SKILLS.reading
+    : SKILLS.listening;
   return (
     <div className="mx-auto w-full max-w-2xl py-16">
       <h1 className="text-2xl font-semibold text-foreground">Full statistics</h1>
@@ -31,11 +42,11 @@ export default function ListeningStatsPage() {
         starts to drop.
       </p>
       <Link
-        to="/listening"
+        to={skill.basePath}
         className="mt-6 inline-flex items-center gap-1.5 text-sm text-primary transition-colors hover:underline"
       >
         <ArrowLeft className="size-3.5" aria-hidden />
-        Back to listening
+        Back to {skill.name}
       </Link>
     </div>
   );

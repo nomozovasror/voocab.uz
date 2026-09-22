@@ -65,28 +65,50 @@ function Label({ children }: { children: React.ReactNode }) {
 
 interface PracticeStatsProps {
   stats: LearnerStats;
+  /** Where this paper's pages live — `/reading`, `/listening`.
+   *
+   *  Every link out of this column used to be written `/listening/...`,
+   *  which was true for as long as there was one paper. On the reading page
+   *  the column then showed reading's own figures under links that took the
+   *  reader to listening: "See your answers" opened the listening review
+   *  with a reading attempt id in it. The numbers were never wrong; every
+   *  way out of them was. */
+  basePath: string;
+  /** What one part of this paper is called, capitalised: `Passage`, `Part`.
+   *  A reading page telling somebody to start with Part 1 is naming a thing
+   *  a reading paper does not have. */
+  partWord: string;
   onBrowsePart: (scope: Scope) => void;
 }
 
-export function PracticeStats({ stats, onBrowsePart }: PracticeStatsProps) {
+export function PracticeStats({
+  stats,
+  basePath,
+  partWord,
+  onBrowsePart,
+}: PracticeStatsProps) {
   // Nothing sat yet. Every card here is a measurement, so they all go rather
   // than standing empty: "0%" and "0 done" are not encouraging, they are not
   // informative, and they are not even true — nothing has been measured.
   if (stats.materials_done === 0) {
-    return <GettingStarted onBrowsePart={onBrowsePart} />;
+    return (
+      <GettingStarted partWord={partWord} onBrowsePart={onBrowsePart} />
+    );
   }
 
   return (
     <div className="space-y-2">
-      {stats.resume && <ResumeCard resume={stats.resume} />}
+      {stats.resume && (
+        <ResumeCard resume={stats.resume} basePath={basePath} />
+      )}
 
-      <MistakesCard mistakes={stats.mistakes} />
+      <MistakesCard mistakes={stats.mistakes} basePath={basePath} />
 
       {/* Absent until there are ten attempts to draw. A line through four
           points is joining up noise and calling it a trend. */}
       {stats.trend && <TrendCard trend={stats.trend} />}
 
-      <Totals stats={stats} />
+      <Totals stats={stats} basePath={basePath} />
     </div>
   );
 }
@@ -110,7 +132,13 @@ export function PracticeStats({ stats, onBrowsePart }: PracticeStatsProps) {
  * what kind of mistakes, then the trend, then the totals — and the page has a
  * side for what to do and a side for how it is going.
  */
-function ResumeCard({ resume }: { resume: NonNullable<LearnerStats["resume"]> }) {
+function ResumeCard({
+  resume,
+  basePath,
+}: {
+  resume: NonNullable<LearnerStats["resume"]>;
+  basePath: string;
+}) {
   return (
     <Card label="Your last result">
       <Label>Your last result</Label>
@@ -127,14 +155,14 @@ function ResumeCard({ resume }: { resume: NonNullable<LearnerStats["resume"]> })
       </p>
       <div className="mt-2.5 flex items-center gap-4 text-sm">
         <Link
-          to={`/listening/attempts/${resume.attempt_id}`}
+          to={`${basePath}/attempts/${resume.attempt_id}`}
           className="inline-flex items-center gap-1 text-primary transition-colors hover:underline"
         >
           See your answers
           <ArrowRight className="size-3.5" aria-hidden />
         </Link>
         <Link
-          to={`/listening/${resume.material_id}`}
+          to={`${basePath}/${resume.material_id}`}
           className="text-muted-foreground transition-colors hover:text-foreground"
         >
           Sit again
@@ -153,7 +181,13 @@ function ResumeCard({ resume }: { resume: NonNullable<LearnerStats["resume"]> })
  * answer at all has two different problems with two different evenings' work
  * behind them. Neither is visible in "62%".
  */
-function MistakesCard({ mistakes }: { mistakes: Mistakes | null }) {
+function MistakesCard({
+  mistakes,
+  basePath,
+}: {
+  mistakes: Mistakes | null;
+  basePath: string;
+}) {
   if (!mistakes || mistakes.groups.length === 0) {
     return (
       <Card label="Where you lose marks">
@@ -210,7 +244,7 @@ function MistakesCard({ mistakes }: { mistakes: Mistakes | null }) {
       </ul>
 
       <Link
-        to="/listening/statistics"
+        to={`${basePath}/statistics`}
         className="mt-3 inline-flex items-center gap-1 text-sm text-primary transition-colors hover:underline"
       >
         Review your mistakes
@@ -314,7 +348,13 @@ function Sparkline({ points, up }: { points: number[]; up: boolean }) {
 
 // --- 4. Totals --------------------------------------------------------------
 
-function Totals({ stats }: { stats: LearnerStats }) {
+function Totals({
+  stats,
+  basePath,
+}: {
+  stats: LearnerStats;
+  basePath: string;
+}) {
   return (
     <Card label="Totals">
       <dl className="space-y-1 text-sm">
@@ -341,7 +381,7 @@ function Totals({ stats }: { stats: LearnerStats }) {
           it cost a card's worth of gap to say four words, and the column is
           already taller than a short laptop screen. */}
       <Link
-        to="/listening/statistics"
+        to={`${basePath}/statistics`}
         className="mt-3 block border-t border-border-subtle pt-2.5 text-center text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         Full statistics →
@@ -363,14 +403,16 @@ function Total({ label, value }: { label: string; value: string | null }) {
 // --- The empty state --------------------------------------------------------
 
 function GettingStarted({
+  partWord,
   onBrowsePart,
 }: {
+  partWord: string;
   onBrowsePart: (scope: Scope) => void;
 }) {
   return (
     <div className="space-y-2">
       <Card label="Getting started">
-        <p className="text-sm text-foreground">Start with Part 1</p>
+        <p className="text-sm text-foreground">Start with {partWord} 1</p>
         <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
           It&apos;s the most approachable — a short conversation with a form to
           fill in. Sit two or three and you&apos;ll start seeing where your
@@ -383,7 +425,7 @@ function GettingStarted({
           onClick={() => onBrowsePart(1)}
           className="mt-2.5 h-auto px-0 text-sm"
         >
-          Browse Part 1
+          Browse {partWord} 1
           <ArrowRight className="size-3.5" aria-hidden />
         </Button>
       </Card>
