@@ -68,13 +68,16 @@ def _client() -> httpx.AsyncClient:
 async def _rows(client: httpx.AsyncClient, token: str, **params) -> list[dict]:
     """One page of the catalogue, as a list.
 
-    ``done=true`` by default because the endpoint now puts materials the
-    caller has already sat away, and half of these tests are about what a row
-    says once it HAS been sat. ``limit`` is raised for the same reason a test
-    looks its material up by id rather than taking the first row: the test
-    database holds whatever every other test left behind.
+    No ``done`` by default, which is the list as a learner first meets it:
+    what they have not sat. A test about what a row says once it HAS been
+    sat passes ``done="true"`` — the filter means "only the finished ones"
+    now, so the two cannot be asked for in one request.
+
+    ``limit`` is raised for the same reason a test looks its material up by
+    id rather than taking the first row: the test database holds whatever
+    every other test left behind.
     """
-    query = {"done": "true", "limit": 100, **params}
+    query = {"limit": 100, **params}
     r = await client.get(
         "/api/listening/practice", params=query, cookies={"access_token": token}
     )
@@ -290,7 +293,7 @@ async def test_the_history_in_a_row_is_the_callers_own() -> None:
             assert r_theirs.status_code == 200, r_theirs.text
             assert r_theirs.json()["score"] == 3
 
-            rows = await _rows(client, my_token)
+            rows = await _rows(client, my_token, done="true")
             row = next(x for x in rows if x["id"] == str(material.id))
             assert row["attempts"] == 2
             # Mine, not the better score somebody else got.
@@ -298,7 +301,7 @@ async def test_the_history_in_a_row_is_the_callers_own() -> None:
             assert row["last_attempt_id"] == last_id
             assert row["last_attempt_at"] is not None
 
-            their_rows = await _rows(client, their_token)
+            their_rows = await _rows(client, their_token, done="true")
             row_other = next(
                 x for x in their_rows if x["id"] == str(material.id)
             )
@@ -401,9 +404,13 @@ async def test_search_matches_the_title_and_the_author() -> None:
 
 @pytest.mark.asyncio
 async def test_done_materials_are_put_away_and_counted() -> None:
-    """The one filter that starts on. It is not silent about it: what it
-    holds back comes back as a number, because a list quietly shorter than
-    the reader knows the library to be is a list that looks broken."""
+    """The one filter that starts on, and what it does in each of the three
+    states the page can be in.
+
+    It is not silent about what it holds back: the number comes back, because
+    a list quietly shorter than the reader knows the library to be is a list
+    that looks broken.
+    """
     email = "cat-done@example.com"
     user = await _make_user(email)
     prefix = f"Done{uuid.uuid4().hex[:8]}"
@@ -422,15 +429,37 @@ async def test_done_materials_are_put_away_and_counted() -> None:
             )
             assert r.status_code == 200, r.text
 
-            default = await _catalogue(client, token, q=prefix)
-            assert [x["id"] for x in default["items"]] == [str(fresh.id)]
-            assert default["total"] == 1
-            assert default["done_hidden"] == 1
+            # 1. Browsing: what is left to practise, and a count of what that
+            #    put away.
+            browsing = await _catalogue(client, token, limit=100)
+            listed = [x["id"] for x in browsing["items"]]
+            assert str(fresh.id) in listed
+            assert str(sat.id) not in listed
+            assert browsing["done_hidden"] >= 1
 
+            # 2. Searching: the finished one comes back too, BELOW the one
+            #    they have not sat. A search is somebody naming the thing
+            #    they want, and answering "no results" for a paper they sat
+            #    last week — which they can see is on the shelf — is the page
+            #    refusing the question it was asked.
+            found = await _catalogue(client, token, q=prefix)
+            assert [x["id"] for x in found["items"]] == [
+                str(fresh.id),
+                str(sat.id),
+            ]
+            assert found["total"] == 2
+            # And nothing is being held back, so the line above the list has
+            # nothing to say.
+            assert found["done_hidden"] == 0
+
+            # 3. Asked for: ONLY the finished ones. The chip used to mean
+            #    "and the done ones as well", which made it a way of clearing
+            #    a filter rather than applying one — and left "what have I
+            #    already sat" the one question the catalogue could not be
+            #    asked.
             asked = await _catalogue(client, token, q=prefix, done="true")
-            assert asked["total"] == 2
-            # Nothing is being held back once they have been asked for, so
-            # the line above the list has nothing to say.
+            assert [x["id"] for x in asked["items"]] == [str(sat.id)]
+            assert asked["total"] == 1
             assert asked["done_hidden"] == 0
     finally:
         await _cleanup([sat.id, fresh.id], email)

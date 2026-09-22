@@ -17,9 +17,19 @@ most of it is half a megabyte of JSON to show somebody thirty titles.
 - **Facets are counted over the whole library**, never the page and never
   what the other filters left. An option that appears and vanishes as you
   filter is one nobody can aim at.
-- **`done` defaults to false** — sat materials are put away — and the
-  endpoint reports how many that hid (`done_hidden`). Never hide rows without
-  saying so.
+- **`done` has three states, not two.** Off with nothing typed, materials
+  the caller has sat are put away and `done_hidden` says how many — never
+  hide rows without saying so. **On, the list is ONLY the finished ones**;
+  it used to mean "and the done ones as well", which made the chip a way of
+  clearing a filter rather than applying one, and left "what have I already
+  sat" the one question the catalogue could not be asked. Off **while
+  something is typed**, they come back and sort BELOW everything unsat: a
+  search is somebody naming the thing they want, and "no results" for a
+  paper they sat last week — which they can see is on the shelf — is the
+  page refusing the question. `done_hidden` is then zero, because nothing is
+  being hidden.
+- The same three states, with the same reasoning, in `drills.list_drills`.
+  Two lists with one chip over them cannot mean different things by it.
 - Anything a row prints that is a fact about the LIBRARY rather than the
   material must come from the server. The byline's "4 materials here" was
   counted in the browser and became a lie the day the browser stopped having

@@ -250,7 +250,10 @@ async def test_a_row_says_which_parts_it_holds_and_who_wrote_it() -> None:
 
             r = await client.get(
                 "/api/listening/practice",
-                params={"done": "true", "limit": 100},
+                # Nothing has been sat here, so the default list is the one
+                # that holds it: `done=true` asks for the finished ones and
+                # this material is not one of them.
+                params={"limit": 100},
                 cookies={"access_token": token},
             )
             assert r.status_code == 200, r.text

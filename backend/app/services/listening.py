@@ -1165,6 +1165,25 @@ def _band_of():
     return func.coalesce(MaterialDifficulty.band, literal_column("'new'"))
 
 
+def _sat_by(user_id: uuid.UUID):
+    """Whether this caller has FINISHED the material, as SQL.
+
+    Written once because three things ask it — the filter, the count of what
+    the filter is holding back, and the order a search comes back in — and
+    three copies of "submitted, by them, for this material" is three places
+    for started-and-abandoned to start counting as done in one of them.
+    """
+    return (
+        select(Attempt.id)
+        .where(
+            Attempt.material_id == Material.id,
+            Attempt.user_id == user_id,
+            Attempt.status == AttemptStatus.SUBMITTED,
+        )
+        .exists()
+    )
+
+
 def _catalogue_where(
     user_id: uuid.UUID,
     *,
@@ -1232,20 +1251,26 @@ def _catalogue_where(
     if bands:
         where.append(_band_of().in_(bands))
 
-    if not done:
-        # Materials the caller has already sat are put away by default: the
-        # list answers "what shall I practise next", and a paper they have
-        # finished is the least likely answer on it. Started-and-abandoned
-        # does not count — only a submitted attempt is having done something.
-        where.append(
-            ~select(Attempt.id)
-            .where(
-                Attempt.material_id == Material.id,
-                Attempt.user_id == user_id,
-                Attempt.status == AttemptStatus.SUBMITTED,
-            )
-            .exists()
-        )
+    if done:
+        # ONLY what they have finished. The chip used to mean "and the done
+        # ones as well", which made it a way of clearing a filter rather than
+        # of applying one: pressing it answered "what is there" when what was
+        # being asked is "what have I already sat" -- the one question the
+        # catalogue could not be asked at all.
+        where.append(_sat_by(user_id))
+    elif not query:
+        # Off, and with nothing typed, materials the caller has already sat
+        # are put away: the list answers "what shall I practise next", and a
+        # paper they have finished is the least likely answer on it.
+        # Started-and-abandoned does not count -- only a submitted attempt is
+        # having done something.
+        #
+        # With something TYPED they stay. A search is somebody naming the
+        # thing they want, and a list that answers "no results" for a paper
+        # they sat last week -- which is on the shelf, and which they can see
+        # is on the shelf -- is the page refusing the question it was asked.
+        # They sort below everything unsat instead; see `_catalogue_order`.
+        where.append(~_sat_by(user_id))
 
     # Title, reference, author, and the name of a collection the material is
     # in. The
@@ -1311,7 +1336,7 @@ def _hit(column, term: str):
     return func.lower(column).like(f"%{term.lower()}%")
 
 
-def _catalogue_order(sort: str) -> list:
+def _catalogue_order(sort: str, demote=None) -> list:
     """The chosen order, with a tiebreaker that makes paging honest.
 
     Every order ends in ``created_at DESC, id``: two materials with the same
@@ -1319,18 +1344,27 @@ def _catalogue_order(sort: str) -> list:
     one of page two. Without the final ``id`` two rows written in the same
     transaction could swap places between two requests, which is a row the
     reader sees twice and one they never see.
+
+    ``demote`` sorts a set of rows to the bottom before anything else is
+    considered -- the finished ones, when a search is showing them. FALSE
+    sorts before TRUE, so the unsat come first without a CASE around it. It
+    goes FIRST in the list and not last, because "below the ones I have not
+    done" is the strongest thing the reader wants said about the order; the
+    sort they chose still governs within each half.
     """
     tail = [Material.created_at.desc(), Material.id]  # type: ignore[attr-defined]
     if sort == "easiest":
-        return [_band_case(_EASIEST_FIRST), *tail]
-    if sort == "hardest":
-        return [_band_case(_HARDEST_FIRST), *tail]
-    if sort == "shortest":
+        chosen = [_band_case(_EASIEST_FIRST), *tail]
+    elif sort == "hardest":
+        chosen = [_band_case(_HARDEST_FIRST), *tail]
+    elif sort == "shortest":
         # NULLS LAST: a material with no recording has no length, so it sorts
         # last rather than first — an unknown duration is not a duration of
         # zero.
-        return [AudioBlob.duration_ms.asc().nulls_last(), *tail]  # type: ignore[attr-defined]
-    return tail
+        chosen = [AudioBlob.duration_ms.asc().nulls_last(), *tail]  # type: ignore[attr-defined]
+    else:
+        chosen = tail
+    return [demote.asc(), *chosen] if demote is not None else chosen
 
 
 def _band_case(ranks: dict[str, int]):
@@ -1460,7 +1494,17 @@ async def practice_catalogue(
         (
             await session.exec(
                 page.where(*where)
-                .order_by(*_catalogue_order(sort))
+                # Finished materials sort below the rest, and only where
+                # they are being shown alongside them — which is a search
+                # with the chip off. Asked for on their own (the chip on)
+                # they are the whole list, and pushing them down inside it
+                # would order it by nothing.
+                .order_by(
+                    *_catalogue_order(
+                        sort,
+                        demote=_sat_by(user_id) if query and not done else None,
+                    )
+                )
                 .limit(limit)
                 .offset(offset)
             )
@@ -1468,11 +1512,15 @@ async def practice_catalogue(
     )
 
     # How many the default is holding back, over and above whatever the chips
-    # are doing: the same filters with that one switch flipped the other way.
+    # are doing: the same filters, asking for the finished ones instead.
+    #
     # Zero the moment the reader asks to see them, which is what makes the
-    # line above the list disappear rather than say "0 done".
+    # line above the list disappear rather than say "0 done" — and zero while
+    # they are SEARCHING, because a search shows them anyway. A footnote
+    # saying "12 done, put away" over a list that is showing the done ones is
+    # the page describing something it is not doing.
     done_hidden = 0
-    if not done:
+    if not done and not query:
         done_where = _catalogue_where(
             user_id,
             skill=skill,
@@ -1480,16 +1528,12 @@ async def practice_catalogue(
             scope=scope,
             types=types or [],
             bands=bands or [],
+            # Which now means "only the finished ones" and therefore says
+            # the whole of what is being counted. It used to mean "don't
+            # filter by finishedness", so the clause had to be appended
+            # here by hand — two statements of one rule, and the one out
+            # here is the one that would have been forgotten.
             done=True,
-        )
-        done_where.append(
-            select(Attempt.id)
-            .where(
-                Attempt.material_id == Material.id,
-                Attempt.user_id == user_id,
-                Attempt.status == AttemptStatus.SUBMITTED,
-            )
-            .exists()
         )
         done_hidden = int(
             (

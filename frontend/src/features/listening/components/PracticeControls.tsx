@@ -692,14 +692,20 @@ export function FilterChips({
             parts={parts}
           />
           {/* The one chip that starts the list off narrower than the
-              catalogue. It reads as what it does rather than as what it hides
-              — "Show done" off is a list of what there is left to practise,
-              which is the question the page is here to answer. */}
+              catalogue. Off is a list of what there is left to practise,
+              which is the question the page is here to answer.
+              
+              On is ONLY the finished ones, and the label says so. It used to
+              say "Show done" and mean "and the done ones as well", which
+              made it a way of CLEARING a filter rather than applying one —
+              so "what have I already sat" was the one question the catalogue
+              could not be asked, and the chip's two states answered the same
+              question at two widths. */}
           <Chip
             active={showDone}
             onClick={() => onChange({ showDone: !showDone })}
           >
-            Show done
+            Done only
           </Chip>
 
           {(typeOptions.length > 0 || bandOptions.length > 0) && <ChipDivider />}
@@ -794,7 +800,7 @@ export function FilterChips({
                 active={showDone}
                 onClick={() => onChange({ showDone: !showDone })}
               >
-                Show done
+                Done only
               </Chip>
             </>
           )}
@@ -1009,7 +1015,13 @@ export function ListHeader({
   /** How many materials the default "done are put away" is holding back, over
    *  and above whatever the chips are doing. Printed, because a list quietly
    *  short of what the reader knows is in it is a list that looks broken —
-   *  the chip above turns them back on. */
+   *  the chip above shows them on their own, and typing anything into the
+   *  field brings them back into the list.
+   *
+   *  Zero while there IS something typed, because a search shows them. The
+   *  server decides that, not this component: a footnote about what has been
+   *  put away, over a list that is showing it, is the page describing
+   *  something it is not doing. */
   hiddenDone?: number;
   sort: SortKey;
   onSort: (sort: SortKey) => void;

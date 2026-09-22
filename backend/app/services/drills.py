@@ -257,11 +257,16 @@ async def list_drills(
     per type would be a card nobody clicks beside one that answers the same
     question.
 
-    ``done`` defaults to False and hides drills the caller has already
-    submitted, reporting how many that hid — the catalogue's rule, for the
-    catalogue's reason: a list answering "what shall I practise next" that
-    leads with work already finished has stopped answering it, and a filter
-    that hides things silently is one that makes the list look broken.
+    ``done`` follows the catalogue's rule exactly, in all three of its
+    states, and for the catalogue's reasons:
+
+    * off and nothing typed — drills the caller has finished are put away,
+      and how many that hid comes back as a number. A list answering "what
+      shall I practise next" that leads with finished work has stopped
+      answering it; one that hides things silently looks broken.
+    * off and SEARCHING — they come back, below the ones not done. A search
+      is somebody naming the thing they want.
+    * on — ONLY the finished ones.
     """
     base = (
         select(QuestionGroup, Material, Part)
@@ -291,6 +296,19 @@ async def list_drills(
         .exists()
     )
 
+    # The filters that are not about finishedness, kept aside: the count of
+    # what is being held back asks them WITH `drilled`, and the list below
+    # is about to be narrowed the other way.
+    filters = list(where)
+
+    # The same three states as the catalogue's: only the finished ones,
+    # everything (a search shows them and sorts them last), or what is left
+    # to do.
+    if done:
+        where.append(drilled)
+    elif not query:
+        where.append(~drilled)
+
     total = int(
         (
             await session.exec(
@@ -298,13 +316,14 @@ async def list_drills(
                 .select_from(QuestionGroup)
                 .join(Part, Part.id == QuestionGroup.part_id)  # type: ignore[arg-type]
                 .join(Material, Material.id == Part.material_id)  # type: ignore[arg-type]
-                .where(*where, *([] if done else [~drilled]))
+                .where(*where)
             )
         ).one()
     )
 
+    # Nothing is being held back while a search is showing them.
     done_hidden = 0
-    if not done:
+    if not done and not query:
         done_hidden = int(
             (
                 await session.exec(
@@ -312,17 +331,20 @@ async def list_drills(
                     .select_from(QuestionGroup)
                     .join(Part, Part.id == QuestionGroup.part_id)  # type: ignore[arg-type]
                     .join(Material, Material.id == Part.material_id)  # type: ignore[arg-type]
-                    .where(*where, drilled)
+                    .where(*filters, drilled)
                 )
             ).one()
         )
 
     rows = (
         await session.exec(
-            base.where(*where, *([] if done else [~drilled]))
+            base.where(*where)
             # A total order, for the reason the catalogue's own order has one:
             # without the tail, row 30 of page 1 can also be row 1 of page 2.
+            # Finished drills sort below the rest where they are being shown
+            # alongside them, which is a search with the filter off.
             .order_by(
+                *([drilled.asc()] if query and not done else []),
                 Material.created_at.desc(),  # type: ignore[attr-defined]
                 Material.id,  # type: ignore[arg-type]
                 QuestionGroup.order_index,  # type: ignore[arg-type]
