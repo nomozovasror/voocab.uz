@@ -2680,6 +2680,33 @@ The listening one confirms itself: with the gaps back in the book's order
 its replay marks run forwards in time (248s → 272s → 295s → 341s → 385s),
 where before they doubled back. The recording agrees with the page.
 
+### A replay span must not go backwards either
+
+`mark_answers.py` has always refused a placement that goes backwards — a
+paper asks its questions in the order the recording answers them. What had
+no such rule was `build_questions.py`'s own fallback, which finds a span by
+searching the alignment for the answer's own words.
+
+`locate` refuses an AMBIGUOUS match, and that is not the same guard. A
+phrase said once in the whole recording is unambiguous even when the once is
+in the wrong place. Cambridge 10 Test 2 Section 1 answers question 10 with
+`training` at 345s; the alignment has the word only at 203s, inside "I've
+just finished my training. I'm a hairdresser" — the ASR dropped the sentence
+that answers the question, and the search found the distractor with nothing
+to tell the two apart. The replay button sent the learner two minutes early,
+to a sentence about a different thing.
+
+**22 of 395 marked groups** had a span like it, and nearly all were Section 4
+note completion, where a monologue answers strictly in order.
+
+The rule now: a span that starts before the previous answer's is asked again
+over the stretch AFTER it. Three came back at the right moment — the phrase
+really is said twice. The other nineteen were dropped: no replay button,
+which is this pipeline's standing answer to a placement it cannot vouch for,
+and better than one that teaches a learner they misheard something they
+never heard. Equal is allowed — a "choose TWO" is answered in one breath and
+the book prints `17&18` against a single line.
+
 ### Lemmatisation without a parser
 
 The lists ship lemmatised, so most surface forms map home by lookup, and that

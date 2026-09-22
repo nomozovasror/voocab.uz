@@ -576,7 +576,7 @@ def build(section_id: str) -> int:
 
     problems: list[str] = []
     warnings: list[str] = []
-    recovered = moved = tightened = 0
+    recovered = moved = tightened = forwarded = unplaced = 0
     out_groups = []
     for gi, group in enumerate(src["groups"]):
         lettered = (group["type"] in LETTERED
@@ -602,6 +602,12 @@ def build(section_id: str) -> int:
             print(f"note: group {gi} was numbered {shifted} off the paper; "
                   "renumbered to start at 1", file=sys.stderr)
         numbers = [q["number"] for q in group["questions"]]
+        # Where the previous question of this group was answered. A paper
+        # asks its questions in the order the recording answers them -- the
+        # rule `mark_answers.py` already enforces on its own placements --
+        # so a span that starts before this one is evidence that the answer's
+        # words were matched at the wrong occurrence. See `forward` below.
+        floor = 0
 
         if not lettered and not fixed:
             gaps = [int(n) for n in GAP.findall(group.get("template") or "")]
@@ -742,6 +748,38 @@ def build(section_id: str) -> int:
                 span = settled
                 by_hand_used += 1
 
+            # And it must not go backwards.
+            #
+            # `locate` refuses an ambiguous match, but a phrase said ONCE in
+            # the whole recording is unambiguous even when the once is in the
+            # wrong place. Cambridge 10 Test 2 Section 1 answers question 10
+            # with "training" at 345s; the alignment has the word only at
+            # 203s, in "I've just finished my training. I'm a hairdresser" --
+            # the ASR dropped the sentence that answers the question, and the
+            # search found the distractor with nothing to tell it apart.
+            # Twenty-two sections had a span like it.
+            #
+            # Asked again, after the previous answer: a recording that says
+            # the phrase a second time in the right place gets the right
+            # moment. Where it does not, the span is dropped -- no replay
+            # button, which is this pipeline's standing answer to a placement
+            # it cannot vouch for. A marker on the wrong turn sends a learner
+            # to the wrong second of a recording, and that is worse than
+            # sending them nowhere.
+            #
+            # Equal is allowed. Two questions answered in one breath is a
+            # "choose TWO", and the book prints "17&18" against a single line.
+            if span is not None and span[0] < floor:
+                again = locate(answers, (floor, 1 << 62)) if not lettered else None
+                if again is not None:
+                    span = again
+                    forwarded += 1
+                else:
+                    span = None
+                    unplaced += 1
+            if span is not None:
+                floor = span[0]
+
             option_replay = ({letter: [span[0], span[1]] for letter in answers}
                              if span and group["type"] == "multiple_choice" else {})
             questions.append({
@@ -863,6 +901,13 @@ def build(section_id: str) -> int:
     if tightened:
         print(f"note: {tightened} replay span(s) longer than {LONG_SPAN // 1000}s "
               "narrowed to the answer's own words inside the turn", file=sys.stderr)
+    if forwarded:
+        print(f"note: {forwarded} replay span(s) re-found after the previous "
+              "answer, where the first match was earlier in the recording",
+              file=sys.stderr)
+    if unplaced:
+        print(f"note: {unplaced} replay span(s) dropped for going backwards; "
+              "those answers get no replay button", file=sys.stderr)
     for w in warnings:
         print(f"note: {w}", file=sys.stderr)
     if problems:
