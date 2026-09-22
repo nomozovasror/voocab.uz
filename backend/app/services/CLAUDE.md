@@ -216,7 +216,17 @@ word changing meaning underneath somebody is worse than one that has aged.
   be two implementations that have to agree for ever.
 - **The span match is how a phrase is recognised.** `give rise to` is one
   entry over three words; a tap on `rise` lands inside it. Nothing else
-  would ever surface it — every word in it is NGSL rank one hundred.
+  would ever surface it — every word in it is NGSL rank one hundred. It
+  tests `also_at` as well as the entry's own span, or a tap inside the
+  SECOND `give rise to` in a passage misses the phrase entirely and the
+  word is answered on its own, which is the one answer the phrase exists
+  to prevent.
+- **`also_at` carries every other place the word stands**, so the passage
+  can be marked at all of them off one row. One row per lemma is what makes
+  a tapped word have one answer; a row per occurrence would duplicate a
+  gloss fourteen times for `revolution`. Empty where the gloss is about one
+  USE rather than about the word — an unusual sense, or one that differs
+  from the word's ordinary meaning.
 - **`source` is never overwritten unless it is `extracted`.** The column
   exists from the first day so that nobody discovers, months later, that a
   re-run reverted their correction.

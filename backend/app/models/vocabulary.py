@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import Column, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as SA_UUID
 from sqlmodel import Field, SQLModel
 
@@ -173,6 +174,40 @@ class MaterialVocabulary(SQLModel, table=True):
     paragraph_index: int = Field(default=0)
     offset_start: int = Field(default=0)
     offset_end: int = Field(default=0)
+    #: Everywhere ELSE the same word stands in this material, as
+    #: ``[paragraph_index, start, end]`` triples in reading order.
+    #:
+    #: ## Why the row keeps a list instead of there being more rows
+    #:
+    #: One entry per lemma per material is the constraint the whole lookup
+    #: rests on: a reader taps a word, it is lemmatised, and exactly one row
+    #: answers. A row per occurrence would make that answer arbitrary and
+    #: would duplicate a gloss, an example and a level fourteen times over
+    #: for `revolution`.
+    #:
+    #: But the passage has to be MARKED at every occurrence, and for a long
+    #: time it was not: the entry carried one span, the review drew it, and
+    #: 17% of entries -- 8 864 occurrences across the corpus -- stood in the
+    #: text with nothing on them. A reader who meets `solutionism` twice and
+    #: sees one of them marked does not conclude that the second is a
+    #: different word. They conclude the list is incomplete.
+    #:
+    #: So: one row, one gloss, and the places as data on it. They cost
+    #: nothing to produce -- the deterministic scan already had them -- and
+    #: they are drawn more quietly than the first (see
+    #: ``features/reading/layers.ts``), because the first occurrence is
+    #: where the reader meets the word and the rest are where they meet it
+    #: again.
+    #:
+    #: Empty for an entry whose gloss is about one USE rather than about the
+    #: word: an unusual sense, or one the passage uses differently from the
+    #: word's ordinary meaning. `address` as "deal with" says nothing about
+    #: the `address` four paragraphs later, and the scan cannot tell them
+    #: apart. See ``repeatable`` in ``seed/read_vocabulary.py``.
+    also_at: list[list[int]] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False,
+                                               server_default="[]")
+    )
 
     #: ``B1``, ``B2`` or ``C1``, for the word in this sense -- so a common
     #: word used unusually is rated on the unusual use. THIS is the figure a

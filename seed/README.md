@@ -2629,6 +2629,28 @@ rule about the prompt, not about which words exist.
 The part of speech follows the lemma too. `learning` the noun is its own
 entry rather than `learn` wearing an `n`.
 
+### Every occurrence, not just the first
+
+An entry carries `again` — every other place the same word stands, as
+`[paragraph, start, end]`. `AI solutionism` appears twice in Cambridge 21's
+third passage and only the first of them was marked, which reads as the
+word list being incomplete rather than as the mark being economical.
+Measured: **17% of word entries** appear more than once in their passage,
+and **8 864 occurrences** across the corpus had nothing on them.
+
+The places cost nothing — the deterministic scan already walked them and was
+throwing all but the first away — and `--places-only` fills them in for a
+corpus already glossed without asking anybody anything.
+
+Two kinds of entry stay alone where they were found (`repeatable`): one
+marked `unusual`, and one whose sense differs from the word's ordinary
+meaning. `address` glossed as "deal with" says nothing about the `address`
+four paragraphs later, and the scan cannot tell them apart; a mark that puts
+one sense over the other is worse than no mark, because it is confidently
+wrong. A phrase repeats by EXACT search only — the case-insensitive second
+try `locate` makes is for placing one entry somebody can check, not for
+sweeping marks across a passage.
+
 ### Lemmatisation without a parser
 
 The lists ship lemmatised, so most surface forms map home by lookup, and that

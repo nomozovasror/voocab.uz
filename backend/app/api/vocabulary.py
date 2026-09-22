@@ -84,6 +84,7 @@ def _entry(
         paragraph_index=entry.paragraph_index,
         offset_start=entry.offset_start,
         offset_end=entry.offset_end,
+        also_at=entry.also_at,
         stale=vocabulary_service.stale(material, entry),
         saved=saved,
     )

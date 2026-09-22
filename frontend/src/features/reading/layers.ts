@@ -141,6 +141,19 @@ export interface Overlay {
    *  build the Saved layer by filtering these rather than by walking the
    *  entries a second time with a different predicate. */
   saved?: boolean;
+  /** For a `word`, a LATER occurrence of one already marked elsewhere.
+   *
+   *  Drawn as a thin rule under the word and nothing else — no wash. The
+   *  first occurrence is where the reader meets the word and deserves the
+   *  full mark; the rest are where they meet it again, and a passage that
+   *  washes `revolution` fourteen times is a passage nobody can read. What
+   *  the rule has to do is stop the reader concluding that an unmarked
+   *  word is one the list does not have.
+   *
+   *  It carries the same `key`, so pointing at the row on the right lights
+   *  every one of them at once — which is the moment the quiet ones become
+   *  worth having. */
+  repeat?: boolean;
   /** What this mark is about, so hovering a row on the right can light the
    *  matching marks on the left and nothing else. A question id for
    *  evidence, a lemma for a word. */
@@ -393,18 +406,27 @@ export function wordOverlays(
   const out: Overlay[] = [];
   for (const entry of entries) {
     if (entry.stale) continue;
-    out.push({
+    const shared = {
       partId: entry.part_id,
-      index: entry.paragraph_index,
-      start: entry.offset_start,
-      end: entry.offset_end,
-      tone: "word",
+      tone: "word" as const,
       level: entry.cefr_level,
       lookedUp: lookedUp(entry.lemma),
       saved: saved(entry.lemma),
       key: entry.lemma,
       title: entry.meaning_uz || entry.meaning_en,
+    };
+    out.push({
+      ...shared,
+      index: entry.paragraph_index,
+      start: entry.offset_start,
+      end: entry.offset_end,
     });
+    // And every other place the same word stands. Same key, same level,
+    // same title — one word, marked wherever it is — with `repeat` so the
+    // pane can draw them quietly. See `Overlay.repeat`.
+    for (const [index, start, end] of entry.also_at) {
+      out.push({ ...shared, index, start, end, repeat: true });
+    }
   }
   return out;
 }
@@ -450,6 +472,13 @@ export function overlaysIn(
       if (overlay.labels?.length) {
         last.labels = [...(last.labels ?? []), ...overlay.labels];
       }
+      // And it is drawn as loudly as the loudest claim on it. A phrase's
+      // LATER occurrence can sit over a word meeting the reader for the
+      // first time — `machine learning` in paragraph 4 over a word whose
+      // only appearance is inside it — and one mark has to serve both.
+      // Drawn quietly it would demote that word's only mark to a hairline
+      // for no reason the reader could see.
+      if (!overlay.repeat) last.repeat = false;
       continue;
     }
     // Copied, because the lines above write to it and these come from a
@@ -533,9 +562,19 @@ export const WASH: Record<
  */
 export function wordStyle(overlay: Overlay, lit: boolean): string {
   const tone = toneOf(overlay.level);
+  // A later occurrence is a rule under the word and nothing else, until
+  // somebody points at it — then it wears the full mark, because the whole
+  // reason the quiet ones exist is to be findable together.
+  const quiet = overlay.repeat && !lit;
   return [
-    tone.wash,
-    overlay.lookedUp
+    quiet
+      ? // `bg-transparent` is load-bearing and the third time this trap has
+        // been sprung: a <mark> with no ground of its own falls back to the
+        // BROWSER's, which is a block of highlighter yellow. The quiet mark
+        // would have come out louder than the loud one.
+        `bg-transparent underline decoration-1 underline-offset-4 opacity-70 ${tone.line}`
+      : tone.wash,
+    overlay.lookedUp && !quiet
       ? // The reader's own underline, in the level's own colour: it marks
         // WHICH words they stopped on without claiming they are a
         // different kind of word.

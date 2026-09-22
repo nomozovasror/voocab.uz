@@ -1261,3 +1261,105 @@ async def test_a_lemma_the_material_already_has_is_answered_not_inserted(
             assert [row.lemma for row in rows].count("give rise to") == 1
     finally:
         await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_a_word_is_marked_everywhere_it_stands() -> None:
+    """One entry, one gloss, and every occurrence of the word carried on it.
+
+    `AI solutionism` appears twice in Cambridge 21's third passage and only
+    the first of them was marked, which reads as the word list being
+    incomplete rather than as the mark being economical. Across the corpus
+    that was 17% of entries and 8 864 unmarked occurrences.
+
+    One row per lemma per material stays exactly as it is — it is what
+    makes a tapped word have one answer — so the other places ride on the
+    row.
+    """
+    email = f"vocab-again-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material, part = await _make_passage(user.id)
+    await _submit_something(material.id, user.id)
+    try:
+        async with async_session_factory() as session:
+            await vocabulary_service.replace_extracted(
+                session,
+                material_id=material.id,
+                part_id=part.id,
+                rows=[
+                    {"lemma": "vogue", "surface": "vogue",
+                     "meaning_en": "in fashion", "meaning_uz": "moda",
+                     "index": 0, "start": 0, "end": 5, "cefr_level": "B2",
+                     "again": [[1, 3, 8], [1, 20, 25]]},
+                    # A malformed place is dropped rather than stored: it
+                    # would be drawn as a highlight somewhere nobody meant.
+                    {"lemma": "hectare", "surface": "hectares",
+                     "meaning_en": "a unit of area", "meaning_uz": "gektar",
+                     "index": 0, "start": 6, "end": 14, "cefr_level": "B2",
+                     "again": [[1, 2], "nonsense", [2, 9, 14]]},
+                ],
+            )
+            await session.commit()
+
+        async with _client() as client:
+            answer = await client.get(
+                f"/api/materials/{material.id}/vocabulary",
+                headers=_headers(user),
+            )
+        assert answer.status_code == 200
+        by_lemma = {e["lemma"]: e for e in answer.json()["entries"]}
+        assert by_lemma["vogue"]["also_at"] == [[1, 3, 8], [1, 20, 25]]
+        assert by_lemma["hectare"]["also_at"] == [[2, 9, 14]]
+    finally:
+        await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_a_tap_on_a_later_occurrence_finds_the_phrase() -> None:
+    """The span test is the only thing that recognises a phrase, and it was
+    only ever looking at the first occurrence.
+
+    A reader who taps a word inside the SECOND `give rise to` would be
+    answered about the word on its own — which is the one answer the phrase
+    entry exists to prevent.
+    """
+    email = f"vocab-again-tap-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material, _ = await _make_passage(user.id)
+    try:
+        text = PASSAGE["paragraphs"][0]["text"]
+        first = text.find("give rise to")
+        async with async_session_factory() as session:
+            # The same expression, pretended to stand in paragraph B as
+            # well. Paragraph B is shorter than A, so the offsets are its
+            # own and deliberately different from the first occurrence's.
+            entry = (
+                await session.exec(
+                    select(MaterialVocabulary).where(
+                        MaterialVocabulary.material_id == material.id,
+                        MaterialVocabulary.lemma == "give rise to",
+                    )
+                )
+            ).first()
+            entry.also_at = [[1, 0, 12]]
+            session.add(entry)
+            await session.commit()
+
+        async with async_session_factory() as session:
+            loaded = await session.get(Material, material.id)
+            # Inside the second occurrence, in the other paragraph.
+            found = await vocabulary_service.look_up(
+                session, loaded, user_id=user.id, word="Undertaken",
+                paragraph_index=1, offset=4,
+            )
+            assert found["phrase"] is not None
+            assert found["phrase"].lemma == "give rise to"
+            # And the first occurrence still answers, which is the half
+            # that was already working.
+            again = await vocabulary_service.look_up(
+                session, loaded, user_id=user.id, word="rise",
+                paragraph_index=0, offset=first + 5,
+            )
+            assert again["phrase"].lemma == "give rise to"
+    finally:
+        await _cleanup(material.id, email)

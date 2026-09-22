@@ -484,6 +484,17 @@ def candidates(paragraphs: list[dict],
             "index": where.index,
             "start": where.start,
             "end": where.end,
+            # Everywhere ELSE the same word stands, so the passage can mark
+            # every occurrence rather than only the first. A reader who
+            # meets `solutionism` twice and sees one of them marked does
+            # not conclude that the second is a different word; they
+            # conclude the list is incomplete.
+            #
+            # Measured before this was carried: 17% of word entries appear
+            # more than once in their passage, and 8 864 occurrences across
+            # the corpus had no mark on them.
+            "again": [[place.index, place.start, place.end]
+                      for place in standing[1:]],
             "frequency_band": band(lemma),
             "occurrences": len(standing),
             # Asked about on suspicion rather than on evidence. The caller

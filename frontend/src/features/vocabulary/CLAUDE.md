@@ -161,6 +161,21 @@ answer about something wider than what was tapped, and the entry is stored
 over the term's span. A term the passage already has is not written again —
 the reader is already being shown it as the phrase.
 
+**A word is marked everywhere it stands, and the repeats are quiet.** One
+entry per lemma per material is what makes a tapped word have one answer,
+so the other places ride on the row (`also_at`) rather than becoming rows.
+The first occurrence gets the full wash; the rest get a hairline rule in the
+level's colour and nothing else — until the reader points at the row on the
+right, when every one of them lights at once. Before this, 17% of entries
+had occurrences with no mark on them, and an unmarked `solutionism` two
+paragraphs below a marked one reads as the list being incomplete.
+
+**An entry about one USE does not repeat.** `address` glossed as "deal
+with", and anything marked `unusual`, stands alone where it was found: the
+same passage may use the word ordinarily four paragraphs later and the scan
+cannot tell them apart. A mark that puts one sense over the other is worse
+than no mark, because it is confidently wrong.
+
 **Part of speech belongs to the lemma.** `learning` the noun is its own
 entry, not `learn` wearing an `n`.
 

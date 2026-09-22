@@ -377,6 +377,30 @@ def locate(paragraphs: list[dict], surface: str) -> tuple[int, int, int] | None:
     return None
 
 
+def locate_all(paragraphs: list[dict], surface: str) -> list[list[int]]:
+    """Every place this exact string stands, in reading order.
+
+    Exact only -- not the case-insensitive second try :func:`locate` makes.
+    That fallback exists to PLACE an entry the model wrote out with the
+    wrong capitalisation, and placing is a one-off judgement somebody can
+    check against the surface stored beside it. Marking is not: a
+    case-insensitive sweep of `US` over a passage about `us` would fleck
+    the text with marks on the wrong word, repeatedly, with nothing stored
+    that would show it had happened.
+    """
+    needle = surface.strip()
+    if not needle:
+        return []
+    found: list[list[int]] = []
+    for index, paragraph in enumerate(paragraphs):
+        text = paragraph.get("text") or ""
+        at = text.find(needle)
+        while at >= 0:
+            found.append([index, at, at + len(needle)])
+            at = text.find(needle, at + 1)
+    return found
+
+
 def one_line(value: object, limit: int) -> str:
     """A field the model wrote, flattened and trimmed, or empty."""
     text = " ".join(str(value or "").split())
@@ -485,6 +509,11 @@ def glossed(reply: dict, candidates: list[dict],
             "index": where["index"],
             "start": where["start"],
             "end": where["end"],
+            # Where else the same word stands. Only where the gloss is a
+            # fact about the WORD -- see `repeatable`: an entry that says
+            # "here it means something else" has no business marking the
+            # occurrences where it may not.
+            "again": where["again"] if repeatable(entry) else [],
             "example": sentence_at(text, where["start"], where["end"]),
             "is_phrase": False,
         })
@@ -516,6 +545,12 @@ def phrased(reply: dict, passage: dict) -> list[dict]:
             "index": index,
             "start": start,
             "end": end,
+            # A fixed expression means the same thing every time it is
+            # written, so every other place it stands gets the mark too.
+            "again": [place
+                      for place in locate_all(passage["paragraphs"],
+                                              text[start:end])
+                      if place[:2] != [index, start]],
             "example": sentence_at(text, start, end),
             "is_phrase": True,
         })
@@ -568,6 +603,11 @@ def sensed(reply: dict, passage: dict, taken: set) -> list[dict]:
             # easy, the model says C1, and neither figure on its own can
             # report the disagreement.
             "unusual": True,
+            # And alone where it was found. This entry is a claim about one
+            # USE of a common word -- `bank` as the side of a river -- and
+            # the same passage may well use it the ordinary way two
+            # paragraphs later. See `repeatable`.
+            "again": [],
             # And the same finding said in the field the whole list uses.
             # This question asked for the everyday sense and the passage's
             # sense as two separate answers, so a difference between them is
@@ -593,6 +633,27 @@ def band_of(surface: str) -> str:
     bands = [vocabulary.band(vocabulary.lemma_for(word))
              for word in surface.split() if word]
     return max(bands, key=vocabulary.BANDS.index) if bands else "off-list"
+
+
+def repeatable(entry: dict) -> bool:
+    """Whether this gloss is true everywhere the word stands in the passage.
+
+    The mark on a repeated occurrence claims *this word means what the list
+    says it means, here too*, and for the great majority of entries that is
+    simply true: `solutionism` is `solutionism` in both paragraphs it
+    appears in.
+
+    It is NOT true for the two kinds of entry that are about one USE rather
+    than about the word. `address` glossed as "deal with" is a statement
+    about the sentence it was read in, and the same passage may well use
+    `address` to mean an envelope four paragraphs later; the scan cannot
+    tell the two apart, and a mark that puts one sense over the other is
+    worse than no mark, because it is confidently wrong.
+
+    So an entry whose sense differs from the word's usual one, and an entry
+    marked `unusual`, stand alone where they were found. About 4% of them.
+    """
+    return not (entry.get("sense_differs") or entry.get("unusual"))
 
 
 def judged(said: dict, frequency_band: str) -> dict | None:
@@ -871,6 +932,55 @@ def deduped(entries: list[dict]) -> list[dict]:
                   key=lambda entry: (entry["index"], entry["start"]))
 
 
+def place_again(passage_id: str) -> dict | None:
+    """Fill in where else each entry's word stands, without asking anybody.
+
+    The one arm of this stage that spends nothing. Every occurrence comes
+    from the deterministic scan and from exact search, so a corpus glossed
+    before entries carried their repeats can be brought up to date for the
+    cost of reading two hundred files -- no batches, no requests, and no
+    chance of a different answer from the run that wrote them.
+
+    Which is also why it is an arm here rather than a one-off script: the
+    rule for WHICH entries may repeat lives in `repeatable`, beside the
+    reason, and a copy of it somewhere else is a copy that would not be
+    there when the rule next changes.
+    """
+    path = WORK / passage_id / "vocabulary.json"
+    passage_path = WORK / passage_id / "passage.json"
+    if not path.exists() or not passage_path.exists():
+        return None
+    result = json.loads(path.read_text())
+    paragraphs = json.loads(passage_path.read_text())["paragraphs"]
+
+    # The scan's own occurrence lists, reachable from any one of them. An
+    # entry is joined to its lemma by POSITION rather than by name: the
+    # lemma stored on an entry is the model's (`sacrifice` for
+    # `sacrificed`) and the scan's is this pipeline's, and the two are
+    # allowed to differ -- that is the whole reason `glossed` keeps the
+    # model's.
+    everywhere: dict[tuple[int, int], list[list[int]]] = {}
+    for places in vocabulary.scan(paragraphs).values():
+        spread = [[place.index, place.start, place.end] for place in places]
+        for place in spread:
+            everywhere[(place[0], place[1])] = spread
+
+    for entry in result.get("entries", []):
+        here = (entry["index"], entry["start"])
+        if not repeatable(entry):
+            entry["again"] = []
+        elif entry.get("is_phrase"):
+            entry["again"] = [place
+                              for place in locate_all(paragraphs,
+                                                      entry["surface"])
+                              if (place[0], place[1]) != here]
+        else:
+            entry["again"] = [place
+                              for place in everywhere.get(here, [])
+                              if (place[0], place[1]) != here]
+    return result
+
+
 def passages(conn: sqlite3.Connection, where: str, args: tuple) -> list[str]:
     return [row[0] for row in conn.execute(
         f"select id from passage where {where} "
@@ -911,6 +1021,11 @@ def main() -> int:
     ap.add_argument("--senses-only", action="store_true",
                     help="add the unusual senses to passages already glossed, "
                          "without asking about anything else again")
+    ap.add_argument("--places-only", action="store_true",
+                    help="fill in where else each entry's word stands, from "
+                         "the passage alone. Asks nobody anything and costs "
+                         "nothing; how a corpus glossed before entries "
+                         "carried their repeats catches up")
     ap.add_argument("--extra-only", action="store_true",
                     help="ask only about the candidates a passage's file "
                          "does not already cover, and fold them in, leaving "
@@ -934,7 +1049,14 @@ def main() -> int:
     done = skipped = failed = 0
     for passage_id in ids:
         out = WORK / passage_id / "vocabulary.json"
-        if args.senses_only:
+        if args.places_only:
+            # Nothing to do for a passage that was never glossed, and
+            # everything to do for one that was -- the same opposite test
+            # the other folding arms make.
+            if not out.exists():
+                skipped += 1
+                continue
+        elif args.senses_only:
             # The opposite test: this arm has nothing to do for a passage
             # that was never glossed, and everything to do for one that was.
             if not out.exists() or (already_sensed(out) and not args.force):
@@ -958,7 +1080,9 @@ def main() -> int:
         # to take the other hundred and sixty down with it. Caught here so
         # the run carries on and says at the end what it could not do.
         try:
-            if args.senses_only:
+            if args.places_only:
+                result = place_again(passage_id)
+            elif args.senses_only:
                 result = add_senses(passage_id, model=args.model,
                                     most=args.senses)
             elif args.extra_only:

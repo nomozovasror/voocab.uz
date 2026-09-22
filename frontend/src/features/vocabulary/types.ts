@@ -61,6 +61,17 @@ export interface VocabularyEntry {
   paragraph_index: number;
   offset_start: number;
   offset_end: number;
+  /** Everywhere else the same word stands in this passage, as
+   *  `[paragraph_index, start, end]`.
+   *
+   *  One entry per lemma is what makes a tapped word have one answer;
+   *  marking only one of its occurrences is what made the list look
+   *  incomplete — `solutionism` appears twice and only the first carried a
+   *  mark. Drawn more quietly than the first: see
+   *  `features/reading/layers.ts`.
+   *
+   *  Empty where the gloss is about one USE rather than about the word. */
+  also_at: number[][];
   /** The passage has been edited since this was glossed, so the offsets may
    *  no longer point at the right words. */
   stale: boolean;

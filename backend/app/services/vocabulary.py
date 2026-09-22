@@ -375,9 +375,17 @@ def _covering(
     for entry in found:
         if phrases is not None and entry.is_phrase != phrases:
             continue
-        if entry.paragraph_index != index:
-            continue
-        if entry.offset_start <= offset < entry.offset_end:
+        if (entry.paragraph_index == index
+                and entry.offset_start <= offset < entry.offset_end):
+            return entry
+        # And everywhere else the same word stands. Without this, a tap on
+        # the SECOND `give rise to` in a passage misses the phrase entirely
+        # -- the span test is the only thing that recognises a phrase, and
+        # it was only ever looking at the first occurrence. The word inside
+        # it would be answered on its own, which is the one answer the
+        # phrase exists to prevent.
+        if any(where == index and left <= offset < right
+               for where, left, right in entry.also_at):
             return entry
     return None
 
@@ -848,6 +856,15 @@ async def replace_extracted(
                 paragraph_index=int(row.get("index") or 0),
                 offset_start=int(row.get("start") or 0),
                 offset_end=int(row.get("end") or 0),
+                # Trusted as far as its shape and no further: three
+                # integers or the place is dropped. It is drawn as a mark
+                # over the passage, and a malformed triple is a highlight
+                # somewhere nobody meant.
+                also_at=[
+                    [int(place[0]), int(place[1]), int(place[2])]
+                    for place in (row.get("again") or [])
+                    if isinstance(place, (list, tuple)) and len(place) == 3
+                ],
                 cefr_level=row.get("cefr_level") or "",
                 frequency_band=row.get("frequency_band") or "",
                 is_phrase=bool(row.get("is_phrase")),

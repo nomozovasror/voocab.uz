@@ -75,6 +75,12 @@ class VocabularyEntryOut(BaseModel):
     paragraph_index: int
     offset_start: int
     offset_end: int
+    #: Everywhere else the same word stands in this passage, as
+    #: ``[paragraph_index, start, end]``. One entry per lemma is what makes
+    #: a tapped word have one answer; marking only one of its occurrences
+    #: is what made the list look incomplete. Empty where the gloss is
+    #: about one USE rather than about the word.
+    also_at: list[list[int]] = []
     #: Whether the passage has been edited since this was glossed, so the
     #: offsets may no longer point at the right words. Derived, never stored.
     stale: bool = False
