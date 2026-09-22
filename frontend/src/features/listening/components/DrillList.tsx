@@ -39,6 +39,7 @@ type View = (typeof VIEWS)[number];
 
 export function DrillList({
   skill,
+  basePath,
   family,
   query,
   part,
@@ -48,6 +49,10 @@ export function DrillList({
   /** Which paper's drills. The list is one query over two libraries and the
    *  only difference is which — the same bargain the catalogue makes. */
   skill: string;
+  /** And where that paper's pages live, for the rows to link into. Passed
+   *  rather than built from `skill`, because where a paper lives is the
+   *  descriptor's to say and not this component's to assume. */
+  basePath: string;
   family: TaskFamily;
   /** Already settled — the page holds the typing, this holds a list. */
   query: string;
@@ -178,12 +183,13 @@ export function DrillList({
           )}
         >
           {view === "grid" ? (
-            <DrillGrid items={rows} nextId={nextId} />
+            <DrillGrid items={rows} nextId={nextId} basePath={basePath} />
           ) : (
             <>
               <DrillRows
                 items={rows}
                 nextId={nextId}
+                basePath={basePath}
                 revealRef={revealRef}
               />
               {hasNextPage && (

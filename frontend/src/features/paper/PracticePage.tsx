@@ -674,6 +674,7 @@ export function PracticePage({ skill }: { skill: Skill }) {
             drillFamily ? (
               <DrillList
                 skill={skill.id}
+                basePath={skill.basePath}
                 family={drillFamily}
                 query={settledQuery}
                 part={drillPart}

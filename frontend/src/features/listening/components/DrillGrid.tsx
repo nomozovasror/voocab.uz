@@ -59,8 +59,13 @@ function describe(d: PracticeDrill): string {
 export function DrillGrid({
   items,
   nextId,
+  basePath,
 }: {
   items: PracticeDrill[];
+  /** Where this paper's pages live — `/reading`, `/listening`. The cell
+   *  navigated to `/listening/drills/...` whatever it was showing, so every
+   *  cell on the reading tab opened the listening take screen. */
+  basePath: string;
   /** The first one they have not done, in the order shown. Not a sequence
    *  anybody laid out — these are not lessons — but "the next one to do" is
    *  still the question the grid is most often opened with. */
@@ -117,7 +122,7 @@ export function DrillGrid({
               // The number in the cell says nothing read aloud on its own, so
               // the accessible name carries the whole row.
               aria-label={`${i + 1}. ${d.material_title} — ${describe(d)}`}
-              onClick={() => navigate(`/listening/drills/${d.group_id}`)}
+              onClick={() => navigate(`${basePath}/drills/${d.group_id}`)}
               onMouseEnter={() => setAt(i)}
               onMouseLeave={() => setAt((was) => (was === i ? null : was))}
               onFocus={() => setAt(i)}

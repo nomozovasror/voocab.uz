@@ -110,7 +110,7 @@ export function NextUp({
   }
   // A suggestion with nothing to suggest is a heading over an empty box.
   if (data.items.length === 0) return null;
-  return <Suggested data={data} onBrowse={onBrowse} />;
+  return <Suggested data={data} basePath={basePath} onBrowse={onBrowse} />;
 }
 
 /**
@@ -377,7 +377,7 @@ function CarryOn({
             View course
           </Link>
           <Button asChild size="sm">
-            <Link to={`/listening/${next.id}`}>
+            <Link to={`${basePath}/${next.id}`}>
               Continue
               <ArrowRight className="size-3.5" aria-hidden />
             </Link>
@@ -433,7 +433,7 @@ function Finished({
         </p>
         <div className="flex shrink-0 items-center gap-3">
           <Link
-            to="/listening/statistics"
+            to={`${basePath}/statistics`}
             className="text-xs text-muted-foreground transition-colors hover:text-foreground"
           >
             See your results
@@ -452,9 +452,11 @@ function Finished({
 
 function Suggested({
   data,
+  basePath,
   onBrowse,
 }: {
   data: NextUpData;
+  basePath: string;
   onBrowse: (scope: Scope) => void;
 }) {
   const more = browse(data);
@@ -491,7 +493,7 @@ function Suggested({
       <ul className="mt-2.5 grid gap-2 sm:grid-cols-3">
         {data.items.map((m) => (
           <li key={m.id}>
-            <Tile material={m} />
+            <Tile material={m} basePath={basePath} />
           </li>
         ))}
       </ul>
@@ -499,10 +501,16 @@ function Suggested({
   );
 }
 
-function Tile({ material: m }: { material: PracticeMaterial }) {
+function Tile({
+  material: m,
+  basePath,
+}: {
+  material: PracticeMaterial;
+  basePath: string;
+}) {
   return (
     <Link
-      to={`/listening/${m.id}`}
+      to={`${basePath}/${m.id}`}
       className="block rounded-lg bg-surface-sunken px-3 py-2.5 transition-colors duration-fast hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
     >
       <p className="truncate text-sm text-foreground">{m.title}</p>

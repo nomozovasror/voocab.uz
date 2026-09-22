@@ -38,6 +38,8 @@ import {
   useUpdateCollection,
 } from "@/features/listening/queries";
 import { usePracticeCatalogue } from "@/features/paper/queries";
+import { SKILLS } from "@/features/paper/skill";
+import type { Skill } from "@/features/paper/skill";
 import {
   DIFFICULTY_CLASS,
   DIFFICULTY_SHORT,
@@ -391,7 +393,13 @@ function Details({
               <DropdownMenuContent align="end" className="font-mono">
                 {published && (
                   <DropdownMenuItem asChild>
-                    <Link to={`/listening/collections/${collection.id}`}>
+                    {/* The collection's OWN paper, from the collection.
+                        Written `/listening/...` while there was one, so a
+                        reading course previewed as a learner opened the
+                        listening course page with a reading id in it. */}
+                    <Link
+                      to={`${SKILLS[collection.skill as Skill["id"]].basePath}/collections/${collection.id}`}
+                    >
                       <Eye className="size-3.5" aria-hidden />
                       See it as a learner does
                     </Link>

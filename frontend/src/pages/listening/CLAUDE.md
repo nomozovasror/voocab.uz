@@ -19,6 +19,21 @@ The column takes `basePath` and `partWord` now, from the same descriptor
 everything else does. The rule to keep: **a route or a part word in this
 directory comes from the skill, never from a string.**
 
+It was in six more places, all of them the same sentence written before
+there was a second paper: every drill row and every grid cell
+(`DrillRows`, `DrillGrid`) opened `/listening/drills/...`, so the whole
+Question types tab on the reading page led into listening; `NextUp`'s
+`Continue`, its suggestion tiles and its results link did the same, in a
+component that was already being handed `basePath` and using it three
+lines above; and both studio "see it as a learner does" previews. The
+sweep that finds them is
+
+    grep -rn 'to={`/listening\|to="/listening\|href={`/listening\|navigate(`/listening' frontend/src
+
+and it should come back with nothing outside `pages/listening/`, whose
+own pages really are listening's. `CollectionPage` lives there and is
+NOT one of them — reading routes to it too.
+
 The take screen's own rules (one scroll, the question strip, the travelling
 player, the waveform) live in
 `frontend/src/features/listening/CLAUDE.md` — read that too before changing

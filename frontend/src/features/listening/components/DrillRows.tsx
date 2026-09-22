@@ -96,6 +96,7 @@ function Rail({
 
 function DrillRow({
   drill: d,
+  basePath,
   index,
   status,
   first,
@@ -104,6 +105,7 @@ function DrillRow({
   revealRef,
 }: {
   drill: PracticeDrill;
+  basePath: string;
   index: number;
   status: Status;
   first: boolean;
@@ -129,7 +131,7 @@ function DrillRow({
         afterDone={afterDone}
       />
       <Link
-        to={`/listening/drills/${d.group_id}`}
+        to={`${basePath}/drills/${d.group_id}`}
         className={cn(
           "my-0.5 flex min-w-0 flex-1 items-center gap-4 rounded-lg px-3 py-2.5 transition-colors duration-fast",
           "hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
@@ -202,10 +204,15 @@ function DrillRow({
 export function DrillRows({
   items,
   nextId,
+  basePath,
   revealRef,
 }: {
   items: PracticeDrill[];
   nextId: string | null;
+  /** Where this paper's pages live — `/reading`, `/listening`. The row was
+   *  written `/listening/drills/...`, so every drill on the READING tab
+   *  opened the listening take screen with a reading group id in it. */
+  basePath: string;
   revealRef?: (el: HTMLLIElement | null) => void;
 }) {
   return (
@@ -214,6 +221,7 @@ export function DrillRows({
         <DrillRow
           key={d.group_id}
           drill={d}
+          basePath={basePath}
           index={i + 1}
           status={statusOf(d, nextId)}
           first={i === 0}

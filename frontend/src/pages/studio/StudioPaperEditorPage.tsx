@@ -2627,7 +2627,7 @@ export function StudioPaperEditorPage({ skill }: { skill: Skill }) {
             pressing submit over there records an attempt. */}
         {state.materialId && (
           <a
-            href={`/listening/${state.materialId}`}
+            href={`${skill.basePath}/${state.materialId}`}
             target="_blank"
             rel="noreferrer"
             title="See it as a candidate does"
