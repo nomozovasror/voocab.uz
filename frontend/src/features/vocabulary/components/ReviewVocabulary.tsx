@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
+import { Check, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
@@ -459,18 +459,15 @@ function Toggle({
  *
  * It was a small `Example ▸` button on a line of its own under each entry,
  * which is the worst of both: it cost the line the folding was meant to
- * save. The row itself opens it now, and all that is left of the control is
- * a chevron beside the save button — in the column that already exists, at
- * the size of a hint rather than a button.
+ * save. Then it was a chevron beside the save button, which cost no line
+ * and was still a second thing to look at on every one of a hundred rows.
+ * Now there is no control at all: the row is a pointer, and pressing it
+ * opens the sentence and takes the passage to the word.
  *
  * `＋` stops the press going through to the row. Saving a word and reading
  * its sentence are two different intentions and the buttons are a
  * centimetre apart; a save that also opened a paragraph would be the page
  * doing something nobody asked for every single time.
- *
- * An entry with no example is not a disclosure at all — no chevron, no
- * pointer, nothing to press. A control that opens nothing is worse than the
- * absence it is hiding.
  *
  * ## Hover is unchanged, and it is the point of the whole panel
  *
@@ -590,66 +587,46 @@ function Word({
           )}
         </div>
 
-        {/* The two controls stacked rather than side by side: the button is
-            the one that does something and gets the width, and the chevron
-            is a hint sitting under it rather than competing for the same
-            line. */}
-        <div className="flex shrink-0 flex-col items-center gap-0.5">
-          <button
-            type="button"
-            disabled={busy}
-            // See the component comment: the row opens the sentence and
-            // takes the passage to the word, and a save that also did that
-            // would be the page acting twice on one press.
-            onClick={(e) => {
-              e.stopPropagation();
-              onSave();
-            }}
-            title={
-              entry.saved
-                ? "Take it off your list"
-                : "Add to your vocabulary"
-            }
-            aria-label={
-              entry.saved ? `Remove ${entry.lemma}` : `Save ${entry.lemma}`
-            }
-            className={cn(
-              "group flex size-9 items-center justify-center rounded-lg border transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50",
-              entry.saved
-                ? "border-correct/40 bg-correct/10 text-correct hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
-                : "border-border bg-surface-hover text-foreground hover:border-primary/50 hover:bg-primary/15 hover:text-primary",
-            )}
-          >
-            {entry.saved ? (
-              <>
-                {/* The tick until the pointer is on it, then what pressing
-                    would do — or `Saved` is a button that removes, which
-                    nobody presses twice on purpose. */}
-                <Check className="size-4 group-hover:hidden" aria-hidden />
-                <X className="hidden size-4 group-hover:block" aria-hidden />
-              </>
-            ) : (
-              <Plus className="size-4" aria-hidden />
-            )}
-          </button>
-          {/* A hint, not a control: it is inside the thing that already is
-              one, so it takes no row of its own and no tab stop. */}
-          {canOpen &&
-            (open ? (
-              <ChevronDown
-                className="size-3.5 text-muted-foreground"
-                aria-hidden
-              />
-            ) : (
-              <ChevronRight
-                className={cn(
-                  "size-3.5 text-muted-foreground transition-opacity duration-fast",
-                  !hovered && "opacity-40",
-                )}
-                aria-hidden
-              />
-            ))}
-        </div>
+        {/* One control in this column, centred against the entry it
+            belongs to. There was a chevron under it saying the row opens —
+            and it was a second thing to look at on every one of a hundred
+            rows, for a disclosure the row itself already invites by being
+            a pointer. What the column is FOR is the button. */}
+        <button
+          type="button"
+          disabled={busy}
+          // See the component comment: the row opens the sentence and
+          // takes the passage to the word, and a save that also did that
+          // would be the page acting twice on one press.
+          onClick={(e) => {
+            e.stopPropagation();
+            onSave();
+          }}
+          title={
+            entry.saved ? "Take it off your list" : "Add to your vocabulary"
+          }
+          aria-label={
+            entry.saved ? `Remove ${entry.lemma}` : `Save ${entry.lemma}`
+          }
+          className={cn(
+            "group flex size-8 shrink-0 items-center justify-center self-center rounded-lg border transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50",
+            entry.saved
+              ? "border-correct/40 bg-correct/10 text-correct hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+              : "border-border bg-surface-hover text-foreground hover:border-primary/50 hover:bg-primary/15 hover:text-primary",
+          )}
+        >
+          {entry.saved ? (
+            <>
+              {/* The tick until the pointer is on it, then what pressing
+                  would do — or `Saved` is a button that removes, which
+                  nobody presses twice on purpose. */}
+              <Check className="size-3.5 group-hover:hidden" aria-hidden />
+              <X className="hidden size-3.5 group-hover:block" aria-hidden />
+            </>
+          ) : (
+            <Plus className="size-3.5" aria-hidden />
+          )}
+        </button>
       </div>
 
       {/* Under the whole entry rather than inside the text column, with the

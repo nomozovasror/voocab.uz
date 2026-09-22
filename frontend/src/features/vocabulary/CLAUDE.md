@@ -205,6 +205,12 @@ the same word again and was offered Save a second time. It reads back
 passage moves too. A save whose only visible effect is on the thing about
 to be closed is a save the reader has no reason to believe happened.
 
+**The row has no disclosure control.** The example was behind an
+`Example ▸` button on a line of its own, then behind a chevron beside the
+save button; it is behind the row itself now. A chevron on every one of a
+hundred rows is a hundred things to look at for a disclosure the pointer
+already announces, and the column beside the entry is for the button.
+
 **Pressing a row takes the passage to the word.** Hover lights the mark,
 which is worth nothing when the word is four screens down — and in a list
 of a hundred, most of them are. The press scrolls through the same
