@@ -78,19 +78,28 @@ nor the answer can be read.
   figure on a first try (the same number under a second name), and no
   platform average below `difficulty.MIN_ANSWERS` — that guard, not a second
   one invented for this page.
-- **The score's context is four columns, not a sentence.** Run together as
-  prose the four facts have to be parsed apart before any can be read, and
-  three of the four are numbers. The first try is printed as a MOVEMENT
+- **The card is two rows and both are full width.** The score on the left
+  and its context on the right share the first baseline; the map has the
+  second line to itself. Sharing a line with the map gave it whatever width
+  the score left over, which is a different width on every paper and never
+  the one the squares wanted.
+- **The context is a row and is still not a sentence.** Every value keeps
+  its own label in front of it, so four facts stay four facts to be picked
+  out rather than prose to be parsed. The first try is printed as a MOVEMENT
   (`52% → 70%`), because two numbers with an arrow between them are one fact
   where the same two in two places are an arithmetic problem set for the
   reader — and green only where it IS growth, or the page is congratulating
   somebody on going backwards.
-- **The question strip has two shapes and `MAP_AT` (12) chooses.** Up to a
-  dozen, a row of bars is the paper at a glance. Past that the bars are three
-  pixels wide — a texture, not a picture, and clicking one is aiming at a
-  hairline. A long paper gets numbered squares in a grid instead: the take
-  screen's navigator and a collection's grid are the same object, so it needs
-  no learning.
+- **One map, numbered, filling the width.** `repeat(N, 1fr)`: the squares
+  divide the width they are given rather than being packed into it at a
+  fixed size, so thirteen questions and forty both reach edge to edge. Past
+  twenty across it takes more rows and divides the questions EVENLY between
+  them — 26 is two rows of thirteen, not twenty and a ragged six.
+
+  There was a second shape for short papers, a row of unnumbered bars, on
+  the argument that up to a dozen the pattern is the whole point. It is not:
+  the map is the fastest route to a mistake, and a bar you cannot name is
+  one you have to count along to.
 - It is a picture AND a jump. On a forty-question paper the alternative to
   clicking a cell is scrolling past thirty right answers, so jumping to one
   the filter is hiding **switches the view first and scrolls on the next
