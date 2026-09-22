@@ -5,7 +5,6 @@ import {
 } from "@/features/paper/form-syntax";
 import { matchIndex } from "@/features/paper/matching";
 import { questionNumbersShort, sorted } from "@/features/paper/numbering";
-import { questionAnchor } from "@/features/paper/take-focus";
 import { QUESTION_TYPE_LABEL } from "@/features/paper/question-types";
 import { isCompletion } from "@/features/paper/types";
 import { paperParts } from "@/features/paper/take-paper";
@@ -679,88 +678,54 @@ function runHeading(row: ReviewRow): string | null {
 }
 
 /**
- * The next mistake BELOW where the reader is, so the button is a way DOWN
- * the page rather than a cursor over a list.
+ * Which TASK the marks went on, where one of them clearly did.
  *
- * Past the last one it wraps to the first: a button that answers a press by
- * doing nothing is worse than one that goes somewhere, and "find next"
- * wrapping is what everybody already expects of it.
+ * It replaces a "next mistake" button, and the reason it replaces it rather
+ * than sitting beside it is that the button could only be pressed once: it
+ * scrolled the list, and the row it lives in went up the page with
+ * everything else. A control you can use one time is a control that has
+ * been put in the wrong place, and the question map at the top of the card
+ * was always the better version of it — every mistake at once, and any of
+ * them one click away.
  *
- * ## The fold is the SCROLLER's, not the window's
+ * What belongs in that space instead is not another way DOWN the page but
+ * the thing the page cannot say by being scrolled: where the mistakes are
+ * concentrated. "Most lost in matching headings" is a sentence somebody can
+ * act on this evening; the individual rows underneath are the evidence for
+ * it.
  *
- * Which is the whole reason this is shared rather than written once per
- * page. The listening review scrolls the document, and half the window is
- * the middle of what the reader can see. The reading review scrolls a PANE
- * — the document never moves — and a fold measured against the window is
- * only right there by the accident that the pane happens to fill it.
+ * ## Only where it is a finding
  *
- * So the scroller is found from the anchor itself, the way everything in
- * `take-focus.ts` is found: ask the DOM where the thing is rather than keep
- * a register of where it was put.
+ * Nothing on a paper with one task — "most lost in the only thing you did"
+ * says nothing. Nothing where the worst task ties with another, because
+ * naming one of two equals is a coin toss presented as an insight. And
+ * nothing for a single slip: one wrong answer is an accident, and calling
+ * it a weakness is the page reading a pattern into noise.
+ *
+ * Tasks are counted by NAME rather than by run, so a paper that returns to
+ * true/false after a gap is one task with two runs rather than two tasks —
+ * which is what it is on the page anybody sat.
  */
-export function nextMistake(wrong: ReviewRow[]): string | null {
-  const first = wrong[0];
-  if (!first) return null;
-  const anchor = questionAnchor(first.result.question_id);
-  const view = viewOf(anchor ? scrollerOf(anchor) : null);
-
-  // Already at the end, so there is no next one and the wrap is the answer.
-  //
-  // This is the condition, and not "no mistake is below the fold": at the
-  // bottom of a list the last row is still in the lower half of what the
-  // reader can see, so a fold test alone keeps choosing it and the button
-  // stops moving — which is how it looks broken from the other side.
-  if (view.scrollTop + view.height >= view.scrollHeight - 2) {
-    return first.result.question_id;
+export function worstTask(
+  rows: ReviewRow[],
+): { heading: string; wrong: number; total: number } | null {
+  const byTask = new Map<string, { wrong: number; total: number }>();
+  for (const run of reviewRuns(rows)) {
+    if (!run.heading) continue;
+    const at = byTask.get(run.heading) ?? { wrong: 0, total: 0 };
+    at.wrong += run.rows.filter((row) => !row.result.is_correct).length;
+    at.total += run.rows.length;
+    byTask.set(run.heading, at);
   }
+  if (byTask.size < 2) return null;
 
-  const below = wrong.find((row) => {
-    const box = questionAnchor(row.result.question_id)?.getBoundingClientRect();
-    return box ? box.top > view.top + view.height * 0.5 : false;
-  });
-  return (below ?? first).result.question_id;
-}
-
-/** Where the reader is and how much further there is to go, from whichever
- *  of the two things is doing the scrolling. */
-function viewOf(scroller: HTMLElement | null) {
-  if (scroller) {
-    return {
-      top: scroller.getBoundingClientRect().top,
-      height: scroller.clientHeight,
-      scrollTop: scroller.scrollTop,
-      scrollHeight: scroller.scrollHeight,
-    };
-  }
-  const page = document.documentElement;
-  return {
-    top: 0,
-    height: window.innerHeight,
-    scrollTop: window.scrollY,
-    scrollHeight: page.scrollHeight,
-  };
-}
-
-/** The nearest ancestor that actually scrolls, or null for the document.
- *
- *  By computed style rather than by class, because what scrolls is a fact
- *  about the layout and the two pages arrive at it differently — one pane
- *  with `overflow-y: auto`, one document that simply runs long. */
-function scrollerOf(from: HTMLElement): HTMLElement | null {
-  for (
-    let node = from.parentElement;
-    node && node !== document.body;
-    node = node.parentElement
-  ) {
-    const how = getComputedStyle(node).overflowY;
-    if (
-      (how === "auto" || how === "scroll") &&
-      node.scrollHeight > node.clientHeight
-    ) {
-      return node;
-    }
-  }
-  return null;
+  const ranked = [...byTask.entries()]
+    .map(([heading, one]) => ({ heading, ...one }))
+    .sort((a, b) => b.wrong - a.wrong);
+  const [worst, next] = ranked;
+  if (worst.wrong < 2) return null;
+  if (next && next.wrong === worst.wrong) return null;
+  return worst;
 }
 
 /**

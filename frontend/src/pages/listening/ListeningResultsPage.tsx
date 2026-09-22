@@ -23,10 +23,10 @@ import {
 } from "@/features/paper/components/ReviewFilter";
 import type { WavePart } from "@/features/listening/components/Waveform";
 import {
-  nextMistake,
   numberWidth,
   reviewRows,
   tallyMistakes,
+  worstTask,
 } from "@/features/paper/review";
 import { Q_ANCHOR, goToQuestion } from "@/features/paper/take-focus";
 import { sorted } from "@/features/paper/numbering";
@@ -202,14 +202,6 @@ export default function ListeningResultsPage() {
     [rows],
   );
 
-  // The next mistake BELOW where the reader is, wrapping past the last.
-  // Shared with the reading review, which scrolls a pane rather than the
-  // document — see `nextMistake` on why the fold cannot be the window's.
-  const goToNextMistake = useCallback(() => {
-    const id = nextMistake(wrong);
-    if (id) goToQuestion(id);
-  }, [wrong]);
-
   if (isLoading) return <ResultsSkeleton />;
   if (isError || !data) {
     return (
@@ -284,7 +276,7 @@ export default function ListeningResultsPage() {
           onScope={setChosen}
           mistakes={wrong.length}
           total={rows.length}
-          onNextMistake={wrong.length > 1 ? goToNextMistake : undefined}
+          worst={worstTask(rows)}
         />
       </div>
 

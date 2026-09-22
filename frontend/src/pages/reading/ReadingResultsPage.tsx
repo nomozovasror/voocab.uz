@@ -11,12 +11,12 @@ import { useAttempt, useTakeMaterial } from "@/features/paper/queries";
 import { Q_ANCHOR } from "@/features/paper/take-focus";
 import { sorted } from "@/features/paper/numbering";
 import {
-  nextMistake,
   numberWidth,
   passageQuote,
   reviewRows,
   reviewRuns,
   tallyMistakes,
+  worstTask,
 } from "@/features/paper/review";
 import { ReviewItem } from "@/features/paper/components/ReviewItem";
 import {
@@ -347,15 +347,6 @@ export default function ReadingResultsPage() {
     [rows, scope, layer],
   );
 
-  // The next one BELOW where the reader is, wrapping past the last — and
-  // never `wrong[0]`, which is what this was. With "Mistakes only" on, the
-  // first mistake is the row at the top of the pane, so the button answered
-  // every press by scrolling to where the reader already was.
-  const goToNextMistake = useCallback(() => {
-    const id = nextMistake(wrong);
-    if (id) scrollToQuestion(id);
-  }, [wrong]);
-
   // --- How tall the panes are ----------------------------------------------
   //
   // Measured from where they actually start rather than computed from the
@@ -426,7 +417,7 @@ export default function ReadingResultsPage() {
               onScope={setChosen}
               mistakes={wrong.length}
               total={rows.length}
-              onNextMistake={wrong.length > 1 ? goToNextMistake : undefined}
+              worst={worstTask(rows)}
             />
           </div>
 

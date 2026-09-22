@@ -1,10 +1,9 @@
-import { ArrowDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type ReviewScope = "mistakes" | "all";
 
 /**
- * Which questions to show, and the shortcut to the next one that went wrong.
+ * Which questions to show, and where the marks actually went.
  *
  * **`Mistakes only` is the default**, and that is the page taking a position:
  * somebody who has just been marked is here to find out what they got wrong,
@@ -17,21 +16,29 @@ export type ReviewScope = "mistakes" | "all";
  * over nothing is an empty page where a congratulation belongs, and a filter
  * that can be switched to a view with nothing in it is a control that can be
  * used to break the page.
+ *
+ * **The right of the row is a finding, not a control.** It was a "next
+ * mistake" button, which could be pressed exactly once: it scrolled the
+ * list, and this row went up the page with everything else. What sits there
+ * now is the one thing scrolling cannot tell anybody — which task the marks
+ * went on — and it needs no pressing to say it.
  */
 export function ReviewFilter({
   scope,
   onScope,
   mistakes,
   total,
-  onNextMistake,
+  worst,
 }: {
   scope: ReviewScope;
   onScope: (scope: ReviewScope) => void;
   mistakes: number;
   total: number;
-  /** Absent when there is nothing left to jump to — either nothing went
-   *  wrong, or the reader is already at the last one. */
-  onNextMistake?: () => void;
+  /** The task the most marks went on, where one of them clearly did —
+   *  `worstTask` withholds it on a one-task paper, on a tie, and on a
+   *  single slip, because each of those would be the page reading a pattern
+   *  into noise. */
+  worst?: { heading: string; wrong: number; total: number } | null;
 }) {
   const locked = mistakes === 0;
   return (
@@ -49,15 +56,14 @@ export function ReviewFilter({
         <Count n={total} on={scope === "all"} />
       </Chip>
 
-      {onNextMistake && (
-        <button
-          type="button"
-          onClick={onNextMistake}
-          className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-        >
-          Next mistake
-          <ArrowDown className="size-3.5" aria-hidden />
-        </button>
+      {worst && (
+        <p className="ml-auto flex items-baseline gap-2 text-xs">
+          <span className="text-muted-foreground">Most lost in</span>
+          <span className="text-foreground/80">{worst.heading}</span>
+          <span className="tabular-nums text-muted-foreground">
+            {worst.total - worst.wrong}/{worst.total}
+          </span>
+        </p>
       )}
     </div>
   );
