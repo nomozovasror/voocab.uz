@@ -479,6 +479,22 @@ async def _generate(
         start, end = span
         surface = prose[start:end]
 
+    # The lemma that came back may be one this material already has, and
+    # that is not a rare collision -- it is what happens every time a model
+    # answers about a WORD with the term it belongs to. A reader taps
+    # `machine-learning`; the answer's lemma is `machine learning`, which
+    # the extraction wrote hours ago.
+    #
+    # Checked here rather than left to the unique constraint. The constraint
+    # does catch it, and the catch below is kept for the genuine race of two
+    # readers tapping the same unusual word at once -- but a failed INSERT
+    # leaves the session's connection in a state the next query on it cannot
+    # survive, and what the reader saw was "we couldn't find a meaning for
+    # that one" about a word the model had glossed perfectly well.
+    already = _by_string(known, gloss.lemma)
+    if already is not None:
+        return already
+
     entry = MaterialVocabulary(
         material_id=material.id,
         part_id=part.id,
@@ -506,11 +522,23 @@ async def _generate(
     try:
         await session.commit()
     except IntegrityError:
-        # Two readers tapped the same unusual word at once, or the model
-        # returned a lemma this material already has under another surface.
-        # Either way the row that is already there is the answer.
+        # Two readers tapped the same unusual word at the same moment. The
+        # other one won, and their row is the answer -- but it is not in
+        # `known`, which was read before either of them asked, so there is
+        # nothing to hand back here.
+        #
+        # Answered from MEMORY rather than by reading the table again. A
+        # failed INSERT leaves this session's connection unable to serve the
+        # next query on it, and the re-read used to raise over the top of
+        # the exception it was handling: the reader was told there was no
+        # meaning, having waited for one that had just been written.
+        #
+        # So this tap finds nothing and the next tap on the same word finds
+        # it in the cache. Losing one answer in a race is the small half of
+        # the trade; the ordinary collision -- a term the material already
+        # has -- never reaches here at all, because it is checked above.
         await session.rollback()
-        return _by_string(await entries(session, material.id), gloss.lemma)
+        return _by_string(known, gloss.lemma)
     await session.refresh(entry)
     return entry
 

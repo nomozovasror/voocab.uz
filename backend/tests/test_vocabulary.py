@@ -1214,3 +1214,50 @@ async def test_a_saved_word_gains_the_usual_meaning_without_losing_its_own(
             assert again == 0
     finally:
         await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_a_lemma_the_material_already_has_is_answered_not_inserted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model answering about a word with the term it belongs to will name
+    a lemma this material already holds, and that must be an ANSWER rather
+    than a failed insert.
+
+    It is the ordinary case, not a corner: a reader taps `rise`, and the
+    honest gloss is `give rise to`, which the extraction wrote hours ago.
+    Left to the unique constraint it becomes a failed INSERT, and a failed
+    INSERT leaves the session's connection unable to serve the re-read that
+    was meant to recover from it — so what the reader saw was "we couldn't
+    find a meaning for that one" about a word the model had glossed
+    perfectly well, or a 500.
+    """
+
+    class _Knows:
+        async def look_up(self, word: str, context: str):
+            return dictionary_service.Gloss(
+                lemma="give rise to", pos="phr",
+                meaning_en="to cause something to happen",
+                meaning_uz="sabab bo'lmoq", cefr_level="B2",
+            )
+
+    email = f"vocab-known-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material, _ = await _make_passage(user.id)
+    monkeypatch.setattr(dictionary_service, "providers", lambda: [_Knows()])
+    try:
+        async with async_session_factory() as session:
+            loaded = await session.get(Material, material.id)
+            # No position sent, so the span match cannot help and the word
+            # goes all the way through to the model.
+            answer = await vocabulary_service.look_up(
+                session, loaded, user_id=user.id, word="produce"
+            )
+            assert answer["word"] is not None
+            assert answer["word"].lemma == "give rise to"
+            # And the session still works afterwards, which is the half of
+            # this that used to fail.
+            rows = await vocabulary_service.entries(session, material.id)
+            assert [row.lemma for row in rows].count("give rise to") == 1
+    finally:
+        await _cleanup(material.id, email)
