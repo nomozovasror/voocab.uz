@@ -172,11 +172,6 @@ export function PassageTools({
     setPicking(false);
   };
 
-  // Where the reader is on the three-step scale. Found rather than stored:
-  // the size itself is what is remembered, and a second piece of state
-  // saying which step it is would be a second thing that can disagree.
-  const step = Math.max(0, SIZES.indexOf(size as (typeof SIZES)[number]));
-
   const word = selected?.text.trim() ?? "";
   // A word or a short phrase. Longer than that is somebody selecting a
   // sentence to read it, and the control steps out of the way rather than
@@ -255,26 +250,7 @@ export function PassageTools({
           every reader does it, it is half the width, and the ends disable
           themselves — which is the whole of what the third button was
           telling anybody. */}
-      <div role="group" aria-label="Text size" className="flex items-center">
-        <Tool
-          icon={AArrowDown}
-          label="Smaller text"
-          hideLabel
-          iconClass="size-[1.15rem]"
-          disabled={step === 0}
-          title="Smaller text"
-          onClick={() => onSize(SIZES[Math.max(0, step - 1)])}
-        />
-        <Tool
-          icon={AArrowUp}
-          label="Larger text"
-          hideLabel
-          iconClass="size-[1.15rem]"
-          disabled={step === SIZES.length - 1}
-          title="Larger text"
-          onClick={() => onSize(SIZES[Math.min(SIZES.length - 1, step + 1)])}
-        />
-      </div>
+      <TextSize size={size} onSize={onSize} />
 
       <Rule />
 
@@ -471,6 +447,53 @@ function Tool({
       )}
       {!hideLabel && label}
     </button>
+  );
+}
+
+/**
+ * Two steps, and the passage itself is the readout.
+ *
+ * That is how every reader does it, it is half the width of a three-button
+ * row, and the ends disable themselves — which is the whole of what a middle
+ * button marked "100%" was telling anybody.
+ *
+ * Its own component because the REVIEW wants it too: the passage is still
+ * half that screen and still the thing being read, so a reader who needed it
+ * bigger to sit the paper needs it bigger to go back over it. Two steppers
+ * that had to be kept in step would be two places to change the sizes.
+ */
+export function TextSize({
+  size,
+  onSize,
+}: {
+  size: number;
+  onSize: (next: number) => void;
+}) {
+  // Where the reader is on the three-step scale. Found rather than stored:
+  // the size itself is what is remembered, and a second piece of state
+  // saying which step it is would be a second thing that can disagree.
+  const step = Math.max(0, (SIZES as readonly number[]).indexOf(size));
+  return (
+    <div role="group" aria-label="Text size" className="flex items-center">
+      <Tool
+        icon={AArrowDown}
+        label="Smaller text"
+        hideLabel
+        iconClass="size-[1.15rem]"
+        disabled={step === 0}
+        title="Smaller text"
+        onClick={() => onSize(SIZES[Math.max(0, step - 1)])}
+      />
+      <Tool
+        icon={AArrowUp}
+        label="Larger text"
+        hideLabel
+        iconClass="size-[1.15rem]"
+        disabled={step === SIZES.length - 1}
+        title="Larger text"
+        onClick={() => onSize(SIZES[Math.min(SIZES.length - 1, step + 1)])}
+      />
+    </div>
   );
 }
 

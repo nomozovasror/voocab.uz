@@ -31,6 +31,10 @@ import {
 } from "@/features/reading/components/PassagePane";
 import { SplitPanes } from "@/features/reading/components/SplitPanes";
 import { ReviewLayers } from "@/features/reading/components/ReviewLayers";
+import {
+  TextSize,
+  useTextSize,
+} from "@/features/reading/components/PassageTools";
 import { ReviewMarks } from "@/features/reading/components/ReviewMarks";
 import { loadHighlights } from "@/features/reading/highlights";
 import {
@@ -122,6 +126,12 @@ export default function ReadingResultsPage() {
   // hand back three empty pills. False while the material is still coming,
   // which is also right — the skeleton draws no islands either.
   useHeaderTask(passages.length > 0);
+
+  // The same three steps the take screen has, remembered under the same key.
+  // A reader who needed the passage bigger to SIT the paper needs it bigger
+  // to go back over it, and having to set it twice would be the app
+  // forgetting something it is holding.
+  const [textSize, setTextSize] = useTextSize();
 
   const quote = useCallback(
     (result: Parameters<typeof passageQuote>[1]) =>
@@ -598,11 +608,25 @@ export default function ReadingResultsPage() {
       </HeaderSlot>
 
       <HeaderSlot side="centre">
-        <ReviewLayers layer={layer} onLayer={setChosenLayer} counts={counts} />
+        <div className="flex items-center gap-1">
+          <ReviewLayers
+            layer={layer}
+            onLayer={setChosenLayer}
+            counts={counts}
+          />
+          <span aria-hidden className="mx-1 h-4 w-px bg-border" />
+          <TextSize size={textSize} onSize={setTextSize} />
+        </div>
       </HeaderSlot>
 
       <SplitPanes
         ref={paneRef}
+        // On the pane rather than on the passage alone, exactly as the take
+        // screen sets it: what scales is everything written in `em`, which
+        // is the prose. The analysis beside it is set in rem and holds
+        // still, which is right — the control is for the text being read,
+        // not for the furniture around it.
+        style={{ fontSize: `${textSize}%` }}
         height={paneH}
         split={wide}
         leftLabel={passages.length > 1 ? "Passages" : "Passage"}

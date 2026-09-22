@@ -278,6 +278,39 @@ export function PassagePane({
                             LAYER_WASH[run.mark.tone].lit,
                         )}
                       >
+                        {/* The number, at the FRONT of the mark and in
+                            the passage's own size.
+
+                            It was a superscript on the end, which is where a
+                            footnote goes — and a footnote is read after the
+                            sentence, which is the wrong way round here. The
+                            reader is looking FOR question 28, not reading a
+                            sentence and wondering afterwards what it was
+                            about: the number has to be the thing they meet
+                            first, at the left edge where the eye already is.
+
+                            Full size and bold rather than small and raised,
+                            for the same reason. A 0.6em superscript is a
+                            reference mark — something to notice once you
+                            already care — and this is a label somebody scans
+                            a page for.
+
+                            Inside the <mark> so it travels with the wash and
+                            cannot be separated from it by a line break, and
+                            `select-none` so copying the passage does not
+                            take "Q12" out with it: the text under these marks
+                            is the book's, and somebody copying a sentence
+                            into their notes should get the sentence. */}
+                        {run.mark.labels?.length ? (
+                          <span
+                            className={cn(
+                              "mr-1.5 font-bold select-none",
+                              LAYER_WASH[run.mark.tone].tag,
+                            )}
+                          >
+                            {run.mark.labels.join(" ")}
+                          </span>
+                        ) : null}
                         {inside(run.text, run.at, run.mark.inner).map(
                           (piece, n) =>
                             piece.hard ? (
@@ -304,28 +337,6 @@ export function PassagePane({
                               <span key={n}>{piece.text}</span>
                             ),
                         )}
-                        {/* The number, riding on the end of the mark.
-                            Inside the <mark> so it travels with the wash
-                            and cannot be separated from it by a line break,
-                            and `sup` because that is what a marginal
-                            reference is — a teacher's pencil number beside
-                            the sentence, not a word in it.
-
-                            `select-none` so copying the passage does not
-                            take "Q12" out with it: the text under these
-                            marks is the book's, and a reader copying a
-                            sentence into their notes should get the
-                            sentence. */}
-                        {run.mark.labels?.length ? (
-                          <sup
-                            className={cn(
-                              "ml-0.5 text-[0.6em] font-semibold tracking-tight select-none",
-                              LAYER_WASH[run.mark.tone].tag,
-                            )}
-                          >
-                            {run.mark.labels.join(" ")}
-                          </sup>
-                        ) : null}
                       </mark>
                     ) : (
                       <span key={k}>{run.text}</span>

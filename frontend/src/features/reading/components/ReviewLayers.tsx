@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { LAYERS, SWATCH, type LayerId } from "@/features/reading/layers";
+import { LAYERS, type LayerId } from "@/features/reading/layers";
 
 /**
  * Which marking is on the passage — and therefore what is listed beside it
@@ -17,6 +17,18 @@ import { LAYERS, SWATCH, type LayerId } from "@/features/reading/layers";
  * layer with it. Two controls that do one thing is a reader deciding which
  * of them is the real one. The counts came here when the tabs went, because
  * *Vocabulary 88* is most of the reason to press it.
+ *
+ * **It looks like the app's own navigation, because it IS navigation.** The
+ * same pill, the same uppercase chip, the same amber for the one you are on
+ * — a reader who has used the header knows what these are without being
+ * taught twice.
+ *
+ * There were coloured squares in front of the names, one per layer. They
+ * were a legend for marks that are already on the passage six inches away,
+ * and a legend is what you need when the thing itself is not in front of
+ * you. Here it is: the red is on the answers, the amber on the words. What
+ * the swatches actually did was make four navigation chips look like a
+ * settings panel.
  *
  * **A radio group, not four checkboxes.** Exactly one layer is on, always
  * (`features/reading/layers.ts` says why), and `aria-pressed` on four
@@ -49,7 +61,7 @@ export function ReviewLayers({
     <div
       role="radiogroup"
       aria-label="What to mark on the passage"
-      className="flex shrink-0 items-center gap-0.5"
+      className="flex shrink-0 items-center gap-1"
     >
       {shown.map((one) => (
         <button
@@ -59,20 +71,14 @@ export function ReviewLayers({
           aria-checked={layer === one.id}
           onClick={() => onLayer(one.id)}
           title={one.meaning}
+          // The app's own nav link, to the class: see `Layout`.
           className={cn(
-            "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs whitespace-nowrap transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-            // The same two tones as the take screen's tool row, measured
-            // there: `--muted-foreground` on the island's ground is 2.17:1
-            // and unreadable, so a quiet control is the foreground at 70%.
+            "rounded-full px-3 py-1.5 text-xs font-medium tracking-wide whitespace-nowrap uppercase transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
             layer === one.id
-              ? "bg-primary/15 text-primary"
-              : "text-foreground/70 hover:bg-surface-hover hover:text-foreground",
+              ? "bg-primary/10 text-primary"
+              : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
           )}
         >
-          <span
-            aria-hidden
-            className={cn("size-2 shrink-0 rounded-[2px]", SWATCH[one.id])}
-          />
           {/* Below the split there is no room for four labelled buttons
               between the way out and the account — the take screen folds its
               own third group at the same width, and for the same reason.
@@ -94,7 +100,7 @@ export function ReviewLayers({
               can use. */}
           <span
             className={cn(
-              "tabular-nums opacity-55",
+              "ml-1.5 tabular-nums opacity-55",
               layer === one.id ? "inline" : "hidden lg:inline",
             )}
           >

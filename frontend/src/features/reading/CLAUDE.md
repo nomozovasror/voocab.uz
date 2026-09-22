@@ -195,12 +195,19 @@ alone they read as "here are the hard bits", which is a different claim. The
 green is drawn quieter than the red, because the two are not equally
 interesting.
 
-What keeps the passage from drowning in colour is the `Q12` in the margin of
+What keeps the passage from drowning in colour is the `Q12` at the FRONT of
 each mark rather than the wash: seventeen coloured sentences is not an answer
 to *where was question 31*, and `Q31` beside one of them is. Where one mark
 stands for two questions — a TRUE/FALSE pair often turns on one clause — it
 prints both numbers, because a mark labelled `Q31` that is also Q32's is
 lying by omission to whoever is looking for Q32.
+
+The number is at the front, in the passage's own size, bold. It was a small
+superscript on the END, which is where a footnote goes — and a footnote is
+read after the sentence, which is the wrong way round: the reader is looking
+FOR question 28, not reading a sentence and wondering afterwards what it was
+about. It has to be what they meet first, at the left edge where the eye
+already is.
 
 Green and red here mean what they mean in the question map at the top of the
 same screen: the verdict. That is exactly why the reader's own three
