@@ -4,7 +4,7 @@ import {
   type FormLine,
 } from "@/features/paper/form-syntax";
 import { matchIndex } from "@/features/paper/matching";
-import { sorted } from "@/features/paper/numbering";
+import { questionNumbersShort, sorted } from "@/features/paper/numbering";
 import { QUESTION_TYPE_LABEL } from "@/features/paper/question-types";
 import { isCompletion } from "@/features/paper/types";
 import { paperParts } from "@/features/paper/take-paper";
@@ -643,6 +643,31 @@ function asGroupType(value: string | undefined): QuestionGroupType | null {
   return value && value in QUESTION_TYPE_LABEL
     ? (value as QuestionGroupType)
     : null;
+}
+
+/**
+ * How wide the number column has to be, as a CSS value for `--q-number`.
+ *
+ * The widest number the paper actually prints, not the widest one it could:
+ * a "choose TWO" is printed `13–14` and needs five characters, and a fixed
+ * column wide enough for that spends thirty empty pixels down the left of
+ * every row on the ninety-five per cent of papers that have none.
+ *
+ * Measured over ALL the rows rather than the shown ones, so switching
+ * between "mistakes only" and "all questions" does not shift the whole list
+ * sideways — the column is a property of the paper, not of the filter.
+ *
+ * In `ch`, which the row resolves against the span the number is set in, so
+ * it is that many digits of the face the digits are in rather than of
+ * whatever the container happens to use.
+ */
+export function numberWidth(rows: ReviewRow[]): string {
+  const widest = rows.reduce(
+    (most, row) =>
+      Math.max(most, questionNumbersShort(row.number, row.span).length),
+    1,
+  );
+  return `${widest}ch`;
 }
 
 function runHeading(row: ReviewRow): string | null {

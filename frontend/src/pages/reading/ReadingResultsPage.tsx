@@ -11,6 +11,7 @@ import { useAttempt, useTakeMaterial } from "@/features/paper/queries";
 import { Q_ANCHOR } from "@/features/paper/take-focus";
 import { sorted } from "@/features/paper/numbering";
 import {
+  numberWidth,
   passageQuote,
   reviewRows,
   reviewRuns,
@@ -427,49 +428,58 @@ export default function ReadingResultsPage() {
           {/* Under what each run of questions IS. A paper is four or five
               TASKS rather than forty questions, and the task is the thing
               somebody is good or bad at — "I lose matching headings" is a
-              sentence a candidate can act on. */}
-          {reviewRuns(shown).map((run, at) => (
-            <div key={at}>
-              {run.heading && (
-                <h3 className="mt-6 mb-1 px-3 text-[0.7rem] tracking-caps text-muted-foreground/80 uppercase first:mt-4">
-                  {run.heading}
-                </h3>
-              )}
-              {run.rows.map((row) => {
-                const here = marked.has(row.result.question_id);
-                return (
-                  <ReviewItem
-                    key={row.result.question_id}
-                    row={row}
-                    anchor={{ [Q_ANCHOR]: row.result.question_id }}
-                    // No onPlay: a passage has nothing to play, and
-                    // ReviewItem draws the button only where one is handed
-                    // to it.
-                    evidence={
-                      here
-                        ? {
-                            where: whereabouts(passages, row),
-                            onGoTo: () => goToEvidence(row.result.question_id),
-                          }
-                        : undefined
-                    }
-                    hint={hintFor(row)}
-                    // The older route, for a paper the extraction never
-                    // reached: the quote's own paragraph. Withheld where the
-                    // evidence is known, or the row would offer two ways to
-                    // go to two different places.
-                    onGoTo={here ? undefined : goToParagraph}
-                    onPoint={
-                      here
-                        ? (on) => setLit(on ? row.result.question_id : null)
-                        : undefined
-                    }
-                    lit={lit === row.result.question_id}
-                  />
-                );
-              })}
-            </div>
-          ))}
+              sentence a candidate can act on.
+
+              `--q-number` is set once for the whole list: the rows are
+              separate grids and would otherwise each guess at how much room
+              a question number needs. */}
+          <div
+            style={{ "--q-number": numberWidth(rows) } as React.CSSProperties}
+          >
+            {reviewRuns(shown).map((run, at) => (
+              <div key={at}>
+                {run.heading && (
+                  <h3 className="mt-6 mb-1 px-3 text-[0.7rem] tracking-caps text-muted-foreground/80 uppercase first:mt-4">
+                    {run.heading}
+                  </h3>
+                )}
+                {run.rows.map((row) => {
+                  const here = marked.has(row.result.question_id);
+                  return (
+                    <ReviewItem
+                      key={row.result.question_id}
+                      row={row}
+                      anchor={{ [Q_ANCHOR]: row.result.question_id }}
+                      // No onPlay: a passage has nothing to play, and
+                      // ReviewItem draws the button only where one is handed
+                      // to it.
+                      evidence={
+                        here
+                          ? {
+                              where: whereabouts(passages, row),
+                              onGoTo: () =>
+                                goToEvidence(row.result.question_id),
+                            }
+                          : undefined
+                      }
+                      hint={hintFor(row)}
+                      // The older route, for a paper the extraction never
+                      // reached: the quote's own paragraph. Withheld where the
+                      // evidence is known, or the row would offer two ways to
+                      // go to two different places.
+                      onGoTo={here ? undefined : goToParagraph}
+                      onPoint={
+                        here
+                          ? (on) => setLit(on ? row.result.question_id : null)
+                          : undefined
+                      }
+                      lit={lit === row.result.question_id}
+                    />
+                  );
+                })}
+              </div>
+            ))}
+          </div>
 
           <ReviewMistakes groups={mistakes} skill="reading" className="mt-10" />
         </>

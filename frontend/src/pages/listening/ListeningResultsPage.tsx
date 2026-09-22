@@ -22,7 +22,11 @@ import {
   type ReviewScope,
 } from "@/features/paper/components/ReviewFilter";
 import type { WavePart } from "@/features/listening/components/Waveform";
-import { reviewRows, tallyMistakes } from "@/features/paper/review";
+import {
+  numberWidth,
+  reviewRows,
+  tallyMistakes,
+} from "@/features/paper/review";
 import { Q_ANCHOR, goToQuestion } from "@/features/paper/take-focus";
 import { sorted } from "@/features/paper/numbering";
 import { PRACTICE } from "@/features/paper/take-config";
@@ -292,7 +296,10 @@ export default function ListeningResultsPage() {
         />
       </div>
 
-      <div>
+      {/* One width for the whole list — the rows are separate grids and
+          would otherwise each guess at how much room a question number
+          needs. See `numberWidth`. */}
+      <div style={{ "--q-number": numberWidth(rows) } as React.CSSProperties}>
         {shown.map((row) => (
           <ReviewItem
             key={row.result.question_id}

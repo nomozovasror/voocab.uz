@@ -120,20 +120,25 @@ export function ReviewItem({
           : undefined
       }
       className={cn(
-        // 2.5rem, not the 1.75 a single number needs: a "choose TWO" is
-        // printed as "13–14" and ran straight into the question text at the
-        // narrower width. The column is the widest number the paper can
-        // hold, because every row is its own grid and none of them can
-        // learn the width from the others.
-        "group relative -mx-3 grid scroll-mt-24 grid-cols-[2.5rem_1fr] gap-x-2 rounded-lg border-b border-border/60 px-3 py-3.5 transition-colors duration-fast last:border-b-0",
+        "group relative -mx-3 grid scroll-mt-24 grid-cols-[auto_1fr] gap-x-2 rounded-lg border-b border-border/60 px-3 py-3.5 transition-colors duration-fast last:border-b-0",
         evidence && "cursor-pointer",
         onPoint && "hover:bg-surface-hover",
         lit && "bg-surface-hover",
       )}
     >
+      {/* As wide as the WIDEST number on this paper, and not a pixel more.
+          A fixed column has to be wide enough for "13–14" — a "choose TWO"
+          takes five characters — and on a paper whose questions are 1 to 13
+          that is thirty pixels of empty gutter down the left of every row,
+          taken off the question beside it.
+        
+          The width comes from the list, in `ch` of THIS span's own type, so
+          `2ch` is two digits of the face the digits are actually set in.
+          Every row is its own grid and cannot learn the width from its
+          neighbours — `--q-number` is how they are told. */}
       <span
         className={cn(
-          "pt-px text-right text-[0.8rem] whitespace-nowrap tabular-nums",
+          "w-[var(--q-number,2.5rem)] pt-px text-right text-[0.8rem] whitespace-nowrap tabular-nums",
           right ? "text-correct" : "text-incorrect",
         )}
       >
