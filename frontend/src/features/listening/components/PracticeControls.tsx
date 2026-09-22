@@ -240,7 +240,15 @@ export function SearchField({
  *  `h-8` rather than the button's own height: inside the bar below, the gap
  *  between a chip and the bar's edge is what makes it look set INTO something
  *  rather than dropped on top of it. */
-const PILL = "h-8 rounded-full px-3 text-xs";
+/** One control in the filter bar.
+ *
+ *  `px-2` and not `px-3`, which is two pixels a side and adds up to more
+ *  than it sounds: eight controls across the row, each with its own padding
+ *  either side of a two-pixel gap, put 26px of nothing between every pair of
+ *  labels. The bar read as a line of widely spaced words rather than as a
+ *  row of controls — and a chip is legible as a chip from its pill, not from
+ *  the air around it. */
+const PILL = "h-8 rounded-full px-2 text-xs";
 
 /** Horizontal slack inside the box that clips the swapping control groups, so
  *  its edge never cuts through a focus ring. Four, against the ring's three. */
@@ -276,9 +284,13 @@ function Chip({
 }
 
 /** The rule between groups of controls — they answer different questions and
- *  a gap alone doesn't say so. */
+ *  a gap alone doesn't say so.
+ *
+ *  `mx-1` rather than `mx-1.5`: the rule only has to be seen, and the pills
+ *  either side already carry their own padding, so the margin was being
+ *  added to space that was there anyway. */
 function ChipDivider() {
-  return <span aria-hidden className="mx-1.5 h-5 w-px bg-border-subtle" />;
+  return <span aria-hidden className="mx-1 h-5 w-px bg-border-subtle" />;
 }
 
 /**
