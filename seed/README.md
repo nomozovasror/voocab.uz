@@ -2699,13 +2699,38 @@ to a sentence about a different thing.
 **22 of 395 marked groups** had a span like it, and nearly all were Section 4
 note completion, where a monologue answers strictly in order.
 
-The rule now: a span that starts before the previous answer's is asked again
-over the stretch AFTER it. Three came back at the right moment — the phrase
-really is said twice. The other nineteen were dropped: no replay button,
-which is this pipeline's standing answer to a placement it cannot vouch for,
-and better than one that teaches a learner they misheard something they
-never heard. Equal is allowed — a "choose TWO" is answered in one breath and
-the book prints `17&18` against a single line.
+**Which of two disagreeing claims is wrong is the whole difficulty**, and
+walking forward keeping the first gets it backwards about half the time.
+Cambridge 17 Test 1 Section 4 settles it: questions 31 to 37 sit within
+seconds of where their own words are said, Q38's marker puts it at 374.7s,
+and the words answering Q39 and Q40 are spoken once each at 343.2s and
+362.4s. Keeping the earlier claim drops the two that agree with each other
+in favour of the one that agrees with nothing.
+
+So neither claim is privileged and `in_order` picks the SET instead: the
+longest run of placements that ascends, each question offering what it has
+— the marker's span, the single place its answer is spoken, or nothing.
+Everything outside that run loses its span. Ties go to the marker, a printed
+page read by a person against a machine's transcript of speech. Equal times
+are allowed — a "choose TWO" is answered in one breath and the book prints
+`17&18` against a single line.
+
+The corpus went from 2 593 placed with 22 groups out of order to **2 582
+placed with none**, and eleven answers lost a replay button that was
+pointing at the wrong minute.
+
+### What is left, and why it is not this stage's to fix
+
+Twenty-two answers have no replay button. Seven are lettered — a matching
+answer is `C`, and the recording says the thing C stands for, so there is
+nothing for a search to match. The rest trace to a stage further back:
+`read_audioscript.py` duplicated a turn and hung several markers on the
+copies. Cambridge 17 Test 1 Section 4 has ONE sentence — "So, what is it
+about labyrinths that makes their appeal so universal?" — repeated as turns
+8, 9, 10 and 11, carrying Q37 to Q40. **Fifteen sections have a repeated
+turn, every one of them carrying a marker.** No amount of care here can
+place a marker that is on a turn the audioscript invented; those pages want
+re-reading.
 
 ### Lemmatisation without a parser
 

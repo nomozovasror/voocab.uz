@@ -386,6 +386,90 @@ def heard(section_id: str) -> dict[int, tuple[int, int]]:
             for number, pair in said.items()}
 
 
+def in_order(questions: list[dict]) -> tuple[int, int]:
+    """Keep the largest set of replay spans that a recording could produce,
+    and drop the rest. Returns ``(moved, dropped)``.
+
+    A paper asks its questions in the order the recording answers them --
+    the rule `mark_answers.py` already enforces on its own placements -- so
+    a group whose spans go backwards contains at least one that is wrong.
+    Which one is the whole difficulty, and walking forward keeping the first
+    gets it backwards about half the time.
+
+    Cambridge 17 Test 1 Section 4 is the case that settles it. Questions 31
+    to 37 are placed within seconds of where their own words are said, Q38's
+    marker puts it at 374.7s, and the words answering Q39 and Q40 are said
+    once each, at 343.2s and 362.4s. Keeping the earlier claim drops the two
+    that agree with each other in favour of the one that agrees with
+    nothing.
+
+    So neither claim is privileged and the SET is chosen instead: the
+    longest run of placements that ascends, with each question offering
+    what it has -- the marker's span, the single place its answer is spoken,
+    or nothing. Everything outside that run loses its span. A question with
+    two candidates can take the one that fits, which is how Q38's marker is
+    dropped while Q39 and Q40 keep the moments they are actually said.
+
+    Ties go to the marker: it is a printed page read by a person, and the
+    alignment is a machine's transcript of speech. Equal times are allowed --
+    a "choose TWO" is answered in one breath, and the book prints "17&18"
+    against a single line.
+    """
+    # Each question's candidates, best first, as (start, end, from_marker).
+    offers: list[list[tuple[int, int, bool]]] = []
+    for q in questions:
+        options = []
+        if q.get("replay_start_ms") is not None:
+            options.append((q["replay_start_ms"], q["replay_end_ms"], True))
+        heard = q.get("_heard_at")
+        if heard and (not options or heard[0] != options[0][0]):
+            options.append((heard[0], heard[1], False))
+        offers.append(options)
+
+    # Longest ascending assignment, by questions placed. Ten questions with
+    # two offers each: the table is twenty wide and the search is a walk
+    # back through it.
+    best: list[tuple[int, int, int, int]] = []  # (placed, markers, i, c)
+    picked: dict[tuple[int, int], tuple[int, int] | None] = {}
+    score: dict[tuple[int, int], tuple[int, int]] = {}
+    for i, options in enumerate(offers):
+        for c, (lo, _hi, marked) in enumerate(options):
+            run, markers, back = 1, int(marked), None
+            for j in range(i):
+                for d, (plo, _phi, pmarked) in enumerate(offers[j]):
+                    if plo > lo or (j, d) not in score:
+                        continue
+                    had, hadm = score[(j, d)]
+                    if (had + 1, hadm + int(marked)) > (run, markers):
+                        run, markers, back = had + 1, hadm + int(marked), (j, d)
+            score[(i, c)] = (run, markers)
+            picked[(i, c)] = back
+            best.append((run, markers, -i, c))
+    if not best:
+        return 0, 0
+
+    run, markers, negative_i, c = max(best)
+    keep: dict[int, tuple[int, int, bool]] = {}
+    at: tuple[int, int] | None = (-negative_i, c)
+    while at is not None:
+        keep[at[0]] = offers[at[0]][at[1]]
+        at = picked[at]
+
+    moved = dropped = 0
+    for i, q in enumerate(questions):
+        q.pop("_heard_at", None)
+        chosen = keep.get(i)
+        if chosen is None:
+            if q.get("replay_start_ms") is not None:
+                dropped += 1
+            q["replay_start_ms"] = q["replay_end_ms"] = None
+            continue
+        if q.get("replay_start_ms") != chosen[0]:
+            moved += 1
+        q["replay_start_ms"], q["replay_end_ms"] = chosen[0], chosen[1]
+    return moved, dropped
+
+
 def build(section_id: str) -> int:
     work = WORK / section_id
     src = json.loads((work / "questions.src.json").read_text())
@@ -576,7 +660,7 @@ def build(section_id: str) -> int:
 
     problems: list[str] = []
     warnings: list[str] = []
-    recovered = moved = tightened = forwarded = unplaced = 0
+    recovered = moved = tightened = moved_back = unplaced = 0
     out_groups = []
     for gi, group in enumerate(src["groups"]):
         lettered = (group["type"] in LETTERED
@@ -748,37 +832,12 @@ def build(section_id: str) -> int:
                 span = settled
                 by_hand_used += 1
 
-            # And it must not go backwards.
-            #
-            # `locate` refuses an ambiguous match, but a phrase said ONCE in
-            # the whole recording is unambiguous even when the once is in the
-            # wrong place. Cambridge 10 Test 2 Section 1 answers question 10
-            # with "training" at 345s; the alignment has the word only at
-            # 203s, in "I've just finished my training. I'm a hairdresser" --
-            # the ASR dropped the sentence that answers the question, and the
-            # search found the distractor with nothing to tell it apart.
-            # Twenty-two sections had a span like it.
-            #
-            # Asked again, after the previous answer: a recording that says
-            # the phrase a second time in the right place gets the right
-            # moment. Where it does not, the span is dropped -- no replay
-            # button, which is this pipeline's standing answer to a placement
-            # it cannot vouch for. A marker on the wrong turn sends a learner
-            # to the wrong second of a recording, and that is worse than
-            # sending them nowhere.
-            #
-            # Equal is allowed. Two questions answered in one breath is a
-            # "choose TWO", and the book prints "17&18" against a single line.
-            if span is not None and span[0] < floor:
-                again = locate(answers, (floor, 1 << 62)) if not lettered else None
-                if again is not None:
-                    span = again
-                    forwarded += 1
-                else:
-                    span = None
-                    unplaced += 1
-            if span is not None:
-                floor = span[0]
+            # What the answer's own words say about where it is, kept
+            # beside what the marker says. Reconciled after the group is
+            # whole -- see `in_order` below, which needs every question's
+            # evidence before it can tell which of two disagreeing claims
+            # is the one out of step.
+            heard_at = None if lettered else locate(answers)
 
             option_replay = ({letter: [span[0], span[1]] for letter in answers}
                              if span and group["type"] == "multiple_choice" else {})
@@ -789,10 +848,27 @@ def build(section_id: str) -> int:
                 "correct_answers": answers,
                 "replay_start_ms": span[0] if span else None,
                 "replay_end_ms": span[1] if span else None,
+                **({"_heard_at": heard_at} if heard_at else {}),
                 **({"prompt": q["prompt"]} if q.get("prompt") else {}),
                 **({"options": q["options"]} if q.get("options") else {}),
                 **({"option_replay": option_replay} if option_replay else {}),
             })
+
+        # The group is whole, so the claims about WHERE can be reconciled
+        # against each other. Not per question, inside the loop: the
+        # evidence that a span is the one out of step is what the questions
+        # after it say, and inside the loop they have not been read yet.
+        shifted_on, lost = in_order(questions)
+        moved_back += shifted_on
+        unplaced += lost
+        for q in questions:
+            if q.get("option_replay") and q["replay_start_ms"] is None:
+                q.pop("option_replay")
+            elif q.get("option_replay"):
+                q["option_replay"] = {
+                    letter: [q["replay_start_ms"], q["replay_end_ms"]]
+                    for letter in q["option_replay"]
+                }
 
         # `config` is what the group's own schema expects, and the three
         # kinds want three different things in it.
@@ -901,13 +977,14 @@ def build(section_id: str) -> int:
     if tightened:
         print(f"note: {tightened} replay span(s) longer than {LONG_SPAN // 1000}s "
               "narrowed to the answer's own words inside the turn", file=sys.stderr)
-    if forwarded:
-        print(f"note: {forwarded} replay span(s) re-found after the previous "
-              "answer, where the first match was earlier in the recording",
-              file=sys.stderr)
+    if moved_back:
+        print(f"note: {moved_back} replay span(s) moved onto the moment the "
+              "answer is actually spoken, their marker being the claim that "
+              "did not fit the order", file=sys.stderr)
     if unplaced:
-        print(f"note: {unplaced} replay span(s) dropped for going backwards; "
-              "those answers get no replay button", file=sys.stderr)
+        print(f"note: {unplaced} replay span(s) dropped for not fitting the "
+              "order the recording answers in; those answers get no replay "
+              "button", file=sys.stderr)
     for w in warnings:
         print(f"note: {w}", file=sys.stderr)
     if problems:
