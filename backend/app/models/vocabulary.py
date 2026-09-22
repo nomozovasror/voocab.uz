@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, UniqueConstraint
+from sqlalchemy import Column, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID as SA_UUID
 from sqlmodel import Field, SQLModel
 
 #: Where an entry came from, and therefore what a re-generation may do to it.
@@ -218,6 +219,21 @@ class SavedWordContext(SQLModel, table=True):
     ``vocabulary_id`` is kept anyway, nullable, as provenance: it says which
     entry this was taken from for anybody later asking where a translation
     came from, and it is what stops one material being saved twice.
+
+    **ON DELETE SET NULL, and that is the copy rule enforced in the
+    database.** A re-extraction deletes and rewrites every machine-made
+    entry, and the plain foreign key made that impossible the moment one
+    learner had saved a word from the passage: the delete raised, and the
+    whole import of that passage failed with it. Found by running a
+    vocabulary re-import across the corpus for the first time on a database
+    with saved words in it -- `cam11-t1-p1`, one row.
+
+    Blocking the delete would have been the wrong repair even if it had
+    worked, because it is the opposite of what the paragraph above decides.
+    The gloss is already copied; what is lost when the source row goes is a
+    POINTER, and a pointer going null is what "this came from an entry that
+    no longer exists" looks like. The learner keeps their word, their
+    meaning and their sentence.
     """
 
     __tablename__ = "saved_word_contexts"
@@ -232,7 +248,12 @@ class SavedWordContext(SQLModel, table=True):
     saved_word_id: uuid.UUID = Field(foreign_key="saved_words.id", index=True)
     material_id: uuid.UUID = Field(foreign_key="materials.id", index=True)
     vocabulary_id: uuid.UUID | None = Field(
-        default=None, foreign_key="material_vocabulary.id"
+        default=None,
+        sa_column=Column(
+            SA_UUID(as_uuid=True),
+            ForeignKey("material_vocabulary.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
     )
 
     surface: str = Field(default="", max_length=120)

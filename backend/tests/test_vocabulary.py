@@ -895,3 +895,74 @@ async def test_a_re_extraction_replaces_a_learner_generated_entry() -> None:
             assert by_lemma["vogue"].source == "extracted"
     finally:
         await _cleanup(material.id, email)
+
+
+@pytest.mark.asyncio
+async def test_a_re_extraction_survives_a_word_somebody_saved() -> None:
+    """Deleting an entry a learner has saved FROM must not fail the import.
+
+    `saved_word_contexts.vocabulary_id` is provenance and nothing else — the
+    gloss itself is copied at the moment of saving, on purpose, so that a
+    re-glossed material cannot change somebody's saved word underneath them.
+    The foreign key did not know that: it was a plain reference with no
+    delete behaviour, so one saved word made a passage's entries
+    undeletable, and `replace_extracted` deletes every machine-made row by
+    design.
+
+    Found by running a vocabulary re-import across the whole corpus for the
+    first time on a database that had saved words in it. 202 passages went
+    through; `cam11-t1-p1` raised a ForeignKeyViolationError over a single
+    row, and the passage's whole import failed with it.
+
+    What the learner keeps is everything that was theirs. What goes null is
+    the pointer, which is what "this came from an entry that no longer
+    exists" should look like.
+    """
+    email = f"vocab-fk-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material, part = await _make_passage(user.id)
+    try:
+        async with _client() as client:
+            kept = await client.post(
+                "/api/vocabulary/words",
+                json={"material_id": str(material.id), "lemmas": ["vogue"]},
+                headers=_headers(user),
+            )
+            assert kept.status_code == 201
+
+        async with async_session_factory() as session:
+            context = (
+                await session.exec(select(SavedWordContext))
+            ).all()
+            mine = [row for row in context if row.material_id == material.id]
+            assert len(mine) == 1
+            assert mine[0].vocabulary_id is not None
+
+        # The pipeline runs again over the same passage.
+        async with async_session_factory() as session:
+            await vocabulary_service.replace_extracted(
+                session,
+                material_id=material.id,
+                part_id=part.id,
+                rows=[
+                    {"lemma": "vogue", "surface": "vogue",
+                     "meaning_en": "in fashion", "meaning_uz": "moda",
+                     "index": 0, "start": 0, "end": 5, "cefr_level": "B2"},
+                ],
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            rows = [
+                row
+                for row in (await session.exec(select(SavedWordContext))).all()
+                if row.material_id == material.id
+            ]
+            assert len(rows) == 1, "the learner's word is not the pipeline's"
+            # Their own copy, untouched: the meaning they saved, not the one
+            # the re-run wrote.
+            assert rows[0].meaning_uz == "moda"
+            # And the pointer, gone with the row it pointed at.
+            assert rows[0].vocabulary_id is None
+    finally:
+        await _cleanup(material.id, email)
