@@ -83,6 +83,21 @@ first rule in this file forbids.
   not know this word, and I did not know that I did not know it.* Words
   many readers look up in review which the extraction never offered are the
   evidence for where the frequency cut is wrong.
+- **A word must START with a letter.** `15-year-olds` otherwise tokenises
+  from the digit, and the offset sent is three characters before the
+  `year-old` entry's span — so the server's span-containment test finds
+  nothing, the string match fails on a token with a number in it, and a word
+  the passage already has glossed is glossed a second time under a name
+  nobody typed. It also means a bare number is not a target, which is right
+  on its own terms.
+- **Not reachable by keyboard, and deliberately not.** Nine hundred tab
+  stops between the top of the passage and the questions would be worse
+  than the gap they close. The spans carry no role and no label, so a screen
+  reader reads the passage as a passage; what a keyboard user has instead is
+  the word list beside it, which is every word the extraction knows with its
+  meaning, reachable in one tab. What they do not have is the words the
+  extraction MISSED — the very hole this closes for a mouse. Worth fixing
+  the day there is a shape for it that is not 900 tab stops.
 - **A caveat worth watching.** The budget is what used to bound how much a
   curious reader could add to a SHARED list. With it gone, every casual
   click on a common word can add a row that every future learner then sees

@@ -174,11 +174,26 @@ function inside(
   return out;
 }
 
-/** Letters and digits, plus the two marks that live INSIDE English words.
- *  The apostrophe in both its shapes, because a passage read off a printed
- *  page carries the typographic one and one typed by an author carries the
- *  straight one — and `Earth's` has to be one word either way. */
-const WORD = /[\p{L}\p{N}][\p{L}\p{N}'\u2019-]*/gu;
+/**
+ * What counts as a word somebody might want the meaning of.
+ *
+ * Letters and digits INSIDE, plus the two marks that live inside English
+ * words — the apostrophe in both its shapes, because a passage read off a
+ * printed page carries the typographic one and one typed by an author
+ * carries the straight one, and `Earth's` has to be one word either way.
+ *
+ * But it must START with a letter, and that is not tidiness. `15-year-olds`
+ * otherwise matches from the digit, and the offset sent is then three
+ * characters before the `year-old` entry's span — so the server's
+ * span-containment test finds nothing, the string match fails on a token
+ * with a number in it, and a word the passage already has glossed gets
+ * glossed a second time under a name nobody typed. Starting at the letter
+ * puts the offset inside the entry, where one lookup answers.
+ *
+ * It also means a bare number is not a target, which is right on its own
+ * terms: nobody wants the meaning of `15`.
+ */
+const WORD = /\p{L}[\p{L}\p{N}'\u2019-]*/gu;
 
 /** What a word wears when it can be asked about.
  *
