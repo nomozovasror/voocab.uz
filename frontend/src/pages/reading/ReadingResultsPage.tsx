@@ -301,6 +301,11 @@ export default function ReadingResultsPage() {
           (id) => counts[id] > 0,
         ) ?? "answers");
 
+  /** Whether the score card is drawn — see where it is. It belongs to the
+   *  answers tab, except on a paper that HAS no answers tab, where it is
+   *  the only place a score can be shown at all. */
+  const scored = layer === "answers" || counts.answers === 0;
+
   /** What the pointer is on, wherever it is. One key, shared by both panes:
    *  a question id in the mistakes layer, a lemma in the other two. */
   const [lit, setLit] = useState<string | null>(null);
@@ -449,9 +454,29 @@ export default function ReadingResultsPage() {
     // own horizontal scrollbar. A pane that scrolls sideways on a page built
     // out of two vertical scrollers reads as broken.
     <div className={cn(PANE_TOP, "px-3")} style={{ zoom: textSize / 100 }}>
-      <ReviewScore data={data} rows={rows} onJump={jumpTo} />
-
-      {wrong.length === 0 && <CleanSheet />}
+      {/* The score is the ANSWERS tab's own header, not the page's.
+          
+          It sat above all four panels, on the reasoning that a score is the
+          headline of a review. It is — of how the paper was ANSWERED, which
+          is one of the four questions this page can be asked. Above the word
+          list it was a card about something else taking the top of the pane,
+          and a reader who came to the vocabulary had to scroll past their own
+          marks to reach the first word; the question map under it made that
+          worse, since forty numbered squares that jump to questions are a
+          control for a panel that is not open.
+          
+          `scored` rather than `layer === "answers"` for the one paper where
+          that would lose it altogether: a passage the evidence extraction
+          never reached has no answers layer to offer, the page falls through
+          to the vocabulary, and the score then has nowhere else to be. The
+          card is the answers tab's; where there is no answers tab it is the
+          page's again. */}
+      {scored && (
+        <>
+          <ReviewScore data={data} rows={rows} onJump={jumpTo} />
+          {wrong.length === 0 && <CleanSheet />}
+        </>
+      )}
 
       {layer === "answers" && (
         <>
@@ -557,7 +582,10 @@ export default function ReadingResultsPage() {
 
       {(layer === "vocabulary" || layer === "saved") && vocabulary && (
         <ReviewVocabulary
-          className="mt-5"
+          // The gap under the score card, and nothing when there is no card
+          // to sit under: the panel then opens at the same height as the
+          // passage title opposite it, which is what the two panes are for.
+          className={cn(scored && "mt-5")}
           materialId={data.material_id}
           data={vocabulary}
           // The Saved layer is the same list with everything else taken
@@ -577,7 +605,7 @@ export default function ReadingResultsPage() {
 
       {layer === "marks" && (
         <ReviewMarks
-          className="mt-5"
+          className={cn(scored && "mt-5")}
           marks={marks}
           passages={passages}
           lit={lit}

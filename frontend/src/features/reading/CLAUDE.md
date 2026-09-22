@@ -94,6 +94,14 @@ is a reader working out which is the real one.
   a disabled button reads as "not you". The same fall-through picks the
   opening layer, so a paper with no evidence opens on the vocabulary with no
   second rule written for it.
+- **The score card belongs to the ANSWERS tab, not to the page.** It is the
+  headline of how the paper was answered, which is one of the four
+  questions this page can be asked — above the word list it was a card
+  about something else taking the top of the pane, and its question map was
+  forty numbered squares jumping into a panel that is not open. The one
+  exception is a paper the evidence extraction never reached: there is no
+  answers tab to put it on, so it stays where the page fell through to, or
+  the score would be nowhere at all.
 - **Every layer has an analysis.** Answers is the marked question list,
   Vocabulary the word list, Saved the same list filtered to what the reader
   had already met, My marks their own highlights grouped by what each stroke
