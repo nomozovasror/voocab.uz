@@ -439,28 +439,38 @@ export default function ReadingResultsPage() {
             {reviewRuns(shown).map((run, at) => (
               <div key={at}>
                 {run.heading && (
-                  // Legible, and with a rule over it.
+                  // A rule that runs THROUGH the name, the way a fieldset
+                  // legend sits in its own border: a short lead-in, the
+                  // task, then the line carrying on to the edge.
                   //
-                  // It was `muted-foreground/80` at 0.7rem, which on this
-                  // ground comes to about 2:1 — not quiet, invisible — and
-                  // it sat between rows that each carry a hairline of their
-                  // own, so nothing about it read as a boundary. What says
-                  // a new task has started is the RULE; the words say which
-                  // task.
+                  // The words alone were not enough to say a different task
+                  // had started — they sat between two rows that each carry
+                  // a hairline of their own, so nothing about the space
+                  // around them read as a boundary. Now the LINE says
+                  // where, and the words only say which, which is why they
+                  // can go back to being quiet.
                   //
-                  // `-mx-3 px-3` so the rule lines up with the borders
-                  // between rows, which reach out by the same three to draw
-                  // their hover state full-bleed. A divider inset from every
-                  // line above and below it reads as a mistake.
+                  // `-mx-3` and no padding of its own, so the rule starts
+                  // exactly where the borders between rows start — those
+                  // reach out by the same three to draw their hover state
+                  // full-bleed. A divider inset from every line above and
+                  // below it reads as a mistake rather than as a divider.
                   <h3
                     className={cn(
-                      "-mx-3 px-3 text-[0.72rem] font-medium tracking-caps text-foreground/55 uppercase",
-                      at === 0
-                        ? "mt-4 mb-2"
-                        : "mt-7 mb-2 border-t border-border pt-6",
+                      "-mx-3 mb-2 flex items-center gap-2.5",
+                      at === 0 ? "mt-4" : "mt-7",
                     )}
                   >
-                    {run.heading}
+                    <span aria-hidden className="h-px w-5 shrink-0 bg-border" />
+                    {/* `muted-foreground` — the theme's secondary TEXT, and
+                        the role every quiet label on this app already uses.
+                        Not `secondary`, which is a surface: #2c2e31 on a
+                        #323437 ground is a heading nobody can see, and in
+                        the light theme it is a pale grey on white. */}
+                    <span className="shrink-0 text-[0.72rem] tracking-caps text-muted-foreground uppercase">
+                      {run.heading}
+                    </span>
+                    <span aria-hidden className="h-px flex-1 bg-border" />
                   </h3>
                 )}
                 {run.rows.map((row) => {
