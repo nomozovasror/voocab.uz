@@ -23,6 +23,7 @@ import {
 } from "@/features/paper/components/ReviewFilter";
 import type { WavePart } from "@/features/listening/components/Waveform";
 import {
+  nextMistake,
   numberWidth,
   reviewRows,
   tallyMistakes,
@@ -201,21 +202,12 @@ export default function ListeningResultsPage() {
     [rows],
   );
 
-  // The next mistake BELOW where the reader is, so the button is a way DOWN
-  // the page rather than a cursor over a list. Past the last one it wraps to
-  // the first: a button that answers a press by doing nothing is worse than
-  // one that goes somewhere, and "find next" wrapping is what everybody
-  // already expects of it.
-  const nextMistake = useCallback(() => {
-    const fold = window.innerHeight * 0.5;
-    const below = wrong.find((row) => {
-      const box = document
-        .querySelector(`[${Q_ANCHOR}="${CSS.escape(row.result.question_id)}"]`)
-        ?.getBoundingClientRect();
-      return box ? box.top > fold : false;
-    });
-    const next = below ?? wrong[0];
-    if (next) goToQuestion(next.result.question_id);
+  // The next mistake BELOW where the reader is, wrapping past the last.
+  // Shared with the reading review, which scrolls a pane rather than the
+  // document — see `nextMistake` on why the fold cannot be the window's.
+  const goToNextMistake = useCallback(() => {
+    const id = nextMistake(wrong);
+    if (id) goToQuestion(id);
   }, [wrong]);
 
   if (isLoading) return <ResultsSkeleton />;
@@ -292,7 +284,7 @@ export default function ListeningResultsPage() {
           onScope={setChosen}
           mistakes={wrong.length}
           total={rows.length}
-          onNextMistake={wrong.length > 1 ? nextMistake : undefined}
+          onNextMistake={wrong.length > 1 ? goToNextMistake : undefined}
         />
       </div>
 

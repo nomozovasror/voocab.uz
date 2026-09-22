@@ -11,6 +11,7 @@ import { useAttempt, useTakeMaterial } from "@/features/paper/queries";
 import { Q_ANCHOR } from "@/features/paper/take-focus";
 import { sorted } from "@/features/paper/numbering";
 import {
+  nextMistake,
   numberWidth,
   passageQuote,
   reviewRows,
@@ -346,9 +347,13 @@ export default function ReadingResultsPage() {
     [rows, scope, layer],
   );
 
-  const nextMistake = useCallback(() => {
-    const first = wrong[0];
-    if (first) scrollToQuestion(first.result.question_id);
+  // The next one BELOW where the reader is, wrapping past the last — and
+  // never `wrong[0]`, which is what this was. With "Mistakes only" on, the
+  // first mistake is the row at the top of the pane, so the button answered
+  // every press by scrolling to where the reader already was.
+  const goToNextMistake = useCallback(() => {
+    const id = nextMistake(wrong);
+    if (id) scrollToQuestion(id);
   }, [wrong]);
 
   // --- How tall the panes are ----------------------------------------------
@@ -421,7 +426,7 @@ export default function ReadingResultsPage() {
               onScope={setChosen}
               mistakes={wrong.length}
               total={rows.length}
-              onNextMistake={wrong.length > 1 ? nextMistake : undefined}
+              onNextMistake={wrong.length > 1 ? goToNextMistake : undefined}
             />
           </div>
 

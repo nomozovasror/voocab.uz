@@ -5,6 +5,7 @@ import {
 } from "@/features/paper/form-syntax";
 import { matchIndex } from "@/features/paper/matching";
 import { questionNumbersShort, sorted } from "@/features/paper/numbering";
+import { questionAnchor } from "@/features/paper/take-focus";
 import { QUESTION_TYPE_LABEL } from "@/features/paper/question-types";
 import { isCompletion } from "@/features/paper/types";
 import { paperParts } from "@/features/paper/take-paper";
@@ -675,6 +676,91 @@ function runHeading(row: ReviewRow): string | null {
   const label = QUESTION_TYPE_LABEL[row.groupType];
   if (!isCompletion(row.groupType)) return label;
   return row.byLetter ? `${label} — from the list` : `${label} — your words`;
+}
+
+/**
+ * The next mistake BELOW where the reader is, so the button is a way DOWN
+ * the page rather than a cursor over a list.
+ *
+ * Past the last one it wraps to the first: a button that answers a press by
+ * doing nothing is worse than one that goes somewhere, and "find next"
+ * wrapping is what everybody already expects of it.
+ *
+ * ## The fold is the SCROLLER's, not the window's
+ *
+ * Which is the whole reason this is shared rather than written once per
+ * page. The listening review scrolls the document, and half the window is
+ * the middle of what the reader can see. The reading review scrolls a PANE
+ * — the document never moves — and a fold measured against the window is
+ * only right there by the accident that the pane happens to fill it.
+ *
+ * So the scroller is found from the anchor itself, the way everything in
+ * `take-focus.ts` is found: ask the DOM where the thing is rather than keep
+ * a register of where it was put.
+ */
+export function nextMistake(wrong: ReviewRow[]): string | null {
+  const first = wrong[0];
+  if (!first) return null;
+  const anchor = questionAnchor(first.result.question_id);
+  const view = viewOf(anchor ? scrollerOf(anchor) : null);
+
+  // Already at the end, so there is no next one and the wrap is the answer.
+  //
+  // This is the condition, and not "no mistake is below the fold": at the
+  // bottom of a list the last row is still in the lower half of what the
+  // reader can see, so a fold test alone keeps choosing it and the button
+  // stops moving — which is how it looks broken from the other side.
+  if (view.scrollTop + view.height >= view.scrollHeight - 2) {
+    return first.result.question_id;
+  }
+
+  const below = wrong.find((row) => {
+    const box = questionAnchor(row.result.question_id)?.getBoundingClientRect();
+    return box ? box.top > view.top + view.height * 0.5 : false;
+  });
+  return (below ?? first).result.question_id;
+}
+
+/** Where the reader is and how much further there is to go, from whichever
+ *  of the two things is doing the scrolling. */
+function viewOf(scroller: HTMLElement | null) {
+  if (scroller) {
+    return {
+      top: scroller.getBoundingClientRect().top,
+      height: scroller.clientHeight,
+      scrollTop: scroller.scrollTop,
+      scrollHeight: scroller.scrollHeight,
+    };
+  }
+  const page = document.documentElement;
+  return {
+    top: 0,
+    height: window.innerHeight,
+    scrollTop: window.scrollY,
+    scrollHeight: page.scrollHeight,
+  };
+}
+
+/** The nearest ancestor that actually scrolls, or null for the document.
+ *
+ *  By computed style rather than by class, because what scrolls is a fact
+ *  about the layout and the two pages arrive at it differently — one pane
+ *  with `overflow-y: auto`, one document that simply runs long. */
+function scrollerOf(from: HTMLElement): HTMLElement | null {
+  for (
+    let node = from.parentElement;
+    node && node !== document.body;
+    node = node.parentElement
+  ) {
+    const how = getComputedStyle(node).overflowY;
+    if (
+      (how === "auto" || how === "scroll") &&
+      node.scrollHeight > node.clientHeight
+    ) {
+      return node;
+    }
+  }
+  return null;
 }
 
 /**
