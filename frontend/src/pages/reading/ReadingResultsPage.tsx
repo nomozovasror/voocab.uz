@@ -414,7 +414,7 @@ export default function ReadingResultsPage() {
     // into they hung past the pane's right edge and gave the answers their
     // own horizontal scrollbar. A pane that scrolls sideways on a page built
     // out of two vertical scrollers reads as broken.
-    <div className={cn(PANE_TOP, "px-3")}>
+    <div className={cn(PANE_TOP, "px-3")} style={{ zoom: textSize / 100 }}>
       <ReviewScore data={data} rows={rows} onJump={jumpTo} />
 
       {wrong.length === 0 && <CleanSheet />}
@@ -621,18 +621,12 @@ export default function ReadingResultsPage() {
 
       <SplitPanes
         ref={paneRef}
-        // On the pane rather than on the passage alone, exactly as the take
-        // screen sets it: what scales is everything written in `em`, which
-        // is the prose. The analysis beside it is set in rem and holds
-        // still, which is right — the control is for the text being read,
-        // not for the furniture around it.
-        style={{ fontSize: `${textSize}%` }}
         height={paneH}
         split={wide}
         leftLabel={passages.length > 1 ? "Passages" : "Passage"}
         rightLabel="Your result"
         left={
-          <div className={PANE_TOP}>
+          <div className={PANE_TOP} style={{ zoom: textSize / 100 }}>
             <div className="mb-5 text-center">
               <h1 className="text-[1.35em] leading-snug font-semibold text-foreground">
                 {data.material_title}
@@ -678,6 +672,29 @@ export default function ReadingResultsPage() {
  *  screen's own two measurements, for a layout that is the take screen's.
  *  The islands end at 60px and content that began there touched them. */
 const PANE_TOP = "pt-19 pb-6";
+
+/*  Why both panes are ZOOMED rather than given a font size.
+ *
+ *  The take screen sets `fontSize` on the split and everything it cares
+ *  about is written in `em`, so the prose follows. That works there because
+ *  the thing being resized IS the prose.
+ *
+ *  Here the right-hand pane is the other half of the page, and every size in
+ *  it — the answers, the chips, the letter chips, the score — is a Tailwind
+ *  utility in `rem`, which is measured from the ROOT and ignores any font
+ *  size set on a container. So the passage grew and the answers beside it
+ *  did not, which is the one thing a reader would never ask for: the two
+ *  halves are read against each other.
+ *
+ *  Converting five shared components to `em` would fix it and bring a worse
+ *  problem with it — `em` compounds, so `text-sm` inside `text-sm` is two
+ *  reductions, and those components are nested and are also listening's.
+ *
+ *  `zoom` scales a subtree the way the browser's own page zoom does: type,
+ *  padding, borders and rules together, with the layout re-flowed rather
+ *  than transformed. It is on each pane's CONTENT and never on the split
+ *  itself, whose height is measured in real pixels to keep the page from
+ *  scrolling. */
 
 /**
  * Where this row's marks are, in as few characters as say it.

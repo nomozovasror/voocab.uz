@@ -100,6 +100,20 @@ is a reader working out which is the real one.
   MEANS. A layer whose panel showed something else would be the page
   contradicting its own control — which is what happened to *My marks*
   before `ReviewMarks` existed.
+- **The text size ZOOMS both panes; it does not set a font size.** The take
+  screen sets `fontSize` on the split and its prose, written in `em`,
+  follows — which works there because the prose is the thing being resized.
+  Here the other half of the screen is the answers, and every size in them
+  is a Tailwind utility in `rem`, measured from the ROOT and deaf to a font
+  size set on a container: the passage grew and the answers beside it did
+  not, which is the one thing a reader would never ask for, since the two
+  halves are read against each other. Converting five shared components to
+  `em` would fix it and bring a worse problem — `em` compounds, and those
+  components nest and are also listening's. `zoom` scales a subtree the way
+  the browser's own page zoom does, type and padding and rules together,
+  with the layout reflowed rather than transformed. It goes on each pane's
+  CONTENT and never on the split, whose height is measured in real pixels to
+  keep the page itself from scrolling.
 - **"My marks" is not an overlay.** It hands `PassagePane` the reader's own
   `Highlight`s and the existing code draws them, so they keep the three
   colours they were made in. Those colours mean something — the keyword,
