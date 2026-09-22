@@ -2507,6 +2507,54 @@ The first two thousand are the words a passage is READ with. Past that a
 candidate is meeting a word rather than using one. Median over the corpus:
 82 candidates a passage.
 
+### And a second cut at rank 800, judged by the model
+
+Frequency in a native corpus and difficulty for a learner are not the same
+measurement, and the gap between them has a shape: Latinate academic words
+are common in written English and late for anybody learning it.
+`appropriate` is NGSL rank **1019** — squarely inside "the words a passage
+is read with" — and it is B2 vocabulary that stops band 5-6 readers. No
+threshold on rank rescues it, because by rank it is not a hard word.
+
+So there are two lines. Above rank 2000 a word is offered outright. Between
+**800 and 2000** it is offered PROVISIONALLY: asked about in the same batch
+as the rest, and kept only if the model comes back B2 or higher. A B1 there
+is the model agreeing with the frequency list, which is what was already
+assumed, so it is dropped (`glossed` in `read_vocabulary.py`).
+
+**The judge is the model, not a graded word list, and that was chosen
+against the alternative rather than for want of one.** A CEFR-graded list
+was fetched and measured first. The openly licensed one — CEFR-J plus the
+Octanove C1/C2 extension, 8 653 headwords — grades `appropriate` **A2**,
+`significant` A2 and `establish` A2, because it profiles what a Japanese
+learner is expected to know and that curve is not this curve. It would have
+rescued 349 words and not the one the rule was written for. The list that
+grades these correctly is Oxford's 3000/5000, which is not published under a
+licence this repository can vendor a copy under; `wordlists/` only carries
+lists it may redistribute.
+
+The model is also the better judge on the merits, for the reason the whole
+stage already rests on: it reads the word IN THIS PASSAGE'S SENSE, where a
+list grades a headword once for every text in English. Measured on Cambridge
+10 Test 1 Passage 1 the second layer added `spell` ("a short period of time
+with a specific type of weather"), `scale` ("a system used to measure the
+strength of an earthquake") and `corner` ("a remote or distant part of a
+region") — three common words no headword list would have flagged and whose
+level is a fact about this passage.
+
+    cam10-t1-p1   106 firm candidates + 55 provisional
+                  -> 20 kept (18 B2, 2 C1), 35 answered B1 and dropped
+
+The cost is one extra request a passage. 800 rather than lower because below
+it the words are the first eight hundred of English, where a B2 reading is
+the model being agreeable rather than right.
+
+**For a passage already glossed:** `--extra-only` asks about the provisional
+band alone and folds in what comes back, leaving every existing entry
+untouched — the same arm, for the same reason, as `--senses-only`. It
+decides what to ask by which candidate POSITIONS the file does not already
+hold, so it is idempotent: run twice and the second run finds nothing.
+
 ### Lemmatisation without a parser
 
 The lists ship lemmatised, so most surface forms map home by lookup, and that

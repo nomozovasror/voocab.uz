@@ -111,11 +111,19 @@ import vocabulary
 SEED = pathlib.Path(__file__).resolve().parent
 WORK = SEED / "work"
 
-#: The three CEFR levels this is allowed to answer. Below B1 a word would not
-#: have survived the frequency filter, and C2 is a judgement no two sources
-#: agree on -- a scale with a disputed top band is a scale that reads as
-#: noise at the top. Anything else the model says is refused rather than
-#: rounded, because a level nobody asked for is a level nobody can trust.
+#: The three CEFR levels this is allowed to answer. Below B1 a word is not
+#: worth a learner's attention in an IELTS passage, and C2 is a judgement no
+#: two sources agree on -- a scale with a disputed top band is a scale that
+#: reads as noise at the top. Anything else the model says is refused rather
+#: than rounded, because a level nobody asked for is a level nobody can
+#: trust.
+#:
+#: The scale is also where the SECOND candidate layer is decided. Words the
+#: frequency filter called known are asked about provisionally
+#: (`vocabulary.ASK_RANK`) and kept only on B2 or above; a B1 from the model
+#: there is the model agreeing with the frequency list, which is what was
+#: already assumed. So B1 means two different things depending on how the
+#: word got into the batch, and `glossed` is where that is resolved.
 LEVELS = ("B1", "B2", "C1")
 
 #: Parts of speech, in the abbreviations a learner's dictionary prints.
@@ -359,6 +367,13 @@ def glossed(reply: dict, candidates: list[dict], passage: dict) -> list[dict]:
         entry = judged(said, where["frequency_band"])
         if entry is None:
             continue
+        # The second layer's verdict. A provisional candidate is one the
+        # frequency filter called known and this stage asked about anyway --
+        # see `vocabulary.ASK_RANK` -- and it earns its place only by coming
+        # back B2 or higher. B1 here is the model agreeing with the
+        # frequency list, which is the answer that was already assumed.
+        if where.get("provisional") and entry["cefr_level"] == "B1":
+            continue
         text = passage["paragraphs"][where["index"]].get("text") or ""
         entries.append({
             **entry,
@@ -583,6 +598,55 @@ def add_senses(passage_id: str, *, model: str, most: int) -> dict | None:
     return result
 
 
+def add_provisional(passage_id: str, *, model: str) -> dict | None:
+    """The second candidate layer, run over a passage already glossed.
+
+    Same shape as :func:`add_senses` and here for the same reason: the layer
+    was written after the corpus had been read, and re-glossing two hundred
+    passages to add a handful of words each would spend the whole extraction
+    again for a fraction of its output.
+
+    Only the PROVISIONAL candidates are asked about -- the band between
+    `vocabulary.ASK_RANK` and `vocabulary.KNOWN_RANK` that the first run
+    never saw -- and only the ones this passage does not already have a
+    place taken at. Everything already written is copied through untouched,
+    including any entry a person has since corrected: a stage that improves
+    a list by rewriting it is a stage nobody can run twice.
+    """
+    path = WORK / passage_id / "vocabulary.json"
+    passage_path = WORK / passage_id / "passage.json"
+    if not path.exists() or not passage_path.exists():
+        return None
+    result = json.loads(path.read_text())
+    passage = json.loads(passage_path.read_text())
+    entries = list(result.get("entries", []))
+    # By POSITION, like the missing-answer pass in `read`: the stored lemma
+    # is the model's and the candidate's is this stage's, and comparing the
+    # two would re-ask about every word the model had corrected the spelling
+    # of.
+    taken = {(entry["index"], entry["start"]) for entry in entries}
+    candidates = [entry
+                  for entry in vocabulary.candidates(passage["paragraphs"])
+                  if entry["provisional"]
+                  and (entry["index"], entry["start"]) not in taken]
+    if not candidates:
+        return None
+
+    fresh: list[dict] = []
+    for start in range(0, len(candidates), BATCH):
+        batch = candidates[start:start + BATCH]
+        fresh += glossed(ask_words(passage, batch, model=model),
+                         batch, passage)
+    if not fresh:
+        return None
+
+    entries += fresh
+    entries.sort(key=lambda entry: (entry["index"], entry["start"]))
+    result["entries"] = entries
+    result["candidates"] = result.get("candidates", 0) + len(candidates)
+    return result
+
+
 def passages(conn: sqlite3.Connection, where: str, args: tuple) -> list[str]:
     return [row[0] for row in conn.execute(
         f"select id from passage where {where} "
@@ -623,6 +687,11 @@ def main() -> int:
     ap.add_argument("--senses-only", action="store_true",
                     help="add the unusual senses to passages already glossed, "
                          "without asking about anything else again")
+    ap.add_argument("--extra-only", action="store_true",
+                    help="ask about the second candidate layer only -- the "
+                         "common-by-frequency words the first run never "
+                         "offered -- and fold in whatever comes back B2 or "
+                         "higher, leaving every existing entry alone")
     ap.add_argument("--model", default=vision.DEFAULT_MODEL)
     args = ap.parse_args()
 
@@ -647,6 +716,15 @@ def main() -> int:
             if not out.exists() or (already_sensed(out) and not args.force):
                 skipped += 1
                 continue
+        elif args.extra_only:
+            # Same opposite test, and no "already done" flag to check: what
+            # would be added is decided by which candidate positions the
+            # file does not already hold, so a second run over a passage the
+            # first one covered finds nothing to ask about and says so by
+            # returning None.
+            if not out.exists():
+                skipped += 1
+                continue
         elif out.exists() and not args.force:
             skipped += 1
             continue
@@ -656,17 +734,26 @@ def main() -> int:
         # to take the other hundred and sixty down with it. Caught here so
         # the run carries on and says at the end what it could not do.
         try:
-            result = (add_senses(passage_id, model=args.model,
-                                 most=args.senses)
-                      if args.senses_only
-                      else read(passage_id, model=args.model,
-                                most=args.phrases, senses=args.senses))
+            if args.senses_only:
+                result = add_senses(passage_id, model=args.model,
+                                    most=args.senses)
+            elif args.extra_only:
+                result = add_provisional(passage_id, model=args.model)
+            else:
+                result = read(passage_id, model=args.model,
+                              most=args.phrases, senses=args.senses)
         except SystemExit as stopped:
             print(f"{passage_id:16} FAILED  {stopped}", file=sys.stderr)
             failed += 1
             continue
         if result is None or not result["entries"]:
-            failed += 1
+            # Nothing to add is not a failure in the --extra-only arm: it is
+            # a passage whose second layer turned up no word the model was
+            # willing to call B2, which is an answer.
+            if args.extra_only and result is None:
+                skipped += 1
+            else:
+                failed += 1
             continue
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(result, indent=2, ensure_ascii=False))

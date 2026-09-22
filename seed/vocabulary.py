@@ -25,6 +25,14 @@ precisely what an IELTS reading passage is written in, and precisely why the
 academic list is KEPT rather than dropped. The two are disjoint but for a
 single word.
 
+## Two lines, not one
+
+The cut below is a FREQUENCY cut, and frequency answers a different question
+from the one that matters. See :data:`ASK_RANK`: words between the two lines
+are asked about and kept only if the model calls them B2 or higher, because
+`appropriate` is NGSL rank 1019 and is nevertheless the kind of word that
+stops a band 5-6 reader.
+
 ## Where the line is drawn, and why it is not at the edge of the list
 
 The obvious rule -- in the NGSL, so the reader knows it -- is wrong, and
@@ -79,10 +87,43 @@ import re
 
 WORDLISTS = pathlib.Path(__file__).resolve().parent / "wordlists"
 
-#: Below this NGSL rank a word is assumed known and never offered. See the
+#: Below this NGSL rank a word is offered without argument. See the
 #: measurement in the module docstring: the number is the third of the NGSL
 #: where meeting a word stops being the same thing as using one.
 KNOWN_RANK = 2000
+
+#: And below THIS rank a word is not offered at all. Between the two it is
+#: offered PROVISIONALLY -- asked about, and kept only if the model comes
+#: back with B2 or higher.
+#:
+#: The second layer exists because frequency in a native corpus and
+#: difficulty for a learner are not the same measurement, and the gap
+#: between them has a shape: Latinate academic words are common in written
+#: English and late for anybody learning it. `appropriate` is NGSL rank
+#: 1019 -- squarely inside "the words a passage is read with" -- and it is
+#: B2 vocabulary that stops band 5-6 readers. No threshold on rank can
+#: rescue it, because by rank it is not a hard word.
+#:
+#: The judge is the MODEL rather than a graded word list, and that was a
+#: decision made against the alternative rather than for want of one. A
+#: CEFR-graded list was fetched and measured: the openly licensed one
+#: (CEFR-J plus the Octanove C1/C2 extension) grades `appropriate` A2,
+#: `significant` A2 and `establish` A2, because it profiles what a Japanese
+#: learner is expected to know and that curve is not this curve. It would
+#: have rescued 349 words and not the one the rule was written for. The
+#: list that grades these correctly is Oxford's 3000/5000, which is not
+#: published under a licence this repository can vendor a copy under.
+#:
+#: The model is also the better judge on the merits, and for the reason
+#: this whole module already rests on: it reads the word IN THIS PASSAGE'S
+#: SENSE. A list grades a headword once, for every text in English.
+#:
+#: 800 rather than lower because the cost is one extra request a passage at
+#: this width -- measured on Cambridge 10 Test 1 Passage 1, where the cut
+#: takes the candidate count from 106 to 161 -- and because below it the
+#: words are the first eight hundred of English, where a B2 reading is the
+#: model being agreeable rather than right.
+ASK_RANK = 800
 
 #: What the frequency evidence says about one lemma, coarsest first. An
 #: ORDERED scale, because the difficulty projection wants to compare passages
@@ -383,7 +424,7 @@ def candidates(paragraphs: list[dict]) -> list[dict]:
             continue
         where = places[0]
         rank = lists().ngsl.get(lemma)
-        if rank is not None and rank <= KNOWN_RANK:
+        if rank is not None and rank <= ASK_RANK:
             continue
         if lemma in lists().supplementary:
             continue
@@ -395,6 +436,12 @@ def candidates(paragraphs: list[dict]) -> list[dict]:
             "end": where.end,
             "frequency_band": band(lemma),
             "occurrences": len(places),
+            # Asked about on suspicion rather than on evidence. The caller
+            # keeps a provisional entry only where the model answers B2 or
+            # higher -- see ASK_RANK. Never a reason to skip the ASK: the
+            # cost of asking is a line in a batch, and the cost of not
+            # asking is the word being invisible for ever.
+            "provisional": rank is not None and rank <= KNOWN_RANK,
         })
     keep.sort(key=lambda entry: (entry["index"], entry["start"]))
     return keep
