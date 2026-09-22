@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, ArrowRight, RotateCcw } from "lucide-react";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
@@ -6,6 +13,7 @@ import { toast } from "@/lib/toast";
 import { timeAgo } from "@/lib/time";
 import { getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { CEFR_LEVELS, CEFR_TONE } from "@/features/vocabulary/cefr";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { HeaderSlot, useHeaderTask } from "@/components/layout/header-task";
 import {
@@ -51,7 +59,7 @@ import {
 } from "@/features/reading/components/SplitPanes";
 import {
   PassageTools,
-  useMarkColour,
+  useMarkStyle,
   useSelection,
   useTextSize,
 } from "@/features/reading/components/PassageTools";
@@ -126,11 +134,6 @@ const PANE_FOOT = 0;
  *  nothing is inside the faded band, so the fade costs nothing and only
  *  does anything once the reader scrolls. */
 const PANE_TOP = "pt-19 pb-6";
-
-/** The levels a reader sees, in the order they get harder. Named because
- *  `Object.keys` on the counts would print them in whatever order the JSON
- *  arrived in, and `B1 · C1 · B2` reads as a bug. */
-const LEVELS = ["B1", "B2", "C1"] as const;
 
 /*  The `pb-6` is the other end of the same idea, and it is NOT the gap that
  *  was taken out below the panes. That one sat outside them and cost every
@@ -261,7 +264,7 @@ export default function ReadingTakePage() {
     [id],
   );
   const [textSize, setTextSize] = useTextSize();
-  const [colour, setColour] = useMarkColour();
+  const [colour, setColour] = useMarkStyle();
   const selected = useSelection();
 
   // Which side the passage is drawn on. Page state rather than remembered:
@@ -376,13 +379,13 @@ export default function ReadingTakePage() {
     });
   }, [sessionKey, id]);
 
-  // A mark from either path — the row's colour row, or the popover at the
+  // A mark from either path — the tray under the pen, or the popover at the
   // selection. Both end here, so there is one place where a selection turns
   // into a mark and one place that clears it afterwards.
   const markSelection = useCallback(
     (which: typeof colour, at: Selected) => {
       setColour(which);
-      keep([...marks, { ...at.where, colour: which }]);
+      keep([...marks, { ...at.where, style: which }]);
       window.getSelection()?.removeAllRanges();
     },
     [marks, keep, setColour],
@@ -401,7 +404,9 @@ export default function ReadingTakePage() {
             m.end === at.where.end
           ),
       );
-      keep(text ? [...without, { ...at.where, colour, note: text }] : without);
+      keep(
+        text ? [...without, { ...at.where, style: colour, note: text }] : without,
+      );
       setPanel(null);
       window.getSelection()?.removeAllRanges();
     },
@@ -977,16 +982,32 @@ export default function ReadingTakePage() {
                   // whether it is pitched at this reader — and a second
                   // row under the title pushed the passage down for
                   // something read once.
-                  vocabulary && vocabulary.total > 0
-                    ? `${vocabulary.total} words to learn (${LEVELS.filter(
-                        (level) => vocabulary.levels[level],
-                      )
-                        .map((level) => `${level} ${vocabulary.levels[level]}`)
-                        .join(" · ")})`
-                    : null,
                 ]
                   .filter(Boolean)
                   .join(" · ")}
+                {/* The spread, and the only part of this line that is not
+                    a string: each level is printed in its own colour, so
+                    the header says how hard this passage is at a glance
+                    rather than after three numbers have been read and
+                    compared. Same colours the review will use on the same
+                    words — see `features/vocabulary/cefr.ts`, including
+                    why the letters are always printed beside them. */}
+                {vocabulary && vocabulary.total > 0 && (
+                  <>
+                    {` · ${vocabulary.total} words to learn (`}
+                    {CEFR_LEVELS.filter(
+                      (level) => vocabulary.levels[level],
+                    ).map((level, n) => (
+                      <Fragment key={level}>
+                        {n > 0 ? " · " : null}
+                        <span className={CEFR_TONE[level].ink}>
+                          {level} {vocabulary.levels[level]}
+                        </span>
+                      </Fragment>
+                    ))}
+                    {")"}
+                  </>
+                )}
               </p>
             </div>
             <div className="space-y-10">

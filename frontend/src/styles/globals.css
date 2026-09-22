@@ -69,13 +69,24 @@
   --color-published: var(--published);
   --color-draft: var(--draft);
   --color-stub: var(--stub);
-  /* The reader's own marks on a passage (§3). Three, and never green or
-     red: those two mean "right" and "wrong" on the review page, and a
-     candidate who marked a line green while reading would meet their own
-     marking again as a verdict they never made. */
+  /* The reader's own mark on a passage (§3). One hue in two styles, and
+     never green or red: those two mean "right" and "wrong" on the review
+     page, and a candidate who marked a line green while reading would meet
+     their own marking again as a verdict they never made. */
   --color-mark-key: var(--mark-key);
-  --color-mark-found: var(--mark-found);
-  --color-mark-doubt: var(--mark-doubt);
+
+  /* The CEFR scale (§3). Three levels, three roles each: the hue itself
+     (a rule, a ring), the ink it is legible as, and the wash it lays over
+     a word in the passage. */
+  --color-cefr-b1: var(--cefr-b1);
+  --color-cefr-b2: var(--cefr-b2);
+  --color-cefr-c1: var(--cefr-c1);
+  --color-cefr-b1-ink: var(--cefr-b1-ink);
+  --color-cefr-b2-ink: var(--cefr-b2-ink);
+  --color-cefr-c1-ink: var(--cefr-c1-ink);
+  --color-cefr-b1-wash: var(--cefr-b1-wash);
+  --color-cefr-b2-wash: var(--cefr-b2-wash);
+  --color-cefr-c1-wash: var(--cefr-c1-wash);
   --color-wave: var(--wave);
   --color-wave-progress: var(--wave-progress);
   --color-region: var(--region);
@@ -210,17 +221,62 @@
   --draft: var(--muted-foreground);
   --stub: color-mix(in srgb, var(--foreground) 15%, transparent);
 
-  /* The reader's marks (§3). What each one MEANS is the point of having
-     three: the amber is a keyword in the question, the blue is where the
-     answer was found in the passage, and the violet is a line to come back
-     to. A candidate working a forty-question paper needs those three apart
-     at a glance, twenty minutes later, without a legend.
+  /* The reader's marks (§3). ONE hue, in two styles — see
+     features/reading/highlights.ts.
 
-     The amber is the app's own accent, because "this is the thing" is
-     already what that colour says everywhere else here. */
+     It was three hues: amber for a keyword, blue for where the answer was,
+     violet for a line to come back to. They had to go, and not because
+     three meanings was one too many. The blue was #5b9bd5, which is
+     exactly --cefr-b1 below, and the violet was a shade off --cefr-b2. A
+     reader on the review page met blue meaning "I found the answer here"
+     on one layer and blue meaning "this word is B1" on the next, and a
+     colour that means two things is not a colour system, it is two.
+
+     CEFR won that argument on reach: it is printed on four screens and it
+     is a scale learners already have a feel for, where the marks are one
+     reader's private annotation on one screen. So the marks keep the amber
+     — the app's own accent, already saying "this is the thing" everywhere
+     else here — and separate by STYLE instead of by hue.
+
+     The cost is real and worth naming: two styles carry two meanings, so
+     "the keyword" and "where the answer was" are now one mark between
+     them. They were always the same gesture (this matters, here); the
+     third — "I am not sure about this" — is the one that was never like
+     the others, and it is the one that kept a channel of its own. */
   --mark-key: var(--primary);
-  --mark-found: #5b9bd5;
-  --mark-doubt: #a98cd8;
+
+  /* CEFR (§3). The one place on the platform where colour carries a SCALE
+     rather than a category, which is why it runs blue → violet → orange:
+     cool to warm reads as easy to hard without a legend, and none of the
+     three is green or red. Those two mean "right" and "wrong" on the
+     review page, and a learner shown their C1 words in red would read the
+     hardest words in the passage as forty mistakes.
+
+     Never on its own, anywhere. Every use of these is accompanied by the
+     letters — `C1` beside the colour — because about one man in twelve
+     cannot tell the violet from the orange, and a scale he cannot read is
+     worse than no scale at all.
+
+     The ink is mixed TOWARDS the theme's own foreground rather than
+     declared per theme: the hue is the identity and has to survive, but
+     #d98a4a as small text is a pale smudge on serika-light and too hot on
+     serika-dark, and the mix lands it legible on both from one
+     declaration. A fourth theme gets it free. */
+  --cefr-b1: #5b9bd5;
+  --cefr-b2: #9b87d0;
+  --cefr-c1: #d98a4a;
+  --cefr-b1-ink: color-mix(in srgb, var(--cefr-b1) 62%, var(--foreground));
+  --cefr-b2-ink: color-mix(in srgb, var(--cefr-b2) 62%, var(--foreground));
+  --cefr-c1-ink: color-mix(in srgb, var(--cefr-c1) 62%, var(--foreground));
+
+  /* And the wash each one lays over the passage. A token rather than an
+     opacity modifier at the call site, because the three ratios are not
+     the same number: the orange carries further than the blue at equal
+     alpha, so equal alpha would draw the C1 words louder than the C1
+     words are. Deciding that once is what a token is for. */
+  --cefr-b1-wash: color-mix(in srgb, var(--cefr-b1) 20%, transparent);
+  --cefr-b2-wash: color-mix(in srgb, var(--cefr-b2) 22%, transparent);
+  --cefr-c1-wash: color-mix(in srgb, var(--cefr-c1) 24%, transparent);
 
   /* What a drag of the mouse looks like before it becomes anything.
      Left to the browser it is the platform blue, which is the one colour on

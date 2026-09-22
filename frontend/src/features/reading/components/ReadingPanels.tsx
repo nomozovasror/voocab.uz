@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { getErrorMessage } from "@/lib/api";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { CefrTag } from "@/features/vocabulary/components/CefrTag";
 import { helpFor } from "@/features/reading/help";
 import { LOOKUP_BUDGET } from "@/features/reading/lookups";
 import type { QuestionGroupType } from "@/features/paper/types";
@@ -332,11 +333,11 @@ export function LookupPopover({
               {lead.pos}
             </span>
           )}
-          {lead?.cefr_level && (
-            <span className="rounded border border-border px-1 text-[0.62rem] text-muted-foreground">
-              {lead.cefr_level}
-            </span>
-          )}
+          {/* Coloured from here on, and it is the same colour the review
+              will use for this word an hour from now — which is the whole
+              point of the scale having one. See
+              `features/vocabulary/cefr.ts`. */}
+          <CefrTag level={lead?.cefr_level} />
           <button
             type="button"
             onClick={onClose}

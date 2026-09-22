@@ -6,6 +6,7 @@ import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { CefrTag } from "@/features/vocabulary/components/CefrTag";
 import { vocabularyApi } from "@/features/vocabulary/api";
 import type { SavedWord, SavedWords } from "@/features/vocabulary/types";
 
@@ -134,11 +135,7 @@ function Word({
                 {first.pos}
               </span>
             )}
-            {first?.cefr_level && (
-              <span className="rounded border border-border px-1 text-[0.65rem] font-medium text-muted-foreground">
-                {first.cefr_level}
-              </span>
-            )}
+            <CefrTag level={first?.cefr_level} />
             {rest.length > 0 && (
               <span className="text-[0.7rem] text-muted-foreground">
                 · {word.contexts.length} passages
