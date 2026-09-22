@@ -7,6 +7,7 @@ import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { CefrTag } from "@/features/vocabulary/components/CefrTag";
+import { meanings } from "@/features/vocabulary/meaning";
 import { vocabularyApi } from "@/features/vocabulary/api";
 import type { SavedWord, SavedWords } from "@/features/vocabulary/types";
 
@@ -165,7 +166,19 @@ function Word({
   );
 }
 
-/** One meeting: what it meant there, the sentence, and the way back. */
+/** One meeting: what the word means, what it meant THERE where that is a
+ *  different thing, the sentence, and the way back.
+ *
+ *  The usual meaning leads here as it does everywhere else, and this is the
+ *  screen where it matters most: a card somebody studies from. A learner
+ *  revising `learn` off a passage about artificial intelligence had one
+ *  line to go on — "a computer process of finding patterns in data" — and
+ *  nothing on the page to tell them it was the passage talking. See
+ *  `features/vocabulary/meaning.ts`.
+ *
+ *  Uzbek above English, which is this page's own order and the opposite of
+ *  the review's: the review is read beside an English passage with the
+ *  English still in the reader's eye, and this is read cold. */
 function Sense({
   context,
   separated = false,
@@ -173,10 +186,22 @@ function Sense({
   context: SavedWord["contexts"][number];
   separated?: boolean;
 }) {
+  const sense = meanings(context);
   return (
     <div className={cn(separated && "mt-3 border-t border-border/60 pt-2.5")}>
-      <p className="mt-1 text-sm text-foreground">{context.meaning_uz}</p>
-      <p className="text-xs text-muted-foreground">{context.meaning_en}</p>
+      <p className="mt-1 text-sm text-foreground">{sense.uz}</p>
+      <p className="text-xs text-muted-foreground">{sense.en}</p>
+      {sense.here && (
+        <p className="mt-1 border-l-2 border-border pl-2">
+          <span className="block text-sm text-foreground">
+            <span className="text-muted-foreground">Here: </span>
+            {sense.here.uz}
+          </span>
+          <span className="block text-xs text-muted-foreground">
+            {sense.here.en}
+          </span>
+        </p>
+      )}
       {context.example && (
         <p className="mt-1.5 border-l-2 border-border pl-2 text-xs leading-relaxed text-muted-foreground italic">
           {context.example}

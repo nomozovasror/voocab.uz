@@ -23,9 +23,28 @@ export interface VocabularyEntry {
   /** `n`, `v`, `adj`, `adv`, `prep`, `conj`, `phr`; empty where the model
    *  would not commit to one, which is better than a guess in italics. */
   pos: string;
-  /** One line, in the sense THIS passage uses. */
+  /** What the word USUALLY means — its commonest general sense, and the
+   *  line every screen prints first. See `meaning.ts`, which owns the rule
+   *  and the story of the gloss that made it necessary.
+   *
+   *  Empty on an entry written before the field existed; readers fall back
+   *  to `meaning_en`. */
+  meaning_core_en: string;
+  meaning_core_uz: string;
+  /** One line, in the sense THIS passage uses. Shown under the usual
+   *  meaning, as `Here: …`, and only where `sense_differs`. */
   meaning_en: string;
   meaning_uz: string;
+  /** Whether this passage's sense is genuinely not the usual one.
+   *
+   *  The switch that decides whether a reader sees one meaning or two, and
+   *  the flag the `unusual sense` tag and its filter now read. It replaced
+   *  a narrower one — a COMMON word in an unexpected sense, `bank` as the
+   *  side of a river — which is still a column on the server and still what
+   *  the arithmetic comparing passages uses, but is not what a reader wants
+   *  pointed out: a rare word in an unexpected sense is just as much of a
+   *  trap and was not being marked at all. */
+  sense_differs: boolean;
   /** The sentence from the passage that contains it. What makes a saved word
    *  worth more than a word off a list: the learner met it here. */
   example: string;
@@ -35,14 +54,6 @@ export interface VocabularyEntry {
   /** A multi-word expression rather than a word. `give rise to` is one
    *  entry over three words, which is what lets a tap on `rise` find it. */
   is_phrase: boolean;
-  /** A COMMON word in a sense a reader would not expect — `bank` as the side
-   *  of a river, `address` as "deal with".
-   *
-   *  The hardest kind to spot, because nothing about it looks difficult, so
-   *  nothing tells the reader there is anything to check. It is also the one
-   *  finding neither measure reports alone: the frequency says easy and the
-   *  level says C1, and the disagreement is the point. */
-  unusual: boolean;
   /** Where it stands, in the coordinates the reading highlights use — the
    *  part as well as the paragraph, because a reading paper can hold three
    *  passages and each letters its paragraphs from A. */
@@ -78,7 +89,8 @@ export interface VocabularyList {
   material_id: string;
   total: number;
   levels: Record<string, number>;
-  /** How many are common words in an unexpected sense. */
+  /** How many of them the passage uses in a sense that is not the word's
+   *  usual one. */
   unusual: number;
   entries: VocabularyEntry[];
 }
@@ -89,8 +101,15 @@ export interface SavedContext {
   material_title: string;
   surface: string;
   pos: string;
+  /** Filled in later where it was empty, and never written over — a saved
+   *  word's gloss is a copy of what the learner MET, and the usual meaning
+   *  is a field that did not exist when they met it rather than a
+   *  correction to what they saved. */
+  meaning_core_en: string;
+  meaning_core_uz: string;
   meaning_en: string;
   meaning_uz: string;
+  sense_differs: boolean;
   example: string;
   cefr_level: string;
   is_phrase: boolean;

@@ -25,7 +25,9 @@ export interface WordFilter {
   levels: CefrLevel[];
   /** Only the words this reader spent one of their three look-ups on. */
   lookedUp: boolean;
-  /** Only the common words used in a sense they would not expect. */
+  /** Only the words this passage uses in a sense that is not their usual
+   *  one. Named `unusual` because that is what the toggle says and what the
+   *  tag on the row says; what it reads is `sense_differs`. */
   unusual: boolean;
 }
 
@@ -75,6 +77,6 @@ export function keeps(
     if (!level || !filter.levels.includes(level)) return false;
   }
   if (filter.lookedUp && !lookedUp(entry.lemma)) return false;
-  if (filter.unusual && !entry.unusual) return false;
+  if (filter.unusual && !entry.sense_differs) return false;
   return true;
 }

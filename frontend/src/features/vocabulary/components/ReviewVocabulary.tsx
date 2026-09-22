@@ -13,6 +13,7 @@ import {
   type CefrLevel,
 } from "@/features/vocabulary/cefr";
 import { CefrTag } from "@/features/vocabulary/components/CefrTag";
+import { meanings } from "@/features/vocabulary/meaning";
 import {
   isFiltering,
   keeps,
@@ -193,7 +194,7 @@ export function ReviewVocabulary({
       shown,
       levels,
       openedCount: base.filter((e) => opened.has(e.lemma)).length,
-      unusualCount: base.filter((e) => e.unusual).length,
+      unusualCount: base.filter((e) => e.sense_differs).length,
     };
   }, [data, filter, only, opened]);
 
@@ -251,11 +252,12 @@ export function ReviewVocabulary({
                 Looked up · {openedCount}
               </Toggle>
             )}
-            {/* "Six of them are common words in an unexpected sense" is the
-                one figure neither measure reports alone — the frequency
-                says easy, the level says C1, and the disagreement IS the
-                finding. It was a clause in the subtitle; as a toggle it is
-                the same fact and also a way to read the six. */}
+            {/* "Six of them are used in a sense that is not the word's
+                usual one" — the nastiest kind of hard word, because nothing
+                about it looks difficult and so nothing tells the reader
+                there is anything to check. It was a clause in the subtitle;
+                as a toggle it is the same fact and also a way to read the
+                six. */}
             {unusualCount > 0 && (
               <Toggle
                 on={filter.unusual}
@@ -463,6 +465,7 @@ function Word({
 }) {
   const [hovered, setHovered] = useState(false);
   const [open, setOpen] = useState(false);
+  const sense = meanings(entry);
   const canOpen = Boolean(entry.example);
   const toggle = () => canOpen && setOpen((was) => !was);
 
@@ -518,16 +521,32 @@ function Word({
                 filter above uses, or a toggle would appear to do nothing. */}
             {opened && <Flag>looked up</Flag>}
             {earlier && <Flag>saved earlier</Flag>}
-            {entry.unusual && <Flag>unusual sense</Flag>}
+            {sense.here && <Flag>unusual sense</Flag>}
           </p>
           {/* English in the mono face the rest of the paper's own words are
               set in, Uzbek in the sans — the app's global rule, and here it
               also does the work of telling two one-line definitions apart at
               a glance without a label in front of either. */}
           <p className="mt-0.5 font-mono text-xs text-foreground/80">
-            {entry.meaning_en}
+            {sense.en}
           </p>
-          <p className="text-xs text-muted-foreground">{entry.meaning_uz}</p>
+          <p className="text-xs text-muted-foreground">{sense.uz}</p>
+          {/* The passage's own sense, under the one worth carrying away,
+              and only where the two are different — see `meaning.ts`. The
+              label is a word rather than an icon because it is doing the
+              whole job: without it these are two definitions with nothing
+              to say which is which. */}
+          {sense.here && (
+            <p className="mt-1 border-l-2 border-border pl-2">
+              <span className="font-mono text-xs text-foreground/80">
+                <span className="text-muted-foreground">Here: </span>
+                {sense.here.en}
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                {sense.here.uz}
+              </span>
+            </p>
+          )}
         </div>
 
         <div className="flex shrink-0 items-center gap-0.5">

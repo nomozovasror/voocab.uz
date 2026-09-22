@@ -7,6 +7,7 @@ import { getErrorMessage } from "@/lib/api";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { CefrTag } from "@/features/vocabulary/components/CefrTag";
+import { meanings } from "@/features/vocabulary/meaning";
 import { helpFor } from "@/features/reading/help";
 import { LOOKUP_BUDGET } from "@/features/reading/lookups";
 import type { QuestionGroupType } from "@/features/paper/types";
@@ -279,6 +280,7 @@ export function LookupPopover({
   // the case where it was not.
   const lead = found.data?.phrase ?? found.data?.word ?? null;
   const under = found.data?.phrase ? found.data.word : null;
+  const sense = lead ? meanings(lead) : null;
 
   // The WORD is what gets charged, not the phrase around it: the phrase came
   // free, as context. Charging it would file the look-up under a string the
@@ -411,14 +413,30 @@ export function LookupPopover({
           </p>
         )}
 
-        {lead && (
+        {/* The word's usual meaning first, and the passage's sense under it
+            only where the two differ. See `features/vocabulary/meaning.ts`:
+            a card that only ever says what the word means HERE is what put
+            "a computer process of finding patterns in data" on somebody's
+            list under the verb `learn`. */}
+        {sense && (
           <>
             <p className="text-[0.82rem] leading-snug text-foreground">
-              {lead.meaning_en}
+              {sense.en}
             </p>
             <p className="mt-1 text-[0.8rem] leading-snug text-muted-foreground">
-              {lead.meaning_uz}
+              {sense.uz}
             </p>
+            {sense.here && (
+              <div className="mt-1.5 border-l-2 border-border pl-2">
+                <p className="text-[0.8rem] leading-snug text-foreground">
+                  <span className="text-muted-foreground">Here: </span>
+                  {sense.here.en}
+                </p>
+                <p className="text-[0.78rem] leading-snug text-muted-foreground">
+                  {sense.here.uz}
+                </p>
+              </div>
+            )}
           </>
         )}
 
@@ -438,8 +456,10 @@ export function LookupPopover({
 
         {/* Only where it is true, and short. `bank` as the side of a river
             is the nastiest kind of hard word — nothing about it looks
-            difficult, so nothing tells the reader to check. */}
-        {lead?.unusual && (
+            difficult, so nothing tells the reader to check. It is the same
+            fact the `Here:` block above is showing, said as a warning: the
+            block gives the meaning, this says to expect one. */}
+        {sense?.here && (
           <p className="mt-2.5 flex items-start gap-1.5 border-t border-border pt-2 text-[0.7rem] leading-snug text-warning">
             <TriangleAlert className="mt-px size-3 shrink-0" aria-hidden />
             Not its usual sense here

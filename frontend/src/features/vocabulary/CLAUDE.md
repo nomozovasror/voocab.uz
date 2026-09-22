@@ -117,10 +117,45 @@ cannot be made to look at the top of the screen to find out.
 A selection longer than `LOOKUP_WORDS` drops the control rather than
 greying it out. Absence reads as "not this"; disabled reads as "not you".
 
+## Two meanings, and the usual one leads
+
+**Every entry carries the sense the word USUALLY has and the sense this
+passage gives it.** The usual one is printed first, everywhere; the
+passage's follows it under `Here:`, and only where `sense_differs` says the
+two are genuinely not the same — which is a small minority of entries.
+`features/vocabulary/meaning.ts` owns that rule and all three screens ask
+it rather than each writing it out.
+
+The contextual meaning is still the reason this feature exists and none of
+that argument is undone: `spring` is a season in one passage and a coil in
+the next, and a dictionary answering with five senses is exactly what a
+band 5 reader cannot use. What a contextual meaning ALONE cannot do is
+teach the language. A passage about artificial intelligence glossed `learn`
+as "a computer process of finding patterns in data", marked `n` — a
+faithful reading of `machine learning`, a false statement about the verb,
+and the only line the learner who saved it would ever see.
+
+**A missing usual meaning falls back rather than blanking the card.** It is
+empty on an entry written before the field existed and on one whose model
+would not answer for it; readers then print the contextual line as though
+it were the word's own. Narrower help beats none.
+
+**Compound terms are entries in their own right.** `machine learning`,
+`climate change`, `public sector` — the seed stage asks about terms BEFORE
+it builds the word list, and a word standing only inside terms is left to
+them (`seed/vocabulary.py`, `candidates(claimed=…)`). The live lookup does
+the same thing from the other end: `dictionary.Gloss.term` lets a model
+answer about something wider than what was tapped, and the entry is stored
+over the term's span. A term the passage already has is not written again —
+the reader is already being shown it as the phrase.
+
+**Part of speech belongs to the lemma.** `learning` the noun is its own
+entry, not `learn` wearing an `n`.
+
 ## The panel: what it shows and what it refuses to
 
-Lemma, part of speech, CEFR, the meaning in THIS passage, Uzbek first and
-English under it. Nothing else.
+Lemma, part of speech, CEFR, the word's usual meaning, the meaning in THIS
+passage where that differs, Uzbek and English. Nothing else.
 
 **No example sentence.** It looks like an omission and is not: the reader is
 looking at the sentence, six inches to the left. **No etymology, no other
@@ -128,10 +163,19 @@ senses, no synonyms.** Each lookup has about two seconds to pay for itself,
 and a panel that reads like a dictionary page is a panel somebody closes and
 goes back to guessing, having spent one of three for the privilege.
 
-**A word marked `unusual` says so in words, not with a badge.** It is a
-common word in a sense the reader would not expect — `bank` as the side of a
+**A word in an unexpected sense says so in words, not with a badge.** It is
+a word used in a sense the reader would not expect — `bank` as the side of a
 river — and a badge would say "this one is special" and leave them to work
-out how. What helps is the sentence.
+out how. What helps is the `Here:` line, which gives the sense itself.
+
+The flag both that line and the `unusual sense` tag read is `sense_differs`,
+not the older `unusual` column. `unusual` is narrower — a COMMON word in an
+unexpected sense, which is the disagreement between the two difficulty
+measures — and it still exists on the server, where the arithmetic
+comparing passages uses it. It is not what a reader wants pointed out: a
+rare word in an unexpected sense is just as much of a trap and was not being
+marked at all. Two nearly-identical flags on one row is how one of them
+quietly stops being maintained, so only one of them reaches the wire.
 
 **CEFR is printed; the frequency band never is.** `C1` is a scale a learner
 already has a feel for. "NGSL rank 2400" is a fact about a corpus. The band
