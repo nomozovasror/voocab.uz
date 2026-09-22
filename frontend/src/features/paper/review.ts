@@ -702,26 +702,39 @@ function runHeading(row: ReviewRow): string | null {
  * nothing for a single slip: one wrong answer is an accident, and calling
  * it a weakness is the page reading a pattern into noise.
  *
- * Tasks are counted by NAME rather than by run, so a paper that returns to
- * true/false after a gap is one task with two runs rather than two tasks —
- * which is what it is on the page anybody sat.
+ * Tasks are counted by HEADING rather than by run, so a paper that returns
+ * to true/false after a gap is one task with two runs rather than two tasks
+ * — which is what it is on the page anybody sat. And by heading rather than
+ * by type, because a completion answered from a list and one answered in
+ * your own words are two different things to be bad at, which is why the
+ * list draws them under two headings.
+ *
+ * What comes BACK is the type, because the finding has one line of a row
+ * that already holds two chips and the qualifier is what overflows it:
+ * "Most lost in Sentence completion — your words 0/7" wrapped onto a second
+ * line and sat there right-aligned and orphaned. The qualifier earns its
+ * place over a run of rows, where it says which of two ways this set was
+ * answered. It earns nothing in a one-line finding whose evidence is
+ * directly underneath.
  */
 export function worstTask(
   rows: ReviewRow[],
-): { heading: string; wrong: number; total: number } | null {
-  const byTask = new Map<string, { wrong: number; total: number }>();
+): { type: QuestionGroupType; wrong: number; total: number } | null {
+  const byTask = new Map<
+    string,
+    { type: QuestionGroupType; wrong: number; total: number }
+  >();
   for (const run of reviewRuns(rows)) {
-    if (!run.heading) continue;
-    const at = byTask.get(run.heading) ?? { wrong: 0, total: 0 };
+    const type = run.rows[0]?.groupType;
+    if (!run.heading || !type) continue;
+    const at = byTask.get(run.heading) ?? { type, wrong: 0, total: 0 };
     at.wrong += run.rows.filter((row) => !row.result.is_correct).length;
     at.total += run.rows.length;
     byTask.set(run.heading, at);
   }
   if (byTask.size < 2) return null;
 
-  const ranked = [...byTask.entries()]
-    .map(([heading, one]) => ({ heading, ...one }))
-    .sort((a, b) => b.wrong - a.wrong);
+  const ranked = [...byTask.values()].sort((a, b) => b.wrong - a.wrong);
   const [worst, next] = ranked;
   if (worst.wrong < 2) return null;
   if (next && next.wrong === worst.wrong) return null;

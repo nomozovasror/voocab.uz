@@ -1,4 +1,6 @@
 import { cn } from "@/lib/utils";
+import { QUESTION_TYPE_LABEL } from "@/features/paper/question-types";
+import type { QuestionGroupType } from "@/features/paper/types";
 
 export type ReviewScope = "mistakes" | "all";
 
@@ -38,7 +40,7 @@ export function ReviewFilter({
    *  `worstTask` withholds it on a one-task paper, on a tie, and on a
    *  single slip, because each of those would be the page reading a pattern
    *  into noise. */
-  worst?: { heading: string; wrong: number; total: number } | null;
+  worst?: { type: QuestionGroupType; wrong: number; total: number } | null;
 }) {
   const locked = mistakes === 0;
   return (
@@ -57,9 +59,11 @@ export function ReviewFilter({
       </Chip>
 
       {worst && (
-        <p className="ml-auto flex items-baseline gap-2 text-xs">
+        <p className="ml-auto flex items-baseline gap-2 text-xs whitespace-nowrap">
           <span className="text-muted-foreground">Most lost in</span>
-          <span className="text-foreground/80">{worst.heading}</span>
+          <span className="text-foreground/80">
+            {QUESTION_TYPE_LABEL[worst.type]}
+          </span>
           <span className="tabular-nums text-muted-foreground">
             {worst.total - worst.wrong}/{worst.total}
           </span>
