@@ -2651,6 +2651,35 @@ wrong. A phrase repeats by EXACT search only — the case-insensitive second
 try `locate` makes is for placing one entry somebody can check, not for
 sweeping marks across a passage.
 
+### A group's gaps have to arrive in the book's order
+
+`build_questions.py` refuses a group whose `paper_number`s descend at any
+point. A paper numbers its gaps in reading order — left to right, top to
+bottom — so a group that comes back out of that order is a group whose
+LAYOUT was read in some other order.
+
+It is always a table, and always the same misreading: a cell holding
+several lines gets spread over several `+` rows, so the cell's second line
+lands after the whole of the next column. `Maori cloaks` (cam103-t2-p1) was
+read transposed outright, columns for rows.
+
+**The content survives it and the numbering does not.** Every answer stayed
+with its own gap — the reader had recorded the right `paper_number` for each
+— but the number PRINTED beside the gap comes from its position in the
+template, so five of that table's seven gaps were labelled with a number the
+book gives to a different question. Somebody checking their answers against
+the book was comparing two numberings.
+
+Three of 1 076 groups: `cam103-t2-p1`, `cam18-t1-p1`, `cam18-t2-s1`. All
+three templates were rewritten by hand — the template language has no
+multi-line cell (`form-syntax.ts`: a cell is a line), so each cell is one
+line with the book's own words and its dashes where the book prints bullets
+— and their questions re-sorted by `paper_number`.
+
+The listening one confirms itself: with the gaps back in the book's order
+its replay marks run forwards in time (248s → 272s → 295s → 341s → 385s),
+where before they doubled back. The recording agrees with the page.
+
 ### Lemmatisation without a parser
 
 The lists ship lemmatised, so most surface forms map home by lookup, and that

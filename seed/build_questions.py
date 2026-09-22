@@ -459,6 +459,33 @@ def build(section_id: str) -> int:
             f"PROBLEM  after dropping, questions {short} of {lo}-{hi} are "
             "missing; the page was misread")
 
+    # And the ones that ARE all there have to arrive in the order the book
+    # prints them. A paper numbers its gaps in reading order -- left to
+    # right, top to bottom -- so a group whose paper numbers descend at any
+    # point is a group whose LAYOUT was read in some other order, and the
+    # template is the wrong shape.
+    #
+    # It is always a table, and always the same misreading: a cell holding
+    # several lines gets spread over several rows, so the cell's second line
+    # lands after the whole of the next column -- and `Maori cloaks` was read
+    # transposed outright, columns for rows. The content survives it (every
+    # answer stays with its own gap) and the NUMBERING does not: five of that
+    # table's seven gaps were printed under a number the book gives to a
+    # different question, so a candidate checking their answers was comparing
+    # two numberings.
+    #
+    # Three of 1 076 groups, found by this test after the fact. Refused here
+    # rather than warned about, like the hole above it: a template that has
+    # to be rewritten by hand is not something to discover from a screenshot.
+    for group in kept:
+        papers = [q.get("paper_number") for q in group["questions"]]
+        if None in papers or papers == sorted(papers):
+            continue
+        raise SystemExit(
+            f"PROBLEM  the {group['type']} group's gaps run {papers}, not in "
+            "the order the paper numbers them; its layout was read out of "
+            "order and the template needs rewriting by hand")
+
     def between(paper: int | None) -> tuple[int, int]:
         """The stretch of recording a question's answer has to fall inside.
 
