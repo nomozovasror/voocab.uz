@@ -118,6 +118,19 @@ function Word({
   // first, and where a word has only one context — which is nearly all of
   // them — it is the only one.
   const [first, ...rest] = word.contexts;
+  // The word's own meaning, said ONCE above everything the passages had to
+  // say about it. That is the shape the card wants: `spring` met in a
+  // passage about seasons and again in one about coils is one word, and
+  // repeating "a season of the year" over each meeting would be the card
+  // arguing with its own headline.
+  //
+  // Taken from the first context that has one, because it is a fact about
+  // the word rather than about any meeting, and two contexts phrasing it
+  // differently is two runs of the same question and not a disagreement
+  // worth printing twice. Absent on a word saved before the field existed
+  // and not yet enriched, and then each meeting prints its own meaning as
+  // it always did.
+  const core = word.contexts.find((one) => one.meaning_core_en) ?? null;
 
   return (
     <li
@@ -143,9 +156,24 @@ function Word({
               </span>
             )}
           </p>
-          {first && <Sense context={first} />}
+          {core && (
+            <>
+              <p className="mt-1 text-sm text-foreground">
+                {core.meaning_core_uz}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {core.meaning_core_en}
+              </p>
+            </>
+          )}
+          {first && <Sense context={first} headline={!core} />}
           {rest.map((context) => (
-            <Sense key={context.material_id} context={context} separated />
+            <Sense
+              key={context.material_id}
+              context={context}
+              headline={!core}
+              separated
+            />
           ))}
         </div>
         <button
@@ -166,8 +194,8 @@ function Word({
   );
 }
 
-/** One meeting: what the word means, what it meant THERE where that is a
- *  different thing, the sentence, and the way back.
+/** One meeting: what it meant THERE where that is a different thing from
+ *  what the word usually means, the sentence, and the way back.
  *
  *  The usual meaning leads here as it does everywhere else, and this is the
  *  screen where it matters most: a card somebody studies from. A learner
@@ -181,16 +209,26 @@ function Word({
  *  English still in the reader's eye, and this is read cold. */
 function Sense({
   context,
+  headline,
   separated = false,
 }: {
   context: SavedWord["contexts"][number];
+  /** Whether this meeting has to print the word's meaning itself. False
+   *  where the card has already said it once above — see `Word` — and true
+   *  for a word saved before the usual meaning existed, which has nothing
+   *  else to show. */
+  headline: boolean;
   separated?: boolean;
 }) {
   const sense = meanings(context);
   return (
     <div className={cn(separated && "mt-3 border-t border-border/60 pt-2.5")}>
-      <p className="mt-1 text-sm text-foreground">{sense.uz}</p>
-      <p className="text-xs text-muted-foreground">{sense.en}</p>
+      {headline && (
+        <>
+          <p className="mt-1 text-sm text-foreground">{sense.uz}</p>
+          <p className="text-xs text-muted-foreground">{sense.en}</p>
+        </>
+      )}
       {sense.here && (
         <p className="mt-1 border-l-2 border-border pl-2">
           <span className="block text-sm text-foreground">

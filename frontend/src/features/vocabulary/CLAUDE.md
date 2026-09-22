@@ -140,6 +140,14 @@ empty on an entry written before the field existed and on one whose model
 would not answer for it; readers then print the contextual line as though
 it were the word's own. Narrower help beats none.
 
+**On the saved-words page the usual meaning is said once, above all the
+meetings.** A word met in two passages is one word; repeating "a season of
+the year" over each meeting would be the card arguing with its own
+headline. Each meeting then carries only what is its own — the `Here:` line
+where the sense differed, the sentence, and the way back to the passage. A
+word saved before the field existed and not yet enriched has no headline,
+and each meeting prints its own meaning as it always did.
+
 **Compound terms are entries in their own right.** `machine learning`,
 `climate change`, `public sector` — the seed stage asks about terms BEFORE
 it builds the word list, and a word standing only inside terms is left to
