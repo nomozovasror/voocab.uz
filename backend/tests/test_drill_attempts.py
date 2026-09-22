@@ -648,3 +648,86 @@ async def test_between_two_carry_ons_the_later_one_wins():
             cookies={"access_token": token},
         )
         assert await reason() == "course"
+
+
+@pytest.mark.asyncio
+async def test_a_reading_group_can_be_drilled_and_carries_its_passage():
+    """The reading arm of ``_load_drillable_group``, which had never run.
+
+    Reading has no clip to contain anything — the passage is on the part and
+    is read whole whether the material is sat entire or one group at a time —
+    so the drillable test is "does it have questions" and nothing else. That
+    branch asked `get_group_questions` for the group's ID where the function
+    wants the ROW, and raised an AttributeError inside it: a 500 on every
+    reading drill there has ever been.
+
+    Unseen because the only links to one pointed at `/listening/drills/...`,
+    where this branch is not the one that runs. The drill opened on the wrong
+    paper's route, failed there for its own reason, and the reading route was
+    never asked.
+    """
+    author = await _user("drill-read-author@example.com")
+    learner = await _user("drill-read-learner@example.com")
+    author_token = create_access_token(str(author.id))
+    token = create_access_token(str(learner.id))
+
+    async with _client() as client:
+        r = await client.post(
+            "/api/materials",
+            json={"type": "reading", "title": f"Reading drill {_fresh()}"},
+            cookies={"access_token": author_token},
+        )
+        assert r.status_code == 201, r.text
+        material_id = r.json()["id"]
+
+        r = await client.post(
+            f"/api/materials/{material_id}/parts",
+            json={
+                "order_index": 0,
+                "title": "Reading Passage 1",
+                "passage": {
+                    "title": "The Cutty Sark",
+                    "paragraphs": [{"label": "A", "text": "She was fast."}],
+                },
+            },
+            cookies={"access_token": author_token},
+        )
+        assert r.status_code == 201, r.text
+        part_id = r.json()["id"]
+
+        r = await client.post(
+            f"/api/parts/{part_id}/question-groups",
+            json={
+                "type": "sentence_completion",
+                "instructions": "Complete the sentences.",
+                "config": {
+                    "word_limit": 2,
+                    "template": "The ship was {{1}}.\nHer captain was {{2}}.",
+                },
+                "questions": [
+                    {"number": n, "correct_answers": [f"fast{n}"]}
+                    for n in (1, 2)
+                ],
+            },
+            cookies={"access_token": author_token},
+        )
+        assert r.status_code == 201, r.text
+        group_id = r.json()["id"]
+        await _publish(uuid.UUID(material_id))
+
+        got = await client.get(
+            f"/api/reading/drills/{group_id}", cookies={"access_token": token}
+        )
+        assert got.status_code == 200, got.text
+        body = got.json()
+
+        # The passage travels with it, or the questions cannot be answered.
+        assert body["parts"][0]["passage"]["paragraphs"][0]["text"] == "She was fast."
+        assert len(body["parts"][0]["question_groups"][0]["questions"]) == 2
+        # No clip: there is no recording, and an envelope around nothing is
+        # a claim about a thing that does not exist.
+        assert body["clip_start_ms"] is None
+        assert body["clip_end_ms"] is None
+        assert body["audio_url"] is None
+        # And the same guarantee every take payload carries.
+        assert "correct_answers" not in got.text

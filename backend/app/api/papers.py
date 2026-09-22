@@ -81,7 +81,13 @@ async def _load_drillable_group(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Question group not found")
     material = await _load_owned_or_public(session, part.material_id, user_id)
     if skill == "reading":
-        if not await listening_service.get_group_questions(session, group.id):
+        # The GROUP, not its id. `get_group_questions` pairs every question
+        # with the group it belongs to and needs the row to do it, so passing
+        # the id raised an AttributeError inside it -- a 500 on every reading
+        # drill there has ever been. It went unseen because the only links to
+        # a reading drill pointed at `/listening/drills/...`, where this
+        # branch is not the one that runs.
+        if not await listening_service.get_group_questions(session, group):
             raise HTTPException(status.HTTP_404_NOT_FOUND,
                                 "This group cannot be drilled")
     elif await listening_service.group_clip(session, group) is None:
