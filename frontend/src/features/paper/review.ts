@@ -5,10 +5,13 @@ import {
 } from "@/features/paper/form-syntax";
 import { matchIndex } from "@/features/paper/matching";
 import { sorted } from "@/features/paper/numbering";
+import { QUESTION_TYPE_LABEL } from "@/features/paper/question-types";
+import { isCompletion } from "@/features/paper/types";
 import { paperParts } from "@/features/paper/take-paper";
 import type {
   LabelStyle,
   MaterialTake,
+  QuestionGroupType,
   MistakeKind,
   QuestionResult,
   TakeQuestionGroup,
@@ -445,6 +448,13 @@ export interface ReviewRow {
    *  i to viii, everything else is A to H. Carried because the answer is
    *  stored as its label and has to be looked back up. */
   labels: LabelStyle;
+  /** What KIND of question this was. The review draws one skeleton for all
+   *  of them and changes only how the VALUE reads — a lettered option and
+   *  its words, a written word and what kind of wrong it was, a fixed
+   *  choice and the line that explains it — so the row has to know which
+   *  it is. Null where the material could not be fetched, which draws the
+   *  plainest of the three. */
+  groupType: QuestionGroupType | null;
   transcript: string;
   /** Which paragraph the quote was taken from, where the paper has lettered
    *  paragraphs and the quote was found in one. Null for listening, whose
@@ -562,6 +572,7 @@ export function reviewRows(
       );
       const options = found?.options ?? [];
       const labels = found?.group.config.label_style ?? "letters";
+      const groupType = asGroupType(found?.group.type);
       const quoted = quote
         ? quote(result)
         : { text: transcriptText(result.transcript), where: null };
@@ -580,6 +591,7 @@ export function reviewRows(
         byLetter,
         options,
         labels,
+        groupType,
         transcript: quoted.text,
         where: quoted.where,
         startMs,
@@ -587,6 +599,57 @@ export function reviewRows(
       };
     })
     .sort((a, b) => a.number - b.number);
+}
+
+/**
+ * The rows in runs, each under what that run of questions IS.
+ *
+ * A review read straight down is forty rows that all look alike, and the
+ * reader has to work out from the shape of each answer what was being asked
+ * of them. But a paper is not forty questions — it is four or five TASKS,
+ * and the task is the thing somebody is good or bad at. "I lose matching
+ * headings and I am fine on true/false" is a sentence a candidate can act
+ * on; "I got 14, 19, 22 and 31 wrong" is not.
+ *
+ * Consecutive rows only, never gathered from across the paper: the runs are
+ * the paper's own groups in the paper's own order, so the review still reads
+ * down in the order it was sat. Two sets of one type that happen to be
+ * adjacent become one run, which is what they look like on the page anyway.
+ *
+ * The heading is `QUESTION_TYPE_LABEL` and not a second naming of the same
+ * thing — with one qualifier, for the one distinction that is not a type: a
+ * completion task with a box of options to pick from is answered by letter,
+ * one without is answered in your own words, and those are two different
+ * things to be bad at. The ROW draws them differently for the same reason.
+ */
+export function reviewRuns(
+  rows: ReviewRow[],
+): { heading: string | null; rows: ReviewRow[] }[] {
+  const out: { heading: string | null; rows: ReviewRow[] }[] = [];
+  for (const row of rows) {
+    const heading = runHeading(row);
+    const last = out[out.length - 1];
+    if (last && last.heading === heading) last.rows.push(row);
+    else out.push({ heading, rows: [row] });
+  }
+  return out;
+}
+
+/** The wire calls a group's type a string, because the server may know a
+ *  type this build does not. Narrowed against the one place every type is
+ *  named, so an unknown one reads as "no type" and the row draws its
+ *  plainest form rather than a heading of `undefined`. */
+function asGroupType(value: string | undefined): QuestionGroupType | null {
+  return value && value in QUESTION_TYPE_LABEL
+    ? (value as QuestionGroupType)
+    : null;
+}
+
+function runHeading(row: ReviewRow): string | null {
+  if (!row.groupType) return null;
+  const label = QUESTION_TYPE_LABEL[row.groupType];
+  if (!isCompletion(row.groupType)) return label;
+  return row.byLetter ? `${label} — from the list` : `${label} — your words`;
 }
 
 /**

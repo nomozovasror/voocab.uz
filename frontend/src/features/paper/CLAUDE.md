@@ -118,6 +118,40 @@ conditions: where you were, what you put, and where the answer was. A second
 "review row" for reading would be two files that have to agree about what a
 marked question looks like.
 
+## One skeleton, four currencies, and the runs above them
+
+Every row is number · question · `You` / `Answer`, whatever the task — and
+holding that shape still is what lets somebody run down forty rows without
+re-learning the layout at each group boundary. What changes is the VALUE,
+because the tasks are answered in four different currencies:
+
+- **picked from a box** — the letter as a chip and the option's own WORDS
+  beside it. `C` is the storage format; *C · outlining some possible
+  benefits* is the answer.
+- **a "choose TWO"** — a chip per option picked, green for the one they got
+  and red for the one they did not, with the MISSED ones outlined on the
+  answer line, and *1 of 2 right*. Partial credit is invisible in a score
+  and is a different evening's work from none.
+- **written in their own words** — no letter, and the mistake KIND beside
+  the value instead. On this task the classification is the most useful
+  thing on the row: "almost right" and "never found it" wear the same red.
+- **a fixed choice** — the three words in mono, and a line of teaching
+  under them. Only these get a hint; everything else explains itself.
+
+An answer that is not a letter the box has is printed as what it is, never
+dressed in a chip — a chip around a stray value is the page claiming an
+option exists that does not.
+
+**`reviewRuns` puts a heading over each run of one type.** A paper is four
+or five TASKS rather than forty questions, and the task is the thing
+somebody is good or bad at: *I lose matching headings and I am fine on
+true/false* is a sentence a candidate can act on. Consecutive rows only, in
+the paper's own order — the review still reads down the way it was sat. The
+heading is `QUESTION_TYPE_LABEL` with ONE qualifier, for the one distinction
+that is not a type: a completion task with a box of options is answered by
+letter and one without is answered in your own words, which is why the row
+draws them differently too.
+
 ## A completion row quotes its own SENTENCE, never the document
 
 `lineAround` cuts the line holding a gap down to the sentence that gap is

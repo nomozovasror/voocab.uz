@@ -1,62 +1,75 @@
-import { CornerLeftUp, Play } from "lucide-react";
+import { Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fmtClock } from "@/lib/time";
 import { MISTAKE_LABEL } from "@/features/listening/practice";
 import {
   markAnswer,
-  sayAnswer,
   type QuoteSource,
   type ReviewRow,
 } from "@/features/paper/review";
+import { matchIndex, matchLabel } from "@/features/paper/matching";
 import { questionNumbersShort } from "@/features/paper/numbering";
+import { isFixedChoice } from "@/features/paper/types";
 
 /**
  * One question, after it has been marked.
  *
- * Three rows, and the order is the argument: where you were, what you put,
- * and what was actually said. Anything that breaks that order breaks the
- * page — the version this replaced threaded `(accepted: Preston, preston)`
- * into the middle of the form's own sentence, which left "junction of Mill
- * Street and 3 test (accepted: Preston, preston) Avenue" on screen and no
- * way to read either the question or the answer out of it.
+ * ## One skeleton for every task, and only the VALUE changes
  *
- * So the form is not redrawn. It is quoted, in one line, with the gap written
- * `___` — enough to be recognised and never enough to take the layout apart.
+ * Number, question, then `You` and `Answer` under each other in a two-column
+ * grid. That shape is the same for a multiple choice, a gap-fill, a matching
+ * item and a true/false statement — and holding it still is what lets a
+ * reader run down forty rows without re-learning the layout at every group
+ * boundary.
  *
- * ## The transcript is the reason this page exists
+ * What changes is how the ANSWER reads, because the tasks are answered in
+ * four different currencies:
  *
- * Knowing you were wrong is worth very little. *Hearing why you missed it* is
- * the whole value of a review, and it is the one thing a score cannot give
- * anybody. A candidate who wrote "windscreen" where the answer was "wing
- * mirror" did not mishear a word — they were pulled by a distractor, and the
- * only thing on any screen that shows them so is the sentence: *"The
- * windscreen was fine, luckily — but the wing mirror is broken."*
+ * - **picked from a box** — the letter as a chip and the option's own WORDS
+ *   beside it. "C" is the storage format; *C · outlining some possible
+ *   benefits of AI* is the answer. The chip is small and the words are not,
+ *   because the words are the part anybody thinks in.
+ * - **a "choose TWO"** — one chip per option they picked, green for the one
+ *   they got and red for the one they did not, with the ones they MISSED
+ *   drawn as outlines on the answer line. Partial credit is invisible in a
+ *   score and very visible here, which is the point: one of two right is a
+ *   different evening's work from none.
+ * - **written in their own words** — no letter, and the kind of wrong
+ *   instead: *spelling*, *singular / plural*. On this task the
+ *   classification is the most useful thing on the row, because "almost
+ *   right" and "never found it" are two different problems wearing the same
+ *   red.
+ * - **a fixed choice** — the three words in mono, and a LINE underneath
+ *   saying why. See below.
  *
- * The answer is marked inside it, and the play button seeks to exactly that
- * stretch. Both are conditional and quietly absent when they can't be had:
- * listening transcripts are optional (the ASR may have failed, the author may
- * have removed it), and a row with no transcript prints the answer and stops.
- * No empty box, no "no transcript available" — a message about a missing
- * feature is a row of the page spent saying nothing.
+ * ## The hint line, which only the fixed choices get
  *
- * ## On a reading review the evidence is not quoted, it is pointed at
+ * Everything else explains itself: you picked C, the answer was B, the
+ * passage is beside you. TRUE / FALSE / NOT GIVEN does not, and it is the
+ * task candidates lose most — so the row carries one sentence of teaching,
+ * chosen by which of the three ways they got it wrong. The page decides
+ * which; this draws it.
  *
- * The passage is on the other half of the screen. Quoting a sentence out of
- * it into a box under the answer would put the same words on screen twice
- * and, worse, cut them out of the paragraph that gives them their meaning —
- * which is the whole reason somebody who answered NOT GIVEN wrongly needs
- * the text rather than the line.
+ * ## Where it was, in the corner
  *
- * So `evidence` replaces the quote box with a LINK: pointing at the row
- * lights the words in the passage, and pressing it scrolls them into view.
- * The quote box stays for listening, where the sentence is inside a
- * recording and there is nothing on screen to point at.
+ * The passage is on the other half of the screen, so the row does not quote
+ * it: it points. `¶3` in the corner, invisible until the row is under the
+ * pointer, and pressing the row goes there. A sentence-long link inside the
+ * row ("The answer is in paragraph C") was the same fact taking a whole
+ * line, and it pushed the thing the row exists for — what you put, and what
+ * was right — further down the page on every one of forty rows.
+ *
+ * Listening keeps its quote box instead. There the sentence is inside a
+ * recording and there is nothing on screen to point at, which is the whole
+ * difference between the two papers and the one thing this still draws two
+ * ways.
  */
 export function ReviewItem({
   row,
   onPlay,
   onGoTo,
   evidence,
+  hint,
   onPoint,
   lit,
   anchor,
@@ -65,19 +78,17 @@ export function ReviewItem({
   /** Seeks to the moment and plays only it. Absent when the recording failed
    *  to load — the text still stands, so the row is drawn either way. */
   onPlay?: (startMs: number | null, endMs: number | null) => void;
-  /** Takes the reader to the paragraph the quote came from. Reading's
-   *  counterpart to the play button, and it is the same argument: the quote
-   *  says what the line was, and this is how you go and read around it —
-   *  which is exactly what somebody who answered NOT GIVEN wrongly needs to
-   *  do. Absent for listening, where there is no paragraph to go to. */
+  /** Takes the reader to the paragraph the quote came from — the older
+   *  route, for a paper the evidence extraction never reached. */
   onGoTo?: (where: QuoteSource) => void;
-  /** Where the answer is in the passage beside this row, and how to get
-   *  there. Given only where the extraction placed the evidence — see
-   *  `seed/read_evidence.py`. Takes the place of the quote box entirely:
-   *  with the passage on screen, a copy of one of its sentences in a box is
-   *  the same words twice and the paragraph around them lost. */
-  evidence?: { label: string; onGoTo: () => void };
-  /** Pointing at this row, which lights its evidence in the passage. Both
+  /** Where in the passage this row's marks are, said in as little as it
+   *  takes — `¶3`, or `¶C` where the book letters its paragraphs — and how
+   *  to go there. */
+  evidence?: { where: string; onGoTo: () => void };
+  /** One line of teaching, under the answers. Only the fixed choices have
+   *  one; everything else explains itself. */
+  hint?: React.ReactNode;
+  /** Pointing at this row, which lights its marks in the passage. Both
    *  directions, because a link that only works one way is one the reader
    *  has to discover the direction of. */
   onPoint?: (on: boolean) => void;
@@ -87,122 +98,105 @@ export function ReviewItem({
 }) {
   const { result } = row;
   const right = result.is_correct;
-  const given = sayAnswer(
-    result.given_answer,
-    row.byLetter,
-    row.options,
-    row.labels,
-  ).trim();
-  const key = row.byLetter
-    ? sayAnswer(
-        result.correct_answers.join(","),
-        true,
-        row.options,
-        row.labels,
-      )
-    : result.correct_answers.join(" / ");
+  const numbers = questionNumbersShort(row.number, row.span);
   const canPlay = onPlay && row.startMs != null;
 
   return (
     <article
       {...anchor}
-      aria-label={`Question ${questionNumbersShort(row.number, row.span)}`}
+      aria-label={`Question ${numbers}`}
       onMouseEnter={onPoint ? () => onPoint(true) : undefined}
       onMouseLeave={onPoint ? () => onPoint(false) : undefined}
+      onClick={
+        evidence
+          ? (e) => {
+              // A drag that ends inside the row is somebody copying the
+              // question, not asking to be taken somewhere. Without this the
+              // passage jumps out from under a selection every time.
+              if (window.getSelection()?.toString()) return;
+              if ((e.target as HTMLElement).closest("button")) return;
+              evidence.onGoTo();
+            }
+          : undefined
+      }
       className={cn(
-        "scroll-mt-24 border-t border-border py-4 transition-colors duration-fast",
-        // Only where there is something on the other side to be lit BY.
-        // A row that highlights itself on hover for no reason is a row
-        // that looks clickable and isn't.
-        onPoint && "-mx-3 rounded-lg px-3 hover:bg-surface-hover",
+        // 2.5rem, not the 1.75 a single number needs: a "choose TWO" is
+        // printed as "13–14" and ran straight into the question text at the
+        // narrower width. The column is the widest number the paper can
+        // hold, because every row is its own grid and none of them can
+        // learn the width from the others.
+        "group relative -mx-3 grid scroll-mt-24 grid-cols-[2.5rem_1fr] gap-x-2 rounded-lg border-b border-border/60 px-3 py-3.5 transition-colors duration-fast last:border-b-0",
+        evidence && "cursor-pointer",
+        onPoint && "hover:bg-surface-hover",
         lit && "bg-surface-hover",
       )}
     >
-      {/* Where you were: the number, the line it sat in, and — for a wrong
-          answer — what kind of wrong. */}
-      <header className="flex items-baseline gap-3">
-        <span
-          className={cn(
-            "w-6 shrink-0 text-right text-sm font-semibold tabular-nums",
-            right ? "text-correct" : "text-incorrect",
-          )}
-        >
-          {questionNumbersShort(row.number, row.span)}
-        </span>
-        <p className="min-w-0 flex-1 text-sm text-muted-foreground">
-          {row.context?.label && (
-            <span className="text-foreground/80">{row.context.label}</span>
-          )}
-          {row.context?.label && row.context.line && " — "}
-          {row.context?.line}
-        </p>
-        {result.mistake && (
-          // A tag rather than a sentence: it is a filing label, and the panel
-          // above is where it is explained. Two tones only — the kinds that
-          // mean "you didn't hear it" are red, the ones that mean "you heard
-          // it and wrote it wrong" are amber, because those are two different
-          // evenings' work and the colour should say which.
-          <span
-            className={cn(
-              "shrink-0 rounded-full px-2 py-0.5 text-xs",
-              result.mistake === "missed" || result.mistake === "wrong"
-                ? "bg-incorrect/10 text-incorrect"
-                : "bg-attention/10 text-attention",
-            )}
-          >
-            {MISTAKE_LABEL[result.mistake]}
-          </span>
+      <span
+        className={cn(
+          "pt-px text-right text-[0.8rem] whitespace-nowrap tabular-nums",
+          right ? "text-correct" : "text-incorrect",
         )}
-      </header>
+      >
+        {numbers}
+      </span>
 
-      {/* What you put, and what it should have been — on their OWN line, side
-          by side, never inside the question's text. */}
-      <div className="mt-2 ml-9 flex flex-wrap items-baseline gap-x-6 gap-y-1 text-base">
-        <span className="flex items-baseline gap-2">
-          <span className="text-xs text-muted-foreground">You</span>
-          <span
-            className={cn(
-              "border-b-2 pb-px font-mono",
-              !given
-                ? "border-line-subtle text-skipped italic"
-                : right
-                  ? "border-correct/40 text-correct"
-                  : "border-incorrect/40 text-incorrect",
+      <div className="min-w-0">
+        {/* What was asked. In the SANS face, because it is the only thing on
+            the row that is a sentence — everything under it is an answer,
+            and answers are set in mono here the way they are on the paper. */}
+        {(row.context?.label || row.context?.line) && (
+          <p className="mb-2 pr-8 font-sans text-sm leading-relaxed text-foreground/75">
+            {row.context?.label && (
+              <span className="text-foreground/90">{row.context.label}</span>
             )}
-          >
-            {given || "left blank"}
-          </span>
-        </span>
-        {/* Only where it adds something. Beside a right answer it is the same
-            word twice, which reads as the page not knowing they got it. */}
-        {!right && key && (
-          <span className="flex items-baseline gap-2">
-            <span className="text-xs text-muted-foreground">Answer</span>
-            <span className="font-mono text-correct">{key}</span>
-          </span>
+            {row.context?.label && row.context.line && " — "}
+            {row.context?.line}
+          </p>
         )}
+
+        <div className="grid grid-cols-[3rem_1fr] items-baseline gap-x-2.5 gap-y-1.5">
+          <span className="text-xs text-muted-foreground">You</span>
+          <Given row={row} />
+
+          {/* Only where it adds something. Beside a right answer it is the
+              same words twice, which reads as the page not knowing they got
+              it. */}
+          {!right && (
+            <>
+              <span className="text-xs text-muted-foreground">Answer</span>
+              <Answer row={row} />
+            </>
+          )}
+
+          {hint && (
+            <p className="col-start-2 font-sans text-xs leading-relaxed text-muted-foreground">
+              {hint}
+            </p>
+          )}
+        </div>
       </div>
 
-      {/* Where the answer is, on a page that is showing the page it is on.
-          A link rather than a quotation — see the module docstring. */}
+      {/* Where it is, not what it says. Hidden until the row is pointed at:
+          forty of these at full contrast is a column of markers down the
+          edge of a page that is about something else. */}
       {evidence && (
-        <p className="mt-2 ml-9">
-          <button
-            type="button"
-            onClick={evidence.onGoTo}
-            className="inline-flex items-center gap-1.5 rounded-md text-xs text-primary transition-colors duration-fast hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-          >
-            <CornerLeftUp className="size-3" aria-hidden />
-            {evidence.label}
-          </button>
-        </p>
+        <button
+          type="button"
+          onClick={evidence.onGoTo}
+          aria-label={`Show where question ${numbers} was answered`}
+          className={cn(
+            "absolute top-3.5 right-3 rounded text-[0.7rem] tabular-nums transition-colors duration-fast group-hover:text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:text-muted-foreground",
+            lit ? "text-muted-foreground" : "text-transparent",
+          )}
+        >
+          {evidence.where} ↖
+        </button>
       )}
 
+      {/* Listening's quote: the sentence is inside a recording, so there is
+          nothing on screen to point at and the words have to come here. */}
       {!evidence && row.transcript && (
-        <div className="mt-2.5 ml-9 flex items-start gap-3 rounded-lg bg-surface-sunken px-3 py-2.5">
-          {/* Only where there is a recording behind it. A reading quote has
-              nothing to play, and a disabled play button beside it would be a
-              control that exists to be greyed out. */}
+        <div className="col-start-2 mt-2.5 flex items-start gap-3 rounded-lg bg-surface-sunken px-3 py-2.5">
           {onPlay && (
             <button
               type="button"
@@ -216,10 +210,6 @@ export function ReviewItem({
             </button>
           )}
           <div className="min-w-0 flex-1">
-            {/* Where the quote is, in whatever the paper measures place in.
-                A recording measures it in time and a page measures it in
-                paragraphs, and a row never has both — so they share the
-                line rather than reserving two. */}
             {row.startMs != null && (
               <p className="text-xs tabular-nums text-muted-foreground">
                 {fmtClock(row.startMs)}
@@ -235,15 +225,10 @@ export function ReviewItem({
                 Paragraph {row.where.label}
               </button>
             )}
-            <p className="text-base leading-relaxed text-foreground/80">
+            <p className="text-sm leading-relaxed text-foreground/80">
               {markAnswer(row.transcript, result.correct_answers).map(
                 (run, i) =>
                   run.hit ? (
-                    // The one place yellow appears in a review row, and it
-                    // means what it means everywhere else here: this is the
-                    // thing. <mark> rather than a span, because it is
-                    // literally what the element is for and screen readers
-                    // announce it.
                     <mark
                       key={i}
                       className="rounded-sm bg-primary/20 px-1 text-primary"
@@ -259,5 +244,196 @@ export function ReviewItem({
         </div>
       )}
     </article>
+  );
+}
+
+/** The letters in a stored answer, in order, lower-cased and without the
+ *  blanks a trailing comma leaves. */
+function letters(value: string): string[] {
+  return value
+    .split(",")
+    .map((one) => one.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * What they put.
+ *
+ * Three shapes for the three currencies — see the component's docstring —
+ * and one for nothing at all, which is its own kind of answer and reads as
+ * one: an empty row would say the page had lost it.
+ */
+function Given({ row }: { row: ReviewRow }) {
+  const { result } = row;
+  const right = result.is_correct;
+  const given = result.given_answer.trim();
+
+  if (!given)
+    return <span className="text-sm text-skipped italic">left blank</span>;
+
+  if (row.byLetter) {
+    const picked = letters(given);
+    const key = new Set(letters(result.correct_answers.join(",")));
+    return (
+      <span className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+        {picked.map((letter, i) => (
+          <Option
+            key={i}
+            row={row}
+            letter={letter}
+            tone={key.has(letter) ? "got" : "missed"}
+            // The words only where ONE option was picked. A "choose TWO"
+            // answered with two full options runs two sentences across the
+            // row and buries which of them was right, which is the one
+            // thing that line has to say.
+            words={picked.length === 1}
+          />
+        ))}
+        {picked.length > 1 && (
+          <span className="text-xs text-muted-foreground">
+            {[...key].filter((one) => picked.includes(one)).length} of{" "}
+            {key.size} right
+          </span>
+        )}
+      </span>
+    );
+  }
+
+  return (
+    <span className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+      <span
+        className={cn(
+          "font-mono text-sm",
+          isFixedChoice(row.groupType) && "tracking-wide",
+          right ? "text-correct" : "text-incorrect",
+        )}
+      >
+        {given}
+      </span>
+      {/* What KIND of wrong, beside the words rather than off in the margin.
+          On a written answer this is the most useful thing on the row. */}
+      {result.mistake && !right && (
+        <span className="inline-flex items-center gap-1.5 text-[0.7rem] text-muted-foreground">
+          <span
+            aria-hidden
+            className={cn(
+              "size-1.5 rounded-full",
+              result.mistake === "missed" || result.mistake === "wrong"
+                ? "bg-incorrect"
+                : "bg-attention",
+            )}
+          />
+          {MISTAKE_LABEL[result.mistake]}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** What it should have been. Every accepted variant for a written answer,
+ *  because "10km" and "10 km" both counting is a fact about the marking
+ *  worth seeing; every right option for a lettered one, with the ones they
+ *  did not pick drawn as outlines. */
+function Answer({ row }: { row: ReviewRow }) {
+  const { result } = row;
+  if (row.byLetter) {
+    const picked = new Set(letters(result.given_answer));
+    const key = letters(result.correct_answers.join(","));
+    return (
+      <span className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+        {key.map((letter, i) => (
+          <Option
+            key={i}
+            row={row}
+            letter={letter}
+            tone={picked.has(letter) ? "got" : "outline"}
+            words={key.length === 1}
+          />
+        ))}
+      </span>
+    );
+  }
+  return (
+    <span
+      className={cn(
+        "font-mono text-sm text-correct",
+        isFixedChoice(row.groupType) && "tracking-wide",
+      )}
+    >
+      {result.correct_answers.join(" · ")}
+    </span>
+  );
+}
+
+/**
+ * One option: its letter as a chip, and — where there is room for it to mean
+ * anything — the words the chip stands for.
+ *
+ * Drawn in the box's own alphabet, so matching headings reads `iv` where
+ * everything else reads `D`. Taken from `matchLabel` rather than from the
+ * stored string, which is what keeps the chip and the paper agreeing about
+ * which option this is.
+ */
+function Option({
+  row,
+  letter,
+  tone,
+  words,
+}: {
+  row: ReviewRow;
+  letter: string;
+  tone: "got" | "missed" | "outline";
+  words: boolean;
+}) {
+  const index = matchIndex(letter, row.labels);
+  const text = index >= 0 ? row.options[index] : undefined;
+
+  // Not a letter this box has. A drill cut out of a paper, a group whose
+  // options were edited under an answer already given, or a client that
+  // sent words where the paper wanted a letter — whatever the cause, it is
+  // what the learner put, so it is printed as what it is. A chip around it
+  // would be the page dressing a stray value as an option that exists.
+  if (index < 0) {
+    return (
+      <span
+        className={cn(
+          "font-mono text-sm",
+          tone === "missed" ? "text-incorrect" : "text-correct",
+        )}
+      >
+        {letter}
+      </span>
+    );
+  }
+
+  // A roman numeral stays lowercase — `vii` is how the paper prints it —
+  // and a letter is capitalised.
+  const shown = matchLabel(index, row.labels);
+  return (
+    <span className="inline-flex items-baseline gap-2">
+      <span
+        className={cn(
+          "inline-flex min-w-[1.15rem] shrink-0 justify-center rounded px-1 py-px text-center font-mono text-[0.7rem]",
+          tone === "got" && "bg-correct/20 text-correct",
+          tone === "missed" && "bg-incorrect/20 text-incorrect",
+          // Never picked, and the outline says so: a chip with nothing
+          // inside it, which is what a missed option is.
+          tone === "outline" &&
+            "text-correct ring-1 ring-correct/50 ring-inset",
+        )}
+      >
+        {row.labels === "roman" ? shown : shown.toUpperCase()}
+      </span>
+      {words && text && (
+        <span
+          className={cn(
+            "font-sans text-sm leading-snug",
+            tone === "missed" ? "text-incorrect/90" : "text-correct/90",
+          )}
+        >
+          {text}
+        </span>
+      )}
+    </span>
   );
 }

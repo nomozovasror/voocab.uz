@@ -13,6 +13,7 @@ import { sorted } from "@/features/paper/numbering";
 import {
   passageQuote,
   reviewRows,
+  reviewRuns,
   tallyMistakes,
 } from "@/features/paper/review";
 import { ReviewItem } from "@/features/paper/components/ReviewItem";
@@ -40,7 +41,7 @@ import {
 import { ReviewVocabulary } from "@/features/vocabulary/components/ReviewVocabulary";
 import { vocabularyApi, vocabularyKey } from "@/features/vocabulary/api";
 import type { QuoteSource, ReviewRow } from "@/features/paper/review";
-import type { AttemptResult } from "@/features/paper/types";
+import { isFixedChoice, type AttemptResult } from "@/features/paper/types";
 
 /**
  * A marked reading paper, read back — beside the passage it was answered
@@ -220,31 +221,14 @@ export default function ReadingResultsPage() {
     };
   }, [data?.results, vocabulary, saved, passages]);
 
-  /** The questions whose answer layer carries a red mark as well as a green
-   *  one — whatever put it there.
-   *
-   *  Taken from the marks that were actually drawn rather than from
-   *  `result.distractor`, because a written answer's distractor is found
-   *  here rather than sent with the paper, and because either kind can be
-   *  dropped: an option nothing supports, a word that appears four times,
-   *  a hit some other mark already claimed. What the row's link promises
-   *  has to match what the passage will show. */
   /** Every question the answers layer marks at all, in any colour.
    *
-   *  The row's link is offered off THIS rather than off the evidence,
-   *  because a NOT GIVEN statement has no evidence by definition and is
-   *  nonetheless the one most worth going to look at: what it has is the
+   *  What the corner marker is offered off, rather than the evidence: a NOT
+   *  GIVEN statement has no evidence by definition and is nonetheless the
+   *  one most worth going to look at, because what it has instead is the
    *  sentence that made somebody answer otherwise. */
   const marked = useMemo(
     () => new Set(layers.answers.map((one) => one.key)),
-    [layers],
-  );
-
-  const pulled = useMemo(
-    () =>
-      new Set(
-        layers.answers.filter((one) => one.tone === "chose").map((o) => o.key),
-      ),
     [layers],
   );
 
@@ -440,43 +424,52 @@ export default function ReadingResultsPage() {
             />
           </div>
 
-          <div>
-            {shown.map((row) => {
-              const spans = row.result.evidence ?? [];
-              const shown = marked.has(row.result.question_id);
-              return (
-                <ReviewItem
-                  key={row.result.question_id}
-                  row={row}
-                  anchor={{ [Q_ANCHOR]: row.result.question_id }}
-                  // No onPlay: a passage has nothing to play, and ReviewItem
-                  // draws the button only where one is handed to it.
-                  evidence={
-                    shown
-                      ? {
-                          label: evidenceLabel(passages, row, {
-                            span: spans[0],
-                            pulled: pulled.has(row.result.question_id),
-                          }),
-                          onGoTo: () => goToEvidence(row.result.question_id),
-                        }
-                      : undefined
-                  }
-                  // The older route, for a paper the extraction never
-                  // reached: the quote's own paragraph. Withheld where the
-                  // evidence is known, or the row would offer two ways to
-                  // go to two different places.
-                  onGoTo={shown ? undefined : goToParagraph}
-                  onPoint={
-                    shown
-                      ? (on) => setLit(on ? row.result.question_id : null)
-                      : undefined
-                  }
-                  lit={lit === row.result.question_id}
-                />
-              );
-            })}
-          </div>
+          {/* Under what each run of questions IS. A paper is four or five
+              TASKS rather than forty questions, and the task is the thing
+              somebody is good or bad at — "I lose matching headings" is a
+              sentence a candidate can act on. */}
+          {reviewRuns(shown).map((run, at) => (
+            <div key={at}>
+              {run.heading && (
+                <h3 className="mt-6 mb-1 px-3 text-[0.7rem] tracking-caps text-muted-foreground/80 uppercase first:mt-4">
+                  {run.heading}
+                </h3>
+              )}
+              {run.rows.map((row) => {
+                const here = marked.has(row.result.question_id);
+                return (
+                  <ReviewItem
+                    key={row.result.question_id}
+                    row={row}
+                    anchor={{ [Q_ANCHOR]: row.result.question_id }}
+                    // No onPlay: a passage has nothing to play, and
+                    // ReviewItem draws the button only where one is handed
+                    // to it.
+                    evidence={
+                      here
+                        ? {
+                            where: whereabouts(passages, row),
+                            onGoTo: () => goToEvidence(row.result.question_id),
+                          }
+                        : undefined
+                    }
+                    hint={hintFor(row)}
+                    // The older route, for a paper the extraction never
+                    // reached: the quote's own paragraph. Withheld where the
+                    // evidence is known, or the row would offer two ways to
+                    // go to two different places.
+                    onGoTo={here ? undefined : goToParagraph}
+                    onPoint={
+                      here
+                        ? (on) => setLit(on ? row.result.question_id : null)
+                        : undefined
+                    }
+                    lit={lit === row.result.question_id}
+                  />
+                );
+              })}
+            </div>
+          ))}
 
           <ReviewMistakes groups={mistakes} skill="reading" className="mt-10" />
         </>
@@ -626,59 +619,71 @@ export default function ReadingResultsPage() {
  *  The islands end at 60px and content that began there touched them. */
 const PANE_TOP = "pt-19 pb-6";
 
-/** Where the evidence is, said in the fewest words that are true.
+/**
+ * Where this row's marks are, in as few characters as say it.
  *
- *  "Paragraph C" where the book letters its paragraphs, because that is what
- *  the paper itself calls the place and two of Reading's tasks are answered
- *  by naming one. Most passages carry no letters at all, and inventing one
- *  from the position would name a paragraph no question can — so those say
- *  what the link DOES instead, which is the honest half of the same
- *  sentence.
+ * `¶C` where the book letters its paragraphs — that is what the paper calls
+ * the place, and two of Reading's tasks are answered by naming one — and
+ * `¶3` where it does not, counting from one because nobody counts
+ * paragraphs from zero.
  *
- *  Neither of those where there is a DISTRACTOR, because then the link goes
- *  to two places and lands on whichever comes first in the passage — which
- *  is usually the sentence that pulled them, not the one holding the
- *  answer. "The answer is in paragraph A" over a jump that lands in
- *  paragraph C is the page lying about its own control, and the two marks
- *  together say something better than either does alone. */
-function evidenceLabel(
+ * The TRAP first where there is one, because that is where pressing the row
+ * lands: the marks are gone to in the order the passage holds them, and the
+ * sentence that pulled somebody is usually the one they should look at
+ * first. A corner that named the answer's paragraph and then took them
+ * somewhere else would be the page lying about its own control.
+ */
+function whereabouts(
   passages: {
     id: string;
     passage?: { paragraphs: { label: string | null }[] } | null;
   }[],
   row: ReviewRow,
-  at: {
-    span?: { part_id: string; paragraph_index: number };
-    pulled: boolean;
-  },
 ): string {
+  const spans = [
+    ...(row.result.distractor ?? []),
+    ...(row.result.evidence ?? []),
+  ];
+  const first = spans
+    .slice()
+    .sort(
+      (a, b) => a.paragraph_index - b.paragraph_index || a.start - b.start,
+    )[0];
+  if (!first) return "";
+  const part = passages.find((one) => one.id === first.part_id);
+  const label = part?.passage?.paragraphs[first.paragraph_index]?.label;
+  return `\u00b6${label ?? first.paragraph_index + 1}`;
+}
+
+/**
+ * The one line of teaching a TRUE / FALSE / NOT GIVEN row carries, and
+ * nothing for every other task.
+ *
+ * Everything else on this page explains itself — you picked C, the answer
+ * was B, the passage is beside you. This one does not, and it is the task
+ * candidates lose most, so the row says which of the three ways they got it
+ * wrong:
+ *
+ * NOT GIVEN is the hardest of the three to learn and the reason is that the
+ * passage ALWAYS mentions the subject. Saying so, on the row that goes to
+ * the sentence, is the lesson.
+ */
+function hintFor(row: ReviewRow): React.ReactNode {
   const { result } = row;
+  if (result.is_correct || !isFixedChoice(row.groupType)) return null;
+
   const said = (one: string) => one.trim().toLowerCase();
   const key = result.correct_answers.map(said);
-  const gave = said(result.given_answer);
-
-  // The three ways to get a TRUE / FALSE / NOT GIVEN statement wrong, named
-  // in the reader's own terms. They are not decoration: NOT GIVEN is the
-  // single hardest thing about the task to learn, and what makes it hard is
-  // that the passage always DOES mention the subject. Saying so, on the row
-  // that goes to the sentence, is the lesson.
-  if (!result.is_correct && key.includes("not given")) {
-    return "The passage mentions this — but never says it";
+  if (key.includes("not given")) {
+    return "The passage mentions this — but never says it.";
   }
-  if (!result.is_correct && gave === "not given") {
-    return "The evidence was here all along";
+  if (said(result.given_answer) === "not given") {
+    return "The evidence was there — it is marked on the passage.";
   }
-  if (!result.is_correct && (result.keywords?.length ?? 0) > 0) {
-    return result.keywords!.length === 1
-      ? "The answer turns on one word"
-      : "The answer turns on these words";
+  if ((result.keywords?.length ?? 0) > 0) {
+    return "One sentence, and the answer turns on the words marked inside it.";
   }
-
-  if (at.pulled) return "What you read, and what it said";
-  if (!at.span) return "Show me where it was";
-  const part = passages.find((one) => one.id === at.span!.part_id);
-  const label = part?.passage?.paragraphs[at.span.paragraph_index]?.label;
-  return label ? `The answer is in paragraph ${label}` : "Show me where it was";
+  return null;
 }
 
 /** The crumb and title, for the one arrangement that has no passage over

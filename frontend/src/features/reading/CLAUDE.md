@@ -206,6 +206,15 @@ Green and red here mean what they mean in the question map at the top of the
 same screen: the verdict. That is exactly why the reader's own three
 highlight colours are never green or red.
 
+**The row points rather than quotes: `¶3` in the corner**, invisible until
+the row is under the pointer, and pressing anywhere on the row goes there. A
+sentence-long link inside the row ("The answer is in paragraph C") was the
+same fact taking a whole line, on every one of forty rows, and it pushed
+what the row exists for further down the page. The corner names the FIRST
+mark in the passage, which is where pressing lands — usually the trap rather
+than the answer — because a corner that named one paragraph and went to
+another would be the page lying about its own control.
+
 `passageQuote` is still here and is the FALLBACK for a paper the extraction
 never reached: it finds the answer string in the text and, where the book
 letters its paragraphs, the row offers *Paragraph C*. A row never carries
