@@ -2719,18 +2719,41 @@ The corpus went from 2 593 placed with 22 groups out of order to **2 582
 placed with none**, and eleven answers lost a replay button that was
 pointing at the wrong minute.
 
-### What is left, and why it is not this stage's to fix
+### The duplicated turn, and re-reading fifteen pages
 
-Twenty-two answers have no replay button. Seven are lettered — a matching
-answer is `C`, and the recording says the thing C stands for, so there is
-nothing for a search to match. The rest trace to a stage further back:
-`read_audioscript.py` duplicated a turn and hung several markers on the
-copies. Cambridge 17 Test 1 Section 4 has ONE sentence — "So, what is it
-about labyrinths that makes their appeal so universal?" — repeated as turns
-8, 9, 10 and 11, carrying Q37 to Q40. **Fifteen sections have a repeated
-turn, every one of them carrying a marker.** No amount of care here can
-place a marker that is on a turn the audioscript invented; those pages want
-re-reading.
+A Section 4 audioscript is one speaker talking for five minutes, and the
+book prints `Q31` to `Q40` down the margin of that one speech. The reader
+has to CUT the monologue at each marker. Where it could not, it wrote the
+same paragraph out several times instead, one copy per marker — so several
+questions pointed at the same words, the alignment placed those copies
+wherever it could, and the markers landed minutes from the answers.
+
+Cambridge 17 Test 1 Section 4 had one sentence — "So, what is it about
+labyrinths that makes their appeal so universal?" — as turns 8, 9, 10 and
+11, carrying Q37 to Q40. **Fifteen sections were like it, every repeated
+turn carrying a marker.**
+
+Re-read, re-aligned and rebuilt. Fourteen came back cut properly;
+`cam16-t3-s4` still repeats one paragraph three times after two attempts
+and a stronger model, so its page is genuinely hard and it keeps what it
+has. The corpus went from **2 582 spans placed to 2 589**, every
+previously-unplaced answer in those fifteen sections now has one, and the
+median span is 14.5 seconds — the figure the tightening rule was written
+against.
+
+`cam17-t1-s4` is the whole story in one section: Q38's marker used to sit
+at 374.7s, which is after the answers to Q39 and Q40. Re-read, its turns
+cut at the right lines, Q38 aligns at 287.1s — inside "slower **breathing**
+and a restored sense of balance", which is the answer — and all ten
+questions have a span in the order they are spoken.
+
+### What is left
+
+Fifteen answers have no replay button. Seven are lettered: a matching
+answer is `C`, the recording says the thing C stands for, and there is
+nothing for a search to match. The other eight are words the ASR did not
+transcribe where they are spoken, in sections whose audioscript reads
+cleanly — nothing here can place them, and no replay is the honest answer.
 
 ### Lemmatisation without a parser
 
