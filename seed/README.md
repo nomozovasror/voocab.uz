@@ -2733,13 +2733,21 @@ labyrinths that makes their appeal so universal?" — as turns 8, 9, 10 and
 11, carrying Q37 to Q40. **Fifteen sections were like it, every repeated
 turn carrying a marker.**
 
-Re-read, re-aligned and rebuilt. Fourteen came back cut properly;
-`cam16-t3-s4` still repeats one paragraph three times after two attempts
-and a stronger model, so its page is genuinely hard and it keeps what it
-has. The corpus went from **2 582 spans placed to 2 589**, every
-previously-unplaced answer in those fifteen sections now has one, and the
-median span is 14.5 seconds — the figure the tightening rule was written
-against.
+Re-read, re-aligned and rebuilt. Fourteen came back cut properly. The
+fifteenth, `cam16-t3-s4`, would not: three attempts and a stronger model
+all wrote its last paragraph out three times. Its page is why —
+`seed/fix_cam16_t3_s4.py` has the turns typed off pages 113 and 114, and
+the reason the reader could not do it. **Two of that page's paragraphs
+carry three markers each** (Q31–Q33 in the second, Q36–Q38 in the sixth)
+and the reader handed out one marker per paragraph, which slid every
+marker after the first onto a paragraph that does not answer it and then
+repeated the last paragraph to use up the ones it had left. Cut by hand at
+the lines the margin marks, all ten answers fall inside their own span.
+
+The corpus went from **2 582 spans placed to 2 589**, every
+previously-unplaced answer in those fifteen sections now has one, **no
+section has a repeated turn**, and the median span is 14.6 seconds — the
+figure the tightening rule was written against.
 
 `cam17-t1-s4` is the whole story in one section: Q38's marker used to sit
 at 374.7s, which is after the answers to Q39 and Q40. Re-read, its turns
