@@ -99,6 +99,14 @@ LABELLING = {"map_labelling", "diagram_labelling", "flow_chart_completion"}
 #: paragraph runs to.
 LONG_SPAN = 60_000
 
+#: How far a replay window may be stretched to take in the answer it is
+#: about. A turn boundary is a judgement made twice -- once by whatever read
+#: the page, once by the aligner -- and a couple of seconds of disagreement
+#: between them is ordinary. Ten seconds covers every case the corpus has
+#: (the worst is 8.1s) and refuses anything that would mean the marker is on
+#: the wrong turn altogether, which is `in_order`'s business, not this one's.
+REACH = 10_000
+
 
 #: An option printed with the letter it is picked by: "A written records".
 #: The app draws its own letters beside the box, so the letter left in the
@@ -638,6 +646,54 @@ def build(section_id: str) -> int:
                 return aligned[start]["start_ms"], aligned[at + len(wanted) - 1]["end_ms"]
         return None
 
+    def reaches(answers: list[str], span: tuple[int, int]) -> tuple[int, int] | None:
+        """The span widened to cover the answer, where it is spoken just
+        outside it. Nothing where it already covers it, or where the nearest
+        it is said is further than :data:`REACH`.
+
+        A marker names the TURN, and a turn boundary is a judgement about
+        where one paragraph ends -- drawn by a model reading a page, then
+        drawn again by the aligner deciding which word starts it. Two seconds
+        of disagreement is ordinary, and two seconds is all it takes for the
+        replay to stop before the word it exists to play. Twenty-one answers
+        across the corpus were outside their own window, every one of them by
+        less than nine seconds: `cam18-t3-s4` says "thousands" at 164.0s and
+        opened its replay at 172.1s.
+
+        WIDENED rather than moved. The marker is the book's claim about which
+        turn answers the question and it is not in doubt here -- what is in
+        doubt is where that turn starts and stops. A span that has to travel
+        further than `REACH` to reach its answer is a different problem, and
+        `in_order` is what deals with that one.
+
+        The nearest occurrence, not the only one: `locate` refuses a phrase
+        said three times, which is right when it has nothing to go on, and
+        wrong here where the marker has already said roughly where to look.
+        """
+        best = None
+        for answer in sorted(answers, key=len, reverse=True):
+            wanted = [re.sub(r"[^a-z0-9]", "", w.lower()) for w in answer.split()]
+            wanted = [w for w in wanted if w]
+            if not wanted or len("".join(wanted)) < 4:
+                continue
+            stream = [re.sub(r"[^a-z0-9]", "", w["word"].lower()) for w in aligned]
+            for i in range(len(stream) - len(wanted) + 1):
+                if stream[i:i + len(wanted)] != wanted:
+                    continue
+                at, end = aligned[i]["start_ms"], aligned[i + len(wanted) - 1]["end_ms"]
+                if span[0] <= at <= span[1]:
+                    return None
+                gap = span[0] - end if end < span[0] else at - span[1]
+                if gap <= REACH and (best is None or gap < best[0]):
+                    best = (gap, at, end)
+            if best is not None:
+                break
+        if best is None:
+            return None
+        _gap, at, end = best
+        return min(span[0], at), max(span[1], end)
+
+
     # What the PICTURE stage put on the last build, kept by group index. A
     # rebuild is free and gets run often -- every time a span rule changes --
     # and it writes questions.json from questions.src.json, which has never
@@ -660,7 +716,7 @@ def build(section_id: str) -> int:
 
     problems: list[str] = []
     warnings: list[str] = []
-    recovered = moved = tightened = moved_back = unplaced = 0
+    recovered = moved = tightened = moved_back = unplaced = widened = 0
     out_groups = []
     for gi, group in enumerate(src["groups"]):
         lettered = (group["type"] in LETTERED
@@ -861,6 +917,19 @@ def build(section_id: str) -> int:
         shifted_on, lost = in_order(questions)
         moved_back += shifted_on
         unplaced += lost
+
+        # And last, the window has to actually contain the answer. Done after
+        # `in_order` so it widens the span that survived rather than one about
+        # to be dropped.
+        if not lettered:
+            for q in questions:
+                if q["replay_start_ms"] is None:
+                    continue
+                wider = reaches(q["correct_answers"],
+                                (q["replay_start_ms"], q["replay_end_ms"]))
+                if wider is not None:
+                    q["replay_start_ms"], q["replay_end_ms"] = wider
+                    widened += 1
         for q in questions:
             if q.get("option_replay") and q["replay_start_ms"] is None:
                 q.pop("option_replay")
@@ -981,6 +1050,9 @@ def build(section_id: str) -> int:
         print(f"note: {moved_back} replay span(s) moved onto the moment the "
               "answer is actually spoken, their marker being the claim that "
               "did not fit the order", file=sys.stderr)
+    if widened:
+        print(f"note: {widened} replay span(s) widened to take in an answer "
+              "spoken just outside them", file=sys.stderr)
     if unplaced:
         print(f"note: {unplaced} replay span(s) dropped for not fitting the "
               "order the recording answers in; those answers get no replay "

@@ -2755,6 +2755,32 @@ cut at the right lines, Q38 aligns at 287.1s — inside "slower **breathing**
 and a restored sense of balance", which is the answer — and all ten
 questions have a span in the order they are spoken.
 
+### Every window is checked against the words it is supposed to play
+
+The question `cam16-t3-s4` raises is whether the same misreading is
+anywhere else, and there is a cheap test for it: **is the answer spoken
+inside its own replay window?** Over the corpus — 1 303 word answers with a
+span — it came back 1 303 checked, 21 outside, and none of the 21 by more
+than 8.1 seconds. Nothing resembling `cam16-t3-s4`, whose Q40 window opened
+thirty seconds after the answer and whose Q37 marker sat on the paragraph
+that answers Q39.
+
+The 21 were real all the same: a window that stops two seconds before the
+word is a button that does not play the answer. A turn boundary is a
+judgement made twice — once by whatever read the page, once by the aligner
+deciding which word starts the turn — and a couple of seconds of
+disagreement between them is ordinary. `reaches` widens the window to take
+the answer in, up to `REACH` (10s), and widens rather than MOVES: the
+marker's claim about which turn answers the question is not what is in
+doubt. A span that would have to travel further than that is `in_order`'s
+business. All 21 fixed; none left.
+
+The 1 132 lettered answers cannot be checked this way and are not pretended
+to be. A matching option is a paraphrase — "both Helen and Jeremy" is never
+said in those words — so searching the window for the option's own wording
+finds nothing 73% of the time on answers that are perfectly correct. A test
+that cries wolf three times in four is not a test.
+
 ### What is left
 
 Fifteen answers have no replay button. Seven are lettered: a matching
