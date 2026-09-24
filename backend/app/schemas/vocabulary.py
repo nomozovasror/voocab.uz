@@ -21,7 +21,7 @@ one of them quietly stops being maintained.
 
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, Field
 
@@ -31,6 +31,12 @@ from pydantic import BaseModel, Field
 Direction = Literal["passive", "active"]
 ExerciseType = Literal["recognise", "recall", "produce", "listen"]
 Verdict = Literal["correct", "close", "wrong"]
+#: The ladder's two tasks, per direction -- what `PracticeAnswerOut.level`
+#: and `planned_exercise` are drawn from. Narrower than `ExerciseType`
+#: (which also carries the unused `listen`) because these two fields are
+#: never anything else.
+Level = Literal["recognise", "recall", "produce"]
+Mode = Literal["auto", "recognise", "recall", "produce"]
 
 
 class VocabularyEntryOut(BaseModel):
@@ -186,16 +192,94 @@ class SavedContextOut(BaseModel):
 
 
 class SavedWordOut(BaseModel):
-    """One word the learner is studying, with every passage it came from."""
+    """One word the learner is studying, with every passage it came from.
+
+    The fields below ``contexts`` are additive over stage 1's shape --
+    every stage-1 caller (the review page's `Saved` button) reads only
+    ``lemma``/``created_at``/``contexts`` and keeps working unchanged. They
+    are what the words list (plan screen 4) and the word page (screen 5)
+    need to show a row or a header without a second round trip: the
+    learner's own progress, not the catalogue's.
+    """
 
     lemma: str
     created_at: datetime
     contexts: list[SavedContextOut]
 
+    status: str = "learning"
+    pos: str = ""
+    meaning_core_en: str = ""
+    meaning_core_uz: str = ""
+    #: The newest context's CEFR level -- "newest" because that is the
+    #: sense most likely to still be how the learner thinks of the word.
+    cefr_level: str = ""
+    passive_level: Level = "recognise"
+    active_level: Level | None = None
+    passive_due: datetime | None = None
+    active_due: datetime | None = None
+    passive_stability: float | None = None
+    active_stability: float | None = None
+    lapses: int = 0
+    reps: int = 0
+    suspended_until: datetime | None = None
+    #: True when an active card exists (``active_state`` not null) and the
+    #: learner's settings ``direction`` is currently ``passive`` -- the
+    #: active card is paused rather than abandoned: its FSRS state and
+    #: ``active_level`` are untouched, and it resumes unchanged the moment
+    #: ``direction`` goes back to ``both``. See
+    #: ``practice._gather_candidates``'s pause rule.
+    active_paused: bool = False
+
 
 class SavedWordsOut(BaseModel):
     total: int
     words: list[SavedWordOut]
+
+
+class WordHistoryEntryOut(BaseModel):
+    """One row of a word's review history, newest first."""
+
+    reviewed_at: datetime
+    direction: Direction
+    exercise_type: ExerciseType
+    rating: Literal[1, 2, 3, 4]
+    given: str
+    elapsed_ms: int
+
+
+class SavedWordDetailOut(BaseModel):
+    """The word page: the word itself, plus its review history -- capped at
+    100 rows (newest first) because a compact history is the brief's own
+    word, and a card answered thousands of times does not need every one
+    rendered."""
+
+    word: SavedWordOut
+    history: list[WordHistoryEntryOut]
+
+
+class WordBulkActionIn(BaseModel):
+    """``suspend`` is "set aside for 30 days"; ``restore`` recomputes status
+    from the card and clears both ``suspended_until`` and the leech
+    lapse-count window; ``forget`` is stage 1's forget, unchanged (the logs
+    survive). Always scoped to the caller's own words."""
+
+    lemmas: list[str] = Field(min_length=1, max_length=200)
+    action: Literal["known", "suspend", "restore", "forget"]
+
+
+class WordBulkActionOut(BaseModel):
+    changed: int
+
+
+class KnownCheckIn(BaseModel):
+    word_id: uuid.UUID
+
+
+class WordLeechChoiceIn(BaseModel):
+    """The three choices offered on a leech word -- see
+    ``app.services.practice.resolve_leech``."""
+
+    choice: Literal["set_aside", "see_context", "keep"]
 
 
 # --- Practice ----------------------------------------------------------------
@@ -225,35 +309,87 @@ class PracticeSummaryOut(BaseModel):
     avg_seconds: float
     next_due_at: datetime | None
     totals: PracticeTotalsOut
+    #: How many words are currently set aside -- the home screen's own line
+    #: ("N words set aside"), so a 30-day auto-return is never a surprise.
+    set_aside: int
 
 
 class PracticeSessionIn(BaseModel):
     """What to build a session over. Absent ``material_id`` means every
     saved word; present, it narrows the queue to words met in that one
-    material -- "practise what I just read" rather than the whole list."""
+    material -- "practise what I just read" rather than the whole list.
+
+    ``mode`` forces every item in the queue to the ladder's own current
+    level for that task -- it never skips the ladder, so ``produce`` shows
+    nothing for a word still at active `recognise`. ``auto`` (the default)
+    lets reviews and new words fall where the ladder already has them.
+    """
 
     material_id: uuid.UUID | None = None
+    mode: Mode = "auto"
 
 
 class PracticePromptOut(BaseModel):
-    """A gap exercise's prompt. ``definition`` is only set when ``kind`` is
-    ``definition`` -- the fallback with no sentence to show at all (see
-    ``app.services.practice.resolve_gap``)."""
+    """A gap exercise's prompt (`recall`). ``definition`` is only set when
+    ``kind`` is ``definition`` -- the fallback with no sentence to show at
+    all (see ``app.services.practice.resolve_gap``)."""
 
+    kind: Literal["sentence", "definition"]
     before: str
     after: str
     #: The answer's first character. The only part of the answer sent
-    #: before it is submitted -- see ``PracticeItemOut``, which otherwise
-    #: carries nothing the learner could read the answer off of.
+    #: before it is submitted -- see :class:`PracticeItemOut`, which
+    #: otherwise carries nothing the learner could read the answer off of.
     cue: str
-    kind: Literal["sentence", "definition"]
     definition: str | None = None
 
 
+class PracticeChoiceOptionOut(BaseModel):
+    """One recognise option. ``id`` is opaque (see
+    ``app.services.distractors.option_id``) -- nothing about which of the
+    four is right can be read off it."""
+
+    id: str
+    text: str
+
+
+class PracticeChoiceOut(BaseModel):
+    """A recognise exercise's prompt, either direction. Passive marks the
+    word in its sentence (``before``/``target``/``after``); active shows
+    only ``shown_meaning_uz`` and leaves the sentence fields empty -- the
+    brief's active `recognise` is "Uzbek meaning + pos + 4 English lemmas",
+    with no sentence in it."""
+
+    kind: Literal["choice"] = "choice"
+    before: str
+    target: str
+    after: str
+    shown_meaning_uz: str | None = None
+    options: list[PracticeChoiceOptionOut]
+
+
+class PracticeProduceOut(BaseModel):
+    """Active `produce`'s prompt: the Uzbek meaning, the part of speech,
+    and a first-letter cue -- the reveal is where the teaching happens, not
+    the cue, same as `recall`'s."""
+
+    kind: Literal["produce"] = "produce"
+    meaning_uz: str
+    pos: str
+    cue: str
+
+
 class PracticeItemOut(BaseModel):
-    """One card, queued for one sitting. Deliberately missing the answer --
-    see :class:`PracticePromptOut` -- so nothing sent to the browser before
-    the learner submits could be read out of the network tab."""
+    """One card, queued for one sitting. ``prompt`` never carries the
+    answer -- a definition and three distractors for `recognise`, nothing
+    for `recall`/`produce` -- so nothing sent to the browser before the
+    learner submits could be read out of the network tab.
+
+    ``planned_exercise`` is what the ladder actually asked for; it differs
+    from ``exercise_type`` exactly on a distractor-pipeline fallback (see
+    ``app.services.distractors``), which is what makes a fallback
+    measurable on the wire as well as in the log.
+    """
 
     word_id: uuid.UUID
     context_id: uuid.UUID | None
@@ -261,12 +397,13 @@ class PracticeItemOut(BaseModel):
     pos: str
     cefr_level: str
     is_new: bool
-    #: Both fixed to their stage-1 values rather than left to widen by
-    #: themselves -- a client built against this shape today must not
-    #: silently start receiving ``active`` items the day stage 2 ships.
-    direction: Literal["passive"]
-    exercise_type: Literal["recall"]
-    prompt: PracticePromptOut
+    direction: Direction
+    exercise_type: Level
+    planned_exercise: Level
+    prompt: Annotated[
+        Union[PracticePromptOut, PracticeChoiceOut, PracticeProduceOut],
+        Field(discriminator="kind"),
+    ]
 
 
 class PracticeSessionOut(BaseModel):
@@ -274,20 +411,28 @@ class PracticeSessionOut(BaseModel):
 
 
 class PracticeAnswerIn(BaseModel):
-    """One answer to one item. ``context_id`` is echoed back from whatever
-    :class:`PracticeItemOut` carried -- it may be null (the fallback
-    prompt), and a value that turns out not to belong to ``word_id`` is
-    treated as null rather than rejected (see
-    ``app.services.practice.record_answer``)."""
+    """One answer to one item. ``context_id`` and ``planned_exercise`` are
+    echoed back from whatever :class:`PracticeItemOut` carried --
+    ``context_id`` may be null (the fallback prompt), and a value that
+    turns out not to belong to ``word_id`` is treated as null rather than
+    rejected (see ``app.services.practice.record_answer``).
+
+    ``given`` is reused across every exercise: the option id for
+    `recognise`, the typed word for `recall`/`produce`. ``claim_known`` is
+    set only by the "I know this" flow's single follow-up answer.
+    """
 
     word_id: uuid.UUID
     context_id: uuid.UUID | None = None
     direction: Direction
     exercise_type: ExerciseType
-    #: What the learner actually typed, kept unmodified all the way to
-    #: ``VocabularyReviewLog.given`` -- see that model's docstring for why.
+    planned_exercise: Level | None = None
+    #: What the learner actually typed or picked, kept unmodified all the
+    #: way to ``VocabularyReviewLog.given`` -- see that model's docstring
+    #: for why.
     given: str = Field(default="", max_length=200)
     elapsed_ms: int = Field(ge=0)
+    claim_known: bool = False
 
 
 class PracticeAnswerWordOut(BaseModel):
@@ -314,28 +459,56 @@ class PracticeAnswerOut(BaseModel):
     #: 1..4 = Again/Hard/Good/Easy, an ``fsrs.Rating`` value carried as a
     #: plain int so the wire format never has to know the library exists.
     rating: Literal[1, 2, 3, 4]
-    #: The text AS IT STOOD in the sentence (or the lemma, for the
-    #: fallback) -- never sent before this response, per the brief.
+    #: For `recall`, the text AS IT STOOD in the sentence (or the lemma,
+    #: for the fallback). For passive `recognise`, the right English
+    #: DEFINITION -- the Uzbek meaning is not repeated here, it is already
+    #: on ``word.meaning_core_uz``. For `produce`, the lemma. Never sent
+    #: before this response, per the brief.
     answer: str
     #: True exactly when ``rating`` is Again. The client, not the server,
     #: re-queues the word at the end of THIS session -- see the brief's
     #: decision on why no session state is kept here.
     returns_this_session: bool
     next_due_at: datetime
+    #: Set only when ``claim_known`` was sent AND the answer was correct --
+    #: the word left the queue as ``known``. False for an ordinary answer,
+    #: and false for a failed "I know this" check, which stays in rotation.
+    known: bool
+    #: True the moment this lapse pushed the word over either leech
+    #: threshold -- the session then offers the three choices (§5).
+    became_leech: bool
+    status: str
+    #: The direction's level AFTER this answer -- what the NEXT encounter
+    #: in this direction will be asked, once the ladder has had its say.
+    level: Level
     word: PracticeAnswerWordOut
 
 
 class VocabularySettingsOut(BaseModel):
     daily_minutes: int
-    direction: Literal["passive", "active", "both"]
+    direction: Literal["passive", "both"]
     exercise_types: list[str] | None
+    #: Never surfaced in the UI (no control on the settings screen), but
+    #: still readable -- see the model's own docstring for why the column
+    #: outlives the screen not showing it.
     pronunciation: bool
+    #: How many of the learner's active cards have actually started and
+    #: are not already retired -- shown beside the direction toggle so
+    #: switching it to ``passive`` is an informed choice: "N words are
+    #: being practised actively -- they'll pause, not reset." See
+    #: ``practice.active_in_progress_count``.
+    active_in_progress: int = 0
 
 
 class VocabularySettingsIn(BaseModel):
-    """Stage 1's one writable preference. The other three settings-screen
-    fields (``direction``, ``exercise_types``, ``pronunciation``) are read
-    back by ``GET`` but have no setter yet -- there is no exercise or
-    direction other than the stage-1 default for them to choose between."""
+    """The whole settings screen, saved together: a plain replace, not a
+    per-field patch, because that is how the screen presents it."""
 
     daily_minutes: Literal[5, 10, 15, 20]
+    #: The brief's toggle has no "active only" -- ``passive`` is silence,
+    #: ``both`` is the toggle switched on.
+    direction: Literal["passive", "both"]
+    #: Null means "the system chooses"; a non-empty subset of the three
+    #: tasks otherwise -- an empty list would mean "practise nothing",
+    #: which is never what the picker is offering.
+    exercise_types: list[Level] | None = Field(default=None, min_length=1)

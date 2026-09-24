@@ -339,6 +339,162 @@ actual `Card`, in either direction.
   case that needs the two columns looked at together is a suspended word
   stable enough to also qualify as mastered, which counts as mastered.
 
+## Vocabulary practice (stage 2) — the ladder, leech, and the distractor pipeline
+
+Stage 2 adds the remaining exercises, both directions, and everything that
+follows from a learner actually using the module for weeks: a leech, a
+30-day set-aside, "I know this". `practice.py` stays the only importer of
+`fsrs` — everything below that builds a recognise item's four OPTIONS lives
+in `distractors.py` instead, because that pipeline touches no card at all
+and is exactly the piece expected to be re-tuned once real sessions are
+watched.
+
+- **The ladder is a stored level, not a derived one.** `passive_level`
+  (`recognise`/`recall`) and `active_level` (`recognise`/`produce`, null =
+  not started) say which TASK is currently served; FSRS still schedules the
+  card exactly as stage 1 does, with no penalty of its own. Promotion at
+  the floor needs 2 consecutive corrects — or 1, if the word has ever been
+  at the top rung before (a re-promotion after a demotion should not cost
+  what the first promotion cost). Demotion is a single Again at the top
+  rung; `close` (Hard on `recall`, Good on `produce`) never demotes,
+  because a demotion is the ladder's judgement about the TASK, not FSRS's
+  about the schedule, and a spelling slip is not evidence the task is too
+  hard. Both are read from `vocabulary_review_logs.planned_exercise`
+  (`_promotion_streak`/`_has_reached_level`), which is what the ladder
+  actually asked for, not `exercise_type` (what was served) — so a
+  distractor-pipeline fallback answered correctly still counts as evidence
+  for promotion, and a fallback answered wrong still counts as a miss at
+  the floor.
+- **The active card starts only once the passive one has earned it.**
+  `direction: "both"` AND passive stability ≥
+  `ACTIVE_UNLOCK_STABILITY_DAYS` (21, the same number as
+  `MASTERED_STABILITY_DAYS` for a different reason, kept as its own name so
+  a future change to either does not silently move the other) — a learner
+  can only produce from nothing what they can already recognise without
+  hesitation.
+- **Turning `direction` back to `passive` PAUSES every active card, not
+  only new unlocks.** `_gather_candidates` is the one place that decision
+  is made: `active_enabled` (`direction == "both"`) gates BOTH
+  `_active_due_words` and `_active_unlock_candidates`, so while it is false
+  no active card — running or not — enters `due` or `new`, and none can be
+  answered this session. Nothing is written to pause one: no FSRS field,
+  no `active_level`, no reset, which is what makes resuming (`direction`
+  back to `both`) restore a card exactly where it was rather than from
+  wherever a pause routine last saved it. `_active_due_words` and
+  `_active_unlock_candidates` themselves stay unconditional on purpose —
+  they answer the plain fact "which active cards exist/qualify" for every
+  caller, including `active_in_progress_count` (the settings screen's own
+  "N words are being practised actively — they'll pause, not reset," and
+  `SavedWordOut.active_paused` on the words list and word page, both true
+  exactly when an active card has started and `direction` is currently
+  `passive`). `record_answer` does not add this gate: a card already
+  fetched before a mid-session settings change may still be answered: the
+  gate is about what a NEW queue offers, not about refusing an answer the
+  client already holds.
+- **A word never appears twice in one session.** `_gather_candidates`
+  de-duplicates by word across passive-due, active-due, active-unlock and
+  passive-new in one pass; when both directions are due for the same word,
+  the more overdue one wins. Order is reviews (most overdue first), then
+  new active unlocks, then brand-new words — the brief's own ordering,
+  because an unlocked active card is closer to being forgotten than a word
+  never met at all.
+- **A forced `mode` filters candidates by their CURRENT level, before the
+  budget runs.** It never skips the ladder — asking for `produce` shows
+  nothing for a word still at active `recognise` — and it is exactly as
+  forceful as a settings screen with one exercise type ticked
+  (`_effective_mode`), because the brief's "bugun faqat yozish" is meant to
+  work either way.
+- **Distractors come only from `material_vocabulary`, never from the
+  learner's own list** — two learners' vocabularies would otherwise leak
+  into each other's multiple-choice options, and a learner's list is
+  exactly the words they do NOT know well, the worst possible source of a
+  plausible wrong answer. The filter, in order: same `pos`; CEFR within one
+  level (unrated only against unrated); the word's own source material(s)
+  sort first, then the public/unhidden catalogue; the word's own lemma is
+  excluded, and so is any candidate sharing a `learning`-status lemma's
+  FAMILY (first 5 characters, shorter lemmas compare exactly — `emerge`
+  excludes `emergence`, because being quizzed on telling apart a word
+  family you are mid-way through teaches confusion, not the word); the
+  similarity guard drops a candidate whose definition shares ≥ 2 content
+  words with the right one (two phrasings of the same idea is a second
+  correct answer, not a wrong one) and drops exact duplicates of an
+  already-chosen option. All five thresholds are named constants in
+  `distractors.py` on purpose — they are expected to move once fallback
+  frequency is actually measured.
+- **A fallback is a substitution forward, never a worse prompt.** Too
+  short a right definition (< `MIN_DEFINITION_WORDS`) or too few surviving
+  distractors (< `MIN_DISTRACTORS`) serves this encounter as `recall`
+  (passive) or `produce` (active) instead — the stored ladder level does
+  not change. It is measurable on the wire and in the log for exactly this
+  reason: `PracticeItemOut.planned_exercise != exercise_type` IS the
+  definition of a fallback, not a second flag that could drift from it,
+  and `logger.info` at session build carries the reason
+  (`short_definition`/`too_few_candidates`) so the guard's thresholds can
+  be raised once fallbacks turn out to be frequent.
+- **`record_answer` trusts nothing about the ladder that the client sent.**
+  `planned_exercise` is accepted on the wire but its VALUE is never read —
+  a client that could name its own would be able to plant a fabricated log
+  row claiming a word "has already reached" its top rung
+  (`_has_reached_level`), buying every later real promotion the cheap
+  1-correct re-promotion price. It is recomputed from the word's own
+  stored level every time, and `exercise_type` is checked against THAT:
+  the only exercise accepted is the level itself, or — at the floor
+  (`recognise`) only — the one fallback `FALLBACK_EXERCISE` names for this
+  direction; anything else is a 422. `direction: "active"` is refused
+  unless the active card has already started or the unlock gate is met
+  RIGHT NOW, and `claim_known` is refused unless the word's passive card
+  has never been practised — both are the server re-checking, at answer
+  time, exactly the gates a forged request would otherwise skip past.
+- **An option's id gives nothing away.** `HMAC-SHA256(app secret,
+  f"{word_id}:{text}")`, truncated to 16 hex — deterministic in the word
+  and the option's own text, so grading a choice is recomputing the RIGHT
+  option's id and comparing (`grade_choice`), with nothing about which four
+  were shown ever stored server-side, and nothing about which is correct
+  derivable from the four ids themselves.
+- **"I know this" is a bypass of the ladder, not a step on it.** Offered
+  only on a brand-new word (never practised); the one follow-up is always
+  `recall`, regardless of what level the ladder would otherwise be at (it
+  is not asked yet). Correct rates the card `Easy` and sets `known`
+  outright — a stronger signal than an ordinary correct answer, because
+  the learner asked for it by pressing a button rather than the scheduler
+  inferring it. Anything else grades exactly as an ordinary recall answer
+  and the word stays in rotation: an unreliable self-assessment ("I know
+  `bank`" from someone who only knows the financial sense) must cost
+  nothing if it turns out to be wrong.
+- **A lapse, for leech purposes, is reconstructed from the log's state
+  chain, not stored as its own flag.** `VocabularyReviewLog` keeps the
+  POST-answer state; a card's state entering answer N is exactly what
+  answer N−1 left it in, so walking the log in order and remembering the
+  previous row's `state` recovers "was this a Review-state Again" with no
+  extra column (`_lapses_since_reset`). Only genuine lapses count —
+  learning-phase misses never do, per stage 1's own rule.
+- **Leech trips on EITHER of two thresholds, since the last reset:** 6
+  lapses ever, or 4 within 14 days. Two separate constants on purpose — a
+  word wrong six times over a year and one wrong four times in a fortnight
+  are different problems, and the second is the one actually costing a
+  learner their week; one threshold would miss it for months. A leech word
+  is never auto-suspended — it is excluded from every queue
+  (`EXCLUDED_STATUSES`) until the learner makes one of three choices
+  (`resolve_leech`): "set aside" is the only one that actually leaves
+  rotation (`suspended`, `suspended_until = now + 30d`); "see it where you
+  met it" and "keep practising" are the SAME mutation (status recomputed,
+  `leech_reset_at = now`) because the difference between them is only
+  which screen asked, not a fact the server needs to remember.
+- **"Set aside" resolves lazily, in every query that would otherwise touch
+  the word — no worker.** `_reap_suspensions` runs at the top of `summary`
+  and `build_session` and fixes up anything whose `suspended_until` has
+  passed before the rest of either function reads `saved_words`, which is
+  what makes a 30-day return "automatic" without anything sweeping for it
+  on a timer.
+- **Bulk actions are scoped to the caller by the query itself, not by a
+  check afterwards.** `known`/`suspend`/`restore` are a plain column write
+  over whichever of the requested lemmas `SavedWord.user_id == user_id`
+  actually matches; `forget` is delegated to the stage-1 function one lemma
+  at a time because it has its own contexts-then-word delete order to
+  preserve. A lemma someone else owns is silently not theirs to change,
+  the same shape as the word page's 404: neither confirms that a word
+  exists for anyone but its owner.
+
 ## Two difficulty measures, and they do not merge
 
 `cefr_level` is the model's, sees the context, and is the better figure for

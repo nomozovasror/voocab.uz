@@ -63,6 +63,16 @@ DIRECTIONS: tuple[str, ...] = ("passive", "active")
 #: sentence -- the other three are enum members with nothing behind them yet.
 EXERCISE_TYPES: tuple[str, ...] = ("recognise", "recall", "produce", "listen")
 
+#: The ladder for each direction, floor first. A passive card climbs
+#: ``recognise`` -> ``recall``; an active card climbs ``recognise`` ->
+#: ``produce`` -- two different top rungs because recognising a word from
+#: four options and typing it from nothing are different skills, per the
+#: brief. ``SavedWord.{direction}_level`` always holds one of these two for
+#: its direction; ``app.services.practice`` is the only place that moves a
+#: word between them.
+PASSIVE_LEVELS: tuple[str, str] = ("recognise", "recall")
+ACTIVE_LEVELS: tuple[str, str] = ("recognise", "produce")
+
 
 class MaterialVocabulary(SQLModel, table=True):
     """One word or phrase of one material, glossed in that material's sense.
@@ -398,6 +408,42 @@ class SavedWord(SQLModel, table=True):
     lapses: int = Field(default=0)
     reps: int = Field(default=0)
 
+    #: The task actually served for each direction -- see ``PASSIVE_LEVELS``/
+    #: ``ACTIVE_LEVELS``. Stored rather than derived from the FSRS state
+    #: because the ladder has its own rule (2 consecutive corrects to
+    #: promote, 1 after a demotion; an Again at the top step to demote) that
+    #: is deliberately NOT a schedule penalty -- FSRS keeps scheduling this
+    #: card exactly as it would with no ladder at all.
+    #:
+    #: ``passive_level`` is never null: every saved word has a passive card
+    #: from the moment it exists, floored at ``recognise``. ``active_level``
+    #: is null until the active card starts (direction setting ``both`` AND
+    #: passive stability >= ``MASTERED_STABILITY_DAYS`` -- see
+    #: ``practice.maybe_unlock_active``), which is a different fact from
+    #: state 0 the same way ``active_state`` being null is: there is no rung
+    #: to be ON before the ladder exists.
+    passive_level: str = Field(default="recognise", max_length=16)
+    active_level: str | None = Field(default=None, max_length=16)
+
+    #: When this word's lapse count last reset to zero -- null means "never
+    #: reset, count from the beginning". Set by every leech resolution
+    #: (``practice.resolve_leech``) and by the 30-day auto-return from
+    #: ``suspended`` (``practice._reap_suspensions``), both of which are
+    #: exactly the moments the brief calls a fresh start: a learner who has
+    #: just chosen what to do about a stubborn word should not be judged
+    #: leech again by lapses from before that choice.
+    leech_reset_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    #: Set by "set aside for 30 days" (a leech choice, or the bulk ``suspend``
+    #: action); null otherwise. ``status`` becomes ``suspended`` at the same
+    #: time, and the two are read together: past this timestamp, the word is
+    #: due back whether or not anything has touched it since, and every
+    #: queue query resolves that lazily rather than a worker sweeping for it.
+    suspended_until: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+
     #: Exposed to the client as ``added_at`` -- the name stays, because it is
     #: also the row's ordinary bookkeeping column, and nothing about renaming
     #: it in the database would be worth the migration.
@@ -678,6 +724,18 @@ class VocabularyReviewLog(SQLModel, table=True):
 
     direction: str = Field(max_length=8)
     exercise_type: str = Field(max_length=16)
+    #: What the ladder asked for, as opposed to ``exercise_type`` -- what was
+    #: actually served. They differ exactly on a distractor-pipeline fallback
+    #: (too short a definition, or too few good distractors survive the
+    #: guard -- see ``app.services.distractors``), which is also what makes
+    #: a fallback measurable: ``planned_exercise != exercise_type`` IS the
+    #: definition, not a separate flag that could drift from it.
+    #:
+    #: Nullable because every stage-1 row predates this column and never had
+    #: a plan distinct from what it served -- backfilling it would have to
+    #: guess, and a guessed row would be indistinguishable from a real one
+    #: the day somebody re-fits FSRS on this table.
+    planned_exercise: str | None = Field(default=None, max_length=16)
     #: 1..4 = Again/Hard/Good/Easy, an ``fsrs.Rating`` value stored as a
     #: plain int so this table never has to import the library either.
     rating: int = Field(sa_column=Column(SmallInteger, nullable=False))
@@ -753,13 +811,14 @@ class VocabularySettings(SQLModel, table=True):
     learner and a lookup is always "this user's settings", never "settings
     number 4".
 
-    Stage 1 reads and writes ``daily_minutes`` only, through
-    ``GET``/``PUT /vocabulary/settings``. ``direction``, ``exercise_types``
-    and ``pronunciation`` are columns rather than a stage-2 migration
-    because the settings SCREEN in the brief shows all four together, and a
-    picker for three of them with the fourth arriving in a later release
-    would need the row shape to change under it while people had already
-    saved preferences.
+    Stage 1 read and wrote ``daily_minutes`` only; stage 2's
+    ``PUT /vocabulary/settings`` also writes ``direction`` (``passive`` or
+    ``both`` -- the brief's toggle has no "active only") and
+    ``exercise_types``. ``pronunciation`` stays a column with no setter and
+    no UI control -- kept from stage 1 rather than dropped, because a screen
+    that shows three of four settings today and grows a fourth later must
+    not need the row's shape to change under people who already saved a
+    preference.
     """
 
     __tablename__ = "vocabulary_settings"

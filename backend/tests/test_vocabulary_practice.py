@@ -8,11 +8,13 @@ Everything that touches `saved_words`/`vocabulary_review_logs` for real
 through the real Postgres the rest of the suite uses.
 """
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import fsrs
 import pytest
+from fastapi import HTTPException
 from sqlmodel import select
 
 from app.core.database import async_session_factory
@@ -26,6 +28,7 @@ from app.models.vocabulary import (
     VocabularyReviewLog,
     VocabularySettings,
 )
+from app.services import distractors
 from app.services import practice as practice_service
 from app.services import vocabulary as vocabulary_service
 
@@ -248,6 +251,23 @@ async def _make_context(
         await session.commit()
         await session.refresh(context)
         return context
+
+
+async def _make_vocab_entry(
+    material_id: uuid.UUID, part_id: uuid.UUID, *, lemma: str, **fields
+) -> MaterialVocabulary:
+    defaults = dict(pos="n", meaning_en="a plain definition", meaning_uz="tarjima",
+                    cefr_level="B2")
+    defaults.update(fields)
+    async with async_session_factory() as session:
+        entry = MaterialVocabulary(
+            material_id=material_id, part_id=part_id, lemma=lemma, surface=lemma,
+            **defaults,
+        )
+        session.add(entry)
+        await session.commit()
+        await session.refresh(entry)
+        return entry
 
 
 async def _reload(word_id: uuid.UUID) -> SavedWord:
@@ -622,3 +642,1007 @@ async def test_saving_a_word_fills_its_core_meaning_once_not_on_every_material()
             )
     finally:
         await _cleanup(user_ids=[user.id], material_ids=[first.id, second.id])
+
+
+# --- The ladder ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ladder_promotes_after_two_consecutive_corrects_at_the_floor():
+    email = f"ladder-promote-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Ladder: promote")
+    word = await _make_saved_word(user.id, "lumen")
+    context = await _make_context(
+        word.id, material.id, surface="lumen",
+        example="A lumen measures the light a bulb gives off.",
+    )
+    try:
+        async with async_session_factory() as session:
+            first = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recall",
+                planned_exercise="recognise", given="lumen", elapsed_ms=1500,
+            )
+        # One correct is not enough yet.
+        assert first["level"] == "recognise"
+        assert (await _reload(word.id)).passive_level == "recognise"
+
+        async with async_session_factory() as session:
+            second = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recall",
+                planned_exercise="recognise", given="lumen", elapsed_ms=1500,
+            )
+        assert second["level"] == "recall"
+        assert (await _reload(word.id)).passive_level == "recall"
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+@pytest.mark.asyncio
+async def test_ladder_re_promotes_after_one_correct_once_it_has_been_demoted():
+    email = f"ladder-repromote-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Ladder: re-promote")
+    word = await _make_saved_word(user.id, "lumen")
+    context = await _make_context(
+        word.id, material.id, surface="lumen", example="A lumen measures light.",
+    )
+    try:
+        # Promote to `recall` the ordinary way.
+        for _ in range(2):
+            async with async_session_factory() as session:
+                await practice_service.record_answer(
+                    session, user, word_id=word.id, context_id=context.id,
+                    direction="passive", exercise_type="recall",
+                    planned_exercise="recognise", given="lumen", elapsed_ms=1000,
+                )
+        assert (await _reload(word.id)).passive_level == "recall"
+
+        # Demote: an Again at the top rung.
+        async with async_session_factory() as session:
+            await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recall",
+                planned_exercise="recall", given="completely wrong",
+                elapsed_ms=1000,
+            )
+        assert (await _reload(word.id)).passive_level == "recognise"
+
+        # It has been at `recall` before, so ONE correct is enough this time.
+        async with async_session_factory() as session:
+            result = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recall",
+                planned_exercise="recognise", given="lumen", elapsed_ms=1000,
+            )
+        assert result["level"] == "recall"
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+@pytest.mark.asyncio
+async def test_hard_does_not_demote_the_top_rung():
+    email = f"ladder-hard-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+    word = await _make_saved_word(
+        user.id, "accommodate", status="review", passive_level="recall",
+        passive_state=int(fsrs.State.Review), passive_stability=12.0,
+        passive_difficulty=5.0, passive_due=now - timedelta(days=1),
+        passive_last_review=now - timedelta(days=13),
+    )
+    try:
+        async with async_session_factory() as session:
+            result = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=None,
+                direction="passive", exercise_type="recall",
+                planned_exercise="recall", given="acommodate",  # one letter short
+                elapsed_ms=3000,
+            )
+        assert result["rating"] == int(fsrs.Rating.Hard)  # a spelling slip, not Again
+        assert result["level"] == "recall"
+        assert (await _reload(word.id)).passive_level == "recall"
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+# --- Active unlock -------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_active_unlocks_only_with_direction_both_and_stability_21_days():
+    email = f"active-unlock-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+    stable = await _make_saved_word(
+        user.id, "stable-word", status="review",
+        passive_state=int(fsrs.State.Review), passive_stability=25.0,
+        passive_due=now + timedelta(days=5),
+    )
+    unstable = await _make_saved_word(
+        user.id, "unstable-word", status="review",
+        passive_state=int(fsrs.State.Review), passive_stability=5.0,
+        passive_due=now + timedelta(days=5),
+    )
+    try:
+        async with async_session_factory() as session:
+            candidates = await practice_service._active_unlock_candidates(
+                session, user.id
+            )
+        lemmas = {word.lemma for word in candidates}
+        assert "stable-word" in lemmas
+        assert "unstable-word" not in lemmas
+
+        # `direction` defaults to `passive` -- no active-unlock candidate
+        # reaches the queue at all.
+        async with async_session_factory() as session:
+            settings = await practice_service.get_settings(session, user.id)
+            _due, new = await practice_service._gather_candidates(
+                session, user, settings, mode="auto", material_id=None
+            )
+        assert not any(c.direction == "active" for c in new)
+
+        async with async_session_factory() as session:
+            await practice_service.update_settings(
+                session, user.id, daily_minutes=10, direction="both",
+                exercise_types=None,
+            )
+
+        async with async_session_factory() as session:
+            settings = await practice_service.get_settings(session, user.id)
+            _due, new = await practice_service._gather_candidates(
+                session, user, settings, mode="auto", material_id=None
+            )
+        active_new = {c.word.lemma for c in new if c.direction == "active"}
+        assert active_new == {"stable-word"}
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+# --- One word, one slot ---------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_word_never_appears_twice_in_one_session():
+    email = f"one-slot-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+    word = await _make_saved_word(
+        user.id, "dual-due", status="review",
+        passive_state=int(fsrs.State.Review), passive_stability=25.0,
+        passive_due=now - timedelta(minutes=10),
+        active_level="produce",
+        active_state=int(fsrs.State.Review), active_stability=25.0,
+        active_due=now - timedelta(minutes=1),
+    )
+    try:
+        # `direction: "both"` -- otherwise the active card is paused and
+        # never reaches the dedup logic this test is actually about.
+        async with async_session_factory() as session:
+            await practice_service.update_settings(
+                session, user.id, daily_minutes=20, direction="both",
+                exercise_types=None,
+            )
+        async with async_session_factory() as session:
+            items = await practice_service.build_session(session, user, tz=None)
+        assert len(items) == 1
+        assert items[0]["lemma"] == "dual-due"
+        # More overdue wins -- the passive due date is further in the past.
+        assert items[0]["direction"] == "passive"
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+# --- Mode -------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mode_takes_only_cards_at_the_matching_level():
+    email = f"mode-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+    recognise_word = await _make_saved_word(
+        user.id, "recognise-word", status="review", passive_level="recognise",
+        passive_state=int(fsrs.State.Review), passive_stability=5.0,
+        passive_due=now - timedelta(minutes=5),
+    )
+    recall_word = await _make_saved_word(
+        user.id, "recall-word", status="review", passive_level="recall",
+        passive_state=int(fsrs.State.Review), passive_stability=5.0,
+        passive_due=now - timedelta(minutes=5),
+    )
+    try:
+        async with async_session_factory() as session:
+            await practice_service.set_daily_minutes(session, user.id, 20)
+        async with async_session_factory() as session:
+            items = await practice_service.build_session(
+                session, user, tz=None, mode="recall"
+            )
+        lemmas = {item["lemma"] for item in items}
+        assert lemmas == {"recall-word"}
+        assert all(item["planned_exercise"] == "recall" for item in items)
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+# --- Distractors -----------------------------------------------------------
+
+
+def test_option_id_does_not_reveal_the_answer():
+    word_id = uuid.uuid4()
+    right = distractors.option_id(word_id, "the correct definition")
+    wrong = distractors.option_id(word_id, "a distractor definition")
+    assert right != wrong
+    assert len(right) == 16
+    assert "correct" not in right
+    # Deterministic in (word_id, text), which is what lets an answer be
+    # graded by recomputing the right id rather than storing anything.
+    assert distractors.option_id(word_id, "the correct definition") == right
+    # But scoped to the word, so the same text means a different id for a
+    # different word.
+    assert distractors.option_id(uuid.uuid4(), "the correct definition") != right
+
+
+@pytest.mark.asyncio
+async def test_distractor_candidates_filter_by_pos_and_cefr():
+    email = f"distractor-filter-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Distractors: filter")
+    part = await _make_part(material.id)
+    try:
+        await _make_vocab_entry(material.id, part.id, lemma="ally", pos="n",
+                                 cefr_level="B2",
+                                 meaning_en="a country that supports another")
+        await _make_vocab_entry(material.id, part.id, lemma="quickly", pos="adv",
+                                 cefr_level="B2", meaning_en="done at speed")
+        await _make_vocab_entry(material.id, part.id, lemma="entity", pos="n",
+                                 cefr_level="C2",
+                                 meaning_en="a distinct independent thing")
+        async with async_session_factory() as session:
+            found = await distractors._candidates(
+                session, pos="n", cefr_level="B2", exclude_lemma="alliance",
+                family_keys=frozenset(),
+            )
+        lemmas = {entry.lemma for entry in found}
+        assert "ally" in lemmas
+        assert "quickly" not in lemmas  # wrong part of speech
+        assert "entity" not in lemmas  # two CEFR levels away
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+@pytest.mark.asyncio
+async def test_distractor_pipeline_prefers_the_source_material():
+    email = f"distractor-source-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    source = await _make_material(user.id, "Distractors: source")
+    other = await _make_material(user.id, "Distractors: other")
+    source_part = await _make_part(source.id)
+    other_part = await _make_part(other.id)
+    try:
+        await _make_vocab_entry(source.id, source_part.id, lemma="ally", pos="n",
+                                 cefr_level="B2",
+                                 meaning_en="a country that supports another")
+        await _make_vocab_entry(other.id, other_part.id, lemma="rival", pos="n",
+                                 cefr_level="B2",
+                                 meaning_en="somebody competing for the same prize")
+        await _make_vocab_entry(other.id, other_part.id, lemma="colleague", pos="n",
+                                 cefr_level="B2", meaning_en="somebody you work with")
+        await _make_vocab_entry(other.id, other_part.id, lemma="outcome", pos="n",
+                                 cefr_level="B2",
+                                 meaning_en="the result of an action or event")
+
+        async with async_session_factory() as session:
+            built = await distractors.build(
+                session, word_id=uuid.uuid4(),
+                right_text="a formal agreement between two or more countries",
+                right_definition="a formal agreement between two or more countries",
+                pos="n", cefr_level="B2", source_material_ids=frozenset({source.id}),
+                family_keys=frozenset(), exclude_lemma="alliance",
+                option_field="definition", rng_seed=1,
+            )
+        assert built.fallback_reason is None
+        assert len(built.options) == 4  # right + 3 distractors
+        # `ally` is the only candidate from the source material, and the
+        # source always sorts first -- it is never the one left out when
+        # there are more eligible candidates than slots.
+        texts = {option.text for option in built.options}
+        assert any("country that supports" in text for text in texts)
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[source.id, other.id])
+
+
+@pytest.mark.asyncio
+async def test_distractor_pipeline_excludes_the_learning_family():
+    email = f"distractor-family-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Distractors: family")
+    part = await _make_part(material.id)
+    try:
+        await _make_vocab_entry(material.id, part.id, lemma="emergence", pos="n",
+                                 cefr_level="B2",
+                                 meaning_en="the process of coming into being")
+        await _make_vocab_entry(material.id, part.id, lemma="occasion", pos="n",
+                                 cefr_level="B2",
+                                 meaning_en="a particular time something happens")
+        await _make_vocab_entry(material.id, part.id, lemma="incident", pos="n",
+                                 cefr_level="B2",
+                                 meaning_en="an event, especially an unpleasant one")
+
+        async with async_session_factory() as session:
+            found = await distractors._candidates(
+                session, pos="n", cefr_level="B2", exclude_lemma="rise",
+                family_keys=frozenset({distractors.family_key("emerge")}),
+            )
+        lemmas = {entry.lemma for entry in found}
+        assert "emergence" not in lemmas  # shares `emerge`'s family
+        assert "occasion" in lemmas
+        assert "incident" in lemmas
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+@pytest.mark.asyncio
+async def test_distractor_guard_drops_near_duplicate_definitions():
+    email = f"distractor-guard-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Distractors: guard")
+    part = await _make_part(material.id)
+    try:
+        # Shares "formal", "agreement" and "countries" with the right
+        # definition -- a second correct answer, not a wrong one.
+        await _make_vocab_entry(material.id, part.id, lemma="pact", pos="n",
+                                 cefr_level="B2",
+                                 meaning_en="a formal agreement between two countries")
+        await _make_vocab_entry(material.id, part.id, lemma="rival", pos="n",
+                                 cefr_level="B2",
+                                 meaning_en="somebody competing for the same prize")
+        await _make_vocab_entry(material.id, part.id, lemma="colleague", pos="n",
+                                 cefr_level="B2", meaning_en="somebody you work with")
+        await _make_vocab_entry(material.id, part.id, lemma="outcome", pos="n",
+                                 cefr_level="B2",
+                                 meaning_en="the result of an action or event")
+
+        async with async_session_factory() as session:
+            built = await distractors.build(
+                session, word_id=uuid.uuid4(),
+                right_text="a formal agreement between two or more countries",
+                right_definition="a formal agreement between two or more countries",
+                pos="n", cefr_level="B2", source_material_ids=frozenset(),
+                family_keys=frozenset(), exclude_lemma="alliance",
+                option_field="definition", rng_seed=1,
+            )
+        assert built.fallback_reason is None
+        texts = {option.text for option in built.options}
+        assert not any("two countries" in text for text in texts)  # `pact` dropped
+        assert len(built.options) == 4
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+@pytest.mark.asyncio
+async def test_distractor_fallback_on_a_short_definition():
+    async with async_session_factory() as session:
+        built = await distractors.build(
+            session, word_id=uuid.uuid4(), right_text="go", right_definition="go",
+            pos="v", cefr_level="B1", source_material_ids=frozenset(),
+            family_keys=frozenset(), exclude_lemma="go", option_field="definition",
+            rng_seed=1,
+        )
+    assert built.options is None
+    assert built.fallback_reason == "short_definition"
+
+
+@pytest.mark.asyncio
+async def test_distractor_fallback_on_too_few_candidates():
+    async with async_session_factory() as session:
+        built = await distractors.build(
+            session, word_id=uuid.uuid4(),
+            right_text="a lasting arrangement between two allies",
+            right_definition="a lasting arrangement between two allies",
+            pos="a-part-of-speech-nothing-uses", cefr_level="B2",
+            source_material_ids=frozenset(), family_keys=frozenset(),
+            exclude_lemma="alliance", option_field="definition", rng_seed=1,
+        )
+    assert built.options is None
+    assert built.fallback_reason == "too_few_candidates"
+
+
+@pytest.mark.asyncio
+async def test_recognise_fallback_in_session_is_measurable_and_logged(caplog):
+    email = f"fallback-session-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Fallback: session")
+    word = await _make_saved_word(
+        user.id, "zzz-obscure-lemma",
+        meaning_core_en="a suitably long definition nobody else shares",
+    )
+    context = await _make_context(
+        word.id, material.id, surface="zzz-obscure-lemma",
+        example="We studied zzz-obscure-lemma carefully in class.",
+    )
+    try:
+        async with async_session_factory() as session:
+            await practice_service.set_daily_minutes(session, user.id, 10)
+        with caplog.at_level(logging.INFO, logger="app.services.practice"):
+            async with async_session_factory() as session:
+                items = await practice_service.build_session(session, user, tz=None)
+        assert len(items) == 1
+        item = items[0]
+        # No catalogue candidate shares this word's invented pos/definition,
+        # so the pipeline falls back -- served harder, never with bad
+        # options, and the mismatch IS the measurement.
+        assert item["planned_exercise"] == "recognise"
+        assert item["exercise_type"] == "recall"
+        reasons = {
+            getattr(record, "reason", None) for record in caplog.records
+            if record.message == "vocabulary distractor fallback"
+        }
+        assert reasons == {"too_few_candidates"}
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+# --- Produce ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_produce_accepts_the_lemma_and_every_context_surface():
+    email = f"produce-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Produce: accepted forms")
+    # The active card already started (at its top rung) -- this test is
+    # about the grading, not the unlock gate `record_answer` now checks for
+    # a card that has never started.
+    word = await _make_saved_word(user.id, "go", active_level="produce")
+    context = await _make_context(
+        word.id, material.id, surface="went", example="She went home early.",
+    )
+    try:
+        async with async_session_factory() as session:
+            by_surface = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="active", exercise_type="produce",
+                planned_exercise="produce", given="went", elapsed_ms=4000,
+            )
+        assert by_surface["verdict"] == "correct"
+        assert by_surface["rating"] == int(fsrs.Rating.Easy)
+
+        async with async_session_factory() as session:
+            by_lemma = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=None,
+                direction="active", exercise_type="produce",
+                planned_exercise="produce", given="go", elapsed_ms=4000,
+            )
+        assert by_lemma["verdict"] == "correct"
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+# --- "I know this" -----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_known_check_correct_marks_the_word_known():
+    email = f"known-check-correct-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Known-check: correct")
+    word = await _make_saved_word(user.id, "vogue")
+    context = await _make_context(
+        word.id, material.id, surface="vogue", example="It is in vogue again.",
+    )
+    try:
+        async with async_session_factory() as session:
+            item = await practice_service.build_known_check_item(
+                session, user, word.id
+            )
+        assert item is not None
+        assert item["exercise_type"] == "recall"
+        assert item["is_new"] is True
+
+        async with async_session_factory() as session:
+            result = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recall",
+                planned_exercise="recall", given="vogue", elapsed_ms=1500,
+                claim_known=True,
+            )
+        assert result["known"] is True
+        assert result["rating"] == int(fsrs.Rating.Easy)
+        assert (await _reload(word.id)).status == "known"
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+@pytest.mark.asyncio
+async def test_known_check_wrong_answer_stays_in_rotation():
+    email = f"known-check-wrong-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Known-check: wrong")
+    word = await _make_saved_word(user.id, "vogue")
+    context = await _make_context(
+        word.id, material.id, surface="vogue", example="It is in vogue again.",
+    )
+    try:
+        async with async_session_factory() as session:
+            result = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recall",
+                planned_exercise="recall", given="nonsense", elapsed_ms=1500,
+                claim_known=True,
+            )
+        assert result["known"] is False
+        assert result["rating"] == int(fsrs.Rating.Again)
+        reloaded = await _reload(word.id)
+        assert reloaded.status == "learning"
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+# --- Leech -------------------------------------------------------------------
+
+
+def _lapse_pair_logs(user_id, word, *, good_at, again_at) -> list[VocabularyReviewLog]:
+    """A Review-state Good followed by an Again -- the state chain
+    :func:`practice._lapses_since_reset` needs to see one lapse."""
+    return [
+        VocabularyReviewLog(
+            user_id=user_id, saved_word_id=word.id, lemma=word.lemma,
+            direction="passive", exercise_type="recall", planned_exercise="recall",
+            rating=int(fsrs.Rating.Good), reviewed_at=good_at,
+            state=int(fsrs.State.Review), stability=8.0, difficulty=5.0,
+        ),
+        VocabularyReviewLog(
+            user_id=user_id, saved_word_id=word.id, lemma=word.lemma,
+            direction="passive", exercise_type="recall", planned_exercise="recall",
+            rating=int(fsrs.Rating.Again), reviewed_at=again_at,
+            state=int(fsrs.State.Relearning), stability=4.0, difficulty=7.0,
+        ),
+    ]
+
+
+def _review_anchor_log(user_id, word, *, at) -> VocabularyReviewLog:
+    """A plain Review-state Good, with no lapse of its own -- used to make
+    the synthetic log HISTORY agree with the SavedWord row's own
+    ``passive_state`` (also Review) right before a real answer is
+    recorded, so :func:`practice._lapses_since_reset`'s state-chain
+    reconstruction and the live card are looking at the same fact."""
+    return VocabularyReviewLog(
+        user_id=user_id, saved_word_id=word.id, lemma=word.lemma,
+        direction="passive", exercise_type="recall", planned_exercise="recall",
+        rating=int(fsrs.Rating.Good), reviewed_at=at,
+        state=int(fsrs.State.Review), stability=8.0, difficulty=5.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_becomes_leech_at_six_lapses_since_reset():
+    email = f"leech-six-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+    word = await _make_saved_word(
+        user.id, "stubborn", status="review",
+        passive_state=int(fsrs.State.Review), passive_stability=8.0,
+        passive_difficulty=6.0, passive_due=now - timedelta(days=1),
+        passive_last_review=now - timedelta(days=20),
+    )
+    try:
+        # Five lapses already on record, spread far apart so the 14-day
+        # threshold plays no part in this test.
+        async with async_session_factory() as session:
+            for i in range(5):
+                marker = now - timedelta(days=200 - i * 20)
+                for log in _lapse_pair_logs(
+                    user.id, word, good_at=marker - timedelta(minutes=1),
+                    again_at=marker,
+                ):
+                    session.add(log)
+            # Anchors the log history to the SavedWord row's actual current
+            # state (Review) right before the real answer below.
+            session.add(_review_anchor_log(user.id, word, at=now - timedelta(minutes=1)))
+            await session.commit()
+
+        # The sixth lapse arrives through a real answer.
+        async with async_session_factory() as session:
+            result = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=None,
+                direction="passive", exercise_type="recall",
+                planned_exercise="recall", given="completely wrong",
+                elapsed_ms=3000,
+            )
+        assert result["became_leech"] is True
+        assert (await _reload(word.id)).status == "leech"
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+@pytest.mark.asyncio
+async def test_becomes_leech_at_four_lapses_within_fourteen_days():
+    email = f"leech-four-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+    word = await _make_saved_word(
+        user.id, "recurring", status="review",
+        passive_state=int(fsrs.State.Review), passive_stability=8.0,
+        passive_difficulty=6.0, passive_due=now - timedelta(days=1),
+        passive_last_review=now - timedelta(days=2),
+    )
+    try:
+        async with async_session_factory() as session:
+            for days_ago in (2, 5, 9):
+                marker = now - timedelta(days=days_ago)
+                for log in _lapse_pair_logs(
+                    user.id, word, good_at=marker - timedelta(minutes=1),
+                    again_at=marker,
+                ):
+                    session.add(log)
+            session.add(_review_anchor_log(user.id, word, at=now - timedelta(minutes=1)))
+            await session.commit()
+
+        async with async_session_factory() as session:
+            result = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=None,
+                direction="passive", exercise_type="recall",
+                planned_exercise="recall", given="completely wrong",
+                elapsed_ms=3000,
+            )
+        assert result["became_leech"] is True
+        assert (await _reload(word.id)).status == "leech"
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+@pytest.mark.asyncio
+async def test_learning_phase_misses_never_count_as_lapses():
+    email = f"leech-learning-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    word = await _make_saved_word(user.id, "fresh-word")
+    try:
+        for _ in range(8):
+            async with async_session_factory() as session:
+                result = await practice_service.record_answer(
+                    session, user, word_id=word.id, context_id=None,
+                    direction="passive", exercise_type="recall",
+                    planned_exercise="recall", given="nonsense", elapsed_ms=1000,
+                )
+            assert result["became_leech"] is False
+        reloaded = await _reload(word.id)
+        assert reloaded.lapses == 0
+        assert reloaded.status != "leech"
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+@pytest.mark.asyncio
+async def test_leech_choices_reset_the_lapse_window():
+    email = f"leech-reset-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+    word = await _make_saved_word(
+        user.id, "chronic", status="leech",
+        passive_state=int(fsrs.State.Review), passive_stability=6.0,
+        passive_due=now + timedelta(days=1),
+    )
+    try:
+        async with async_session_factory() as session:
+            for log in _lapse_pair_logs(
+                user.id, word, good_at=now - timedelta(days=10, minutes=1),
+                again_at=now - timedelta(days=10),
+            ):
+                session.add(log)
+            await session.commit()
+
+        async with async_session_factory() as session:
+            resolved = await practice_service.resolve_leech(
+                session, user, lemma="chronic", choice="keep"
+            )
+        assert resolved is not None
+        assert resolved.status != "leech"
+        assert resolved.leech_reset_at is not None
+
+        async with async_session_factory() as session:
+            lapses = await practice_service._lapses_since_reset(
+                session, resolved, "passive"
+            )
+        assert lapses == []  # the old lapse predates the reset
+
+        async with async_session_factory() as session:
+            set_aside = await practice_service.resolve_leech(
+                session, user, lemma="chronic", choice="set_aside"
+            )
+        assert set_aside.status == "suspended"
+        assert set_aside.suspended_until is not None
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+@pytest.mark.asyncio
+async def test_suspended_word_returns_automatically_after_thirty_days():
+    email = f"leech-suspend-return-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+    word = await _make_saved_word(
+        user.id, "dormant", status="suspended",
+        passive_state=int(fsrs.State.Review), passive_stability=6.0,
+        passive_due=now - timedelta(days=1),
+        suspended_until=now - timedelta(minutes=1),
+    )
+    try:
+        async with async_session_factory() as session:
+            await practice_service._reap_suspensions(session, user.id)
+        reloaded = await _reload(word.id)
+        assert reloaded.status != "suspended"
+        assert reloaded.suspended_until is None
+        assert reloaded.leech_reset_at is not None
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+# --- Bulk actions and the word page -----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bulk_action_only_touches_the_callers_own_words():
+    owner = await _make_user(f"bulk-owner-{uuid.uuid4()}@test.local")
+    other = await _make_user(f"bulk-other-{uuid.uuid4()}@test.local")
+    mine = await _make_saved_word(owner.id, "shared-lemma")
+    theirs = await _make_saved_word(other.id, "shared-lemma")
+    try:
+        async with async_session_factory() as session:
+            changed = await vocabulary_service.bulk_action(
+                session, user_id=owner.id, lemmas=["shared-lemma"], action="known"
+            )
+        assert changed == 1
+        assert (await _reload(mine.id)).status == "known"
+        assert (await _reload(theirs.id)).status != "known"
+    finally:
+        await _cleanup(user_ids=[owner.id, other.id])
+
+
+@pytest.mark.asyncio
+async def test_word_detail_is_404_for_another_users_word():
+    owner = await _make_user(f"detail-owner-{uuid.uuid4()}@test.local")
+    other = await _make_user(f"detail-other-{uuid.uuid4()}@test.local")
+    await _make_saved_word(owner.id, "private-word")
+    try:
+        async with async_session_factory() as session:
+            as_other = await vocabulary_service.saved_word_with_history(
+                session, other.id, "private-word"
+            )
+        assert as_other is None
+
+        async with async_session_factory() as session:
+            as_owner = await vocabulary_service.saved_word_with_history(
+                session, owner.id, "private-word"
+            )
+        assert as_owner is not None
+        word, _contexts, history = as_owner
+        assert word.lemma == "private-word"
+        assert history == []
+    finally:
+        await _cleanup(user_ids=[owner.id, other.id])
+
+
+# --- record_answer is server-authoritative, not client-trusted --------------
+
+
+@pytest.mark.asyncio
+async def test_forged_planned_exercise_is_ignored_the_server_derives_its_own():
+    """A client cannot plant a fabricated `planned_exercise="recall"` log
+    against a word that is really still at the passive floor -- that log
+    would later make `_has_reached_level` believe the word had already
+    reached `recall`, buying a future real promotion the cheap 1-correct
+    re-promotion price instead of `PROMOTE_STREAK`. The server recomputes
+    the value from the word's own stored level and ignores the claim."""
+    email = f"forged-planned-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Forged: planned_exercise")
+    word = await _make_saved_word(user.id, "lumen")  # passive_level: "recognise"
+    context = await _make_context(
+        word.id, material.id, surface="lumen", example="A lumen measures light.",
+    )
+    try:
+        async with async_session_factory() as session:
+            result = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recall",
+                planned_exercise="recall",  # FORGED: claims the top rung
+                given="lumen", elapsed_ms=1000,
+            )
+        assert result is not None
+
+        async with async_session_factory() as session:
+            log = (
+                await session.exec(
+                    select(VocabularyReviewLog).where(
+                        VocabularyReviewLog.saved_word_id == word.id
+                    )
+                )
+            ).one()
+        # The word's REAL floor, never the forged claim.
+        assert log.planned_exercise == "recognise"
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+@pytest.mark.asyncio
+async def test_exercise_type_must_match_the_planned_level_or_its_fallback():
+    """A word still at the passive floor may be served `recall` (the one
+    permitted fallback), but never `produce` -- that is not a level this
+    direction's ladder has, let alone one the fallback pipeline would ever
+    choose."""
+    email = f"forged-exercise-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    word = await _make_saved_word(user.id, "lumen")
+    try:
+        with pytest.raises(HTTPException) as excinfo:
+            async with async_session_factory() as session:
+                await practice_service.record_answer(
+                    session, user, word_id=word.id, context_id=None,
+                    direction="passive", exercise_type="produce",
+                    given="lumen", elapsed_ms=1000,
+                )
+        assert excinfo.value.status_code == 422
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+@pytest.mark.asyncio
+async def test_active_answer_rejected_when_not_started_and_not_unlocked():
+    """A brand-new word's active card has not started, and the learner's
+    settings do not unlock it (`direction` defaults to `passive`) -- a
+    client asking to grade a `produce`/`recognise` answer in that direction
+    anyway is forging a card that was never granted."""
+    email = f"forged-active-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    word = await _make_saved_word(user.id, "fresh-active-word")
+    try:
+        with pytest.raises(HTTPException) as excinfo:
+            async with async_session_factory() as session:
+                await practice_service.record_answer(
+                    session, user, word_id=word.id, context_id=None,
+                    direction="active", exercise_type="recognise",
+                    given="fresh-active-word", elapsed_ms=1000,
+                )
+        assert excinfo.value.status_code == 422
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+@pytest.mark.asyncio
+async def test_active_answer_allowed_once_the_unlock_gate_is_actually_met():
+    """The mirror of the test above: the SAME never-started active card is
+    accepted once `direction` is `both` and passive stability has actually
+    crossed `ACTIVE_UNLOCK_STABILITY_DAYS` -- the gate is a real check, not
+    a blanket refusal of every first active answer."""
+    email = f"unlocked-active-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    word = await _make_saved_word(
+        user.id, "unlockable-word", status="review",
+        passive_state=int(fsrs.State.Review), passive_stability=25.0,
+    )
+    try:
+        async with async_session_factory() as session:
+            await practice_service.update_settings(
+                session, user.id, daily_minutes=10, direction="both",
+                exercise_types=None,
+            )
+        async with async_session_factory() as session:
+            result = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=None,
+                direction="active", exercise_type="recognise",
+                given="unlockable-word", elapsed_ms=1000,
+            )
+        assert result is not None
+        assert (await _reload(word.id)).active_level is not None
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+@pytest.mark.asyncio
+async def test_claim_known_rejected_once_the_word_has_been_practised():
+    """"I know this" is new-word-only -- a word whose passive card has
+    already been practised is already in rotation, and a `claim_known`
+    against it is not the bypass the brief describes."""
+    email = f"forged-known-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+    word = await _make_saved_word(
+        user.id, "already-practised", status="review",
+        passive_state=int(fsrs.State.Review), passive_stability=8.0,
+        passive_due=now - timedelta(days=1),
+    )
+    try:
+        with pytest.raises(HTTPException) as excinfo:
+            async with async_session_factory() as session:
+                await practice_service.record_answer(
+                    session, user, word_id=word.id, context_id=None,
+                    direction="passive", exercise_type="recall",
+                    given="already-practised", elapsed_ms=1000,
+                    claim_known=True,
+                )
+        assert excinfo.value.status_code == 422
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+@pytest.mark.asyncio
+async def test_recognise_answer_with_a_forged_option_id_is_wrong_not_an_error():
+    """`given` need not be one of the four ids actually shown -- grading
+    recomputes the RIGHT option's id and compares, so an unrecognised id is
+    simply a wrong answer, never a crash or a 500."""
+    email = f"forged-option-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    word = await _make_saved_word(
+        user.id, "lumen", meaning_core_en="a unit of luminous flux",
+    )
+    try:
+        async with async_session_factory() as session:
+            result = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=None,
+                direction="passive", exercise_type="recognise",
+                given="not-a-real-option-id", elapsed_ms=1000,
+            )
+        assert result is not None
+        assert result["verdict"] == "wrong"
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+# --- Active practice pauses, rather than resets, with `direction` ------------
+
+
+@pytest.mark.asyncio
+async def test_active_cards_pause_under_passive_and_resume_unchanged():
+    email = f"active-pause-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+    word = await _make_saved_word(
+        user.id, "paused-word", status="review",
+        passive_state=int(fsrs.State.Review), passive_stability=25.0,
+        passive_due=now + timedelta(days=5),
+        active_level="produce",
+        active_state=int(fsrs.State.Review), active_stability=9.0,
+        active_due=now - timedelta(minutes=5),
+    )
+    try:
+        # `direction` defaults to `passive` -- the active card is due, but
+        # paused: it must not enter either queue.
+        async with async_session_factory() as session:
+            settings = await practice_service.get_settings(session, user.id)
+            due, new = await practice_service._gather_candidates(
+                session, user, settings, mode="auto", material_id=None
+            )
+        assert not any(c.word.id == word.id for c in due)
+        assert not any(c.word.id == word.id for c in new)
+
+        # The settings screen's own count still sees it -- pausing is not
+        # the same fact as "retired".
+        async with async_session_factory() as session:
+            in_progress = await practice_service.active_in_progress_count(
+                session, user.id
+            )
+        assert in_progress == 1
+
+        # Switching back to `both` resumes it, unchanged.
+        async with async_session_factory() as session:
+            await practice_service.update_settings(
+                session, user.id, daily_minutes=10, direction="both",
+                exercise_types=None,
+            )
+        async with async_session_factory() as session:
+            settings = await practice_service.get_settings(session, user.id)
+            due, _new = await practice_service._gather_candidates(
+                session, user, settings, mode="auto", material_id=None
+            )
+        resumed = next(c for c in due if c.word.id == word.id)
+        assert resumed.direction == "active"
+
+        reloaded = await _reload(word.id)
+        assert reloaded.active_stability == 9.0  # untouched by the pause
+        assert reloaded.active_due == word.active_due
+        assert reloaded.active_level == "produce"
+    finally:
+        await _cleanup(user_ids=[user.id])

@@ -55,7 +55,7 @@ import logging
 import re
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -71,8 +71,10 @@ from app.models.vocabulary import (
     MaterialVocabulary,
     SavedWord,
     SavedWordContext,
+    VocabularyReviewLog,
 )
 from app.services import dictionary as dictionary_service
+from app.services import practice as practice_service
 
 logger = logging.getLogger("app.services.vocabulary")
 
@@ -743,6 +745,26 @@ async def saved_lemmas(
     return set(rows.all())
 
 
+async def saved_list_for(
+    session: AsyncSession, word_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[SavedWordContext]]:
+    """Every context for a known set of words, grouped by word -- the half
+    of :func:`saved_list` that is reusable for a single word (the word
+    page, a leech resolution's response) without re-running the "which
+    words does this learner have" query for one row."""
+    if not word_ids:
+        return {}
+    contexts = await session.exec(
+        select(SavedWordContext)
+        .where(SavedWordContext.saved_word_id.in_(word_ids))
+        .order_by(SavedWordContext.created_at)
+    )
+    by_word: dict[uuid.UUID, list[SavedWordContext]] = {}
+    for context in contexts.all():
+        by_word.setdefault(context.saved_word_id, []).append(context)
+    return by_word
+
+
 async def saved_list(
     session: AsyncSession, user_id: uuid.UUID
 ) -> list[tuple[SavedWord, list[SavedWordContext]]]:
@@ -755,15 +777,98 @@ async def saved_list(
     found = list(words.all())
     if not found:
         return []
-    contexts = await session.exec(
-        select(SavedWordContext)
-        .where(SavedWordContext.saved_word_id.in_([word.id for word in found]))
-        .order_by(SavedWordContext.created_at)
-    )
-    by_word: dict[uuid.UUID, list[SavedWordContext]] = {}
-    for context in contexts.all():
-        by_word.setdefault(context.saved_word_id, []).append(context)
+    by_word = await saved_list_for(session, [word.id for word in found])
     return [(word, by_word.get(word.id, [])) for word in found]
+
+
+#: The word page's review history is capped here, not just sliced in the
+#: API layer, so the query never pulls more rows than the brief asks it to
+#: show -- a card answered thousands of times should not cost a thousand
+#: rows fetched to throw most of them away.
+MAX_HISTORY = 100
+
+
+async def saved_word_with_history(
+    session: AsyncSession, user_id: uuid.UUID, lemma: str
+) -> tuple[SavedWord, list[SavedWordContext], list[VocabularyReviewLog]] | None:
+    """The word page's whole answer: the word, its contexts, and its
+    review history (newest first, capped at :data:`MAX_HISTORY`). ``None``
+    for a lemma this learner does not have -- including one that belongs
+    to somebody else, which the caller turns into a 404 that says nothing
+    about whether the word exists at all.
+    """
+    rows = await session.exec(
+        select(SavedWord).where(
+            SavedWord.user_id == user_id, SavedWord.lemma == normalise(lemma)
+        )
+    )
+    word = rows.first()
+    if word is None:
+        return None
+    contexts = (await saved_list_for(session, [word.id])).get(word.id, [])
+    history_rows = await session.exec(
+        select(VocabularyReviewLog)
+        .where(VocabularyReviewLog.saved_word_id == word.id)
+        .order_by(VocabularyReviewLog.reviewed_at.desc())
+        .limit(MAX_HISTORY)
+    )
+    return word, contexts, list(history_rows.all())
+
+
+async def bulk_action(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    lemmas: list[str],
+    action: str,
+) -> int:
+    """``known``/``suspend``/``restore``/``forget`` over a batch of the
+    caller's OWN words -- the ``in_`` clause below is scoped to
+    ``user_id``, so a lemma somebody else owns is silently not theirs to
+    change rather than an error that would confirm it exists.
+
+    ``forget`` is delegated to :func:`forget`, one lemma at a time, because
+    it has its own contexts-then-word delete order to preserve; the other
+    three are a plain column write over whichever of the requested lemmas
+    this learner actually has.
+    """
+    wanted = {normalise(lemma) for lemma in lemmas} - {""}
+    if not wanted:
+        return 0
+
+    # The lazy 30-day return, same as every other read/write path that
+    # touches `status` -- a bulk `restore`/`known`/`suspend` should never
+    # act over a status the 30 days have already made stale.
+    await practice_service._reap_suspensions(session, user_id)
+
+    if action == "forget":
+        changed = 0
+        for lemma in wanted:
+            if await forget(session, user_id, lemma):
+                changed += 1
+        return changed
+
+    rows = await session.exec(
+        select(SavedWord).where(
+            SavedWord.user_id == user_id, SavedWord.lemma.in_(wanted)
+        )
+    )
+    words = list(rows.all())
+    now = datetime.now(timezone.utc)
+    for word in words:
+        if action == "known":
+            word.status = "known"
+        elif action == "suspend":
+            word.status = "suspended"
+            word.suspended_until = now + timedelta(days=practice_service.SUSPEND_DAYS)
+        elif action == "restore":
+            word.status = practice_service.recompute_status(word)
+            word.suspended_until = None
+            word.leech_reset_at = now
+        session.add(word)
+    if words:
+        await session.commit()
+    return len(words)
 
 
 async def forget(

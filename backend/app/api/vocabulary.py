@@ -47,6 +47,7 @@ from app.core.database import AsyncSession, get_session
 from app.models.material import Material
 from app.models.vocabulary import MaterialVocabulary
 from app.schemas.vocabulary import (
+    KnownCheckIn,
     LookupIn,
     LookupOut,
     PracticeAnswerIn,
@@ -56,6 +57,7 @@ from app.schemas.vocabulary import (
     PracticeSessionOut,
     PracticeSummaryOut,
     SavedContextOut,
+    SavedWordDetailOut,
     SavedWordOut,
     SavedWordsOut,
     SaveWordsIn,
@@ -63,6 +65,10 @@ from app.schemas.vocabulary import (
     VocabularyListOut,
     VocabularySettingsIn,
     VocabularySettingsOut,
+    WordBulkActionIn,
+    WordBulkActionOut,
+    WordHistoryEntryOut,
+    WordLeechChoiceIn,
 )
 from app.services import materials as materials_service
 from app.services import practice as practice_service
@@ -242,6 +248,130 @@ async def forget_word(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not on your list")
 
 
+@router.get("/vocabulary/words/{lemma}", response_model=SavedWordDetailOut)
+async def get_saved_word(
+    lemma: str, user: CurrentUser, session: SessionDep
+) -> SavedWordDetailOut:
+    """The word page: the word, every context, and its review history.
+
+    404 for a lemma that is not this learner's -- including one that
+    belongs to somebody else -- rather than distinguishing "never saved"
+    from "somebody else's word", which would tell a caller something about
+    another learner's list.
+    """
+    # The lazy half of "set aside for 30 days" -- resolved here too, not
+    # only at the top of a practice queue, so a word whose 30 days passed
+    # while nobody built a session does not show as still set aside on the
+    # one screen that would otherwise print a stale status.
+    await practice_service._reap_suspensions(session, user.id)
+    found = await vocabulary_service.saved_word_with_history(
+        session, user.id, lemma
+    )
+    if found is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not on your list")
+    word, contexts, history = found
+    titles = await materials_service.titles_for(
+        session, [context.material_id for context in contexts]
+    )
+    settings = await practice_service.get_settings(session, user.id)
+    return SavedWordDetailOut(
+        word=_saved_word_out(word, contexts, titles, direction=settings.direction),
+        history=[
+            WordHistoryEntryOut(
+                reviewed_at=log.reviewed_at,
+                direction=log.direction,
+                exercise_type=log.exercise_type,
+                rating=log.rating,
+                given=log.given,
+                elapsed_ms=log.elapsed_ms,
+            )
+            for log in history
+        ],
+    )
+
+
+@router.post("/vocabulary/words/bulk", response_model=WordBulkActionOut)
+async def bulk_word_action(
+    data: WordBulkActionIn, user: CurrentUser, session: SessionDep
+) -> WordBulkActionOut:
+    changed = await vocabulary_service.bulk_action(
+        session, user_id=user.id, lemmas=data.lemmas, action=data.action
+    )
+    return WordBulkActionOut(changed=changed)
+
+
+@router.post("/vocabulary/words/{lemma}/leech", response_model=SavedWordOut)
+async def leech_choice(
+    lemma: str, data: WordLeechChoiceIn, user: CurrentUser, session: SessionDep
+) -> SavedWordOut:
+    await practice_service._reap_suspensions(session, user.id)
+    word = await practice_service.resolve_leech(
+        session, user, lemma=vocabulary_service.normalise(lemma), choice=data.choice
+    )
+    if word is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not on your list")
+    contexts = (await vocabulary_service.saved_list_for(session, [word.id])).get(
+        word.id, []
+    )
+    titles = await materials_service.titles_for(
+        session, [context.material_id for context in contexts]
+    )
+    settings = await practice_service.get_settings(session, user.id)
+    return _saved_word_out(word, contexts, titles, direction=settings.direction)
+
+
+def _saved_word_out(
+    word, contexts, titles: dict, *, direction: str
+) -> SavedWordOut:
+    """One saved word, in the extended shape stage 2 shows on the words list
+    and the word page -- see :class:`SavedWordOut`'s own docstring for why
+    everything past ``contexts`` is additive.
+
+    ``direction`` is the learner's CURRENT settings value, not anything
+    stored on the word -- ``active_paused`` is true exactly when an active
+    card exists and that setting is ``passive``, per
+    ``practice._gather_candidates``'s pause rule.
+    """
+    newest_cefr = contexts[-1].cefr_level if contexts else ""
+    return SavedWordOut(
+        lemma=word.lemma,
+        created_at=word.created_at,
+        contexts=[
+            SavedContextOut(
+                material_id=context.material_id,
+                material_title=titles.get(context.material_id, ""),
+                surface=context.surface,
+                pos=context.pos,
+                meaning_core_en=context.meaning_core_en,
+                meaning_core_uz=context.meaning_core_uz,
+                meaning_en=context.meaning_en,
+                meaning_uz=context.meaning_uz,
+                sense_differs=context.sense_differs,
+                example=context.example,
+                cefr_level=context.cefr_level,
+                is_phrase=context.is_phrase,
+                created_at=context.created_at,
+            )
+            for context in contexts
+        ],
+        status=word.status,
+        pos=word.pos,
+        meaning_core_en=word.meaning_core_en,
+        meaning_core_uz=word.meaning_core_uz,
+        cefr_level=newest_cefr,
+        passive_level=word.passive_level,
+        active_level=word.active_level,
+        passive_due=word.passive_due,
+        active_due=word.active_due,
+        passive_stability=word.passive_stability,
+        active_stability=word.active_stability,
+        lapses=word.lapses,
+        reps=word.reps,
+        suspended_until=word.suspended_until,
+        active_paused=word.active_state is not None and direction == "passive",
+    )
+
+
 async def _saved(session: AsyncSession, user_id: uuid.UUID) -> SavedWordsOut:
     """The learner's list, with the title of every passage a word came from.
 
@@ -249,36 +379,20 @@ async def _saved(session: AsyncSession, user_id: uuid.UUID) -> SavedWordsOut:
     rather than by a relationship per row: a hundred saved words across forty
     passages is one lookup here and a hundred and one without it.
     """
+    # See `get_saved_word`'s own comment -- the same lazy 30-day return,
+    # so the list a learner scans is never the one screen still showing a
+    # word as set aside after its time is up.
+    await practice_service._reap_suspensions(session, user_id)
     rows = await vocabulary_service.saved_list(session, user_id)
     wanted = {
         context.material_id for _, contexts in rows for context in contexts
     }
     titles = await materials_service.titles_for(session, list(wanted))
+    settings = await practice_service.get_settings(session, user_id)
     return SavedWordsOut(
         total=len(rows),
         words=[
-            SavedWordOut(
-                lemma=word.lemma,
-                created_at=word.created_at,
-                contexts=[
-                    SavedContextOut(
-                        material_id=context.material_id,
-                        material_title=titles.get(context.material_id, ""),
-                        surface=context.surface,
-                        pos=context.pos,
-                        meaning_core_en=context.meaning_core_en,
-                        meaning_core_uz=context.meaning_core_uz,
-                        meaning_en=context.meaning_en,
-                        meaning_uz=context.meaning_uz,
-                        sense_differs=context.sense_differs,
-                        example=context.example,
-                        cefr_level=context.cefr_level,
-                        is_phrase=context.is_phrase,
-                        created_at=context.created_at,
-                    )
-                    for context in contexts
-                ],
-            )
+            _saved_word_out(word, contexts, titles, direction=settings.direction)
             for word, contexts in rows
         ],
     )
@@ -301,8 +415,11 @@ async def practice_summary(
         description="IANA timezone naming the learner's day; falls back to "
         "Asia/Tashkent.",
     ),
+    mode: str = Query(default="auto"),
 ) -> PracticeSummaryOut:
-    return PracticeSummaryOut(**await practice_service.summary(session, user, tz=tz))
+    return PracticeSummaryOut(
+        **await practice_service.summary(session, user, tz=tz, mode=mode)
+    )
 
 
 @router.post("/vocabulary/practice/session", response_model=PracticeSessionOut)
@@ -319,9 +436,26 @@ async def practice_session(
     that can see that history.
     """
     items = await practice_service.build_session(
-        session, user, tz=tz, material_id=data.material_id
+        session, user, tz=tz, material_id=data.material_id, mode=data.mode
     )
     return PracticeSessionOut(items=[PracticeItemOut(**item) for item in items])
+
+
+@router.post(
+    "/vocabulary/practice/known-check", response_model=PracticeItemOut
+)
+async def practice_known_check(
+    data: KnownCheckIn, user: CurrentUser, session: SessionDep
+) -> PracticeItemOut:
+    """"I know this": one recall attempt, offered only on a brand-new
+    word's first appearance -- see ``app.services.practice
+    .build_known_check_item``. The client posts the single answer that
+    follows to ``/practice/answers`` with ``claim_known: true``.
+    """
+    item = await practice_service.build_known_check_item(session, user, data.word_id)
+    if item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not on your list")
+    return PracticeItemOut(**item)
 
 
 @router.post("/vocabulary/practice/answers", response_model=PracticeAnswerOut)
@@ -335,8 +469,10 @@ async def practice_answer(
         context_id=data.context_id,
         direction=data.direction,
         exercise_type=data.exercise_type,
+        planned_exercise=data.planned_exercise,
         given=data.given,
         elapsed_ms=data.elapsed_ms,
+        claim_known=data.claim_known,
     )
     if result is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not on your list")
@@ -353,6 +489,9 @@ async def get_vocabulary_settings(
         direction=settings.direction,
         exercise_types=settings.exercise_types,
         pronunciation=settings.pronunciation,
+        active_in_progress=await practice_service.active_in_progress_count(
+            session, user.id
+        ),
     )
 
 
@@ -360,12 +499,19 @@ async def get_vocabulary_settings(
 async def put_vocabulary_settings(
     data: VocabularySettingsIn, user: CurrentUser, session: SessionDep
 ) -> VocabularySettingsOut:
-    settings = await practice_service.set_daily_minutes(
-        session, user.id, data.daily_minutes
+    settings = await practice_service.update_settings(
+        session,
+        user.id,
+        daily_minutes=data.daily_minutes,
+        direction=data.direction,
+        exercise_types=data.exercise_types,
     )
     return VocabularySettingsOut(
         daily_minutes=settings.daily_minutes,
         direction=settings.direction,
         exercise_types=settings.exercise_types,
         pronunciation=settings.pronunciation,
+        active_in_progress=await practice_service.active_in_progress_count(
+            session, user.id
+        ),
     )
