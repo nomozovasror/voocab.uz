@@ -3,6 +3,7 @@ import { Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FlagQuestion } from "@/features/listening/components/FlagQuestion";
 import { Q_ANCHOR } from "@/features/paper/take-focus";
+import { GapField } from "@/features/paper/components/GapField";
 import { FormLayout } from "@/features/listening/components/FormLayout";
 import { TaskPicture } from "@/features/listening/components/TaskPicture";
 import { parseTemplateLayout } from "@/features/paper/form-syntax";
@@ -156,23 +157,13 @@ export function FormCompletionGroup({
                     ))}
                   </select>
                 ) : (
-                <input
-                  type="text"
+                <GapField
                   // Read by the take page's focus timer, which attributes
                   // held focus by walking up from whatever has it. One
                   // attribute here beats threading onFocus/onBlur through
                   // every group component and the layout between them.
                   data-question={question.id}
-                  autoComplete="off"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  className={cn(
-                    // No ring: the underline IS the focus state, and a ring
-                    // around a borderless field draws a box the design spent
-                    // the rest of this rule removing.
-                    "w-36 border-0 border-b-2 bg-transparent px-1 pb-0.5 font-mono text-[1em] text-foreground transition-colors duration-fast placeholder:text-muted-foreground focus-visible:border-primary focus-visible:outline-none",
-                    fieldTone,
-                  )}
+                  tone={fieldTone}
                   value={answers[question.id] ?? ""}
                   onChange={(e) => onChange(question.id, e.target.value)}
                   disabled={disabled}
