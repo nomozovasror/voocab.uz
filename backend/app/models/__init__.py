@@ -22,10 +22,14 @@ from app.models.segment import Segment
 from app.models.segment_attempt import SegmentAttempt
 from app.models.user import User
 from app.models.vocabulary import (
+    Deck,
+    DeckWord,
     LookupEvent,
     MaterialVocabulary,
     SavedWord,
     SavedWordContext,
+    VocabularyReviewLog,
+    VocabularySettings,
 )
 
 __all__ = [
@@ -50,4 +54,8 @@ __all__ = [
     "MaterialVocabulary",
     "SavedWord",
     "SavedWordContext",
+    "VocabularyReviewLog",
+    "Deck",
+    "DeckWord",
+    "VocabularySettings",
 ]

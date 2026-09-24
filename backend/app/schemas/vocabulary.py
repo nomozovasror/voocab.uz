@@ -25,6 +25,13 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+#: Rebuilt on almost every request by the practice endpoints, so named once
+#: rather than repeated as a bare ``Literal`` in five schemas that would
+#: then have to be kept in step by hand.
+Direction = Literal["passive", "active"]
+ExerciseType = Literal["recognise", "recall", "produce", "listen"]
+Verdict = Literal["correct", "close", "wrong"]
+
 
 class VocabularyEntryOut(BaseModel):
     """One word or phrase, in this passage's sense."""
@@ -189,3 +196,146 @@ class SavedWordOut(BaseModel):
 class SavedWordsOut(BaseModel):
     total: int
     words: list[SavedWordOut]
+
+
+# --- Practice ----------------------------------------------------------------
+
+
+class PracticeTotalsOut(BaseModel):
+    """Home progress bar: see ``app.services.practice._totals`` for the
+    partition these three numbers come from."""
+
+    total: int
+    learning: int
+    mastered: int
+
+
+class PracticeSummaryOut(BaseModel):
+    """What the practice home screen shows before a session starts."""
+
+    due_now: int
+    new_available: int
+    #: What today's session WILL contain if started now -- the exact
+    #: numbers ``POST /practice/session`` will deliver, computed the same
+    #: way, so the promise and the delivery cannot drift apart.
+    planned_reviews: int
+    planned_new: int
+    daily_minutes: int
+    seconds_spent_today: float
+    avg_seconds: float
+    next_due_at: datetime | None
+    totals: PracticeTotalsOut
+
+
+class PracticeSessionIn(BaseModel):
+    """What to build a session over. Absent ``material_id`` means every
+    saved word; present, it narrows the queue to words met in that one
+    material -- "practise what I just read" rather than the whole list."""
+
+    material_id: uuid.UUID | None = None
+
+
+class PracticePromptOut(BaseModel):
+    """A gap exercise's prompt. ``definition`` is only set when ``kind`` is
+    ``definition`` -- the fallback with no sentence to show at all (see
+    ``app.services.practice.resolve_gap``)."""
+
+    before: str
+    after: str
+    #: The answer's first character. The only part of the answer sent
+    #: before it is submitted -- see ``PracticeItemOut``, which otherwise
+    #: carries nothing the learner could read the answer off of.
+    cue: str
+    kind: Literal["sentence", "definition"]
+    definition: str | None = None
+
+
+class PracticeItemOut(BaseModel):
+    """One card, queued for one sitting. Deliberately missing the answer --
+    see :class:`PracticePromptOut` -- so nothing sent to the browser before
+    the learner submits could be read out of the network tab."""
+
+    word_id: uuid.UUID
+    context_id: uuid.UUID | None
+    lemma: str
+    pos: str
+    cefr_level: str
+    is_new: bool
+    #: Both fixed to their stage-1 values rather than left to widen by
+    #: themselves -- a client built against this shape today must not
+    #: silently start receiving ``active`` items the day stage 2 ships.
+    direction: Literal["passive"]
+    exercise_type: Literal["recall"]
+    prompt: PracticePromptOut
+
+
+class PracticeSessionOut(BaseModel):
+    items: list[PracticeItemOut]
+
+
+class PracticeAnswerIn(BaseModel):
+    """One answer to one item. ``context_id`` is echoed back from whatever
+    :class:`PracticeItemOut` carried -- it may be null (the fallback
+    prompt), and a value that turns out not to belong to ``word_id`` is
+    treated as null rather than rejected (see
+    ``app.services.practice.record_answer``)."""
+
+    word_id: uuid.UUID
+    context_id: uuid.UUID | None = None
+    direction: Direction
+    exercise_type: ExerciseType
+    #: What the learner actually typed, kept unmodified all the way to
+    #: ``VocabularyReviewLog.given`` -- see that model's docstring for why.
+    given: str = Field(default="", max_length=200)
+    elapsed_ms: int = Field(ge=0)
+
+
+class PracticeAnswerWordOut(BaseModel):
+    """The word as it stood in the context just practised -- or, with no
+    context, the word on its own. Mirrors ``VocabularyEntryOut``'s meaning
+    fields rather than reusing that schema outright: this is a narrower
+    slice (no offsets, no ``also_at``) and a saved word's own copy rather
+    than a live read of ``material_vocabulary``."""
+
+    lemma: str
+    pos: str
+    cefr_level: str
+    meaning_core_en: str
+    meaning_core_uz: str
+    meaning_en: str
+    meaning_uz: str
+    sense_differs: bool
+    material_id: uuid.UUID | None
+    material_title: str
+
+
+class PracticeAnswerOut(BaseModel):
+    verdict: Verdict
+    #: 1..4 = Again/Hard/Good/Easy, an ``fsrs.Rating`` value carried as a
+    #: plain int so the wire format never has to know the library exists.
+    rating: Literal[1, 2, 3, 4]
+    #: The text AS IT STOOD in the sentence (or the lemma, for the
+    #: fallback) -- never sent before this response, per the brief.
+    answer: str
+    #: True exactly when ``rating`` is Again. The client, not the server,
+    #: re-queues the word at the end of THIS session -- see the brief's
+    #: decision on why no session state is kept here.
+    returns_this_session: bool
+    next_due_at: datetime
+    word: PracticeAnswerWordOut
+
+
+class VocabularySettingsOut(BaseModel):
+    daily_minutes: int
+    direction: Literal["passive", "active", "both"]
+    exercise_types: list[str] | None
+    pronunciation: bool
+
+
+class VocabularySettingsIn(BaseModel):
+    """Stage 1's one writable preference. The other three settings-screen
+    fields (``direction``, ``exercise_types``, ``pronunciation``) are read
+    back by ``GET`` but have no setter yet -- there is no exercise or
+    direction other than the stage-1 default for them to choose between."""
+
+    daily_minutes: Literal[5, 10, 15, 20]

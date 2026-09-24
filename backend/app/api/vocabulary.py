@@ -39,7 +39,7 @@ checked.
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.deps import CurrentUser
 from app.api.materials import _load_owned_or_public
@@ -49,14 +49,23 @@ from app.models.vocabulary import MaterialVocabulary
 from app.schemas.vocabulary import (
     LookupIn,
     LookupOut,
+    PracticeAnswerIn,
+    PracticeAnswerOut,
+    PracticeItemOut,
+    PracticeSessionIn,
+    PracticeSessionOut,
+    PracticeSummaryOut,
     SavedContextOut,
     SavedWordOut,
     SavedWordsOut,
     SaveWordsIn,
     VocabularyEntryOut,
     VocabularyListOut,
+    VocabularySettingsIn,
+    VocabularySettingsOut,
 )
 from app.services import materials as materials_service
+from app.services import practice as practice_service
 from app.services import vocabulary as vocabulary_service
 
 router = APIRouter(prefix="/api", tags=["vocabulary"])
@@ -272,4 +281,91 @@ async def _saved(session: AsyncSession, user_id: uuid.UUID) -> SavedWordsOut:
             )
             for word, contexts in rows
         ],
+    )
+
+
+# --- Practice ----------------------------------------------------------------
+#
+# Everything below reads and writes through `app.services.practice`, the one
+# module that touches `fsrs`. This file stays about HTTP -- turning a query
+# param into a timezone, a missing word into a 404 -- and never computes a
+# rating or a due date itself.
+
+
+@router.get("/vocabulary/practice/summary", response_model=PracticeSummaryOut)
+async def practice_summary(
+    user: CurrentUser,
+    session: SessionDep,
+    tz: str | None = Query(
+        default=None,
+        description="IANA timezone naming the learner's day; falls back to "
+        "Asia/Tashkent.",
+    ),
+) -> PracticeSummaryOut:
+    return PracticeSummaryOut(**await practice_service.summary(session, user, tz=tz))
+
+
+@router.post("/vocabulary/practice/session", response_model=PracticeSessionOut)
+async def practice_session(
+    data: PracticeSessionIn,
+    user: CurrentUser,
+    session: SessionDep,
+    tz: str | None = Query(default=None),
+) -> PracticeSessionOut:
+    """Build today's queue now, over the same plan `practice_summary`
+    promised. Building it here rather than the client assembling it from
+    the summary's counts keeps the context-rotation and gap-building logic
+    -- both stateful across a learner's whole history -- on the one side
+    that can see that history.
+    """
+    items = await practice_service.build_session(
+        session, user, tz=tz, material_id=data.material_id
+    )
+    return PracticeSessionOut(items=[PracticeItemOut(**item) for item in items])
+
+
+@router.post("/vocabulary/practice/answers", response_model=PracticeAnswerOut)
+async def practice_answer(
+    data: PracticeAnswerIn, user: CurrentUser, session: SessionDep
+) -> PracticeAnswerOut:
+    result = await practice_service.record_answer(
+        session,
+        user,
+        word_id=data.word_id,
+        context_id=data.context_id,
+        direction=data.direction,
+        exercise_type=data.exercise_type,
+        given=data.given,
+        elapsed_ms=data.elapsed_ms,
+    )
+    if result is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not on your list")
+    return PracticeAnswerOut(**result)
+
+
+@router.get("/vocabulary/settings", response_model=VocabularySettingsOut)
+async def get_vocabulary_settings(
+    user: CurrentUser, session: SessionDep
+) -> VocabularySettingsOut:
+    settings = await practice_service.get_settings(session, user.id)
+    return VocabularySettingsOut(
+        daily_minutes=settings.daily_minutes,
+        direction=settings.direction,
+        exercise_types=settings.exercise_types,
+        pronunciation=settings.pronunciation,
+    )
+
+
+@router.put("/vocabulary/settings", response_model=VocabularySettingsOut)
+async def put_vocabulary_settings(
+    data: VocabularySettingsIn, user: CurrentUser, session: SessionDep
+) -> VocabularySettingsOut:
+    settings = await practice_service.set_daily_minutes(
+        session, user.id, data.daily_minutes
+    )
+    return VocabularySettingsOut(
+        daily_minutes=settings.daily_minutes,
+        direction=settings.direction,
+        exercise_types=settings.exercise_types,
+        pronunciation=settings.pronunciation,
     )

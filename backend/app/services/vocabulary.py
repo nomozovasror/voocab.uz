@@ -676,7 +676,22 @@ async def save(
     for entry in found:
         word = words.get(entry.lemma)
         if word is None:
-            word = SavedWord(user_id=user_id, lemma=entry.lemma)
+            # The word-level fields the practice module reads
+            # (`app.services.practice`) filled from THIS entry, once, at
+            # creation. A later save from a second material never
+            # overwrites them -- same reasoning as `enrich_saved_contexts`
+            # below: what a learner has stays what they first met, and a
+            # gap left by an entry with no usual meaning yet is topped up
+            # by the same migration/enrichment pass that backfills every
+            # other saved word, not by whichever material happens to save
+            # the word next.
+            word = SavedWord(
+                user_id=user_id,
+                lemma=entry.lemma,
+                pos=entry.pos,
+                meaning_core_en=entry.meaning_core_en or entry.meaning_en,
+                meaning_core_uz=entry.meaning_core_uz or entry.meaning_uz,
+            )
             session.add(word)
             await session.flush()
             words[entry.lemma] = word

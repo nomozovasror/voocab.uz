@@ -1,8 +1,16 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, ForeignKey, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    SmallInteger,
+    String,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as SA_UUID
 from sqlmodel import Field, SQLModel
 
@@ -35,6 +43,25 @@ SOURCES: tuple[str, ...] = (
 #: next source added has to decide which side it is on instead of landing on
 #: whichever default the test happened to give it.
 MACHINE_MADE: frozenset[str] = frozenset({"extracted", "review_lookup"})
+
+#: A saved word's place in its own study cycle. Only ``learning`` and
+#: ``review`` are ever WRITTEN by stage 1 -- see ``app.services.practice`` --
+#: derived straight from the FSRS state of the direction just practised.
+#: ``known``, ``suspended`` and ``leech`` exist from the first migration so
+#: later stages need no schema change, but nothing in this stage sets them;
+#: they only ever narrow a query (a suspended word is never queued).
+STATUSES: tuple[str, ...] = ("learning", "review", "known", "suspended", "leech")
+
+#: Two directions, scored and scheduled apart -- recognising a word (en→uz)
+#: and producing it (uz→en) are different skills, per the brief. Stage 1
+#: exercises ``passive`` only; ``active`` exists on every row from the start
+#: so the columns never need a later migration.
+DIRECTIONS: tuple[str, ...] = ("passive", "active")
+
+#: The four drills the rating table (``app.services.practice.RATING_TABLE``)
+#: is shaped for. Stage 1 issues only ``recall`` -- a gap in the word's own
+#: sentence -- the other three are enum members with nothing behind them yet.
+EXERCISE_TYPES: tuple[str, ...] = ("recognise", "recall", "produce", "listen")
 
 
 class MaterialVocabulary(SQLModel, table=True):
@@ -269,10 +296,37 @@ class SavedWord(SQLModel, table=True):
     :class:`SavedWordContext`, so the word carries two meanings and two
     example sentences, which is a better flashcard than either alone.
 
-    Thin on purpose. Scheduling -- when to show it again, how well it is
-    known -- belongs to the vocabulary module and is not built; putting an
-    interval column here now would be guessing at that design from the
-    outside.
+    ## No longer thin
+
+    It used to be, on the theory that scheduling was a design nobody had made
+    yet and a column added early would be a guess. The vocabulary module's
+    stage 1 brief settled that design, so the guess is over: everything
+    below is exactly what ``app.services.practice`` reads and writes, and
+    nothing else may touch it (see that module's docstring).
+
+    ## Two FSRS cards, one row
+
+    ``passive_*`` and ``active_*`` are two independent spaced-repetition
+    cards -- recognising ``spring`` on the page and producing it from
+    scratch are different skills, and a learner can hold one without the
+    other. Each set mirrors ``fsrs.Card`` field for field (``state``,
+    ``step``, ``stability``, ``difficulty``, ``due``, ``last_review``), which
+    is what makes ``practice._load_card``/``_store_card`` a straight copy in
+    either direction rather than a translation.
+
+    ``{direction}_state`` is null for a direction never practised. This is
+    NOT the same as ``fsrs.State.Learning`` (1): a fresh card in the library
+    starts Learning the moment it is built, but a saved word that has never
+    been drilled is not "in" any FSRS state at all -- there is no stability,
+    no difficulty, nothing an interval could be computed from. Null is the
+    honest value, and ``practice._load_card`` builds a brand-new
+    ``fsrs.Card()`` on the fly for it rather than ever writing state 1 to a
+    row nobody has reviewed.
+
+    ``lapses`` and ``reps`` are not split by direction. They count how many
+    times this WORD has been wrong and how many times it has been answered
+    at all, which is one fact about the word, not two -- and the brief lists
+    them once, unlike the FSRS fields above.
     """
 
     __tablename__ = "saved_words"
@@ -283,6 +337,70 @@ class SavedWord(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="users.id", index=True)
     lemma: str = Field(max_length=80, index=True)
+
+    #: ``n``, ``v``, ``adj``, ... -- copied from the newest context at save
+    #: time (see ``vocabulary.save``) and by the migration's backfill for
+    #: every word saved before this column existed. A word's part of speech
+    #: does not depend on which passage it came from often enough to be
+    #: worth tracking per context.
+    pos: str = Field(default="", max_length=8)
+    #: The word's usual sense, copied the same way and for the same reason
+    #: ``MaterialVocabulary.meaning_core_en`` exists: a card that only ever
+    #: shows the sense of the ONE context practised teaches the passage, not
+    #: the word.
+    meaning_core_en: str = Field(default="", max_length=200)
+    meaning_core_uz: str = Field(default="", max_length=200)
+
+    status: str = Field(default="learning", max_length=16, index=True)
+
+    #: Passive card (recognising the word, en -> uz). ``_state`` holds an
+    #: ``fsrs.State`` value (1 Learning, 2 Review, 3 Relearning) or null for
+    #: never practised; ``_step`` is the library's learning/relearning step
+    #: index, meaningless outside those two states and so left null there
+    #: too.
+    passive_state: int | None = Field(
+        default=None, sa_column=Column(SmallInteger, nullable=True)
+    )
+    passive_step: int | None = Field(default=None)
+    passive_stability: float | None = Field(
+        default=None, sa_column=Column(Float, nullable=True)
+    )
+    passive_difficulty: float | None = Field(
+        default=None, sa_column=Column(Float, nullable=True)
+    )
+    passive_due: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    passive_last_review: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+
+    #: Active card (producing the word, uz -> en). Same shape, same rules,
+    #: unused until a later stage asks for it -- present now so that stage
+    #: never needs a migration of its own.
+    active_state: int | None = Field(
+        default=None, sa_column=Column(SmallInteger, nullable=True)
+    )
+    active_step: int | None = Field(default=None)
+    active_stability: float | None = Field(
+        default=None, sa_column=Column(Float, nullable=True)
+    )
+    active_difficulty: float | None = Field(
+        default=None, sa_column=Column(Float, nullable=True)
+    )
+    active_due: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    active_last_review: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+
+    lapses: int = Field(default=0)
+    reps: int = Field(default=0)
+
+    #: Exposed to the client as ``added_at`` -- the name stays, because it is
+    #: also the row's ordinary bookkeeping column, and nothing about renaming
+    #: it in the database would be worth the migration.
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False),
@@ -358,6 +476,23 @@ class SavedWordContext(SQLModel, table=True):
     example: str = Field(default="", max_length=600)
     cefr_level: str = Field(default="", max_length=4)
     is_phrase: bool = Field(default=False)
+
+    #: Where this meeting sits in the source audio, when the material is a
+    #: listening one -- null for reading and for every context saved before
+    #: this column existed. Stage 1 does not cut audio; the columns are here
+    #: so stage 3 (listening's own exercise) needs no migration to reach
+    #: back into a word saved today.
+    audio_start_ms: int | None = Field(default=None)
+    audio_end_ms: int | None = Field(default=None)
+    #: When this meeting happened, distinct from ``created_at`` -- the row is
+    #: written once, at save time, but a LATER stage means to update this
+    #: column every time the same word turns up again in a passage the
+    #: learner reads, as the "met again, unprompted" signal the plan calls
+    #: for. Null until that stage writes it; nothing in stage 1 sets it.
+    seen_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False),
@@ -475,3 +610,169 @@ class LookupEvent(SQLModel, table=True):
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
+
+
+class VocabularyReviewLog(SQLModel, table=True):
+    """One answer, to one card, in one direction.
+
+    Not FSRS's own ``ReviewLog`` -- that class is a transient return value
+    from ``Scheduler.review_card``, gone the moment the caller stops holding
+    it. This table is the reason stage 1 exists in this shape at all: FSRS's
+    default parameters were fit on ~727 million reviews of a population that
+    is not this one, and the only way to ever re-fit them on ours is to have
+    kept, from the first answer, more than the final rating.
+
+    So every column earns its place by being something that FIT would want
+    and a smaller row would not have:
+
+    * ``given`` -- the raw text the learner typed, not the verdict. A
+      verdict can always be recomputed from this and the accepted answer; the
+      reverse is not true. See the granularity rule in the top-level
+      ``CLAUDE.md``: cheap to store now, impossible to reconstruct later.
+    * ``scheduled_at`` -- the card's ``due`` BEFORE this answer, i.e. how
+      overdue (or early) the review was. A refit needs to know the actual
+      elapsed time the retrievability was computed against, not only the
+      interval that was scheduled.
+    * ``state``/``stability``/``difficulty`` -- the card's own parameters
+      AFTER this answer, copied off the ``fsrs.Card`` the scheduler just
+      returned. ``saved_words`` only ever holds the CURRENT card; a re-fit
+      needs the whole path a card walked to get there, one row per step.
+
+    ``saved_word_id`` is ``ON DELETE SET NULL``, matching
+    ``SavedWordContext.vocabulary_id`` for the identical reason: "forget"
+    (``vocabulary.forget``) removes a word from someone's list, and a
+    training signal is not owed a favour to the row it came from. Deleting
+    every log a forgotten word ever produced would throw away real answers
+    -- real elapsed times, real ratings -- over an unrelated decision to stop
+    studying one lemma. ``lemma`` is copied alongside the (nullable)
+    pointer so the row still means something once it goes null.
+
+    ``context_id`` is ``ON DELETE SET NULL`` for the same reason and is
+    nullable outright: the fallback prompt (see ``app.services.practice``,
+    no example sentence found or none on the word at all) answers about the
+    word on its own, with no context to point at.
+    """
+
+    __tablename__ = "vocabulary_review_logs"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="users.id", index=True)
+    saved_word_id: uuid.UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            SA_UUID(as_uuid=True),
+            ForeignKey("saved_words.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    lemma: str = Field(max_length=80, index=True)
+    context_id: uuid.UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            SA_UUID(as_uuid=True),
+            ForeignKey("saved_word_contexts.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+    )
+
+    direction: str = Field(max_length=8)
+    exercise_type: str = Field(max_length=16)
+    #: 1..4 = Again/Hard/Good/Easy, an ``fsrs.Rating`` value stored as a
+    #: plain int so this table never has to import the library either.
+    rating: int = Field(sa_column=Column(SmallInteger, nullable=False))
+    #: What the learner actually typed, unmodified -- see the class
+    #: docstring. Empty string for a skipped/blank answer, never null, so
+    #: "typed nothing" and "no row" stay two different facts.
+    given: str = Field(default="", max_length=200)
+    elapsed_ms: int = Field(default=0)
+
+    scheduled_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    reviewed_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False)
+    )
+
+    #: The card's own state AFTER this answer -- see the class docstring for
+    #: why the log keeps its own copy rather than reading ``saved_words``.
+    state: int = Field(sa_column=Column(SmallInteger, nullable=False))
+    stability: float | None = Field(
+        default=None, sa_column=Column(Float, nullable=True)
+    )
+    difficulty: float | None = Field(
+        default=None, sa_column=Column(Float, nullable=True)
+    )
+
+
+class Deck(SQLModel, table=True):
+    """A named set of words -- stage 1's whole reason for existing is that a
+    LATER system needs somewhere to point.
+
+    ``all`` and ``material`` decks are not rows in this table at all in
+    stage 1: they are resolved virtually (every saved word; every saved word
+    with a context in one material), because materialising them would mean
+    keeping a deck's membership in step with every save and every forget for
+    a grouping that is already implied by data that exists. The table and
+    ``DeckWord`` exist so that a ``custom`` deck -- and, later, a teacher's
+    assignment pointing at one -- has somewhere to live without a migration
+    when that system is built. Nothing in stage 1 creates a ``custom`` deck
+    either; the column is ready, not used.
+    """
+
+    __tablename__ = "decks"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="users.id", index=True)
+    kind: str = Field(default="custom", max_length=16)
+    material_id: uuid.UUID | None = Field(default=None, foreign_key="materials.id")
+    title: str = Field(default="", max_length=200)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
+class DeckWord(SQLModel, table=True):
+    """One word's membership in one (``custom``) deck. Composite key rather
+    than a surrogate id: membership is the whole fact this row states, and
+    two rows for the same pair would just be the question "is this word in
+    this deck" answered twice."""
+
+    __tablename__ = "deck_words"
+
+    deck_id: uuid.UUID = Field(foreign_key="decks.id", primary_key=True)
+    saved_word_id: uuid.UUID = Field(
+        foreign_key="saved_words.id", primary_key=True
+    )
+
+
+class VocabularySettings(SQLModel, table=True):
+    """One learner's practice preferences. ``user_id`` is the primary key
+    rather than a surrogate one, because there is exactly one row per
+    learner and a lookup is always "this user's settings", never "settings
+    number 4".
+
+    Stage 1 reads and writes ``daily_minutes`` only, through
+    ``GET``/``PUT /vocabulary/settings``. ``direction``, ``exercise_types``
+    and ``pronunciation`` are columns rather than a stage-2 migration
+    because the settings SCREEN in the brief shows all four together, and a
+    picker for three of them with the fourth arriving in a later release
+    would need the row shape to change under it while people had already
+    saved preferences.
+    """
+
+    __tablename__ = "vocabulary_settings"
+
+    user_id: uuid.UUID = Field(foreign_key="users.id", primary_key=True)
+    #: 5, 10, 15 or 20 -- validated at the schema layer
+    #: (``app.schemas.vocabulary``), not here; the column accepts any int so
+    #: a future plan tier is not a migration.
+    daily_minutes: int = Field(default=10)
+    direction: str = Field(default="passive", max_length=8)
+    #: Null means "the system chooses" -- the brief's explicit default, not
+    #: an empty list, which would instead mean "practise nothing".
+    exercise_types: list[str] | None = Field(
+        default=None, sa_column=Column(ARRAY(String(length=16)), nullable=True)
+    )
+    pronunciation: bool = Field(default=False)

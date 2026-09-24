@@ -266,6 +266,79 @@ word changing meaning underneath somebody is worse than one that has aged.
   the `vocabulary_id` the re-extraction nulled. Idempotent by construction,
   because it runs on every import.
 
+## Vocabulary practice (stage 1) — `practice.py` is the only module that imports `fsrs`
+
+`saved_words` carries two independent FSRS cards (`passive_*`, `active_*`,
+mirroring `fsrs.Card` field for field) plus `status`, `lapses`, `reps` — see
+that model's own docstring for why `{direction}_state` is nullable rather
+than defaulted to `fsrs.State.Learning`: null means "never practised", which
+is a different fact from a fresh card's starting state. `_load_card`/
+`_store_card` are the only translation between those six columns and an
+actual `Card`, in either direction.
+
+- **The rating is computed from `exercise_type` + `verdict`, never asked.**
+  `RATING_TABLE` is the whole rule, shaped for all four exercises though
+  stage 1 issues only `recall`. Self-graded ease (Anki's "easy/good/hard")
+  is exactly what this refuses to copy — a learner mid-sentence has no real
+  basis for that judgement, and *which exercise this was* is a fact the
+  system already knows and does not need to ask about twice.
+- **Verdict reuses `mistakes.classify`, not a second opinion on spelling.**
+  `normalize_answer` decides `correct`; only `spelling`/`plural` count as
+  `close`; everything else, including empty, is `wrong`. One classifier,
+  used to explain a reading mistake and to grade a vocabulary card alike.
+- **No interval halving on a wrong answer, ever.** FSRS already does the
+  right thing on `Rating.Again` — stability drops, difficulty rises — and
+  a second penalty on top would double-count what the library did and hide
+  a struggling word behind a deceptively short interval. The only thing
+  layered on top of FSRS's own judgement is the plan's 10-minute
+  learning/relearning step, which is FSRS's own feature
+  (`learning_steps`/`relearning_steps`), not a bypass of it.
+- **A lapse is a REVIEW-state card answered Again**, checked on the card
+  BEFORE `Scheduler.review_card` is called. A Learning-state card failing a
+  step is ordinary progress, not a lapse. `reps` increments on every answer
+  regardless of direction — it is one fact about the WORD, not two.
+- **The gap's answer never reaches the client before the answer is
+  submitted.** `resolve_gap` is a pure function of the word and the chosen
+  context, so it is called once to build the prompt (dropping the
+  `answer` field) and again, identically, when the submitted answer comes
+  back — no session state is kept between the two requests. It searches for
+  the context's `surface` (the inflected form, e.g. "Undertaken") in the
+  sentence first, then the lemma, then falls back to a bare definition
+  (`meaning_core_en`, else the context's `meaning_en`) with the lemma as
+  the answer — still `recall` either way.
+- **Context rotation and "the newest context the first time" are one rule,
+  not two.** A context with no entry in `_last_used_map` sorts as though
+  used at the start of time, so "never used" and "everything tied" hit the
+  same tie-break: newest `created_at` wins. Computed once per session over
+  every queued word's contexts (`_last_used_map`), not once per word.
+- **The daily limit is TIME, and the new-word intake is what actually
+  shrinks.** `_avg_seconds` is the median of the last 200 `elapsed_ms`
+  logs, clamped to [4s, 60s], defaulting to 12s under 20 logs. Reviews are
+  filled first (most overdue — smallest `due` — first), capped by
+  `budget/avg`; whatever is left buys new words at `2×avg` each
+  (`NEW_WORD_COST_FACTOR`), because a new word is normally answered twice
+  before it settles. This is the whole fix for the Anki failure the brief
+  names: reviews crowd out new words automatically, with no cap the learner
+  has to pick.
+- **`forget` (`vocabulary.forget`) keeps every log a word ever produced.**
+  `vocabulary_review_logs.saved_word_id` is `ON DELETE SET NULL`, same
+  reasoning and same mechanism as `saved_word_contexts.vocabulary_id`: a
+  training signal is not owed a favour to the row it came from, and
+  `lemma` is copied onto the log so it still means something once the
+  pointer goes null.
+- **`vocabulary.save` fills a new word's `pos`/`meaning_core_*` once, at
+  creation, from the entry that caused it** — falling back to that entry's
+  contextual meaning when it has no usual one yet, the same fallback the
+  migration's backfill and every `MaterialVocabulary` reader use. A second
+  save of the same lemma from another material never touches those columns
+  again; only the context list grows.
+- **`Mastered` and `Learning` are a partition, computed in Python over one
+  query** (`_totals`), not three separate counts — `known` status OR
+  `passive_stability ≥ 21` days (`MASTERED_STABILITY_DAYS`) is `mastered`;
+  `suspended` is its own bucket; everything else is `learning`. The one
+  case that needs the two columns looked at together is a suspended word
+  stable enough to also qualify as mastered, which counts as mastered.
+
 ## Two difficulty measures, and they do not merge
 
 `cefr_level` is the model's, sees the context, and is the better figure for
