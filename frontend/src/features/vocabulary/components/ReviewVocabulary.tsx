@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -140,6 +141,7 @@ export function ReviewVocabulary({
   className?: string;
 }) {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const key = vocabularyKey(materialId);
 
   const save = useMutation({
@@ -161,6 +163,14 @@ export function ReviewVocabulary({
             }
           : was,
       );
+      // One toast whether this was the row's `＋` or "Save all 85" — a
+      // learner who just pressed either has the same question, "where did
+      // that go", and the practice module is the answer either way.
+      toast({
+        message: "Added to your words",
+        kind: "success",
+        action: { label: "Vocabulary", onClick: () => navigate("/vocabulary") },
+      });
     },
     onError: (e) => toast(getErrorMessage(e)),
   });

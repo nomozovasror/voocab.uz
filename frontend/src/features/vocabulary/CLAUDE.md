@@ -439,3 +439,68 @@ the right number, which was a judgement and not a measurement.
 open. What stays null afterwards is a passage somebody looked words up in
 and never finished — a fact worth counting rather than a gap to apologise
 for.
+
+## A fourth screen: practising the words, not just keeping them
+
+`/vocabulary` (home), `/vocabulary/practice` (session + end) and
+`/vocabulary/words` (the list above, moved here unchanged) are stage 1 of a
+separate module built on top of `SavedWord`/`SavedContext` — the server
+calls them `UserWord`/`UserWordContext` in the brief, same tables, same
+dedup-by-lemma. A saved word used to be inert; this is what turns it into
+something scheduled, with FSRS on the server (`app/services/practice.py`
+owns the only place that touches it) and rationed by TIME rather than by
+word count — see the stage 1 spec for why a daily word quota is the thing
+that makes people quit Anki.
+
+- **The queue is built once, client-side after that.** `POST
+  /vocabulary/practice/session` runs on mount of the practice page and its
+  `items` become local state; every answer pops the front and, when the
+  server's `returns_this_session` says Again, pushes the same item onto the
+  END. The server is never asked "what's next" a second time — the queue's
+  order past the first requeue is a client fact, and asking again would
+  re-plan a budget that has since been partly spent.
+- **`tz` travels on every call that reasons about "today"** — the daily
+  budget resets at midnight in the LEARNER's zone, not the server's.
+  `lib/time.ts`'s `localTimeZone()` is the one place that reads it
+  (`Intl.DateTimeFormat().resolvedOptions().timeZone`, falling back to the
+  server's own default), so a page that forgets to pass it and one that
+  spells the fallback differently can't disagree about what day it is.
+- **The gap field is shared with the take screen, not reimplemented.**
+  `features/paper/components/GapField.tsx` is the same `<input>`
+  `FormCompletionGroup` uses for a sentence/summary completion gap, pulled
+  out so both can use it byte-for-byte. Sharing it is not tidiness — it is
+  the whole argument for the stage 1 exercise being "fill the gap in a
+  sentence" rather than "type the translation": it is asking for the exact
+  skill a completion task already asks for.
+- **The cue is the first letter, and nothing else, until the answer is
+  submitted.** `PracticePrompt.cue` goes in as the field's `placeholder`;
+  the fuller reveal — verdict, the answer as it stood in the sentence, the
+  word's usual meaning, Uzbek, `Here: …` where the sense differs (via
+  `meaning.ts`, exactly as the review and the saved list read it), and the
+  source material — only exists in `PracticeAnswer`, which the server never
+  sends before the learner has answered.
+- **The gap keeps what the learner typed, coloured by the verdict, rather
+  than being overwritten with the right answer.** Same rule
+  `FormCompletionGroup` follows on the take screen: the field says what you
+  wrote, its border says whether that was right, and the correct form is
+  printed in the reveal panel instead of substituted into the box.
+- **Enter is read on the field, not on the document.** While answering it
+  submits; once a result exists it advances — a plain closure over the
+  render's own state, so there is no stale-listener problem to guard
+  against. Esc is a document-level listener as well as the field's own
+  handler, because after a reveal the learner may have moved focus to the
+  source-material link, and exiting has to work from there too.
+- **The end screen's joke is picked from what happened, never at the
+  learner.** `jokes.ts` takes a small stats shape (how many words, how many
+  struggled, which one struggled most) and returns one line from a pool —
+  interpolating the hardest word rather than a generic "well done", and
+  never a line that could read as mocking whoever just sat here. That rule
+  is the brief's, verbatim, and it is the whole reason the joke is a
+  function of session stats and not a static string.
+- **`practiceSummaryKey(tz)` is exported from `api.ts` and shared** between
+  the home screen's query and the practice page's post-session refetch — the
+  session that just finished invalidates exactly that key, so returning to
+  `/vocabulary` shows the due count and next-review time the session just
+  changed, not the ones that were true when the page first opened. Two
+  separate keys computed the same way in two files is how one of them ends
+  up stale.

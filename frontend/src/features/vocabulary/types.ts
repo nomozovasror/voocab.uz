@@ -13,6 +13,8 @@
  * travels, because B2 is a scale somebody already has a feel for.
  */
 
+import type { Glossed } from "@/features/vocabulary/meaning";
+
 export interface VocabularyEntry {
   id: string;
   lemma: string;
@@ -141,4 +143,127 @@ export interface SavedWord {
 export interface SavedWords {
   total: number;
   words: SavedWord[];
+}
+
+/**
+ * The practice module — stage 1.
+ *
+ * A saved word is not yet a card. `/vocabulary/words` above is the list a
+ * reader built by pressing Save on a passage; everything below is the
+ * spaced-repetition engine that turns that list into something practised,
+ * scheduled with FSRS on the server (`app/services/practice.py` owns the
+ * only place that touches it) and rationed by TIME rather than by word
+ * count — see the stage 1 spec for why a daily word quota is the thing that
+ * makes people quit Anki.
+ */
+
+/** The home screen's numbers. Nothing here is a queue — `due_now` and
+ *  `new_available` are what COULD be practised; `planned_reviews` and
+ *  `planned_new` are what today's time budget actually fits, which is the
+ *  figure worth putting on the Start button, not the raw due count. */
+export interface PracticeSummary {
+  due_now: number;
+  new_available: number;
+  planned_reviews: number;
+  planned_new: number;
+  daily_minutes: number;
+  seconds_spent_today: number;
+  avg_seconds: number;
+  /** Null when nothing is scheduled — a learner with no saved words, or one
+   *  who has already cleared every review there is. */
+  next_due_at: string | null;
+  totals: { total: number; learning: number; mastered: number };
+}
+
+/** What to show for one gap. `kind` is `"sentence"` for the ordinary case —
+ *  the word's own context, found in `before`/`after` — and `"definition"`
+ *  for the fallback the spec describes: no usable context, so the gap
+ *  stands beside the word's usual meaning instead and `before`/`after` are
+ *  empty. Either way `cue` is the first letter only; the fuller reveal
+ *  (meaning, Uzbek, `Here: …`) is deliberately withheld until after the
+ *  answer is submitted — see `PracticeAnswer`. */
+export interface PracticePrompt {
+  before: string;
+  after: string;
+  cue: string;
+  kind: "sentence" | "definition";
+  definition: string | null;
+}
+
+/** One card, already the exercise it will be answered as. Stage 1 only ever
+ *  sends `direction: "passive"` and `exercise_type: "recall"`, but both are
+ *  on the wire now rather than assumed, so a later stage adding the other
+ *  three exercise types is a server change and not a client rewrite. */
+export interface PracticeItem {
+  word_id: string;
+  context_id: string | null;
+  lemma: string;
+  pos: string;
+  cefr_level: string;
+  /** Never practised before. Drives the session's own new/reviewed tally at
+   *  the end screen — the server doesn't report that split back, so the
+   *  client counts it off this flag as each item is answered. */
+  is_new: boolean;
+  direction: "passive";
+  exercise_type: "recall";
+  prompt: PracticePrompt;
+}
+
+/** The queue for one sitting, built once when the session starts — not a
+ *  live feed. A wrong answer is re-queued by the CLIENT, appending the same
+ *  item to the end of what it already holds; the server only ever sees the
+ *  session as a sequence of individually-graded answers. */
+export interface PracticeSession {
+  items: PracticeItem[];
+}
+
+export interface PracticeAnswerRequest {
+  word_id: string;
+  context_id: string | null;
+  direction: "passive";
+  exercise_type: "recall";
+  given: string;
+  elapsed_ms: number;
+}
+
+/** The word as this answer's context knew it — a `Glossed` (see
+ *  `meaning.ts`) plus where it came from, for the "source material" link the
+ *  reveal shows. */
+export interface PracticeAnswerWord extends Glossed {
+  lemma: string;
+  pos: string;
+  cefr_level: string;
+  material_id: string | null;
+  material_title: string | null;
+}
+
+/** What one answer comes back with. `rating` is never sent BY the client —
+ *  it is the server's own translation of verdict + exercise type into an
+ *  FSRS grade (see the spec's table), included here only so the client can
+ *  log what happened without recomputing a rule it must never own a second
+ *  copy of. */
+export interface PracticeAnswer {
+  verdict: "correct" | "close" | "wrong";
+  rating: 1 | 2 | 3 | 4;
+  /** The answer as it stood in the sentence — sent only now, never with the
+   *  prompt. */
+  answer: string;
+  /** True exactly when `rating` is Again (1). The client appends this item
+   *  to the end of the current queue when true, and does nothing extra
+   *  otherwise — the server has already rescheduled the card either way. */
+  returns_this_session: boolean;
+  next_due_at: string;
+  word: PracticeAnswerWord;
+}
+
+/** Stage 1 only reads and writes `daily_minutes`; the other three fields
+ *  travel because the settings row already has them (direction, exercise
+ *  choice, pronunciation are stage 2+), and a type that dropped them would
+ *  have to be widened the day the settings PAGE is built rather than the
+ *  day this module's UI catches up to it. */
+export interface VocabularySettings {
+  daily_minutes: 5 | 10 | 15 | 20;
+  direction: "passive" | "active" | "both";
+  exercise_types: string[] | null;
+  pronunciation: boolean;
 }

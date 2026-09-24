@@ -50,9 +50,21 @@ export const router = createBrowserRouter([
         index: true,
         ...page(() => import("@/pages/home/HomePage")),
       },
+      // Practice home first: `/vocabulary` used to be the list, and is now
+      // the spaced-repetition module's front door — due count, Start,
+      // totals. The list survives unchanged at its own path below, for
+      // stage 2 to rebuild.
       {
         path: "vocabulary",
+        ...page(() => import("@/pages/vocabulary/VocabularyHomePage")),
+      },
+      {
+        path: "vocabulary/words",
         ...page(() => import("@/pages/vocabulary/VocabularyPage")),
+      },
+      {
+        path: "vocabulary/practice",
+        ...page(() => import("@/pages/vocabulary/VocabularyPracticePage")),
       },
       {
         path: "login",
