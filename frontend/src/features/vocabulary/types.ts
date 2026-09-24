@@ -129,15 +129,94 @@ export interface SavedContext {
   created_at: string;
 }
 
+/**
+ * The practice module — stage 2 widens both of the axes stage 1 left fixed:
+ * which direction a card is practised in, and which of three tasks its
+ * current level asks for. Neither is derived on the fly — see the spec's
+ * §1 — so the wire has to carry both rather than the client assuming
+ * `passive`/`recall` the way it briefly could.
+ */
+
+/** Passive is read-only until it is not: `recognise` (pick the meaning) then
+ *  `recall` (produce it from a gap). Active only exists once the passive
+ *  card is strong enough to be worth the extra work — see the spec's §2 —
+ *  so a word without one is `null`, not a third level. */
+export type PassiveLevel = "recognise" | "recall";
+export type ActiveLevel = "recognise" | "produce";
+
+/** Which of a word's two cards is being asked about. Scheduled and levelled
+ *  entirely separately — a learner may recognise a word for months before
+ *  writing it, which is the whole point of splitting them. */
+export type Direction = "passive" | "active";
+
+/** The three tasks the ladder can ask for, in the order they get harder.
+ *  `recognise` never differs between directions in KIND — four options,
+ *  one right — only in what the options are (see `PracticeChoicePrompt`).
+ *  `listen` is stage 3's; nothing here ever sends or expects it. */
+export type ExerciseType = "recognise" | "recall" | "produce";
+
+/** What a word IS right now, independent of either card's level.
+ *  `learning`/`review` are FSRS's own phases; `known`, `suspended` and
+ *  `leech` are states a learner or the leech rule put it in, and each takes
+ *  it out of the ordinary queue for a different reason — see the spec's
+ *  §5–§6. */
+export type WordStatus = "learning" | "review" | "known" | "suspended" | "leech";
+
 /** One word the learner is studying.
  *
  *  Deduplicated by lemma across every passage it was met in — somebody
  *  studying `spring` is studying one word — with each meeting kept as a
- *  context, so the card carries two senses and two example sentences. */
+ *  context, so the card carries two senses and two example sentences.
+ *
+ *  The fields below `contexts` did not exist in stage 1, where this shape
+ *  was the saved-words page's own and nothing else read it. Stage 2's words
+ *  list, word page and the review's `savedEarlier` check all read the same
+ *  `GET /vocabulary/words` now, so one interface has to answer for a list
+ *  row, a leech choice and a card's schedule at once. */
 export interface SavedWord {
   lemma: string;
   created_at: string;
   contexts: SavedContext[];
+  status: WordStatus;
+  pos: string;
+  /** The word's own meaning, copied onto the word itself rather than read
+   *  off its first context — see `meaning.ts` for why a card needs this
+   *  said once rather than once per meeting. Empty on a word saved before
+   *  either field existed; callers fall back to a context's, exactly as
+   *  the saved list already did in stage 1. */
+  meaning_core_en: string;
+  meaning_core_uz: string;
+  /** The newest context's level. A word met in an easier passage after a
+   *  harder one is still rated on the harder use it was originally saved
+   *  for having been true of it once — this is a display convenience for
+   *  the list, not a re-grading. */
+  cefr_level: string;
+  passive_level: PassiveLevel;
+  /** `null` = active not started — see the spec's §2 for the stability
+   *  threshold that starts it. */
+  active_level: ActiveLevel | null;
+  passive_due: string | null;
+  active_due: string | null;
+  /** FSRS stability, in days. `null` alongside a `null` level, and also
+   *  before either card has been reviewed once. */
+  passive_stability: number | null;
+  active_stability: number | null;
+  /** Lapses countable since `leech_reset_at` — see the spec's §5 — not the
+   *  lifetime count, which the server keeps but does not send. */
+  lapses: number;
+  reps: number;
+  /** Set for `suspended`, and past its date the word is already back in
+   *  rotation server-side — resolved lazily, not by a worker. A stale
+   *  `suspended_until` in a cached list is a display lag, not a wrong
+   *  queue. */
+  suspended_until: string | null;
+  /** True while active practice exists for this word but the learner's own
+   *  `direction` setting has it turned off — see `VocabularySettings.direction`
+   *  and `active_in_progress` below. The card is not reset, only held: the
+   *  list and the word page print "Paused" over the active direction's
+   *  level while this is true, rather than a level that stopped meaning
+   *  anything the moment nobody could be asked it. */
+  active_paused: boolean;
 }
 
 export interface SavedWords {
@@ -145,8 +224,60 @@ export interface SavedWords {
   words: SavedWord[];
 }
 
+/** One answer this word gave, for the word page's compact history — newest
+ *  first, capped at 100 server-side. `given` is exactly what was typed or,
+ *  for a `recognise` turn, the option id chosen; printed as-is rather than
+ *  matched back to option text, which the word page does not have. */
+export interface WordHistoryEntry {
+  reviewed_at: string;
+  direction: Direction;
+  exercise_type: ExerciseType;
+  rating: 1 | 2 | 3 | 4;
+  given: string;
+  elapsed_ms: number;
+}
+
+/** The word page's response: a `SavedWord` nested under `word` rather than
+ *  flattened, plus the trail of answers behind today's level. Nested
+ *  rather than spread because the server's own `SavedWordDetailOut` is —
+ *  `_saved_word_out` builds the same row the list uses and wraps it once,
+ *  and flattening here would be a shape this client invented rather than
+ *  the one on the wire. */
+export interface WordDetail {
+  word: SavedWord;
+  history: WordHistoryEntry[];
+}
+
+/** `POST /vocabulary/words/bulk`'s four verbs. `suspend` is "set aside for
+ *  30 days" under its wire name; the UI never says `suspend`, only "set
+ *  aside", which is why the label lives in `status.ts` and not here. */
+export type BulkAction = "known" | "suspend" | "restore" | "forget";
+
+export interface BulkWordsRequest {
+  lemmas: string[];
+  action: BulkAction;
+}
+
+export interface BulkWordsResponse {
+  changed: number;
+}
+
+/** The three choices a `became_leech` reveal — or a leech row anywhere else
+ *  — offers. Never a fourth "suspend forever": leech words are never
+ *  auto-suspended, only ever by one of these three, chosen by the learner —
+ *  see the spec's §5. */
+export type LeechChoice = "set_aside" | "see_context" | "keep";
+
+/** Resolving a leech hands back the word's own row, in the same shape the
+ *  list and the word page already read — the server's `leech_choice`
+ *  returns `SavedWordOut` outright rather than a narrower ack, so a caller
+ *  that wanted to patch its cache in place could without a refetch. Nothing
+ *  here does that yet (every caller just invalidates), but the type
+ *  matches the wire rather than a shape invented for this client. */
+export type LeechChoiceResponse = SavedWord;
+
 /**
- * The practice module — stage 1.
+ * The practice module proper — building and answering a sitting.
  *
  * A saved word is not yet a card. `/vocabulary/words` above is the list a
  * reader built by pressing Save on a passage; everything below is the
@@ -156,6 +287,13 @@ export interface SavedWords {
  * count — see the stage 1 spec for why a daily word quota is the thing that
  * makes people quit Anki.
  */
+
+/** `auto` lets the ladder pick, exactly as stage 1 always did. The other
+ *  three are "bugun faqat yozish" (the brief's own example) — ONE task,
+ *  taken only from cards whose current level already matches it, so a
+ *  forced mode narrows the queue rather than skipping rungs on the
+ *  ladder — see the spec's §7. */
+export type PracticeMode = "auto" | ExerciseType;
 
 /** The home screen's numbers. Nothing here is a queue — `due_now` and
  *  `new_available` are what COULD be practised; `planned_reviews` and
@@ -173,27 +311,85 @@ export interface PracticeSummary {
    *  who has already cleared every review there is. */
   next_due_at: string | null;
   totals: { total: number; learning: number; mastered: number };
+  /** Words set aside and not yet due back — the home screen's "N words set
+   *  aside" line reads this rather than counting the words list itself, so
+   *  it costs nothing beyond what the summary already fetches. */
+  set_aside: number;
 }
 
-/** What to show for one gap. `kind` is `"sentence"` for the ordinary case —
- *  the word's own context, found in `before`/`after` — and `"definition"`
- *  for the fallback the spec describes: no usable context, so the gap
- *  stands beside the word's usual meaning instead and `before`/`after` are
- *  empty. Either way `cue` is the first letter only; the fuller reveal
- *  (meaning, Uzbek, `Here: …`) is deliberately withheld until after the
- *  answer is submitted — see `PracticeAnswer`. */
-export interface PracticePrompt {
+/** What to show for a `recall` gap, in the ordinary case — the word's own
+ *  context, found in `before`/`after`. `cue` is the first letter only; the
+ *  fuller reveal (meaning, Uzbek, `Here: …`) is deliberately withheld until
+ *  after the answer is submitted — see `PracticeAnswer`.
+ *
+ *  Split from `PracticeDefinitionPrompt` as two single-`kind` interfaces
+ *  rather than one with `kind: "sentence" | "definition"` — the two read
+ *  identically off the wire, but a shared literal-free discriminant is
+ *  exactly the shape TypeScript's control-flow narrowing handles cleanly
+ *  through an `if (kind === "sentence" || kind === "definition")` guard,
+ *  and the one-interface version silently did not. */
+export interface PracticeSentencePrompt {
+  kind: "sentence";
   before: string;
   after: string;
   cue: string;
-  kind: "sentence" | "definition";
+  definition: null;
+}
+
+/** The fallback the spec describes: no usable context, so the gap stands
+ *  beside the word's usual meaning instead and `before`/`after` are empty. */
+export interface PracticeDefinitionPrompt {
+  kind: "definition";
+  before: string;
+  after: string;
+  cue: string;
   definition: string | null;
 }
 
-/** One card, already the exercise it will be answered as. Stage 1 only ever
- *  sends `direction: "passive"` and `exercise_type: "recall"`, but both are
- *  on the wire now rather than assumed, so a later stage adding the other
- *  three exercise types is a server change and not a client rewrite. */
+/** One option in a `recognise` turn. `id` is opaque (an HMAC truncated
+ *  server-side, per the spec's §3) precisely so the right answer can never
+ *  be read off which option looks different from the others — there is
+ *  nothing to read, the id says nothing about the text behind it. */
+export interface PracticeOption {
+  id: string;
+  text: string;
+}
+
+/** A `recognise` turn, either direction. Passive fills `before`/`target`/
+ *  `after` with the context sentence and its marked word (or the lemma
+ *  alone in `target` when there is no sentence) and offers English
+ *  definitions; active leaves those empty, fills `shown_meaning_uz` with
+ *  the Uzbek meaning to translate FROM, and offers English lemmas instead.
+ *  One shape for both rather than two, because the only real difference is
+ *  which fields are empty. */
+export interface PracticeChoicePrompt {
+  kind: "choice";
+  before: string;
+  target: string;
+  after: string;
+  shown_meaning_uz: string | null;
+  options: PracticeOption[];
+}
+
+/** A `produce` turn: the Uzbek meaning to write FROM, the part of speech,
+ *  and — exactly like `PracticeSentencePrompt.cue` — the answer's first
+ *  letter and nothing more. */
+export interface PracticeProducePrompt {
+  kind: "produce";
+  meaning_uz: string;
+  pos: string;
+  cue: string;
+}
+
+export type PracticePrompt =
+  | PracticeSentencePrompt
+  | PracticeDefinitionPrompt
+  | PracticeChoicePrompt
+  | PracticeProducePrompt;
+
+/** One card, already the exercise it will be answered as. Both `direction`
+ *  and `exercise_type` are now genuinely variable — stage 1's comment about
+ *  a future stage widening them was about this stage. */
 export interface PracticeItem {
   word_id: string;
   context_id: string | null;
@@ -202,10 +398,20 @@ export interface PracticeItem {
   cefr_level: string;
   /** Never practised before. Drives the session's own new/reviewed tally at
    *  the end screen — the server doesn't report that split back, so the
-   *  client counts it off this flag as each item is answered. */
+   *  client counts it off this flag as each item is answered. It is also
+   *  what gates "I know this" — see the spec's §4 — though the session only
+   *  ever OFFERS the button on a `direction: "passive"` item, since that is
+   *  the only case the spec describes. */
   is_new: boolean;
-  direction: "passive";
-  exercise_type: "recall";
+  direction: Direction;
+  exercise_type: ExerciseType;
+  /** What the ladder actually asked for. Always present — equal to
+   *  `exercise_type` in the ordinary case, and different from it exactly
+   *  on a fallback substitution (the spec's §3: too few distractors, or a
+   *  definition too short to quiz on) that does not change the word's
+   *  stored level. A fallback is `planned_exercise !== exercise_type`,
+   *  never `planned_exercise == null` — the server's own definition. */
+  planned_exercise: ExerciseType;
   prompt: PracticePrompt;
 }
 
@@ -220,10 +426,27 @@ export interface PracticeSession {
 export interface PracticeAnswerRequest {
   word_id: string;
   context_id: string | null;
-  direction: "passive";
-  exercise_type: "recall";
+  direction: Direction;
+  exercise_type: ExerciseType;
+  /** What the learner actually did: the typed answer for `recall`/
+   *  `produce`, or the chosen option's opaque id for `recognise`. One field
+   *  for both rather than an `option_id` beside it, because the server
+   *  already treats `given` as "what came back" and a second field would
+   *  be a second place callers could send the wrong one. */
   given: string;
   elapsed_ms: number;
+  /** Set only on the one attempt that follows pressing "I know this" — see
+   *  the spec's §4. Never sent again for the same word even if that attempt
+   *  comes back Again and the word is re-queued; the client clears this the
+   *  moment it is used. */
+  claim_known?: boolean;
+  /** Echoed back from `PracticeItem.planned_exercise`, so the server can
+   *  tell a genuine fallback apart from a client that answered the wrong
+   *  task. Optional on the wire (defaults to `exercise_type` server-side)
+   *  only because a caller that has never heard of the ladder should not
+   *  be obliged to send it; this client always does, since every item it
+   *  ever holds already carries one. */
+  planned_exercise?: ExerciseType;
 }
 
 /** The word as this answer's context knew it — a `Glossed` (see
@@ -245,25 +468,49 @@ export interface PracticeAnswerWord extends Glossed {
 export interface PracticeAnswer {
   verdict: "correct" | "close" | "wrong";
   rating: 1 | 2 | 3 | 4;
-  /** The answer as it stood in the sentence — sent only now, never with the
-   *  prompt. */
+  /** The answer as it stood — the right definition for a passive
+   *  `recognise` turn, the right lemma for an active one, the word as it
+   *  stood in the sentence for `recall`/`produce`. Sent only now, never
+   *  with the prompt. */
   answer: string;
-  /** True exactly when `rating` is Again (1). The client appends this item
+  /** True exactly when `rating` is Again. The client appends this item
    *  to the end of the current queue when true, and does nothing extra
    *  otherwise — the server has already rescheduled the card either way. */
   returns_this_session: boolean;
   next_due_at: string;
   word: PracticeAnswerWord;
+  /** Only meaningful on the one attempt sent with `claim_known: true` — see
+   *  the spec's §4. `false` on every ordinary answer, which the session
+   *  never reads. */
+  known: boolean;
+  /** True exactly when this answer tipped the word into `leech` — the
+   *  signal that opens the three-choice panel (see the spec's §5). */
+  became_leech: boolean;
+  status: WordStatus;
+  /** The level of the card just practised, AFTER this answer — what the
+   *  ladder promoted or demoted it to, in the direction just played. */
+  level: PassiveLevel | ActiveLevel;
 }
 
-/** Stage 1 only reads and writes `daily_minutes`; the other three fields
- *  travel because the settings row already has them (direction, exercise
- *  choice, pronunciation are stage 2+), and a type that dropped them would
- *  have to be widened the day the settings PAGE is built rather than the
- *  day this module's UI catches up to it. */
+/** `direction` dropped `"active"` on its own here — stage 1 offered it as a
+ *  setting with nothing behind it yet. The spec's §2 makes `both` the only
+ *  way to turn active practice on; there is no "active only". */
 export interface VocabularySettings {
   daily_minutes: 5 | 10 | 15 | 20;
-  direction: "passive" | "active" | "both";
-  exercise_types: string[] | null;
+  direction: "passive" | "both";
+  /** `null` = the ladder picks (`auto`). A non-empty subset otherwise — the
+   *  server refuses an empty array rather than accept a setting that would
+   *  serve nothing, and the settings page enforces the same rule by falling
+   *  back to `null` the moment the last type is deselected. */
+  exercise_types: ExerciseType[] | null;
+  /** Read back but never written from this settings page — stage 3's, and
+   *  absent from the UI per the spec. */
   pronunciation: boolean;
+  /** How many words currently have an active card, regardless of whether
+   *  `direction` is `both` right now. Only meaningful for the warning under
+   *  the toggle: turning it off doesn't reset any of these — it pauses them
+   *  (`SavedWord.active_paused` goes true for each) — but a learner about
+   *  to do that has no other way to know there is anything to pause. Zero
+   *  the ordinary case for someone who has never turned it on. */
+  active_in_progress: number;
 }

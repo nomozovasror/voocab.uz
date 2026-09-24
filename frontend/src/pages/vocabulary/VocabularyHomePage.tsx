@@ -1,16 +1,16 @@
+import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Play } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { BookOpen, Play, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { toast } from "@/lib/toast";
-import { getErrorMessage } from "@/lib/api";
 import { localTimeZone, timeUntil } from "@/lib/time";
 import { practiceSummaryKey, vocabularyApi } from "@/features/vocabulary/api";
-import type { VocabularySettings } from "@/features/vocabulary/types";
+import { MODE_LABEL } from "@/features/vocabulary/status";
+import type { PracticeMode } from "@/features/vocabulary/types";
 
-const MINUTES_OPTIONS: VocabularySettings["daily_minutes"][] = [5, 10, 15, 20];
+const MODES: PracticeMode[] = ["auto", "recognise", "recall", "produce"];
 
 /**
  * The practice module's home — not the word list, and that distinction is
@@ -27,32 +27,28 @@ const MINUTES_OPTIONS: VocabularySettings["daily_minutes"][] = [5, 10, 15, 20];
  * once for real on the next screen) would be two different plans of a
  * budget that shrinks as it is spent, and the two could disagree about how
  * many words fit today. This screen only ever reads `summary`, which is the
- * cheap, side-effect-free half of the same arithmetic.
+ * cheap, side-effect-free half of the same arithmetic — now once per `mode`
+ * the picker below is set to, for the same reason.
+ *
+ * ## Stage 2 moved daily minutes to Settings
+ *
+ * Stage 1 put the minutes picker here. The spec's own list of what this
+ * screen shows (mode picker, the set-aside line, a link to Settings) does
+ * not mention it, and Settings' screen 6 lists it as one of its three
+ * fields — so it now lives there and only there, rather than in two places
+ * that would have to agree.
  */
 export default function VocabularyHomePage() {
   const tz = localTimeZone();
-  const qc = useQueryClient();
   const navigate = useNavigate();
+  // Not persisted: the whole point of "bugun faqat yozish" (the brief's own
+  // example, spec §7) is a choice about TODAY, not a standing preference —
+  // that one lives in Settings' `exercise_types` instead.
+  const [mode, setMode] = useState<PracticeMode>("auto");
 
   const { data, isPending, isError } = useQuery({
-    queryKey: practiceSummaryKey(tz),
-    queryFn: () => vocabularyApi.practiceSummary(tz),
-  });
-
-  const updateMinutes = useMutation({
-    mutationFn: (minutes: VocabularySettings["daily_minutes"]) =>
-      vocabularyApi.updateSettings(minutes),
-    // Patched at once so the picker answers the tap, then re-planned: the
-    // minutes are the input to every other number on this page, and a
-    // patch alone left the old budget's count — and a hidden Start button —
-    // on screen for up to a minute after 5 became 20.
-    onSuccess: (settings) => {
-      qc.setQueryData(practiceSummaryKey(tz), (was) =>
-        was ? { ...was, daily_minutes: settings.daily_minutes } : was,
-      );
-      void qc.invalidateQueries({ queryKey: practiceSummaryKey(tz) });
-    },
-    onError: (e) => toast(getErrorMessage(e)),
+    queryKey: practiceSummaryKey(tz, mode),
+    queryFn: () => vocabularyApi.practiceSummary(tz, mode),
   });
 
   if (isPending) return <HomeSkeleton />;
@@ -79,14 +75,26 @@ export default function VocabularyHomePage() {
 
   return (
     <div className="mx-auto w-full max-w-xl pb-24 pt-2">
-      <header className="pb-6">
-        <h1 className="text-2xl font-semibold text-foreground">Vocabulary</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          The words you saved, practised the way that actually keeps them.
-        </p>
+      <header className="flex items-start justify-between gap-4 pb-6">
+        <div>
+          <h1 className="text-2xl font-semibold text-foreground">Vocabulary</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            The words you saved, practised the way that actually keeps them.
+          </p>
+        </div>
+        <Link
+          to="/vocabulary/settings"
+          aria-label="Vocabulary settings"
+          title="Settings"
+          className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors duration-fast hover:bg-surface-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          <Settings className="size-4" aria-hidden />
+        </Link>
       </header>
 
-      <section className="rounded-2xl border border-border bg-card px-6 py-10 text-center">
+      <ModePicker value={mode} onChange={setMode} />
+
+      <section className="mt-4 rounded-2xl border border-border bg-card px-6 py-10 text-center">
         {planned > 0 ? (
           <>
             <p className="text-5xl font-bold tabular-nums text-foreground">
@@ -98,7 +106,13 @@ export default function VocabularyHomePage() {
             <Button
               type="button"
               size="lg"
-              onClick={() => navigate("/vocabulary/practice")}
+              onClick={() =>
+                navigate(
+                  mode === "auto"
+                    ? "/vocabulary/practice"
+                    : `/vocabulary/practice?mode=${mode}`,
+                )
+              }
               className="mt-6 gap-1.5 px-6"
             >
               <Play className="size-4" aria-hidden />
@@ -129,19 +143,17 @@ export default function VocabularyHomePage() {
         <Total label="Mastered" value={data.totals.mastered} />
       </dl>
 
-      <div className="mt-6 flex items-center justify-between gap-4 rounded-xl border border-border px-4 py-3">
-        <div>
-          <p className="text-sm text-foreground">Daily practice</p>
-          <p className="text-xs text-muted-foreground">
-            How much time this buys in new words each day.
-          </p>
-        </div>
-        <MinutesPicker
-          value={data.daily_minutes}
-          onChange={(minutes) => updateMinutes.mutate(minutes)}
-          busy={updateMinutes.isPending}
-        />
-      </div>
+      {/* Said rather than hidden — a word that has been set aside and will
+       *  come back in three weeks is not a word that vanished, and the spec
+       *  is explicit that nothing here should read as a silent forget. */}
+      {data.set_aside > 0 && (
+        <Link
+          to="/vocabulary/words?status=suspended"
+          className="mt-4 block rounded-xl border border-border px-4 py-3 text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+        >
+          {data.set_aside} {data.set_aside === 1 ? "word" : "words"} set aside
+        </Link>
+      )}
 
       <Link
         to="/vocabulary/words"
@@ -153,6 +165,49 @@ export default function VocabularyHomePage() {
   );
 }
 
+/** Mixed · Recognise · Fill the gap · Write — a row of pills exactly like
+ *  stage 1's minutes picker, and for the same reason: four options are a
+ *  control you can see the whole of at once. `role="radiogroup"` rather
+ *  than `role="group"` (unlike the minutes picker) because these four are
+ *  genuinely mutually exclusive alternatives, not four independent
+ *  toggles. */
+function ModePicker({
+  value,
+  onChange,
+}: {
+  value: PracticeMode;
+  onChange: (mode: PracticeMode) => void;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="What to practise today"
+      className="flex gap-1 rounded-full border border-border bg-surface-sunken p-1"
+    >
+      {MODES.map((mode) => {
+        const on = value === mode;
+        return (
+          <button
+            key={mode}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            onClick={() => onChange(mode)}
+            className={cn(
+              "flex-1 rounded-full px-2.5 py-1.5 text-xs font-medium transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+              on
+                ? "bg-primary/20 text-primary"
+                : "text-muted-foreground hover:bg-surface-hover hover:text-foreground",
+            )}
+          >
+            {MODE_LABEL[mode]}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function Total({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-xl border border-border px-3 py-3 text-center">
@@ -160,48 +215,6 @@ function Total({ label, value }: { label: string; value: number }) {
         {value}
       </p>
       <p className="text-xs text-muted-foreground">{label}</p>
-    </div>
-  );
-}
-
-/** Five/ten/fifteen/twenty, as a row of pills rather than a `<select>` — four
- *  options are a control you can see the whole of at once, and a native
- *  dropdown hides three of them behind a click for no reason here. */
-function MinutesPicker({
-  value,
-  onChange,
-  busy,
-}: {
-  value: number;
-  onChange: (minutes: VocabularySettings["daily_minutes"]) => void;
-  busy: boolean;
-}) {
-  return (
-    <div
-      role="group"
-      aria-label="Daily practice time, in minutes"
-      className="flex gap-1 rounded-full border border-border bg-surface-sunken p-1"
-    >
-      {MINUTES_OPTIONS.map((minutes) => {
-        const on = value === minutes;
-        return (
-          <button
-            key={minutes}
-            type="button"
-            disabled={busy}
-            aria-pressed={on}
-            onClick={() => onChange(minutes)}
-            className={cn(
-              "rounded-full px-2.5 py-1 text-xs font-medium tabular-nums transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50",
-              on
-                ? "bg-primary/20 text-primary"
-                : "text-muted-foreground hover:bg-surface-hover hover:text-foreground",
-            )}
-          >
-            {minutes}
-          </button>
-        );
-      })}
     </div>
   );
 }
@@ -242,15 +255,19 @@ function HomeSkeleton() {
       label="Loading your practice"
       className="mx-auto w-full max-w-xl pb-24 pt-2"
     >
-      <header className="pb-6">
-        <h1 className="text-2xl font-semibold">
-          <Skeleton className="inline-block h-[0.8em] w-32" />
-        </h1>
-        <p className="mt-1 text-sm">
-          <Skeleton className="inline-block h-[0.8em] w-72 max-w-full" />
-        </p>
+      <header className="flex items-start justify-between gap-4 pb-6">
+        <div>
+          <h1 className="text-2xl font-semibold">
+            <Skeleton className="inline-block h-[0.8em] w-32" />
+          </h1>
+          <p className="mt-1 text-sm">
+            <Skeleton className="inline-block h-[0.8em] w-72 max-w-full" />
+          </p>
+        </div>
+        <Skeleton className="size-8 shrink-0 rounded-lg" />
       </header>
-      <section className="rounded-2xl border border-border bg-card px-6 py-10 text-center">
+      <Skeleton className="h-9 w-full rounded-full" />
+      <section className="mt-4 rounded-2xl border border-border bg-card px-6 py-10 text-center">
         <p className="text-5xl font-bold">
           <Skeleton className="mx-auto inline-block h-[0.8em] w-16" />
         </p>
@@ -271,7 +288,6 @@ function HomeSkeleton() {
           </div>
         ))}
       </div>
-      <div className="mt-6 h-[3.75rem] rounded-xl border border-border" />
     </SkeletonBlock>
   );
 }

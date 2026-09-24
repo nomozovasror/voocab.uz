@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -13,9 +13,17 @@ import { CefrTag } from "@/features/vocabulary/components/CefrTag";
 import { meanings } from "@/features/vocabulary/meaning";
 import { pickJoke, type SessionStats } from "@/features/vocabulary/jokes";
 import { practiceSummaryKey, vocabularyApi } from "@/features/vocabulary/api";
+import { IN_ROTATION_LABEL, STATUS_LABEL } from "@/features/vocabulary/status";
 import type {
+  Direction,
+  ExerciseType,
+  LeechChoice,
   PracticeAnswer,
+  PracticeChoicePrompt,
   PracticeItem,
+  PracticeMode,
+  PracticeOption,
+  PracticeProducePrompt,
 } from "@/features/vocabulary/types";
 
 /** One answered turn, kept for the end screen's stats and joke. A word
@@ -42,6 +50,13 @@ interface Turn {
  * second time — it doesn't know either, because the queue's own order past
  * the first requeue is a client-side fact, not something FSRS decides.
  *
+ * ## Stage 2: three tasks, one turn each
+ *
+ * `current.exercise_type` picks which of three small components renders —
+ * `ChoicePrompt` (recognise, both directions), the inline gap (recall,
+ * unchanged from stage 1) or `ProducePrompt` (produce). All three share the
+ * same submit/reveal/advance skeleton below; only the middle changes.
+ *
  * ## Calm, on purpose
  *
  * One word. No sidebar, no timer visible, no list of what's coming. The
@@ -57,9 +72,15 @@ export default function VocabularyPracticePage() {
   const navigate = useNavigate();
   const exit = () => navigate("/vocabulary");
 
+  const [params] = useSearchParams();
+  // The home screen's mode picker travels here as a query param rather than
+  // router state, so a reload mid-session keeps forcing the same task
+  // instead of silently falling back to `auto` — see the spec's §7.
+  const mode = (params.get("mode") as PracticeMode | null) ?? "auto";
+
   const { data, isPending, isError } = useQuery({
-    queryKey: ["vocabulary", "practice", "session", tz],
-    queryFn: () => vocabularyApi.practiceSession(tz),
+    queryKey: ["vocabulary", "practice", "session", tz, mode],
+    queryFn: () => vocabularyApi.practiceSession(tz, { mode }),
     // Never served from a previous mount's cache: reloading this page is
     // meant to re-plan, not resume a stale plan from ten minutes ago that
     // may no longer reflect what's due.
@@ -76,8 +97,20 @@ export default function VocabularyPracticePage() {
   const [totalCount, setTotalCount] = useState(0);
   const [answeredCount, setAnsweredCount] = useState(0);
   const [given, setGiven] = useState("");
+  const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
   const [result, setResult] = useState<PracticeAnswer | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
+  // Whether THIS turn is the one attempt "I know this" bought — set the
+  // moment the known-check item is swapped in, cleared the moment the
+  // answer that follows is sent (see `submit`). `claimedResult` is the
+  // same fact held past that clearing, for the Reveal that reads it.
+  const [pendingClaim, setPendingClaim] = useState(false);
+  const [claimedResult, setClaimedResult] = useState(false);
+  // The item on screen has already spent its "I know this" — set once the
+  // swap happens so the button cannot be pressed a second time on the same
+  // turn while its one attempt is still pending.
+  const [usedKnownCheck, setUsedKnownCheck] = useState(false);
+  const [leechChoice, setLeechChoice] = useState<LeechChoice | null>(null);
   // Wall-clock, not a React state value: resetting it must never itself
   // cause a render, and reading it happens only once, at submit.
   const shownAt = useRef(Date.now());
@@ -128,36 +161,142 @@ export default function VocabularyPracticePage() {
     onError: (e) => toast(getErrorMessage(e)),
   });
 
+  const knownCheck = useMutation({
+    mutationFn: (wordId: string) => vocabularyApi.knownCheck(wordId),
+    onSuccess: (item) => {
+      // Swaps the item on screen for the recall check the spec describes —
+      // never a second item appended, since this IS the current word's one
+      // attempt, not a new turn in the queue.
+      setQueue((was) => (was ? [item, ...was.slice(1)] : was));
+      setUsedKnownCheck(true);
+      setPendingClaim(true);
+      setGiven("");
+      setSelectedOptionId(null);
+      setResult(null);
+      shownAt.current = Date.now();
+    },
+    onError: (e) => toast(getErrorMessage(e)),
+  });
+
+  const leech = useMutation({
+    mutationFn: ({ lemma, choice }: { lemma: string; choice: LeechChoice }) =>
+      vocabularyApi.leech(lemma, choice),
+    onSuccess: (_res, { choice }) => {
+      if (choice === "see_context") {
+        // The one choice that leaves the session rather than continuing
+        // it — the spec's own destination for it is the word page, not a
+        // panel here.
+        navigate(`/vocabulary/words/${encodeURIComponent(current?.lemma ?? "")}`);
+        return;
+      }
+      setLeechChoice(choice);
+      advance();
+    },
+    onError: (e) => toast(getErrorMessage(e)),
+  });
+
   const current = queue?.[0] ?? null;
 
-  function submit() {
-    if (!current || answer.isPending) return;
+  function submit(givenOverride?: string) {
+    if (!current || answer.isPending || result) return;
+    const claiming = pendingClaim;
+    if (claiming) setPendingClaim(false);
+    setClaimedResult(claiming);
     answer.mutate({
       word_id: current.word_id,
       context_id: current.context_id,
       direction: current.direction,
       exercise_type: current.exercise_type,
-      given,
+      // Always echoed — `PracticeItem.planned_exercise` is never absent
+      // (it equals `exercise_type` outside a fallback), so there is no
+      // "nothing to send" case the way there was when this field was
+      // still modelled as nullable.
+      planned_exercise: current.planned_exercise,
+      given: givenOverride ?? given,
       elapsed_ms: Date.now() - shownAt.current,
+      ...(claiming ? { claim_known: true } : {}),
     });
   }
 
+  function chooseOption(id: string) {
+    if (!current || answer.isPending || result) return;
+    setSelectedOptionId(id);
+    submit(id);
+  }
+
   function advance() {
-    if (!current || !result || !queue) return;
+    if (!current || !result) return;
     setTurns((was) => [...was, { item: current, result }]);
-    const rest = queue.slice(1);
-    // The wrong-answer requeue, spelled out where the whole session can see
-    // it: the client appends, the server has already rescheduled the card
-    // either way (see the spec's §4). `returns_this_session` is exactly
-    // `rating === Again`, and nothing else moves a word to the back.
-    const next = result.returns_this_session ? [...rest, current] : rest;
+    setQueue((was) => {
+      if (!was) return was;
+      const rest = was.slice(1);
+      // The wrong-answer requeue, spelled out where the whole session can
+      // see it: the client appends, the server has already rescheduled the
+      // card either way (see the spec's §4). `returns_this_session` is
+      // exactly `rating === Again`, and nothing else moves a word to the
+      // back.
+      return result.returns_this_session ? [...rest, current] : rest;
+    });
     if (result.returns_this_session) setTotalCount((t) => t + 1);
     setAnsweredCount((c) => c + 1);
     setGiven("");
+    setSelectedOptionId(null);
     setResult(null);
+    setUsedKnownCheck(false);
+    setClaimedResult(false);
+    setLeechChoice(null);
     shownAt.current = Date.now();
-    setQueue(next);
   }
+
+  // Every hotkey this screen owns, in one place: "0" for "I know this" (a
+  // digit that can never collide with a `recognise` option, and never
+  // fires while a text field has focus, so a `produce` answer starting
+  // with a zero types normally). 1–4 pick a `recognise` option directly —
+  // one press answers, there is no separate confirm step. Enter advances
+  // past a reveal, except while a `became_leech` panel is still waiting
+  // for one of its three choices.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const typing =
+        e.target instanceof HTMLElement &&
+        (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA");
+
+      if (e.key === "Enter" && result) {
+        if (result.became_leech && !leechChoice) return;
+        e.preventDefault();
+        advance();
+        return;
+      }
+
+      if (typing || !current || result) return;
+
+      if (
+        current.direction === "passive" &&
+        current.is_new &&
+        !usedKnownCheck &&
+        !knownCheck.isPending &&
+        e.key === "0"
+      ) {
+        e.preventDefault();
+        knownCheck.mutate(current.word_id);
+        return;
+      }
+
+      if (current.prompt.kind === "choice" && /^[1-4]$/.test(e.key)) {
+        const option = current.prompt.options[Number(e.key) - 1];
+        if (option) {
+          e.preventDefault();
+          chooseOption(option.id);
+        }
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+    // `advance`, `submit` and `chooseOption` close over this render's state
+    // rather than being redeclared as stable refs — cheap to reattach and
+    // simpler than a ref dance for a handful of keys.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, result, leechChoice, usedKnownCheck, knownCheck.isPending]);
 
   if (isPending || queue === null) return <SessionSkeleton />;
 
@@ -216,66 +355,100 @@ export default function VocabularyPracticePage() {
         ? "border-warning text-warning"
         : "border-incorrect text-incorrect";
 
+  const showKnownCheck =
+    current.direction === "passive" &&
+    current.is_new &&
+    !usedKnownCheck &&
+    !result;
+
+  // An if/else statement rather than a nested ternary: TypeScript narrows a
+  // discriminated union reliably across `if`/`else if`/`else`, and less
+  // reliably through the falsy branch of a ternary chained inside another
+  // ternary — `prompt` came back typed as still possibly `sentence` in the
+  // final branch when this was one expression.
+  function renderPrompt() {
+    // `current` is already guaranteed non-null at this point in the render
+    // (the early return above), but a nested function closes over the
+    // OUTER type rather than this render's narrowed one, so TypeScript
+    // needs telling again.
+    if (!current) return null;
+    if (prompt.kind === "sentence" || prompt.kind === "definition") {
+      return (
+        <RecallPrompt
+          before={prompt.before}
+          after={prompt.after}
+          cue={prompt.cue}
+          definition={prompt.kind === "definition" ? prompt.definition : null}
+          value={given}
+          onChange={setGiven}
+          onSubmit={() => submit()}
+          onExit={exit}
+          disabled={answer.isPending || Boolean(result)}
+          tone={tone}
+          turnKey={`${current.word_id}-${answeredCount}`}
+        />
+      );
+    }
+    if (prompt.kind === "choice") {
+      return (
+        <ChoicePrompt
+          prompt={prompt}
+          selectedId={selectedOptionId}
+          correctText={result?.answer ?? null}
+          disabled={answer.isPending || Boolean(result)}
+          onChoose={chooseOption}
+        />
+      );
+    }
+    return (
+      <ProducePrompt
+        prompt={prompt}
+        value={given}
+        onChange={setGiven}
+        onSubmit={() => submit()}
+        onExit={exit}
+        disabled={answer.isPending || Boolean(result)}
+        tone={tone}
+        turnKey={`${current.word_id}-${answeredCount}`}
+      />
+    );
+  }
+
   return (
     <div className="mx-auto flex min-h-[70vh] w-full max-w-xl flex-col justify-center py-10">
-      <div className="flex-1">
-        {prompt.kind === "definition" && prompt.definition && (
-          // The fallback prompt — no usable example sentence, so the gap
-          // stands beside the word's own meaning instead. See the spec's
-          // §5: still a `recall` exercise, just without the sentence.
-          <p className="text-center text-sm text-muted-foreground italic">
-            {prompt.definition}
-          </p>
-        )}
-        <p
-          className={cn(
-            "text-xl leading-relaxed text-foreground",
-            prompt.kind === "definition"
-              ? "mt-4 text-center"
-              : "text-center sm:text-left",
-          )}
-        >
-          {prompt.before}
-          <GapField
-            // A fresh key per turn — including a requeued repeat of the same
-            // word — so the input remounts and `autoFocus` fires again
-            // rather than the browser leaving focus wherever it landed on
-            // the previous item.
-            key={`${current.word_id}-${answeredCount}`}
-            autoFocus
-            // What the learner actually typed, kept on screen after
-            // grading rather than overwritten with the right answer — the
-            // take screen's own completion gap does the same (see
-            // `FormCompletionGroup`): the field says what you wrote, its
-            // colour says whether that was right, and the correct answer
-            // is printed in the reveal panel below rather than substituted
-            // into the box you typed in.
-            value={given}
-            onChange={(e) => setGiven(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                if (result) advance();
-                else submit();
-              } else if (e.key === "Escape") {
-                // Stopped here, or the document listener exits a second
-                // time and Back has to be pressed twice to leave.
-                e.preventDefault();
-                e.stopPropagation();
-                exit();
-              }
-            }}
-            disabled={answer.isPending || Boolean(result)}
-            placeholder={prompt.cue}
-            aria-label={`Type the missing word. It starts with ${prompt.cue}.`}
-            tone={tone}
-            className="mx-1 w-40"
-          />
-          {prompt.after}
-        </p>
-      </div>
+      {showKnownCheck && (
+        <div className="mb-6 flex justify-center">
+          <button
+            type="button"
+            disabled={knownCheck.isPending}
+            onClick={() => knownCheck.mutate(current.word_id)}
+            className="flex items-center gap-1.5 rounded-full border border-border px-3 py-1 text-xs text-muted-foreground transition-colors duration-fast hover:border-primary/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50"
+          >
+            <Kbd>0</Kbd>
+            I know this
+          </button>
+        </div>
+      )}
 
-      {result && <Reveal result={result} />}
+      <div className="flex-1">{renderPrompt()}</div>
+
+      {result && (
+        <>
+          <Reveal
+            result={result}
+            exerciseType={current.exercise_type}
+            direction={current.direction}
+            claimed={claimedResult}
+          />
+          {result.became_leech && (
+            <LeechPanel
+              resolved={leechChoice}
+              busy={leech.isPending}
+              onChoose={(choice) => leech.mutate({ lemma: current.lemma, choice })}
+            />
+          )}
+        </>
+      )}
 
       <p className="mt-10 text-center text-xs tabular-nums text-muted-foreground">
         {position} / {totalCount}
@@ -284,13 +457,284 @@ export default function VocabularyPracticePage() {
   );
 }
 
+function Kbd({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd className="rounded border border-border bg-surface-sunken px-1 py-px font-mono text-[0.65rem] text-foreground">
+      {children}
+    </kbd>
+  );
+}
+
+/** `recall`'s prompt, unchanged from stage 1: the sentence with the gap
+ *  inline, or — the `definition` fallback — the word's own meaning
+ *  standing in for a sentence that doesn't exist. */
+function RecallPrompt({
+  before,
+  after,
+  cue,
+  definition,
+  value,
+  onChange,
+  onSubmit,
+  onExit,
+  disabled,
+  tone,
+  turnKey,
+}: {
+  before: string;
+  after: string;
+  cue: string;
+  definition: string | null;
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+  onExit: () => void;
+  disabled: boolean;
+  tone: string;
+  turnKey: string;
+}) {
+  return (
+    <>
+      {definition && (
+        <p className="text-center text-sm text-muted-foreground italic">
+          {definition}
+        </p>
+      )}
+      <p
+        className={cn(
+          "text-xl leading-relaxed text-foreground",
+          definition ? "mt-4 text-center" : "text-center sm:text-left",
+        )}
+      >
+        {before}
+        <GapField
+          // A fresh key per turn — including a requeued repeat of the same
+          // word — so the input remounts and `autoFocus` fires again
+          // rather than the browser leaving focus wherever it landed on
+          // the previous item.
+          key={turnKey}
+          autoFocus
+          // What the learner actually typed, kept on screen after
+          // grading rather than overwritten with the right answer — the
+          // take screen's own completion gap does the same (see
+          // `FormCompletionGroup`): the field says what you wrote, its
+          // colour says whether that was right, and the correct answer
+          // is printed in the reveal panel below rather than substituted
+          // into the box you typed in.
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              // Submitting only — advancing past a reveal is the
+              // document-level handler's job, so the same Enter press
+              // is never handled twice.
+              e.preventDefault();
+              onSubmit();
+            } else if (e.key === "Escape") {
+              // Stopped here, or the document listener exits a second
+              // time and Back has to be pressed twice to leave.
+              e.preventDefault();
+              e.stopPropagation();
+              onExit();
+            }
+          }}
+          disabled={disabled}
+          placeholder={cue}
+          aria-label={`Type the missing word. It starts with ${cue}.`}
+          tone={tone}
+          className="mx-1 w-40"
+        />
+        {after}
+      </p>
+    </>
+  );
+}
+
+/** `produce`'s prompt: the Uzbek meaning to write FROM, and the same gap
+ *  field `recall` uses — this direction is still "fill the gap", the gap
+ *  just has no sentence around it. */
+function ProducePrompt({
+  prompt,
+  value,
+  onChange,
+  onSubmit,
+  onExit,
+  disabled,
+  tone,
+  turnKey,
+}: {
+  prompt: PracticeProducePrompt;
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+  onExit: () => void;
+  disabled: boolean;
+  tone: string;
+  turnKey: string;
+}) {
+  return (
+    <div className="text-center">
+      {prompt.pos && (
+        <p className="text-xs text-muted-foreground italic">{prompt.pos}</p>
+      )}
+      <p className="mt-1 text-2xl font-semibold text-foreground">
+        {prompt.meaning_uz}
+      </p>
+      <div className="mt-6 flex justify-center">
+        <GapField
+          key={turnKey}
+          autoFocus
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              onSubmit();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              onExit();
+            }
+          }}
+          disabled={disabled}
+          placeholder={prompt.cue}
+          aria-label={`Write the word in English. It starts with ${prompt.cue}.`}
+          tone={tone}
+          className="w-48 text-center"
+        />
+      </div>
+    </div>
+  );
+}
+
+/** `recognise`'s prompt, both directions. Passive marks the word inside its
+ *  sentence (or shows the lemma alone — `before`/`after` are simply empty
+ *  then) and offers English definitions; active shows the Uzbek meaning to
+ *  translate and offers English lemmas. One component either way, because
+ *  the split is which fields the server filled in, not a different task. */
+function ChoicePrompt({
+  prompt,
+  selectedId,
+  correctText,
+  disabled,
+  onChoose,
+}: {
+  prompt: PracticeChoicePrompt;
+  selectedId: string | null;
+  /** `result.answer` once graded — the right option's own text, used only
+   *  to highlight it. `null` before an answer exists. */
+  correctText: string | null;
+  disabled: boolean;
+  onChoose: (id: string) => void;
+}) {
+  const active = prompt.shown_meaning_uz !== null;
+  return (
+    <div>
+      {active ? (
+        <div className="text-center">
+          <p className="mt-1 text-2xl font-semibold text-foreground">
+            {prompt.shown_meaning_uz}
+          </p>
+        </div>
+      ) : (
+        <p className="text-center text-xl leading-relaxed text-foreground sm:text-left">
+          {prompt.before}
+          <mark className="rounded bg-primary/15 px-1 text-foreground">
+            {prompt.target}
+          </mark>
+          {prompt.after}
+        </p>
+      )}
+      <div
+        role="radiogroup"
+        aria-label="Choose the right answer"
+        className="mt-6 grid grid-cols-1 gap-2 sm:grid-cols-2"
+      >
+        {prompt.options.map((option, i) => (
+          <OptionButton
+            key={option.id}
+            index={i}
+            option={option}
+            selected={option.id === selectedId}
+            correct={correctText != null && option.text === correctText}
+            graded={correctText != null}
+            disabled={disabled}
+            onChoose={onChoose}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OptionButton({
+  index,
+  option,
+  selected,
+  correct,
+  graded,
+  disabled,
+  onChoose,
+}: {
+  index: number;
+  option: PracticeOption;
+  selected: boolean;
+  correct: boolean;
+  graded: boolean;
+  disabled: boolean;
+  onChoose: (id: string) => void;
+}) {
+  const tone = !graded
+    ? "border-border hover:border-primary/50 hover:bg-surface-hover"
+    : correct
+      ? "border-correct bg-correct/10 text-correct"
+      : selected
+        ? "border-incorrect bg-incorrect/10 text-incorrect"
+        : "border-border text-muted-foreground";
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      disabled={disabled}
+      onClick={() => onChoose(option.id)}
+      className={cn(
+        "flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-left text-sm transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-default",
+        tone,
+      )}
+      // The same number the "1–4" hotkey uses, so a learner who has
+      // noticed the keys can also see which digit each button answers to.
+      aria-label={`${index + 1}. ${option.text}`}
+    >
+      <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-current/40 font-mono text-[0.7rem] tabular-nums">
+        {index + 1}
+      </span>
+      <span>{option.text}</span>
+    </button>
+  );
+}
+
 /** What one answer reveals — never sent with the prompt, always after.
- *  Order follows the brief exactly: verdict and the answer itself, then the
- *  word's usual sense, Uzbek under it, `Here: …` only where the passage's
- *  sense genuinely differs (see `meaning.ts`), then the way back to where
- *  it was met. */
-function Reveal({ result }: { result: PracticeAnswer }) {
+ *  Order follows the spec exactly for a passive `recognise` turn: the
+ *  right English definition first, the Uzbek meaning under it — the
+ *  opposite of `recall`/`produce`'s order, where the Uzbek leads because
+ *  it is the thing being written FROM. */
+function Reveal({
+  result,
+  exerciseType,
+  direction,
+  claimed,
+}: {
+  result: PracticeAnswer;
+  exerciseType: ExerciseType;
+  direction: Direction;
+  /** Whether THIS turn was the one attempt "I know this" bought — see the
+   *  spec's §4. Adds a headline the ordinary reveal doesn't have; nothing
+   *  else about the reveal changes. */
+  claimed: boolean;
+}) {
   const sense = meanings(result.word);
+  const passiveRecognise = exerciseType === "recognise" && direction === "passive";
   const verdictLabel =
     result.verdict === "correct"
       ? "Correct"
@@ -306,6 +750,14 @@ function Reveal({ result }: { result: PracticeAnswer }) {
 
   return (
     <div className="mt-6 rounded-xl border border-border bg-card px-5 py-4">
+      {claimed && (
+        // A state, not a verb — this line says what the word IS now, the
+        // same way `STATUS_LABEL` does everywhere else; "Marked as known"
+        // is the button that asked for this, not the outcome of asking.
+        <p className="text-sm font-semibold text-foreground">
+          {result.known ? STATUS_LABEL.known : IN_ROTATION_LABEL}
+        </p>
+      )}
       <p className={cn("text-sm font-semibold", verdictTone)}>
         {verdictLabel}
         <span className="ml-1.5 font-normal text-muted-foreground">
@@ -323,8 +775,17 @@ function Reveal({ result }: { result: PracticeAnswer }) {
         )}
         <CefrTag level={result.word.cefr_level} />
       </p>
-      <p className="mt-1 text-sm text-foreground">{sense.uz}</p>
-      <p className="text-xs text-muted-foreground">{sense.en}</p>
+      {passiveRecognise ? (
+        <>
+          <p className="mt-1 text-sm text-foreground">{sense.en}</p>
+          <p className="text-xs text-muted-foreground">{sense.uz}</p>
+        </>
+      ) : (
+        <>
+          <p className="mt-1 text-sm text-foreground">{sense.uz}</p>
+          <p className="text-xs text-muted-foreground">{sense.en}</p>
+        </>
+      )}
       {sense.here && (
         <p className="mt-1.5 border-l-2 border-border pl-2">
           <span className="block text-sm text-foreground">
@@ -348,6 +809,57 @@ function Reveal({ result }: { result: PracticeAnswer }) {
       <p className="mt-3 text-xs text-muted-foreground">
         Enter for the next word · Esc to stop
       </p>
+    </div>
+  );
+}
+
+/** The three choices a `became_leech` reveal offers (the spec's §5).
+ *  `resolved` gates the Enter-to-advance handler above — a learner cannot
+ *  fall through to the next word without picking one, since a leech is a
+ *  deliberate fork the app is asking them to take, not a reflex. */
+function LeechPanel({
+  resolved,
+  busy,
+  onChoose,
+}: {
+  resolved: LeechChoice | null;
+  busy: boolean;
+  onChoose: (choice: LeechChoice) => void;
+}) {
+  return (
+    <div className="mt-3 rounded-xl border border-attention/40 bg-attention/10 px-5 py-4">
+      <p className="text-sm text-foreground">
+        This word keeps coming back wrong. What now?
+      </p>
+      <div className="mt-2.5 flex flex-wrap gap-1.5">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={busy || resolved !== null}
+          onClick={() => onChoose("set_aside")}
+        >
+          Set aside for 30 days
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={busy || resolved !== null}
+          onClick={() => onChoose("see_context")}
+        >
+          See it where you met it
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={busy || resolved !== null}
+          onClick={() => onChoose("keep")}
+        >
+          Keep practising
+        </Button>
+      </div>
     </div>
   );
 }

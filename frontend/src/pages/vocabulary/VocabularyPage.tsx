@@ -1,70 +1,201 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Trash2 } from "lucide-react";
+import { BookOpen, Check } from "lucide-react";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
+import { daysUntil, timeUntil } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import { CefrTag } from "@/features/vocabulary/components/CefrTag";
-import { meanings } from "@/features/vocabulary/meaning";
-import { vocabularyApi } from "@/features/vocabulary/api";
-import type { SavedWord, SavedWords } from "@/features/vocabulary/types";
+import { CEFR_LEVELS, asLevel, type CefrLevel } from "@/features/vocabulary/cefr";
+import { DeleteWordsDialog } from "@/features/vocabulary/components/DeleteWordsDialog";
+import { ACTION_LABEL, STATUS_LABEL, STATUS_TONE } from "@/features/vocabulary/status";
+import {
+  scheduleDelete,
+  undoDelete,
+  useFlushPendingDeletesOnLeave,
+  usePendingDeletes,
+} from "@/features/vocabulary/pendingDelete";
+import { vocabularyApi, vocabularyWordsKey } from "@/features/vocabulary/api";
+import type {
+  BulkAction,
+  LeechChoice,
+  SavedWord,
+  WordStatus,
+} from "@/features/vocabulary/types";
 
 /**
- * The words this learner has kept, and every passage each was met in.
+ * The words this learner has kept — stage 2's rebuild of the stage 1 saved
+ * list, now with what the practice module has done to each one: its
+ * status, both directions' levels, and when it is next due.
  *
- * ## What this is, and what it is not
+ * ## Still not the practice module
  *
- * It is the list. It is not the spaced-repetition module — no scheduling, no
- * review queue, no "next due in three days" — and that absence is deliberate
- * rather than unfinished: scheduling is its own brief, and inventing an
- * interval here would be guessing at that design from the outside and then
- * having to migrate away from the guess.
+ * This is a list, not a queue — pressing a row does not start a session,
+ * and there is no "practise these now" here. That is `/vocabulary` and
+ * `/vocabulary/practice`; this is where a learner comes to ASK about a
+ * word rather than be asked one, which is also why bulk actions (mark
+ * known, set aside, restore, delete) live here and nowhere in the session.
  *
- * What it must do today is much smaller and not optional. The review page
- * offers a Save button on eighty-six words, and a Save button whose result
- * cannot be looked at is a button that quietly does nothing. This is where
- * the words land.
+ * ## Filters are client-side, on purpose
  *
- * ## One word, several contexts
- *
- * `spring` met in a passage about seasons and again in one about coils is
- * ONE word with two meanings, which is why the saved list deduplicates by
- * lemma and hangs each meeting off it. Both are printed, each with the
- * sentence it came from and a link back to the passage — that pair is the
- * whole argument for saving words from a paper rather than from a list: the
- * learner was there, and the sentence is the handle on the memory.
- *
- * The meanings are COPIES, taken at the moment of saving. A material can be
- * edited and re-glossed, and a saved word changing meaning underneath
- * somebody is worse than one that has aged.
+ * The whole list is one call (`GET /vocabulary/words`, the spec's API
+ * summary) and a few hundred rows is nothing to filter in the browser — a
+ * server round trip per filter tap would be the SLOWER page. Only `status`
+ * lives in the URL, because it is the one filter another screen needs to
+ * link to: the home screen's "N words set aside" line points here with
+ * `?status=suspended` rather than describing the filter in words and
+ * hoping the learner presses the right pill.
  */
+
+type StatusFilter = "all" | WordStatus;
+type DirectionFilter = "all" | "passiveOnly" | "active";
+
+const STATUS_FILTERS: StatusFilter[] = [
+  "all",
+  "learning",
+  "review",
+  "known",
+  "suspended",
+  "leech",
+];
+
 export default function VocabularyPage() {
   const qc = useQueryClient();
+  const [params, setParams] = useSearchParams();
+  const status = (params.get("status") as StatusFilter | null) ?? "all";
+  const [cefr, setCefr] = useState<"all" | CefrLevel>("all");
+  const [material, setMaterial] = useState<"all" | string>("all");
+  const [direction, setDirection] = useState<DirectionFilter>("all");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Bulk delete's own count, held apart from `selected.size` so the dialog's
+  // "Delete 12 words?" doesn't relabel itself if the selection changes while
+  // it's open. Null closes it.
+  const [deleteDialogCount, setDeleteDialogCount] = useState<number | null>(null);
+  const pendingDeletes = usePendingDeletes();
+  // Keeps this page registered as a place "Removed · Undo" can be shown for
+  // as long as it's mounted — see `pendingDelete.ts` for why the word page
+  // shares this registration rather than each page owning its own timer.
+  useFlushPendingDeletesOnLeave();
+
   const { data, isPending, isError } = useQuery({
-    queryKey: ["vocabulary", "saved"],
-    queryFn: () => vocabularyApi.saved(),
+    queryKey: vocabularyWordsKey,
+    queryFn: () => vocabularyApi.words(),
   });
 
-  const forget = useMutation({
-    mutationFn: (lemma: string) => vocabularyApi.forget(lemma),
-    onSuccess: (_result, lemma) => {
-      qc.setQueryData<SavedWords>(["vocabulary", "saved"], (was) =>
-        was
-          ? {
-              total: was.total - 1,
-              words: was.words.filter((word) => word.lemma !== lemma),
-            }
-          : was,
-      );
+  function setStatus(next: StatusFilter) {
+    setParams(
+      (prev) => {
+        const copy = new URLSearchParams(prev);
+        if (next === "all") copy.delete("status");
+        else copy.set("status", next);
+        return copy;
+      },
+      { replace: true },
+    );
+  }
+
+  const materials = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const word of data?.words ?? []) {
+      for (const ctx of word.contexts) {
+        if (!seen.has(ctx.material_id)) seen.set(ctx.material_id, ctx.material_title);
+      }
+    }
+    return [...seen.entries()];
+  }, [data]);
+
+  const filtered = useMemo(() => {
+    if (!data) return [];
+    return data.words.filter((word) => {
+      if (status !== "all" && word.status !== status) return false;
+      if (cefr !== "all" && asLevel(word.cefr_level) !== cefr) return false;
+      if (material !== "all" && !word.contexts.some((c) => c.material_id === material))
+        return false;
+      if (direction === "passiveOnly" && word.active_level !== null) return false;
+      if (direction === "active" && word.active_level === null) return false;
+      return true;
+    });
+  }, [data, status, cefr, material, direction]);
+
+  function toggleSelected(lemma: string) {
+    setSelected((was) => {
+      const next = new Set(was);
+      if (next.has(lemma)) next.delete(lemma);
+      else next.add(lemma);
+      return next;
+    });
+  }
+
+  const allVisibleSelected =
+    filtered.length > 0 && filtered.every((w) => selected.has(w.lemma));
+
+  function toggleSelectAll() {
+    setSelected((was) => {
+      if (allVisibleSelected) {
+        const next = new Set(was);
+        for (const w of filtered) next.delete(w.lemma);
+        return next;
+      }
+      return new Set([...was, ...filtered.map((w) => w.lemma)]);
+    });
+  }
+
+  const bulk = useMutation({
+    mutationFn: (action: BulkAction) =>
+      vocabularyApi.bulkWords({ lemmas: [...selected], action }),
+    onSuccess: (result, action) => {
+      setSelected(new Set());
+      setDeleteDialogCount(null);
+      void qc.invalidateQueries({ queryKey: vocabularyWordsKey });
+      // Every count the practice home screen shows (due, set-aside,
+      // totals) can move on any of these four verbs, not just `known` and
+      // `suspend` — a restored word re-enters `due_now` the moment its
+      // schedule is recomputed.
+      void qc.invalidateQueries({ queryKey: ["vocabulary", "practice", "summary"] });
+      toast({
+        message: `${result.changed} ${result.changed === 1 ? "word" : "words"} ${
+          action === "forget" ? "deleted" : "updated"
+        }`,
+        kind: "success",
+      });
     },
     onError: (e) => toast(getErrorMessage(e)),
   });
 
-  if (isPending) return <SavedSkeleton />;
+  // The Delete button's own branch, not the bulk endpoint's: exactly one
+  // selected word gets the cheap answer (the row becomes "Removed · Undo",
+  // no request yet — `pendingDelete.ts`); more than one opens
+  // `DeleteWordsDialog`, which is what actually calls `bulk.mutate("forget")`
+  // once it's confirmed.
+  function handleDeleteClick() {
+    if (selected.size === 1) {
+      const [lemma] = selected;
+      scheduleDelete(lemma);
+      setSelected(new Set());
+    } else if (selected.size > 1) {
+      setDeleteDialogCount(selected.size);
+    }
+  }
 
-  if (isError) {
+  const leech = useMutation({
+    mutationFn: ({ lemma, choice }: { lemma: string; choice: LeechChoice }) =>
+      vocabularyApi.leech(lemma, choice),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: vocabularyWordsKey });
+      // Same reason as the bulk actions above: a leech choice can move a
+      // word out of `due_now` (set aside) or back into it (keep), so the
+      // practice home's counts have to be told too.
+      void qc.invalidateQueries({ queryKey: ["vocabulary", "practice", "summary"] });
+    },
+    onError: (e) => toast(getErrorMessage(e)),
+  });
+
+  if (isPending) return <ListSkeleton />;
+
+  if (isError || !data) {
     return (
       <div className="mx-auto w-full max-w-2xl py-16">
         <h1 className="text-2xl font-semibold text-foreground">Vocabulary</h1>
@@ -77,184 +208,396 @@ export default function VocabularyPage() {
 
   return (
     <div className="mx-auto w-full max-w-2xl pb-24">
-      <header className="pt-2 pb-6">
+      <header className="pt-2 pb-4">
         <h1 className="text-2xl font-semibold text-foreground">Vocabulary</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           {data.total > 0
-            ? `${data.total} ${data.total === 1 ? "word" : "words"} you kept, with the passage each came from.`
+            ? `${data.total} ${data.total === 1 ? "word" : "words"} you kept.`
             : "Words you keep from a passage collect here."}
         </p>
       </header>
 
+      {data.total > 0 && (
+        <div className="flex flex-col gap-2.5">
+          <PillRow
+            label="Status"
+            value={status}
+            options={STATUS_FILTERS.map((s) => [s, s === "all" ? "All" : STATUS_LABEL[s]] as const)}
+            onChange={setStatus}
+          />
+          <div className="flex flex-wrap items-center gap-2.5">
+            <PillRow
+              label="Level"
+              value={cefr}
+              options={[["all", "All"] as const, ...CEFR_LEVELS.map((l) => [l, l] as const)]}
+              onChange={setCefr}
+            />
+            <PillRow
+              label="Direction"
+              value={direction}
+              options={[
+                ["all", "All"] as const,
+                ["passiveOnly", "Passive only"] as const,
+                ["active", "Also active"] as const,
+              ]}
+              onChange={setDirection}
+            />
+          </div>
+          {materials.length > 1 && (
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              Source
+              <select
+                value={material}
+                onChange={(e) => setMaterial(e.target.value)}
+                className="rounded-md border border-border bg-surface-sunken px-2 py-1 text-xs text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                <option value="all">All materials</option>
+                {materials.map(([id, title]) => (
+                  <option key={id} value={id}>
+                    {title}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+      )}
+
       {data.total === 0 ? (
         <Empty />
       ) : (
-        <ul className="space-y-3">
-          {data.words.map((word) => (
-            <Word
-              key={word.lemma}
-              word={word}
-              busy={forget.isPending}
-              onForget={() => forget.mutate(word.lemma)}
+        <>
+          {selected.size > 0 && (
+            <BulkBar
+              count={selected.size}
+              busy={bulk.isPending}
+              onKnown={() => bulk.mutate("known")}
+              onSuspend={() => bulk.mutate("suspend")}
+              onRestore={() => bulk.mutate("restore")}
+              onDelete={handleDeleteClick}
             />
-          ))}
-        </ul>
+          )}
+
+          <DeleteWordsDialog
+            count={deleteDialogCount}
+            deleting={bulk.isPending}
+            onCancel={() => setDeleteDialogCount(null)}
+            onConfirm={() => bulk.mutate("forget")}
+          />
+
+          {filtered.length > 0 ? (
+            <ul className="mt-3 space-y-2">
+              <li>
+                {/* A `<label>` wrapping a real `<input>` gets this for
+                 *  free; `Checkbox` is a styled `<button>` (see its own
+                 *  comment) so the click has to be wired onto the row
+                 *  itself too, or only the small square would answer. */}
+                <label
+                  onClick={toggleSelectAll}
+                  className="flex items-center gap-2 px-1 py-1 text-xs text-muted-foreground"
+                >
+                  <Checkbox checked={allVisibleSelected} onChange={toggleSelectAll} />
+                  Select all ({filtered.length})
+                </label>
+              </li>
+              {filtered.map((word) =>
+                pendingDeletes.has(word.lemma) ? (
+                  <RemovedRow
+                    key={word.lemma}
+                    lemma={word.lemma}
+                    onUndo={() => undoDelete(word.lemma)}
+                  />
+                ) : (
+                  <Word
+                    key={word.lemma}
+                    word={word}
+                    selected={selected.has(word.lemma)}
+                    onToggleSelected={() => toggleSelected(word.lemma)}
+                    onLeech={(choice) => leech.mutate({ lemma: word.lemma, choice })}
+                    leechBusy={leech.isPending}
+                  />
+                ),
+              )}
+            </ul>
+          ) : (
+            <p className="mt-8 text-center text-xs text-muted-foreground">
+              No words match these filters.
+            </p>
+          )}
+        </>
       )}
     </div>
   );
+}
+
+function PillRow<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: readonly (readonly [T, string])[];
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className="flex flex-wrap items-center gap-1.5 text-xs"
+    >
+      <span className="text-muted-foreground">{label}</span>
+      {options.map(([opt, text]) => {
+        const on = value === opt;
+        return (
+          <button
+            key={opt}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onChange(opt)}
+            className={cn(
+              "rounded-full px-2.5 py-1 font-medium transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+              on
+                ? "bg-primary/20 text-primary"
+                : "bg-surface-hover text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {text}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** A checkbox drawn the app's own way rather than the browser's — a square
+ *  that matches the tick `ReviewVocabulary`'s Save button already wears,
+ *  so "this row is selected" and "this word is saved" read as the same
+ *  kind of fact rather than two different widgets doing the same job. */
+function Checkbox({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  label?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={(e) => {
+        e.stopPropagation();
+        onChange();
+      }}
+      className={cn(
+        "flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+        checked
+          ? "border-primary bg-primary/20 text-primary"
+          : "border-border text-transparent hover:border-primary/50",
+      )}
+    >
+      <Check className="size-3.5" aria-hidden />
+    </button>
+  );
+}
+
+/** The bulk action bar. Delete no longer confirms IN the bar — pressing it
+ *  with exactly one word selected defers straight to "Removed · Undo" (no
+ *  question to ask), and with more than one it opens `DeleteWordsDialog`;
+ *  either way `onDelete` is the same press, and the caller is the one that
+ *  knows which of the two `count` calls for. */
+function BulkBar({
+  count,
+  busy,
+  onKnown,
+  onSuspend,
+  onRestore,
+  onDelete,
+}: {
+  count: number;
+  busy: boolean;
+  onKnown: () => void;
+  onSuspend: () => void;
+  onRestore: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-surface-sunken px-3 py-2">
+      <p className="text-sm text-foreground">{count} selected</p>
+      <div className="flex flex-wrap gap-1.5">
+        <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onKnown}>
+          {ACTION_LABEL.markKnown}
+        </Button>
+        <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onSuspend}>
+          Set aside
+        </Button>
+        <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onRestore}>
+          {ACTION_LABEL.returnToRotation}
+        </Button>
+        <Button
+          type="button"
+          variant="destructive"
+          size="sm"
+          disabled={busy}
+          onClick={onDelete}
+        >
+          Delete
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** The word's own meaning, said once. Prefers the field stage 2 put on the
+ *  word itself; falls back to a context that has one, exactly as stage 1's
+ *  saved list already did — a word kept before either field existed has
+ *  neither, and prints nothing rather than guessing. */
+function wordMeaning(word: SavedWord): { en: string; uz: string } {
+  if (word.meaning_core_en || word.meaning_core_uz) {
+    return { en: word.meaning_core_en, uz: word.meaning_core_uz };
+  }
+  const core = word.contexts.find((c) => c.meaning_core_en) ?? word.contexts[0];
+  return {
+    en: core?.meaning_core_en || core?.meaning_en || "",
+    uz: core?.meaning_core_uz || core?.meaning_uz || "",
+  };
+}
+
+/** The earlier of the two directions' due dates — the date this row would
+ *  next pull the learner back in, whichever card gets there first. */
+function earliestDue(word: SavedWord): string | null {
+  const dates = [word.passive_due, word.active_due].filter(
+    (d): d is string => Boolean(d),
+  );
+  if (!dates.length) return null;
+  return dates.reduce((a, b) => (new Date(a) < new Date(b) ? a : b));
 }
 
 function Word({
   word,
-  busy,
-  onForget,
+  selected,
+  onToggleSelected,
+  onLeech,
+  leechBusy,
 }: {
   word: SavedWord;
-  busy: boolean;
-  onForget: () => void;
+  selected: boolean;
+  onToggleSelected: () => void;
+  onLeech: (choice: LeechChoice) => void;
+  leechBusy: boolean;
 }) {
-  const [hovered, setHovered] = useState(false);
-  // The first context carries the headline meaning. It is the one they met
-  // first, and where a word has only one context — which is nearly all of
-  // them — it is the only one.
-  const [first, ...rest] = word.contexts;
-  // The word's own meaning, said ONCE above everything the passages had to
-  // say about it. That is the shape the card wants: `spring` met in a
-  // passage about seasons and again in one about coils is one word, and
-  // repeating "a season of the year" over each meeting would be the card
-  // arguing with its own headline.
-  //
-  // Taken from the first context that has one, because it is a fact about
-  // the word rather than about any meeting, and two contexts phrasing it
-  // differently is two runs of the same question and not a disagreement
-  // worth printing twice. Absent on a word saved before the field existed
-  // and not yet enriched, and then each meeting prints its own meaning as
-  // it always did.
-  const core = word.contexts.find((one) => one.meaning_core_en) ?? null;
+  const meaning = wordMeaning(word);
+  const due = earliestDue(word);
 
   return (
     <li
-      className="rounded-xl border border-border px-5 py-4"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      className={cn(
+        "rounded-xl border px-4 py-3 transition-colors duration-fast",
+        selected ? "border-primary/50 bg-primary/5" : "border-border",
+      )}
     >
       <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
+        <Checkbox
+          checked={selected}
+          onChange={onToggleSelected}
+          label={`Select ${word.lemma}`}
+        />
+        <Link
+          to={`/vocabulary/words/${encodeURIComponent(word.lemma)}`}
+          className="min-w-0 flex-1 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
           <p className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
             <span className="text-base font-semibold text-foreground">
               {word.lemma}
             </span>
-            {first?.pos && (
-              <span className="text-xs text-muted-foreground italic">
-                {first.pos}
-              </span>
+            {word.pos && (
+              <span className="text-xs text-muted-foreground italic">{word.pos}</span>
             )}
-            <CefrTag level={first?.cefr_level} />
-            {rest.length > 0 && (
+            <CefrTag level={word.cefr_level} />
+            <span className={cn("text-[0.7rem] font-medium", STATUS_TONE[word.status])}>
+              {STATUS_LABEL[word.status]}
+            </span>
+            {word.active_level && (
               <span className="text-[0.7rem] text-muted-foreground">
-                · {word.contexts.length} passages
+                · {word.active_paused ? "active, paused" : "also active"}
               </span>
             )}
           </p>
-          {core && (
-            <>
-              <p className="mt-1 text-sm text-foreground">
-                {core.meaning_core_uz}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {core.meaning_core_en}
-              </p>
-            </>
+          {(meaning.uz || meaning.en) && (
+            <p className="mt-0.5 text-sm text-foreground">
+              {meaning.uz}
+              {meaning.en && (
+                <span className="ml-1.5 text-xs text-muted-foreground">
+                  {meaning.en}
+                </span>
+              )}
+            </p>
           )}
-          {first && <Sense context={first} headline={!core} />}
-          {rest.map((context) => (
-            <Sense
-              key={context.material_id}
-              context={context}
-              headline={!core}
-              separated
-            />
-          ))}
-        </div>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={onForget}
-          title="Take it off your list"
-          aria-label={`Remove ${word.lemma}`}
-          className={cn(
-            "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors duration-fast hover:bg-surface-hover hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-            !hovered && "opacity-0",
-          )}
-        >
-          <Trash2 className="size-3.5" aria-hidden />
-        </button>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {word.contexts.length} {word.contexts.length === 1 ? "context" : "contexts"}
+            {" · "}
+            {word.status === "known"
+              ? STATUS_LABEL.known
+              : word.status === "suspended"
+                ? `back ${daysUntil(word.suspended_until)}`
+                : word.status === "leech"
+                  ? "stuck — choose below"
+                  : due
+                    ? `next review ${timeUntil(due)}`
+                    : "not yet scheduled"}
+          </p>
+        </Link>
       </div>
+
+      {word.status === "leech" && (
+        <div className="mt-2.5 flex flex-wrap gap-1.5 pl-8">
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            disabled={leechBusy}
+            onClick={() => onLeech("set_aside")}
+          >
+            Set aside 30 days
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            disabled={leechBusy}
+            onClick={() => onLeech("keep")}
+          >
+            Keep practising
+          </Button>
+        </div>
+      )}
     </li>
   );
 }
 
-/** One meeting: what it meant THERE where that is a different thing from
- *  what the word usually means, the sentence, and the way back.
- *
- *  The usual meaning leads here as it does everywhere else, and this is the
- *  screen where it matters most: a card somebody studies from. A learner
- *  revising `learn` off a passage about artificial intelligence had one
- *  line to go on — "a computer process of finding patterns in data" — and
- *  nothing on the page to tell them it was the passage talking. See
- *  `features/vocabulary/meaning.ts`.
- *
- *  Uzbek above English, which is this page's own order and the opposite of
- *  the review's: the review is read beside an English passage with the
- *  English still in the reader's eye, and this is read cold. */
-function Sense({
-  context,
-  headline,
-  separated = false,
-}: {
-  context: SavedWord["contexts"][number];
-  /** Whether this meeting has to print the word's meaning itself. False
-   *  where the card has already said it once above — see `Word` — and true
-   *  for a word saved before the usual meaning existed, which has nothing
-   *  else to show. */
-  headline: boolean;
-  separated?: boolean;
-}) {
-  const sense = meanings(context);
+/** What a deleted row becomes for the few seconds it can still be undone —
+ *  same slot in the list the word's own row held, so nothing above or below
+ *  it moves. Pressing Undo just calls `undoDelete`; nothing was ever sent to
+ *  the server, so there is nothing else to reverse. */
+function RemovedRow({ lemma, onUndo }: { lemma: string; onUndo: () => void }) {
   return (
-    <div className={cn(separated && "mt-3 border-t border-border/60 pt-2.5")}>
-      {headline && (
-        <>
-          <p className="mt-1 text-sm text-foreground">{sense.uz}</p>
-          <p className="text-xs text-muted-foreground">{sense.en}</p>
-        </>
-      )}
-      {sense.here && (
-        <p className="mt-1 border-l-2 border-border pl-2">
-          <span className="block text-sm text-foreground">
-            <span className="text-muted-foreground">Here: </span>
-            {sense.here.uz}
-          </span>
-          <span className="block text-xs text-muted-foreground">
-            {sense.here.en}
-          </span>
-        </p>
-      )}
-      {context.example && (
-        <p className="mt-1.5 border-l-2 border-border pl-2 text-xs leading-relaxed text-muted-foreground italic">
-          {context.example}
-        </p>
-      )}
-      {context.material_title && (
-        <Link
-          to={`/reading/${context.material_id}`}
-          className="mt-1.5 inline-flex items-center gap-1.5 text-[0.7rem] text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <BookOpen className="size-3" aria-hidden />
-          {context.material_title}
-        </Link>
-      )}
-    </div>
+    <li className="flex items-center gap-1.5 rounded-xl border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
+      <span>Removed</span>
+      <span aria-hidden>·</span>
+      <button
+        type="button"
+        onClick={onUndo}
+        aria-label={`Undo removing ${lemma}`}
+        className="font-medium text-primary transition-colors hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      >
+        Undo
+      </button>
+    </li>
   );
 }
 
@@ -263,7 +606,7 @@ function Sense({
  *  being. */
 function Empty() {
   return (
-    <div className="rounded-xl border border-dashed border-border px-5 py-10 text-center">
+    <div className="mt-4 rounded-xl border border-dashed border-border px-5 py-10 text-center">
       <p className="text-sm text-muted-foreground">
         Sit a reading passage, and the words worth learning from it are waiting
         on the review page afterwards — with what each one means in that
@@ -282,23 +625,24 @@ function Empty() {
 
 /** The page's shape, held open while it loads. Built from the real
  *  component's own class strings — `frontend/CLAUDE.md`. */
-function SavedSkeleton() {
+function ListSkeleton() {
   return (
     <SkeletonBlock
       label="Loading your words"
       className="mx-auto w-full max-w-2xl pb-24"
     >
-      <header className="pt-2 pb-6">
+      <header className="pt-2 pb-4">
         <h1 className="text-2xl font-semibold">
           <Skeleton className="inline-block h-[0.8em] w-40" />
         </h1>
         <p className="mt-1 text-sm">
-          <Skeleton className="inline-block h-[0.8em] w-72 max-w-full" />
+          <Skeleton className="inline-block h-[0.8em] w-52" />
         </p>
       </header>
-      <ul className="space-y-3">
+      <Skeleton className="h-6 w-full max-w-md rounded-full" />
+      <ul className="mt-3 space-y-2">
         {[0, 1, 2].map((row) => (
-          <li key={row} className="rounded-xl border border-border px-5 py-4">
+          <li key={row} className="rounded-xl border border-border px-4 py-3">
             <p className="text-base">
               <Skeleton className="inline-block h-[0.8em] w-28" />
             </p>
@@ -306,7 +650,7 @@ function SavedSkeleton() {
               <Skeleton className="inline-block h-[0.8em] w-52" />
             </p>
             <p className="text-xs">
-              <Skeleton className="inline-block h-[0.8em] w-64 max-w-full" />
+              <Skeleton className="inline-block h-[0.8em] w-40" />
             </p>
           </li>
         ))}

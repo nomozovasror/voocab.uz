@@ -1,13 +1,20 @@
 import { api } from "@/lib/api";
 import type {
+  BulkWordsRequest,
+  BulkWordsResponse,
+  LeechChoice,
+  LeechChoiceResponse,
   Lookup,
   PracticeAnswer,
   PracticeAnswerRequest,
+  PracticeItem,
+  PracticeMode,
   PracticeSession,
   PracticeSummary,
   SavedWords,
   VocabularyList,
   VocabularySettings,
+  WordDetail,
 } from "@/features/vocabulary/types";
 
 /**
@@ -39,8 +46,22 @@ export const vocabularyKey = (materialId: string) => ["vocabulary", materialId];
  *  line and the home screen's due count are the same fact and must update
  *  together, or going back to `/vocabulary` after a session shows the
  *  numbers it just made stale. */
-export const practiceSummaryKey = (tz: string) =>
-  ["vocabulary", "practice", "summary", tz] as const;
+export const practiceSummaryKey = (tz: string, mode?: PracticeMode) =>
+  mode
+    ? (["vocabulary", "practice", "summary", tz, mode] as const)
+    : (["vocabulary", "practice", "summary", tz] as const);
+
+/** The words list's cache key — one row per lemma, read by the list page,
+ *  the word page's own list-invalidation and `ReviewVocabulary`'s
+ *  `savedEarlier` check nowhere near it (that one reads a material's own
+ *  vocabulary, a different endpoint entirely — see `vocabularyKey`). */
+export const vocabularyWordsKey = ["vocabulary", "words"] as const;
+
+/** One word's own page. Kept apart from the list's key rather than a
+ *  sub-key of it, because invalidating the list must NOT throw away a word
+ *  page's `history`, which the list response never carries. */
+export const wordDetailKey = (lemma: string) =>
+  ["vocabulary", "words", "detail", lemma] as const;
 
 export const vocabularyApi = {
   /** One tapped word, in this passage's sense.
@@ -92,12 +113,40 @@ export const vocabularyApi = {
       json: { material_id: materialId, lemmas },
     }),
 
-  saved: () => api.get<SavedWords>("/api/vocabulary/words"),
+  /** Every word this learner has kept, extended in stage 2 with status,
+   *  the ladder's own state for both directions and the leech-lapse count
+   *  — see `SavedWord`. Still one call for the whole list; filters are
+   *  client-side (the spec's API summary), because the list is a few
+   *  hundred rows at most and a server round trip per filter tap would be
+   *  the slower page for no reason. */
+  words: () => api.get<SavedWords>("/api/vocabulary/words"),
+
+  /** One word's own page: the same row plus its review history, newest
+   *  first. 404s for a lemma that is not this learner's — the server never
+   *  says whose it is instead. */
+  wordDetail: (lemma: string) =>
+    api.get<WordDetail>(`/api/vocabulary/words/${encodeURIComponent(lemma)}`),
 
   forget: (lemma: string) =>
     api.delete<void>(`/api/vocabulary/words/${encodeURIComponent(lemma)}`),
 
-  // --- Practice (stage 1) ----------------------------------------------
+  /** Mark known, set aside, restore or forget several words at once — the
+   *  words list's and the word page's bulk actions share this one call,
+   *  since a single word is just a `lemmas` array of one. */
+  bulkWords: (payload: BulkWordsRequest) =>
+    api.post<BulkWordsResponse>("/api/vocabulary/words/bulk", {
+      json: payload,
+    }),
+
+  /** Resolving a leech — the three choices of the spec's §5, offered from
+   *  the session's reveal, the word page and the words list alike. */
+  leech: (lemma: string, choice: LeechChoice) =>
+    api.post<LeechChoiceResponse>(
+      `/api/vocabulary/words/${encodeURIComponent(lemma)}/leech`,
+      { json: { choice } },
+    ),
+
+  // --- Practice ----------------------------------------------------------
   //
   // `tz` travels on every call that reasons about "today" — the daily time
   // budget resets at midnight in the LEARNER's own IANA zone, not the
@@ -108,10 +157,16 @@ export const vocabularyApi = {
 
   /** The home screen's numbers: what's due, what fits in today's time
    *  budget, and the running totals. Cheap and side-effect-free — reading
-   *  it never advances anything, unlike `session`. */
-  practiceSummary: (tz: string) =>
+   *  it never advances anything, unlike `session`.
+   *
+   *  `mode` narrows the count to one task — the mode picker's own preview
+   *  of what pressing Start with that mode chosen would deliver, computed
+   *  the server's own way so the two numbers cannot drift (the spec's
+   *  §7). Omitted for `auto`, which is also the default the server assumes
+   *  from a caller that has never heard of modes. */
+  practiceSummary: (tz: string, mode?: PracticeMode) =>
     api.get<PracticeSummary>("/api/vocabulary/practice/summary", {
-      params: { tz },
+      params: { tz, mode: mode && mode !== "auto" ? mode : undefined },
     }),
 
   /** Builds today's queue, now — reviews first, most overdue first, then as
@@ -121,11 +176,19 @@ export const vocabularyApi = {
    *  until an answer is posted, so reloading the practice page mid-session
    *  costs a re-plan, not a lost place. `materialId` narrows to one
    *  material's words; omitted for the home screen's "Start" button, which
-   *  practises everything due. */
-  practiceSession: (tz: string, materialId?: string) =>
+   *  practises everything due. `mode` is the spec's §7 forced mode — ONE
+   *  task, taken only from cards already at that level; it never skips the
+   *  ladder. */
+  practiceSession: (
+    tz: string,
+    opts: { materialId?: string; mode?: PracticeMode } = {},
+  ) =>
     api.post<PracticeSession>("/api/vocabulary/practice/session", {
       params: { tz },
-      json: materialId ? { material_id: materialId } : {},
+      json: {
+        ...(opts.materialId ? { material_id: opts.materialId } : {}),
+        ...(opts.mode && opts.mode !== "auto" ? { mode: opts.mode } : {}),
+      },
     }),
 
   /** One card's answer. The verdict, the FSRS rating it produced, and
@@ -137,14 +200,26 @@ export const vocabularyApi = {
       json: payload,
     }),
 
+  /** "I know this", pressed on a new word's first appearance (the spec's
+   *  §4). Swaps in a `recall` item for the one attempt that decides it —
+   *  never the item already on screen, so a passive `recognise` turn does
+   *  not have to pretend it was something else. */
+  knownCheck: (wordId: string) =>
+    api.post<PracticeItem>("/api/vocabulary/practice/known-check", {
+      json: { word_id: wordId },
+    }),
+
   settings: () => api.get<VocabularySettings>("/api/vocabulary/settings"),
 
-  /** Stage 1 only ever changes `daily_minutes`; the other fields are read
-   *  back from the server's response rather than round-tripped through
-   *  this call, so a client that has never seen `direction` cannot send it
-   *  back wrong. */
-  updateSettings: (dailyMinutes: VocabularySettings["daily_minutes"]) =>
+  /** The settings page's one call. A plain replace, not a per-field patch —
+   *  `daily_minutes` and `direction` are both required on the wire, because
+   *  that is how the settings screen presents itself: one form with three
+   *  fields, saved together, never a lone minutes picker sending its own
+   *  value and leaving the other two for the server to guess at. */
+  updateSettings: (
+    settings: Pick<VocabularySettings, "daily_minutes" | "direction" | "exercise_types">,
+  ) =>
     api.put<VocabularySettings>("/api/vocabulary/settings", {
-      json: { daily_minutes: dailyMinutes },
+      json: settings,
     }),
 };

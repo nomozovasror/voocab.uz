@@ -484,12 +484,19 @@ that makes people quit Anki.
   `FormCompletionGroup` follows on the take screen: the field says what you
   wrote, its border says whether that was right, and the correct form is
   printed in the reveal panel instead of substituted into the box.
-- **Enter is read on the field, not on the document.** While answering it
-  submits; once a result exists it advances — a plain closure over the
-  render's own state, so there is no stale-listener problem to guard
-  against. Esc is a document-level listener as well as the field's own
-  handler, because after a reveal the learner may have moved focus to the
-  source-material link, and exiting has to work from there too.
+- **Enter submits on the field; it advances on the document.** Stage 1 did
+  both from the field's own `onKeyDown`, which stopped working the moment
+  `recognise` arrived with no field to attach it to. Now the field's Enter
+  only calls `submit()`, and a single document-level listener does
+  `advance()` once a result exists — one rule reachable whichever of the
+  three prompts is on screen, rather than three components each guessing
+  whether they are the one with focus. The two never double-fire: the
+  field's own handler only acts while `!result`, so by the time the
+  document listener would also see the same keypress there is nothing
+  there yet for it to act on. Esc is a document-level listener as well as
+  the field's own handler, because after a reveal the learner may have
+  moved focus to the source-material link, and exiting has to work from
+  there too.
 - **The end screen's joke is picked from what happened, never at the
   learner.** `jokes.ts` takes a small stats shape (how many words, how many
   struggled, which one struggled most) and returns one line from a pool —
@@ -504,3 +511,147 @@ that makes people quit Anki.
   changed, not the ones that were true when the page first opened. Two
   separate keys computed the same way in two files is how one of them ends
   up stale.
+
+## Stage 2: the ladder, both directions, and the words that fight back
+
+Stage 1 shipped one exercise (`recall`, `passive`) because that was enough
+to prove the module worked. Stage 2 is what makes it the thing the plan
+actually describes: a card that gets HARDER as a learner proves themselves,
+a second direction for writing rather than only reading, and the two
+screens (`/vocabulary/words`, `/vocabulary/words/:lemma`) that let somebody
+ask about a word instead of only being asked one.
+
+- **The level is stored, not derived.** `SavedWord.passive_level` and
+  `active_level` say which TASK the ladder is currently asking for
+  (`recognise`/`recall`, `recognise`/`produce`); FSRS still schedules WHEN,
+  the level only ever picks WHAT. Promotion and demotion are the server's
+  own arithmetic (the spec's §1) — the client only ever renders whichever
+  `exercise_type` a `PracticeItem` arrives with, and never infers one from
+  a stability number itself.
+- **`PracticePrompt` is four shapes behind one field, and each got its own
+  interface rather than a shared one with an optional-everything grab bag.**
+  `PracticeSentencePrompt` and `PracticeDefinitionPrompt` look almost
+  identical to `PracticeChoicePrompt` and `PracticeProducePrompt` on the
+  wire, but keeping each `kind` a SINGLE literal (rather than, say, one
+  interface answering to `"sentence" | "definition"`) is what lets
+  `VocabularyPracticePage.tsx`'s `if (kind === "sentence" || kind ===
+  "definition") … else if (kind === "choice") … else …` narrow cleanly — the
+  one-interface version compiled, but TypeScript quietly stopped narrowing
+  the FINAL branch, and `ProducePrompt` was typed to accept a shape it
+  could never actually receive nor coincidentally the recall one.
+- **`recognise` is one component for both directions, not two.** Passive
+  fills `before`/`target`/`after` and offers English definitions; active
+  leaves those empty, fills `shown_meaning_uz`, and offers English lemmas.
+  `ChoicePrompt` branches on `shown_meaning_uz !== null` rather than being
+  told the direction directly, because that is the one fact that actually
+  decides what to draw — a second `direction` prop would be a second way
+  the two could disagree.
+- **Keys 1–4 answer; they do not merely select.** There is no "highlight,
+  then confirm" step on a `recognise` turn — pressing `2` or clicking the
+  second option submits it, same as Enter submits a typed answer. A
+  confirm step would be a second decision for a task that is already the
+  easiest of the three.
+- **"I know this" is a swap, not a second item.** Pressing it (`0` — chosen
+  because it can never collide with the four option keys, and because it
+  is never captured while a text field has focus, so a `produce` answer
+  that happens to start with a digit still types normally) calls
+  `POST /practice/known-check` and replaces `queue[0]` in place. The next
+  `submit()` carries `claim_known: true` and clears the flag immediately
+  afterward — one attempt, exactly as the spec's §4 says, even if that
+  attempt comes back Again and the SAME word is later requeued as an
+  ordinary `recall` turn with no claim attached.
+- **A `became_leech` reveal blocks Enter until one of its three buttons is
+  pressed.** `LeechPanel`'s choices are not a courtesy dismiss — a leech is
+  the app surfacing a real decision (the spec's §5), and falling through to
+  the next word by reflex would be the one screen that most needs a
+  deliberate answer offering none. "See it where you met it" is the one
+  choice that LEAVES the session (`navigate` to the word page) rather than
+  continuing it; the other two call `advance()` themselves once the mutation
+  lands, rather than waiting for the ordinary Enter path.
+- **The reveal's meaning order flips for exactly one case.** Passive
+  `recognise` shows the right English definition first and the Uzbek
+  meaning under it, per the spec — the opposite of every other exercise's
+  reveal, where Uzbek leads because it is what the learner was writing
+  FROM. `Reveal` computes this from `exerciseType === "recognise" &&
+  direction === "passive"` rather than from anything server-sent, since
+  nothing else about the payload distinguishes it.
+- **The words list rebuilds `VocabularyPage.tsx` on the SAME endpoint**
+  (`GET /vocabulary/words`), not a new one — stage 1's saved list and
+  stage 2's practice-aware list are the same rows, extended. Filters
+  (status, CEFR, source material, direction) are client state; only
+  `status` lives in the URL, because it is the one filter the home
+  screen's "N words set aside" line needs to LINK to
+  (`/vocabulary/words?status=suspended`) rather than describe in words.
+- **Deleting ONE word never asks; deleting several always does — two
+  different answers to "are you sure", each sized to what it is answering
+  for.** A single word gets `pendingDelete.ts`: the row becomes "Removed ·
+  Undo" at once (`RemovedRow`), and the DELETE itself waits about six
+  seconds, sent only if nobody presses Undo — cheaper than a dialog for a
+  mistake that costs nothing to reverse in the window where it can still be
+  reversed. More than one word opens `DeleteWordsDialog` (the
+  `components/studio/DeleteMaterialDialog.tsx` pattern, named to a count)
+  and calls the ordinary `bulkWords("forget")` at once on confirming — a
+  batch a reader cannot see all of on screen needs the question asked
+  before anything happens, not an undo they would have to notice six things
+  disappeared to use.
+  - **The timer lives in a module, not a component's state**, because the
+    word page's own Delete button has to survive the very thing it does:
+    navigate to the list. A `setTimeout` in a hook dies with the component
+    that set it; one held in `pendingDelete.ts` keeps counting down
+    whichever of the two pages — or neither — is on screen, and the list
+    picks the same pending lemma back up from there rather than from a prop
+    it was never handed.
+  - **Both pages register as a place "Removed · Undo" could still be
+    shown** (`useFlushPendingDeletesOnLeave`), and the DELETE is sent
+    early — before the six seconds are up — the moment neither is mounted.
+    Leaving the words list for the word page (or back) doesn't trigger
+    this: both are registered at once for the beat the router takes to
+    swap them, which is what tells the flush apart from someone leaving
+    the pages that could ever offer Undo at all.
+- **The word page (`/vocabulary/words/:lemma`) is `WordDetail`: a
+  `SavedWord` plus `history`.** It is reached from the list, and — per the
+  spec's §5 — is also "See it where you met it"'s destination from a
+  leech's reveal, so a learner sent there mid-session lands on the exact
+  page the list would have taken them to, not a special mid-session view
+  of the same information.
+- **Daily minutes moved from `/vocabulary` to `/vocabulary/settings`.**
+  Stage 1's home screen carried its own minutes picker; the spec's list of
+  what the stage 2 home screen shows (mode picker, the set-aside line, a
+  link to Settings) does not mention it, and the settings screen the plan
+  names lists it as one of its three fields. One control for it rather
+  than two that would have to agree on every write.
+- **The mode picker is NOT the settings default.** `exercise_types` in
+  Settings is a standing preference; the home screen's Mixed/Recognise/
+  Fill the gap/Write picker is "bugun faqat yozish" — a choice about TODAY,
+  held in component state and sent as a query param
+  (`/vocabulary/practice?mode=recall`) rather than written anywhere. A
+  forced mode still only ever pulls cards already AT that level — it never
+  skips a rung on the ladder (the spec's §7).
+- **A STATE is a noun; an ACTION is a verb, and the two are never the same
+  word.** `STATUS_LABEL.known` ("Known") is what a row says a word IS; the
+  button that puts it there says what pressing it DOES
+  (`ACTION_LABEL.markKnown`, "Mark as known"). Same split for the other
+  direction — the known-check reveal's outcome line says "Known" or "In
+  rotation" (`IN_ROTATION_LABEL`, since `learning`/`review` are both just
+  "in rotation" to a learner and neither is what that line is claiming),
+  never "Marked as known" or "Back in rotation", which are the BUTTON's
+  words appearing on a line that is reporting a fact, not repeating an
+  instruction. `ACTION_LABEL.returnToRotation` ("Return to rotation")
+  replaced "Restore" for the same reason: "Restore" names the wire verb,
+  "Return to rotation" names what a learner would say happened.
+- **A set-aside date is always in days, on purpose.** `daysUntil` (not
+  `timeUntil`) is what the words list reads for `suspended_until` — "back
+  in 12d", never "tomorrow" or "in 40m". `timeUntil`'s reach for a finer
+  unit close up is right for a next-review estimate, read minute to minute
+  while a session is live; a set-aside date is set weeks out and read once,
+  and switching units as it counts down would make one date read as three
+  different clocks.
+- **`active_paused` is a display fact, not a fourth level.** Turning off
+  `direction: "both"` in Settings does not reset an active card already in
+  progress — it pauses it, server-side, no confirmation asked here because
+  none is needed for something reversible with one click back. The list
+  and the word page print "Paused" over whichever level the active card was
+  actually at (`activeLevelLabel`/`"also active"` otherwise), and Settings'
+  own toggle prints `active_in_progress` under itself while it is nonzero
+  and the toggle is on — the one number that tells a learner there is
+  anything to pause before they find out by pausing it.

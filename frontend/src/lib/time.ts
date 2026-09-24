@@ -72,3 +72,20 @@ export function timeUntil(iso: string | null): string {
   if (diffMs < 2 * day) return "tomorrow";
   return `in ${Math.round(diffMs / day)}d`;
 }
+
+/** "in 12d", "in 2d" — a set-aside word's return date, and ALWAYS in days.
+ *  `timeUntil` reaches for "tomorrow" and "in 40m" on purpose, because a
+ *  next-review estimate is read minute to minute; a set-aside date is set
+ *  weeks out and read once, so switching units as it counts down (minutes,
+ *  then hours, then "tomorrow") would make one date look like three
+ *  different clocks. Never a negative count: a stale `suspended_until` the
+ *  server has already lapsed is "today", not "-1d". */
+export function daysUntil(iso: string | null): string {
+  if (!iso) return "—";
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "—";
+  const diffMs = then - Date.now();
+  const day = 24 * 60 * 60 * 1000;
+  if (diffMs <= 0) return "today";
+  return `in ${Math.max(1, Math.round(diffMs / day))}d`;
+}
