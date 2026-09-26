@@ -201,9 +201,20 @@ export interface SavedWord {
    *  before either card has been reviewed once. */
   passive_stability: number | null;
   active_stability: number | null;
-  /** Lapses countable since `leech_reset_at` — see the spec's §5 — not the
-   *  lifetime count, which the server keeps but does not send. */
+  /** The combined, direction-agnostic lapse count the FSRS bookkeeping
+   *  already kept — countable since `leech_reset_at`, not lifetime. This is
+   *  the figure the leech threshold itself reads; the word page's own
+   *  "lapses" under each direction (`passive_lapses`/`active_lapses` below)
+   *  is a different, LIFETIME count and the two are not the same number. */
   lapses: number;
+  /** Lifetime lapse counts, split by direction — the word page's §8
+   *  per-direction figure, always true that
+   *  `passive_lapses + active_lapses === lapses`. Counted per direction
+   *  because the leech threshold itself is: a passive leech never stops the
+   *  active card, and a shared counter would make one direction's trouble
+   *  read as the other's. */
+  passive_lapses: number;
+  active_lapses: number;
   reps: number;
   /** Set for `suspended`, and past its date the word is already back in
    *  rotation server-side — resolved lazily, not by a worker. A stale
@@ -287,13 +298,6 @@ export type LeechChoiceResponse = SavedWord;
  * count — see the stage 1 spec for why a daily word quota is the thing that
  * makes people quit Anki.
  */
-
-/** `auto` lets the ladder pick, exactly as stage 1 always did. The other
- *  three are "bugun faqat yozish" (the brief's own example) — ONE task,
- *  taken only from cards whose current level already matches it, so a
- *  forced mode narrows the queue rather than skipping rungs on the
- *  ladder — see the spec's §7. */
-export type PracticeMode = "auto" | ExerciseType;
 
 /** The home screen's numbers. Nothing here is a queue — `due_now` and
  *  `new_available` are what COULD be practised; `planned_reviews` and
@@ -447,6 +451,15 @@ export interface PracticeAnswerRequest {
    *  be obliged to send it; this client always does, since every item it
    *  ever holds already carries one. */
   planned_exercise?: ExerciseType;
+  /** True exactly when this is the SAME item re-shown at the end of the
+   *  session after an Again — the spec's §1 requeue. It answers at the task
+   *  it was served, is not a fallback, and changes neither the word's level
+   *  nor its schedule beyond FSRS's own reaction to the rating; the demotion
+   *  an Again earns is felt at the NEXT encounter, not this one. The client
+   *  sets it the moment it pushes the same item onto the queue's end
+   *  (`VocabularyPracticePage`'s `advance`), never on the item's first
+   *  appearance. */
+  requeued: boolean;
 }
 
 /** The word as this answer's context knew it — a `Glossed` (see
@@ -490,6 +503,25 @@ export interface PracticeAnswer {
   /** The level of the card just practised, AFTER this answer — what the
    *  ladder promoted or demoted it to, in the direction just played. */
   level: PassiveLevel | ActiveLevel;
+  /** The word's newest context that has a sentence, sent whenever
+   *  `became_leech` is true — "See it in context" reads this to print the
+   *  sentence with the word marked, right in the session card, rather than
+   *  sending the learner away to fetch it. `null` when the word has no
+   *  context with a sentence to show (§5/§6 of the spec). Absent (not just
+   *  null) outside a `became_leech` answer — nothing here needs it. */
+  leech_context: PracticeLeechContext | null;
+}
+
+/** What "See it in context" prints: the sentence, the word marked inside it,
+ *  and the material it came from. Mirrors the shape a `recognise` prompt's
+ *  sentence fields already use (`before`/`target`/`after`) rather than
+ *  inventing a second way to say "here is a marked sentence". */
+export interface PracticeLeechContext {
+  before: string;
+  target: string;
+  after: string;
+  material_id: string;
+  material_title: string;
 }
 
 /** `direction` dropped `"active"` on its own here — stage 1 offered it as a
@@ -498,11 +530,16 @@ export interface PracticeAnswer {
 export interface VocabularySettings {
   daily_minutes: 5 | 10 | 15 | 20;
   direction: "passive" | "both";
-  /** `null` = the ladder picks (`auto`). A non-empty subset otherwise — the
-   *  server refuses an empty array rather than accept a setting that would
-   *  serve nothing, and the settings page enforces the same rule by falling
-   *  back to `null` the moment the last type is deselected. */
-  exercise_types: ExerciseType[] | null;
+  /** `null` = Automatic, the ladder picks. Otherwise a ONE-element array —
+   *  still a list on the wire (`VocabularySettingsIn.exercise_types: list[Level]
+   *  | None`, `min_length=1, max_length=1`), but never more than the one
+   *  task the fixes brief's addendum makes this: a manual choice is
+   *  "practise only this today", not "practise any of these". A word with
+   *  nothing at that task simply has nothing to offer; see `EXERCISE_LABEL`
+   *  and the settings/home/practice pages for the "No words are ready for
+   *  this yet." case that follows from picking one nothing currently
+   *  matches. */
+  exercise_types: [ExerciseType] | null;
   /** Read back but never written from this settings page — stage 3's, and
    *  absent from the UI per the spec. */
   pronunciation: boolean;

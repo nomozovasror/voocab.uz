@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
 import { vocabularyApi } from "@/features/vocabulary/api";
-import { EXERCISE_LABEL } from "@/features/vocabulary/status";
+import { AUTOMATIC_LABEL, EXERCISE_LABEL } from "@/features/vocabulary/status";
 import type { ExerciseType, VocabularySettings } from "@/features/vocabulary/types";
 
 const MINUTES_OPTIONS: VocabularySettings["daily_minutes"][] = [5, 10, 15, 20];
@@ -159,14 +159,15 @@ export default function VocabularySettingsPage() {
       </section>
 
       <section className="mt-4 rounded-xl border border-border px-4 py-3">
-        <p className="text-sm text-foreground">Default exercises</p>
+        <p className="text-sm text-foreground">Exercise type</p>
         <p className="text-xs text-muted-foreground">
-          Auto lets the ladder pick. Choosing one or more limits every
-          session to just those, until changed back.
+          Automatic lets the ladder pick. Choosing one limits every session
+          to just that task, taken only from words already at that rung —
+          never skipping ahead — until changed back.
         </p>
         <div
-          role="group"
-          aria-label="Default exercise types"
+          role="radiogroup"
+          aria-label="Exercise type"
           className="mt-3 flex flex-wrap gap-1.5"
         >
           <ExercisePill
@@ -174,31 +175,18 @@ export default function VocabularySettingsPage() {
             disabled={update.isPending}
             onClick={() => patch({ exercise_types: null })}
           >
-            Auto
+            {AUTOMATIC_LABEL}
           </ExercisePill>
-          {EXERCISE_TYPES.map((type) => {
-            const chosen = data.exercise_types ?? [];
-            const on = chosen.includes(type);
-            return (
-              <ExercisePill
-                key={type}
-                on={on}
-                disabled={update.isPending}
-                onClick={() => {
-                  const next = on
-                    ? chosen.filter((one) => one !== type)
-                    : [...chosen, type];
-                  // Falls back to Auto the moment the last type is
-                  // deselected — the server refuses an empty array, and a
-                  // control that could produce a setting the server would
-                  // reject is a control lying about what it lets you do.
-                  patch({ exercise_types: next.length ? next : null });
-                }}
-              >
-                {EXERCISE_LABEL[type]}
-              </ExercisePill>
-            );
-          })}
+          {EXERCISE_TYPES.map((type) => (
+            <ExercisePill
+              key={type}
+              on={data.exercise_types?.[0] === type}
+              disabled={update.isPending}
+              onClick={() => patch({ exercise_types: [type] })}
+            >
+              {EXERCISE_LABEL[type]}
+            </ExercisePill>
+          ))}
         </div>
       </section>
     </div>
@@ -219,7 +207,8 @@ function ExercisePill({
   return (
     <button
       type="button"
-      aria-pressed={on}
+      role="radio"
+      aria-checked={on}
       disabled={disabled}
       onClick={onClick}
       className={cn(

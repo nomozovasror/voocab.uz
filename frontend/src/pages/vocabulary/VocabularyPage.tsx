@@ -1,9 +1,15 @@
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Check } from "lucide-react";
+import { BookOpen, Check, EllipsisVertical } from "lucide-react";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
 import { daysUntil, timeUntil } from "@/lib/time";
@@ -11,7 +17,13 @@ import { cn } from "@/lib/utils";
 import { CefrTag } from "@/features/vocabulary/components/CefrTag";
 import { CEFR_LEVELS, asLevel, type CefrLevel } from "@/features/vocabulary/cefr";
 import { DeleteWordsDialog } from "@/features/vocabulary/components/DeleteWordsDialog";
-import { ACTION_LABEL, STATUS_LABEL, STATUS_TONE } from "@/features/vocabulary/status";
+import { StatusChip } from "@/features/vocabulary/components/StatusChip";
+import {
+  ACTION_LABEL,
+  STATUS_CHIP_LABEL,
+  type StatusChip as StatusChipValue,
+  statusChip,
+} from "@/features/vocabulary/status";
 import {
   scheduleDelete,
   undoDelete,
@@ -19,12 +31,7 @@ import {
   usePendingDeletes,
 } from "@/features/vocabulary/pendingDelete";
 import { vocabularyApi, vocabularyWordsKey } from "@/features/vocabulary/api";
-import type {
-  BulkAction,
-  LeechChoice,
-  SavedWord,
-  WordStatus,
-} from "@/features/vocabulary/types";
+import type { BulkAction, SavedWord } from "@/features/vocabulary/types";
 
 /**
  * The words this learner has kept — stage 2's rebuild of the stage 1 saved
@@ -50,13 +57,15 @@ import type {
  * hoping the learner presses the right pill.
  */
 
-type StatusFilter = "all" | WordStatus;
+/** The four chips a learner sees (F7's §7 table), not the five wire
+ *  statuses — `learning`/`review` filter as one "In rotation" pill, same as
+ *  they print as one chip on the row. */
+type StatusFilter = "all" | StatusChipValue;
 type DirectionFilter = "all" | "passiveOnly" | "active";
 
 const STATUS_FILTERS: StatusFilter[] = [
   "all",
-  "learning",
-  "review",
+  "in_rotation",
   "known",
   "suspended",
   "leech",
@@ -110,7 +119,7 @@ export default function VocabularyPage() {
   const filtered = useMemo(() => {
     if (!data) return [];
     return data.words.filter((word) => {
-      if (status !== "all" && word.status !== status) return false;
+      if (status !== "all" && statusChip(word.status) !== status) return false;
       if (cefr !== "all" && asLevel(word.cefr_level) !== cefr) return false;
       if (material !== "all" && !word.contexts.some((c) => c.material_id === material))
         return false;
@@ -180,14 +189,14 @@ export default function VocabularyPage() {
     }
   }
 
-  const leech = useMutation({
-    mutationFn: ({ lemma, choice }: { lemma: string; choice: LeechChoice }) =>
-      vocabularyApi.leech(lemma, choice),
+  // The per-row menu's own mutation, apart from `bulk` above even though it
+  // calls the same endpoint — `bulk` is scoped to `selected` and clears it
+  // on success, which a single row's own menu has no business touching.
+  const rowAction = useMutation({
+    mutationFn: ({ lemma, action }: { lemma: string; action: BulkAction }) =>
+      vocabularyApi.bulkWords({ lemmas: [lemma], action }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: vocabularyWordsKey });
-      // Same reason as the bulk actions above: a leech choice can move a
-      // word out of `due_now` (set aside) or back into it (keep), so the
-      // practice home's counts have to be told too.
       void qc.invalidateQueries({ queryKey: ["vocabulary", "practice", "summary"] });
     },
     onError: (e) => toast(getErrorMessage(e)),
@@ -222,7 +231,9 @@ export default function VocabularyPage() {
           <PillRow
             label="Status"
             value={status}
-            options={STATUS_FILTERS.map((s) => [s, s === "all" ? "All" : STATUS_LABEL[s]] as const)}
+            options={STATUS_FILTERS.map(
+              (s) => [s, s === "all" ? "All" : STATUS_CHIP_LABEL[s]] as const,
+            )}
             onChange={setStatus}
           />
           <div className="flex flex-wrap items-center gap-2.5">
@@ -313,8 +324,9 @@ export default function VocabularyPage() {
                     word={word}
                     selected={selected.has(word.lemma)}
                     onToggleSelected={() => toggleSelected(word.lemma)}
-                    onLeech={(choice) => leech.mutate({ lemma: word.lemma, choice })}
-                    leechBusy={leech.isPending}
+                    onAction={(action) => rowAction.mutate({ lemma: word.lemma, action })}
+                    actionBusy={rowAction.isPending}
+                    onDelete={() => scheduleDelete(word.lemma)}
                   />
                 ),
               )}
@@ -434,7 +446,7 @@ function BulkBar({
           {ACTION_LABEL.markKnown}
         </Button>
         <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onSuspend}>
-          Set aside
+          {ACTION_LABEL.setAside}
         </Button>
         <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onRestore}>
           {ACTION_LABEL.returnToRotation}
@@ -478,18 +490,26 @@ function earliestDue(word: SavedWord): string | null {
   return dates.reduce((a, b) => (new Date(a) < new Date(b) ? a : b));
 }
 
+/** One row: word, part of speech, CEFR chip, usual meaning, next review —
+ *  exactly the fixes brief's §7 list. Actions live in the menu at the row's
+ *  end, never inline, so the status chip (a fact) and the menu (an
+ *  invitation to act) cannot be mistaken for each other. Resolving a leech
+ *  word's three-way fork is not one of these four — that lives on the word
+ *  page (F5), which this row already links to. */
 function Word({
   word,
   selected,
   onToggleSelected,
-  onLeech,
-  leechBusy,
+  onAction,
+  actionBusy,
+  onDelete,
 }: {
   word: SavedWord;
   selected: boolean;
   onToggleSelected: () => void;
-  onLeech: (choice: LeechChoice) => void;
-  leechBusy: boolean;
+  onAction: (action: Exclude<BulkAction, "forget">) => void;
+  actionBusy: boolean;
+  onDelete: () => void;
 }) {
   const meaning = wordMeaning(word);
   const due = earliestDue(word);
@@ -519,9 +539,7 @@ function Word({
               <span className="text-xs text-muted-foreground italic">{word.pos}</span>
             )}
             <CefrTag level={word.cefr_level} />
-            <span className={cn("text-[0.7rem] font-medium", STATUS_TONE[word.status])}>
-              {STATUS_LABEL[word.status]}
-            </span>
+            <StatusChip status={word.status} />
             {word.active_level && (
               <span className="text-[0.7rem] text-muted-foreground">
                 · {word.active_paused ? "active, paused" : "also active"}
@@ -539,43 +557,51 @@ function Word({
             </p>
           )}
           <p className="mt-1 text-xs text-muted-foreground">
-            {word.contexts.length} {word.contexts.length === 1 ? "context" : "contexts"}
-            {" · "}
             {word.status === "known"
-              ? STATUS_LABEL.known
+              ? STATUS_CHIP_LABEL.known
               : word.status === "suspended"
                 ? `back ${daysUntil(word.suspended_until)}`
                 : word.status === "leech"
-                  ? "stuck — choose below"
+                  ? "stuck — open to choose"
                   : due
                     ? `next review ${timeUntil(due)}`
                     : "not yet scheduled"}
           </p>
         </Link>
-      </div>
 
-      {word.status === "leech" && (
-        <div className="mt-2.5 flex flex-wrap gap-1.5 pl-8">
-          <Button
-            type="button"
-            variant="outline"
-            size="xs"
-            disabled={leechBusy}
-            onClick={() => onLeech("set_aside")}
-          >
-            Set aside 30 days
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="xs"
-            disabled={leechBusy}
-            onClick={() => onLeech("keep")}
-          >
-            Keep practising
-          </Button>
-        </div>
-      )}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              title={`${word.lemma} actions`}
+              aria-label={`${word.lemma} actions`}
+              className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors duration-fast hover:bg-surface-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              <EllipsisVertical className="size-4" aria-hidden />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            {word.status !== "known" && (
+              <DropdownMenuItem disabled={actionBusy} onClick={() => onAction("known")}>
+                {ACTION_LABEL.markKnown}
+              </DropdownMenuItem>
+            )}
+            {(word.status === "known" || word.status === "suspended") && (
+              <DropdownMenuItem disabled={actionBusy} onClick={() => onAction("restore")}>
+                {ACTION_LABEL.returnToRotation}
+              </DropdownMenuItem>
+            )}
+            {word.status !== "suspended" && (
+              <DropdownMenuItem disabled={actionBusy} onClick={() => onAction("suspend")}>
+                {ACTION_LABEL.setAside}
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem variant="destructive" onClick={onDelete}>
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </li>
   );
 }

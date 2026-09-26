@@ -8,13 +8,13 @@ import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
 import { fmtClock, timeAgo, timeUntil } from "@/lib/time";
 import { CefrTag } from "@/features/vocabulary/components/CefrTag";
+import { StatusChip } from "@/features/vocabulary/components/StatusChip";
 import { meanings } from "@/features/vocabulary/meaning";
 import {
   ACTION_LABEL,
+  LEECH_LABEL,
   RATING_LABEL,
   RATING_TONE,
-  STATUS_LABEL,
-  STATUS_TONE,
   activeLevelLabel,
   passiveLevelLabel,
 } from "@/features/vocabulary/status";
@@ -123,9 +123,7 @@ export default function VocabularyWordPage() {
         <h1 className="text-2xl font-semibold text-foreground">{word.lemma}</h1>
         {word.pos && <span className="text-sm text-muted-foreground italic">{word.pos}</span>}
         <CefrTag level={word.cefr_level} />
-        <span className={cn("text-xs font-medium", STATUS_TONE[word.status])}>
-          {STATUS_LABEL[word.status]}
-        </span>
+        <StatusChip status={word.status} />
       </header>
 
       {(meaning.uz || meaning.en) && (
@@ -150,7 +148,7 @@ export default function VocabularyWordPage() {
               disabled={leech.isPending}
               onClick={() => leech.mutate("set_aside")}
             >
-              Set aside for 30 days
+              {LEECH_LABEL.set_aside}
             </Button>
             <Button
               type="button"
@@ -159,7 +157,7 @@ export default function VocabularyWordPage() {
               disabled={leech.isPending}
               onClick={() => leech.mutate("see_context")}
             >
-              Seen it below — keep going
+              {LEECH_LABEL.see_context}
             </Button>
             <Button
               type="button"
@@ -168,7 +166,7 @@ export default function VocabularyWordPage() {
               disabled={leech.isPending}
               onClick={() => leech.mutate("keep")}
             >
-              Keep practising
+              {LEECH_LABEL.keep}
             </Button>
           </div>
         </section>
@@ -180,12 +178,14 @@ export default function VocabularyWordPage() {
           level={passiveLevelLabel(word.passive_level)}
           due={word.passive_due}
           stability={word.passive_stability}
+          lapses={word.passive_lapses}
         />
         <DirectionState
           title="Active · producing"
           level={word.active_paused ? "Paused" : activeLevelLabel(word.active_level)}
           due={word.active_level ? word.active_due : null}
           stability={word.active_level ? word.active_stability : null}
+          lapses={word.active_level ? word.active_lapses : null}
         />
       </section>
 
@@ -283,19 +283,23 @@ function wordHeadline(word: SavedWord): { en: string; uz: string } {
   };
 }
 
-/** One direction's card, in plain words rather than a wire token — "not
- *  started", a level, when it's next due, how many days of stability it
- *  has earned. The spec's own phrase for this block. */
+/** One direction's card, in plain words rather than a wire token — level,
+ *  next review, lapses, per the fixes brief's §8. `lapses` is `null` for the
+ *  active side before it has started at all (there is nothing to have
+ *  lapsed yet), printed differently from "0 lapses", which is a card that
+ *  HAS started and simply never has. */
 function DirectionState({
   title,
   level,
   due,
   stability,
+  lapses,
 }: {
   title: string;
   level: string;
   due: string | null;
   stability: number | null;
+  lapses: number | null;
 }) {
   return (
     <div className="rounded-xl border border-border px-3.5 py-3">
@@ -309,21 +313,33 @@ function DirectionState({
           {Math.round(stability)} {Math.round(stability) === 1 ? "day" : "days"} stability
         </p>
       )}
+      {lapses != null && (
+        <p className="text-xs text-muted-foreground">
+          {lapses} {lapses === 1 ? "lapse" : "lapses"}
+        </p>
+      )}
     </div>
   );
 }
 
-/** One meeting: the sentence, `Here:` only where the sense genuinely
- *  differs (see `meaning.ts`), and the way back to the passage. */
+/** One meeting: the sentence, its date, `Here:` only where the sense
+ *  genuinely differs (see `meaning.ts`), and the way back to the passage —
+ *  every context the fixes brief's §8 asks for, in the order a learner
+ *  reads them. */
 function Context({ context }: { context: SavedWord["contexts"][number] }) {
   const sense = meanings(context);
   return (
     <li className="rounded-lg border border-border/60 px-3.5 py-2.5">
-      {context.example && (
-        <p className="text-sm leading-relaxed text-foreground/90 italic">
-          {context.example}
-        </p>
-      )}
+      <div className="flex items-baseline justify-between gap-2">
+        {context.example && (
+          <p className="text-sm leading-relaxed text-foreground/90 italic">
+            {context.example}
+          </p>
+        )}
+        <span className="shrink-0 text-[0.7rem] text-muted-foreground">
+          {timeAgo(context.created_at)}
+        </span>
+      </div>
       {sense.here && (
         <p className="mt-1.5 border-l-2 border-border pl-2">
           <span className="block text-sm text-foreground">

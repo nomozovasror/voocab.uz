@@ -1,8 +1,8 @@
 import type {
   ActiveLevel,
   ExerciseType,
+  LeechChoice,
   PassiveLevel,
-  PracticeMode,
   WordStatus,
 } from "@/features/vocabulary/types";
 
@@ -15,62 +15,83 @@ import type {
  * either — only what a teacher would call it out loud.
  */
 
-export const STATUS_LABEL: Record<WordStatus, string> = {
-  learning: "Learning",
-  review: "Review",
-  known: "Known",
-  suspended: "Set aside",
-  leech: "Leech",
-};
-
 /** A STATE and the ACTION that produces it are named differently on
- *  purpose, everywhere both appear (the words list's bulk bar, the word
- *  page's own buttons, the practice session's known-check reveal): a status
- *  line reads "Known" the way it reads "Learning" or "Leech" — a noun for
- *  what the word IS — and a button reads as a verb for what pressing it
- *  DOES. `STATUS_LABEL.known` already serves the state; these two are the
- *  buttons, and the ordinary (non-known, non-suspended) state that
- *  `WordStatus` has no name of its own for, because `learning`/`review` are
- *  both just "in rotation" to a learner deciding whether to leave a word
- *  alone. */
+ *  purpose, everywhere both appear (the words list's row menu and bulk bar,
+ *  the word page's own buttons, the practice session's known-check reveal):
+ *  a status line reads "Known" the way it reads "In rotation" or "Leech" —
+ *  a noun for what the word IS — and a button reads as a verb for what
+ *  pressing it DOES. */
 export const ACTION_LABEL = {
   markKnown: "Mark as known",
   returnToRotation: "Return to rotation",
+  setAside: "Set aside",
 } as const;
 
 /** The state `ACTION_LABEL.returnToRotation` restores TO — not a
  *  `WordStatus` (a restored word could land in `learning` or `review`
- *  depending on its schedule), and not printed from `STATUS_LABEL` for that
- *  reason. Used wherever a status line needs to say "back to normal"
- *  without claiming to know which of the two it will be. */
+ *  depending on its schedule), and not printed from a per-`WordStatus` table
+ *  for that reason. Used wherever a status line needs to say "back to
+ *  normal" without claiming to know which of the two it will be. */
 export const IN_ROTATION_LABEL = "In rotation";
 
+/**
+ * The four chips a learner actually sees, per the fixes brief's §7 table —
+ * `learning` and `review` are both just "in rotation" to somebody deciding
+ * whether to leave a word alone, and showing them as two different chips
+ * would be a distinction the FSRS engine cares about and a learner never
+ * asked for.
+ */
+export type StatusChip = "known" | "in_rotation" | "suspended" | "leech";
+
+export function statusChip(status: WordStatus): StatusChip {
+  if (status === "learning" || status === "review") return "in_rotation";
+  return status;
+}
+
+export const STATUS_CHIP_LABEL: Record<StatusChip, string> = {
+  known: "Known",
+  in_rotation: IN_ROTATION_LABEL,
+  suspended: "Set aside",
+  leech: "Leech",
+};
+
 /** Never `correct`/`incorrect` — those are the review's verdict colours,
- *  and a status is not a grade. `known` borrows `correct` anyway, on
- *  purpose: it is the one status that IS an unambiguous win, unlike
- *  `learning`/`review`, which are just where a word happens to be. */
-export const STATUS_TONE: Record<WordStatus, string> = {
-  learning: "text-muted-foreground",
-  review: "text-foreground",
-  known: "text-correct",
-  suspended: "text-muted-foreground",
+ *  and a status is not a grade. A grey scale instead, ordered by how much
+ *  attention the word wants: `known` is dim (done, nothing to see),
+ *  `in_rotation` is the page's own text colour (ordinary), `suspended` is
+ *  dimmer still (deliberately set aside, quietest of the four), and `leech`
+ *  alone takes the accent — the one status that is genuinely asking for a
+ *  decision. Never green/red (verdicts) and never a CEFR colour (those name
+ *  difficulty, not standing). */
+export const STATUS_CHIP_TONE: Record<StatusChip, string> = {
+  known: "text-muted-foreground",
+  in_rotation: "text-foreground",
+  suspended: "text-muted-foreground/60",
   leech: "text-attention",
 };
 
-/** The three tasks, named the way the brief names them rather than by their
- *  wire value — "Fill the gap" is what a learner is doing, `recall` is what
- *  the ladder calls it. Shared between the home screen's mode picker and
- *  the settings page's default so the two screens never call one task two
- *  things. */
+/** The settings page's single manual choice, named exactly as the fixes
+ *  brief's §2/§9 want them said out loud — not the wire token, and not the
+ *  stage 1 mode picker's "Fill the gap"/"Write" either, since that picker is
+ *  gone and this is the only place these three names are said now. */
 export const EXERCISE_LABEL: Record<ExerciseType, string> = {
   recognise: "Recognise",
-  recall: "Fill the gap",
-  produce: "Write",
+  recall: "Recall",
+  produce: "Produce",
 };
 
-export const MODE_LABEL: Record<PracticeMode, string> = {
-  auto: "Mixed",
-  ...EXERCISE_LABEL,
+/** The manual choice's fourth option — not an `ExerciseType`, so it is not
+ *  part of `EXERCISE_LABEL`. */
+export const AUTOMATIC_LABEL = "Automatic";
+
+/** The three choices a `became_leech` reveal — or a leech word's own page —
+ *  offers, named exactly as the fixes brief's §5 wants them said. Never a
+ *  fourth "suspend forever": a leech word is only ever moved by one of
+ *  these three, chosen by the learner. */
+export const LEECH_LABEL: Record<LeechChoice, string> = {
+  set_aside: "Set aside",
+  see_context: "See it in context",
+  keep: "Keep going",
 };
 
 /** FSRS's own four grades, named the way the reveal never has to (the

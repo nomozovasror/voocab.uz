@@ -615,29 +615,26 @@ ask about a word instead of only being asked one.
   page the list would have taken them to, not a special mid-session view
   of the same information.
 - **Daily minutes moved from `/vocabulary` to `/vocabulary/settings`.**
-  Stage 1's home screen carried its own minutes picker; the spec's list of
-  what the stage 2 home screen shows (mode picker, the set-aside line, a
-  link to Settings) does not mention it, and the settings screen the plan
-  names lists it as one of its three fields. One control for it rather
-  than two that would have to agree on every write.
-- **The mode picker is NOT the settings default.** `exercise_types` in
-  Settings is a standing preference; the home screen's Mixed/Recognise/
-  Fill the gap/Write picker is "bugun faqat yozish" — a choice about TODAY,
-  held in component state and sent as a query param
-  (`/vocabulary/practice?mode=recall`) rather than written anywhere. A
-  forced mode still only ever pulls cards already AT that level — it never
-  skips a rung on the ladder (the spec's §7).
+  Stage 1's home screen carried its own minutes picker; the fixes brief's
+  F1 list of what the home screen shows (today's amount, Start, the
+  set-aside line, links to the words list and Settings) does not mention
+  it, and the settings screen lists it as one of its three fields. One
+  control for it rather than two that would have to agree on every write.
+- **There is no mode picker any more — see "Stage 2 fixes" below.** This
+  paragraph described a per-session Mixed/Recognise/Fill the gap/Write
+  picker on the home screen; the fixes brief's F1 removed it outright once
+  the addendum made the settings choice a single exercise type rather than
+  a subset, which left nothing for a second, per-session override to mean.
 - **A STATE is a noun; an ACTION is a verb, and the two are never the same
-  word.** `STATUS_LABEL.known` ("Known") is what a row says a word IS; the
-  button that puts it there says what pressing it DOES
+  word.** `STATUS_CHIP_LABEL.known` ("Known") is what a row's chip says a
+  word IS; the button that puts it there says what pressing it DOES
   (`ACTION_LABEL.markKnown`, "Mark as known"). Same split for the other
-  direction — the known-check reveal's outcome line says "Known" or "In
-  rotation" (`IN_ROTATION_LABEL`, since `learning`/`review` are both just
-  "in rotation" to a learner and neither is what that line is claiming),
-  never "Marked as known" or "Back in rotation", which are the BUTTON's
-  words appearing on a line that is reporting a fact, not repeating an
-  instruction. `ACTION_LABEL.returnToRotation` ("Return to rotation")
-  replaced "Restore" for the same reason: "Restore" names the wire verb,
+  direction — the known-check reveal's outcome line says "Known" (and, per
+  the fixes brief's F4, says NOTHING at all on a failed check — see below)
+  never "Marked as known", which is the BUTTON's words appearing on a line
+  that is reporting a fact, not repeating an instruction.
+  `ACTION_LABEL.returnToRotation` ("Return to rotation") replaced "Restore"
+  for the same reason: "Restore" names the wire verb,
   "Return to rotation" names what a learner would say happened.
 - **A set-aside date is always in days, on purpose.** `daysUntil` (not
   `timeUntil`) is what the words list reads for `suspended_until` — "back
@@ -655,3 +652,107 @@ ask about a word instead of only being asked one.
   own toggle prints `active_in_progress` under itself while it is nonzero
   and the toggle is on — the one number that tells a learner there is
   anything to pause before they find out by pausing it.
+
+## Stage 2 fixes: aligning with the written brief
+
+A first pass at stage 2 shipped ahead of a full read of the brief, in a few
+places. The fixes brief (F1–F8) corrected these; this section is what
+changed and, more importantly, why the earlier shape was wrong rather than
+merely different.
+
+- **The home screen lost its mode picker outright, not just its wiring.**
+  `PracticeMode`, `MODE_LABEL` and the `?mode=` query param are gone from
+  the client entirely — the addendum's single manual exercise type in
+  Settings (below) replaced the whole idea of a per-session override, and a
+  picker for a choice that no longer varies per session is a control with
+  nothing left to decide. The server still accepts a `mode` query param on
+  `summary`/`session` for a caller that has never heard of the setting;
+  nothing here sends one.
+- **The progress row stays: total / learning / mastered.** "Only today's
+  amount and Start" was said about the daily-minutes control, not about
+  progress, which stage 1's brief asks for and stage 2 never removes. It
+  was taken out once on that misreading and put back at the user's word.
+- **The settings screen's exercise type is ONE choice, not a subset — but
+  still a one-element ARRAY on the wire, not a bare string.**
+  `VocabularySettings.exercise_types` is `[ExerciseType] | null`
+  (`VocabularySettingsIn.exercise_types: list[Level] | None`, server-side
+  `min_length=1, max_length=1`) — a scalar type here would have been a
+  client invention that drifted from what actually lands in a request body.
+  Automatic / Recognise / Recall / Produce are the exact labels
+  (`AUTOMATIC_LABEL`, `EXERCISE_LABEL`) — stage 1's "Fill the gap"/"Write"
+  wording for the old mode picker is gone along with the picker itself.
+  When the choice leaves nothing to practise, Home, the practice page's
+  "nothing to do" state and its end screen all say the same sentence,
+  "No words are ready for this yet." — never "All caught up", which is true
+  of nothing left to LEARN, a different claim than "nothing at this one
+  task right now."
+- **Passive `recognise` shows the bare word, the same prominent way active
+  shows its Uzbek meaning** — `ChoicePrompt` branches on whether
+  `before`/`after` are empty (`hasSentence`) rather than always drawing a
+  `<mark>` around `target`, because the server sends an empty sentence on
+  purpose (`resolve_mark` no longer builds this prompt) and a lone `<mark>`
+  sitting in nothing read as an accident rather than "the word, alone."
+- **All four `recognise` options are the SAME height, whatever the text
+  behind them.** `OptionButton` carries `min-h-16` and clamps its text to
+  two lines (`line-clamp-2`) — a long definition stretching only its own
+  row is a visible tell for which option is correct, on a task whose whole
+  point is that the four should look interchangeable until chosen.
+- **A failed "I know this" says NOTHING.** `Reveal`'s claimed-outcome line
+  now only renders when `claimed && result.known` — the "In rotation" line
+  it used to print on a failed claim was a small verdict on a guess that
+  was never meant to be graded out loud (the spec's §5: it "just continues
+  as a normal item"). `IN_ROTATION_LABEL` still exists (the words list's
+  status chip reads it) but the known-check reveal no longer does.
+- **Leech resolution never leaves the session, and the three buttons are
+  named `LEECH_LABEL`'s way everywhere: "Set aside", "See it in context",
+  "Keep going".** The session's own reveal used to `navigate` to the word
+  page on "See it in context"; it now reads `PracticeAnswer.leech_context`
+  — sent by the server at the moment `became_leech` fires, the word's own
+  newest sentence with the word marked — and shows it in a panel right
+  under the leech choices, exactly the shape `ChoicePrompt`'s marked
+  sentence already uses. Enter still advances once a choice is made; it was
+  never blocked on leaving the page, only on picking one of the three.
+- **`requeued` travels with the answer that follows an Again**, not
+  invented by guesswork: `VocabularyPracticePage`'s `advance()` marks the
+  item it pushes onto the queue's end (a client-only `QueueItem.requeued`
+  field, never part of the wire `PracticeItem` shape), and `submit()` echoes
+  it as `PracticeAnswerIn.requeued`. The server verifies this against the
+  word's own last log rather than trusting the client outright (a stale or
+  fabricated claim is a 422) — see `backend/app/services/practice.py`'s
+  `record_answer` docstring for the window and the reasoning.
+- **Status is a four-chip system, not the five-value wire enum.**
+  `learning`/`review` collapse into one "In rotation" chip everywhere a
+  status is shown — the row, the word page's header, and the status
+  filter's own pills — because a learner deciding whether to leave a word
+  alone has never once needed to know FSRS's own name for its phase.
+  `features/vocabulary/components/StatusChip.tsx` is the one place this is
+  decided (mirroring `CefrTag`'s reasoning exactly): a grey scale ordered by
+  how much attention a word wants — `known` dim, `in_rotation` the page's
+  own text colour, `suspended` dimmer still, `leech` alone in the accent —
+  never green/red (verdicts) and never a CEFR hue (those name difficulty,
+  not standing). `status.ts`'s old `STATUS_LABEL`/`STATUS_TONE` (keyed by
+  the five wire values) are gone; `statusChip()` maps one onto the other.
+- **The words list's actions moved into a per-row menu, and the row no
+  longer resolves a leech itself.** `Word`'s trailing `DropdownMenu`
+  (`Mark as known` / `Return to rotation` / `Set aside` / `Delete`, each
+  shown only where it applies) replaced the inline "Set aside 30
+  days"/"Keep practising" buttons a leech row used to grow beneath it — the
+  fixes brief's own two-column table (state chip vs. action label) reads
+  oddly if the row ALSO carries a third kind of button that is neither, and
+  the word page (linked from every row) already carries the full three-way
+  leech choice. The menu's own Delete goes through the same
+  `pendingDelete.ts` "Removed · Undo" window a single selected row always
+  used — a menu is the trigger, not a second confirmation surface — and
+  bulk delete (more than one word) still opens `DeleteWordsDialog`
+  unchanged.
+- **The word page prints every context's date, and lapses per direction.**
+  `Context` now shows `timeAgo(context.created_at)` beside the sentence,
+  and `DirectionState` takes a `lapses` prop — `word.passive_lapses`
+  always, `word.active_lapses` only once the active card has started
+  (`null` before that, printed as nothing rather than "0 lapses", which
+  would claim a card that doesn't exist yet has a clean record). These are
+  LIFETIME counts (`SavedWord.lapses` is the separate leech-window figure
+  the threshold itself reads, still on the wire, unused by any screen) —
+  see `lapse_counts_for`'s own docstring in `practice.py` for why a reader
+  looking at their own history has no reason to have that number reset out
+  from under them the moment a leech is resolved.

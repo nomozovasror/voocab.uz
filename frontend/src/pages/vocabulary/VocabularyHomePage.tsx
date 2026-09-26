@@ -1,54 +1,52 @@
-import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { BookOpen, Play, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
 import { localTimeZone, timeUntil } from "@/lib/time";
 import { practiceSummaryKey, vocabularyApi } from "@/features/vocabulary/api";
-import { MODE_LABEL } from "@/features/vocabulary/status";
-import type { PracticeMode } from "@/features/vocabulary/types";
-
-const MODES: PracticeMode[] = ["auto", "recognise", "recall", "produce"];
 
 /**
  * The practice module's home — not the word list, and that distinction is
  * the whole reason `/vocabulary` and `/vocabulary/words` are two routes now
  * rather than one. A list is something you consult; this is the door into a
  * spaced-repetition habit, and the one number that matters on it is what is
- * due TODAY, not how many words exist in total (that is `totals.total`, and
- * it is printed smaller, on purpose).
+ * due TODAY.
+ *
+ * ## The fixes brief's own shape for this screen (F1)
+ *
+ * Today's amount, a Start button, a short progress row (total / learning /
+ * mastered — stage 1's brief asks for it and stage 2 does not take it away),
+ * the "N words set aside" line, and links to the words list and Settings.
+ * Nothing else — no mode picker (that was a
+ * per-session override the addendum's single manual choice in Settings has
+ * superseded, per B4/F1) and no daily minutes (moved to Settings in stage 2
+ * already, and the brief's own list of what this screen shows still doesn't
+ * mention it).
  *
  * ## Where the queue is built
  *
  * `Start` does not itself call `POST /practice/session` — the practice page
- * does, on mount. Building the queue twice (once to preview a count here,
- * once for real on the next screen) would be two different plans of a
- * budget that shrinks as it is spent, and the two could disagree about how
- * many words fit today. This screen only ever reads `summary`, which is the
- * cheap, side-effect-free half of the same arithmetic — now once per `mode`
- * the picker below is set to, for the same reason.
- *
- * ## Stage 2 moved daily minutes to Settings
- *
- * Stage 1 put the minutes picker here. The spec's own list of what this
- * screen shows (mode picker, the set-aside line, a link to Settings) does
- * not mention it, and Settings' screen 6 lists it as one of its three
- * fields — so it now lives there and only there, rather than in two places
- * that would have to agree.
+ * does, on mount. This screen only ever reads `summary`, the cheap,
+ * side-effect-free half of the same arithmetic.
  */
 export default function VocabularyHomePage() {
   const tz = localTimeZone();
   const navigate = useNavigate();
-  // Not persisted: the whole point of "bugun faqat yozish" (the brief's own
-  // example, spec §7) is a choice about TODAY, not a standing preference —
-  // that one lives in Settings' `exercise_types` instead.
-  const [mode, setMode] = useState<PracticeMode>("auto");
 
   const { data, isPending, isError } = useQuery({
-    queryKey: practiceSummaryKey(tz, mode),
-    queryFn: () => vocabularyApi.practiceSummary(tz, mode),
+    queryKey: practiceSummaryKey(tz),
+    queryFn: () => vocabularyApi.practiceSummary(tz),
+  });
+
+  // Whether a manual exercise type is what's making today's amount zero —
+  // read to tell "you've cleared everything" apart from "you asked for just
+  // one task and nothing is at that rung yet" (F2). Shares the settings
+  // page's own cache key, so this never fires an extra request once that
+  // page has been visited.
+  const { data: settings } = useQuery({
+    queryKey: ["vocabulary", "settings"],
+    queryFn: () => vocabularyApi.settings(),
   });
 
   if (isPending) return <HomeSkeleton />;
@@ -72,6 +70,7 @@ export default function VocabularyHomePage() {
   if (data.totals.total === 0) return <Empty />;
 
   const planned = data.planned_reviews + data.planned_new;
+  const manualEmpty = planned === 0 && settings?.exercise_types != null;
 
   return (
     <div className="mx-auto w-full max-w-xl pb-24 pt-2">
@@ -92,9 +91,7 @@ export default function VocabularyHomePage() {
         </Link>
       </header>
 
-      <ModePicker value={mode} onChange={setMode} />
-
-      <section className="mt-4 rounded-2xl border border-border bg-card px-6 py-10 text-center">
+      <section className="rounded-2xl border border-border bg-card px-6 py-10 text-center">
         {planned > 0 ? (
           <>
             <p className="text-5xl font-bold tabular-nums text-foreground">
@@ -106,19 +103,20 @@ export default function VocabularyHomePage() {
             <Button
               type="button"
               size="lg"
-              onClick={() =>
-                navigate(
-                  mode === "auto"
-                    ? "/vocabulary/practice"
-                    : `/vocabulary/practice?mode=${mode}`,
-                )
-              }
+              onClick={() => navigate("/vocabulary/practice")}
               className="mt-6 gap-1.5 px-6"
             >
               <Play className="size-4" aria-hidden />
               Start
             </Button>
           </>
+        ) : manualEmpty ? (
+          // The learner picked one task in Settings and nothing is at that
+          // rung of the ladder right now — never "All caught up", which
+          // would read as nothing left to learn at all (F2).
+          <p className="text-sm text-muted-foreground">
+            No words are ready for this yet.
+          </p>
         ) : (
           // The budget is spent, or there is nothing overdue and no time
           // left to buy new ones — either way there is truthfully nothing to
@@ -161,49 +159,6 @@ export default function VocabularyHomePage() {
       >
         All words ({data.totals.total})
       </Link>
-    </div>
-  );
-}
-
-/** Mixed · Recognise · Fill the gap · Write — a row of pills exactly like
- *  stage 1's minutes picker, and for the same reason: four options are a
- *  control you can see the whole of at once. `role="radiogroup"` rather
- *  than `role="group"` (unlike the minutes picker) because these four are
- *  genuinely mutually exclusive alternatives, not four independent
- *  toggles. */
-function ModePicker({
-  value,
-  onChange,
-}: {
-  value: PracticeMode;
-  onChange: (mode: PracticeMode) => void;
-}) {
-  return (
-    <div
-      role="radiogroup"
-      aria-label="What to practise today"
-      className="flex gap-1 rounded-full border border-border bg-surface-sunken p-1"
-    >
-      {MODES.map((mode) => {
-        const on = value === mode;
-        return (
-          <button
-            key={mode}
-            type="button"
-            role="radio"
-            aria-checked={on}
-            onClick={() => onChange(mode)}
-            className={cn(
-              "flex-1 rounded-full px-2.5 py-1.5 text-xs font-medium transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-              on
-                ? "bg-primary/20 text-primary"
-                : "text-muted-foreground hover:bg-surface-hover hover:text-foreground",
-            )}
-          >
-            {MODE_LABEL[mode]}
-          </button>
-        );
-      })}
     </div>
   );
 }
@@ -266,8 +221,7 @@ function HomeSkeleton() {
         </div>
         <Skeleton className="size-8 shrink-0 rounded-lg" />
       </header>
-      <Skeleton className="h-9 w-full rounded-full" />
-      <section className="mt-4 rounded-2xl border border-border bg-card px-6 py-10 text-center">
+      <section className="rounded-2xl border border-border bg-card px-6 py-10 text-center">
         <p className="text-5xl font-bold">
           <Skeleton className="mx-auto inline-block h-[0.8em] w-16" />
         </p>

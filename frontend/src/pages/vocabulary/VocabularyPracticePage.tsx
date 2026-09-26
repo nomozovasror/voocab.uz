@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import { CefrTag } from "@/features/vocabulary/components/CefrTag";
 import { meanings } from "@/features/vocabulary/meaning";
 import { pickJoke, type SessionStats } from "@/features/vocabulary/jokes";
 import { practiceSummaryKey, vocabularyApi } from "@/features/vocabulary/api";
-import { IN_ROTATION_LABEL, STATUS_LABEL } from "@/features/vocabulary/status";
+import { LEECH_LABEL, STATUS_CHIP_LABEL } from "@/features/vocabulary/status";
 import type {
   Direction,
   ExerciseType,
@@ -21,17 +21,25 @@ import type {
   PracticeAnswer,
   PracticeChoicePrompt,
   PracticeItem,
-  PracticeMode,
+  PracticeLeechContext,
   PracticeOption,
   PracticeProducePrompt,
 } from "@/features/vocabulary/types";
+
+/** A queue entry, plus the one fact the server never sends and the client
+ *  alone knows: whether this is the SAME item come back after an Again. Set
+ *  the moment `advance` pushes it onto the queue's end, and echoed in
+ *  `requeued` on the answer that follows — never on an item's first
+ *  appearance (the spec's §1: that answer counts normally, the demotion is
+ *  felt next time). */
+type QueueItem = PracticeItem & { requeued?: boolean };
 
 /** One answered turn, kept for the end screen's stats and joke. A word
  *  answered twice in one session (it came back after an Again) appears here
  *  twice — `sessionStats` below is what collapses that back to "one word,
  *  two attempts" rather than counting it as two words. */
 interface Turn {
-  item: PracticeItem;
+  item: QueueItem;
   result: PracticeAnswer;
 }
 
@@ -72,15 +80,9 @@ export default function VocabularyPracticePage() {
   const navigate = useNavigate();
   const exit = () => navigate("/vocabulary");
 
-  const [params] = useSearchParams();
-  // The home screen's mode picker travels here as a query param rather than
-  // router state, so a reload mid-session keeps forcing the same task
-  // instead of silently falling back to `auto` — see the spec's §7.
-  const mode = (params.get("mode") as PracticeMode | null) ?? "auto";
-
   const { data, isPending, isError } = useQuery({
-    queryKey: ["vocabulary", "practice", "session", tz, mode],
-    queryFn: () => vocabularyApi.practiceSession(tz, { mode }),
+    queryKey: ["vocabulary", "practice", "session", tz],
+    queryFn: () => vocabularyApi.practiceSession(tz),
     // Never served from a previous mount's cache: reloading this page is
     // meant to re-plan, not resume a stale plan from ten minutes ago that
     // may no longer reflect what's due.
@@ -88,12 +90,20 @@ export default function VocabularyPracticePage() {
     gcTime: 0,
   });
 
+  // Read only to tell "genuinely nothing to practise" apart from "you asked
+  // for one task and nothing is at that rung yet" (F2) — shares the
+  // settings page's own cache key.
+  const { data: settings } = useQuery({
+    queryKey: ["vocabulary", "settings"],
+    queryFn: () => vocabularyApi.settings(),
+  });
+
   // `null` while the session hasn't landed yet; `[]` once every item — the
   // ones the server sent, plus every requeue — has been answered. Those are
   // two different reasons to render nothing further, kept as one variable
   // because the render logic already has to ask "do we have a current
   // item?" and null vs. empty both answer "no".
-  const [queue, setQueue] = useState<PracticeItem[] | null>(null);
+  const [queue, setQueue] = useState<QueueItem[] | null>(null);
   const [totalCount, setTotalCount] = useState(0);
   const [answeredCount, setAnsweredCount] = useState(0);
   const [given, setGiven] = useState("");
@@ -182,15 +192,15 @@ export default function VocabularyPracticePage() {
     mutationFn: ({ lemma, choice }: { lemma: string; choice: LeechChoice }) =>
       vocabularyApi.leech(lemma, choice),
     onSuccess: (_res, { choice }) => {
-      if (choice === "see_context") {
-        // The one choice that leaves the session rather than continuing
-        // it — the spec's own destination for it is the word page, not a
-        // panel here.
-        navigate(`/vocabulary/words/${encodeURIComponent(current?.lemma ?? "")}`);
-        return;
-      }
       setLeechChoice(choice);
-      advance();
+      // "See it in context" stays ON this card — `result.leech_context`
+      // already carries the sentence, so there is nothing left to fetch and
+      // nowhere to navigate to (F5: never leaves the session). Setting
+      // `leechChoice` alone is enough to unblock the ordinary Enter-to-
+      // advance handler below; the learner reads the sentence and presses
+      // Enter same as any other reveal. `set_aside`/`keep` have nothing more
+      // to show, so they advance at once.
+      if (choice !== "see_context") advance();
     },
     onError: (e) => toast(getErrorMessage(e)),
   });
@@ -215,6 +225,10 @@ export default function VocabularyPracticePage() {
       given: givenOverride ?? given,
       elapsed_ms: Date.now() - shownAt.current,
       ...(claiming ? { claim_known: true } : {}),
+      // Set exactly on the same-session requeue `advance` below produces —
+      // never on an item's first appearance, and never on the known-check
+      // swap, which is a fresh item rather than an Again come back (§1).
+      requeued: Boolean(current.requeued),
     });
   }
 
@@ -234,8 +248,10 @@ export default function VocabularyPracticePage() {
       // see it: the client appends, the server has already rescheduled the
       // card either way (see the spec's §4). `returns_this_session` is
       // exactly `rating === Again`, and nothing else moves a word to the
-      // back.
-      return result.returns_this_session ? [...rest, current] : rest;
+      // back. Marked `requeued` so the answer that follows can say so (§1).
+      return result.returns_this_session
+        ? [...rest, { ...current, requeued: true }]
+        : rest;
     });
     if (result.returns_this_session) setTotalCount((t) => t + 1);
     setAnsweredCount((c) => c + 1);
@@ -316,11 +332,17 @@ export default function VocabularyPracticePage() {
     );
   }
 
+  // A manual exercise type in Settings is what's most likely to leave
+  // nothing here — never worded as "you're all caught up", which would be
+  // true of nothing left to LEARN rather than of one narrow task (F2).
+  const manualEmpty = settings?.exercise_types != null;
+
   if (ended) {
     return (
       <EndScreen
         turns={turns}
         nextDueAt={freshSummary?.next_due_at ?? null}
+        manualEmpty={manualEmpty}
         onExit={exit}
       />
     );
@@ -333,7 +355,9 @@ export default function VocabularyPracticePage() {
     return (
       <div className="mx-auto w-full max-w-xl py-16 text-center">
         <p className="text-sm text-muted-foreground">
-          Nothing to practise right now.
+          {manualEmpty
+            ? "No words are ready for this yet."
+            : "Nothing to practise right now."}
         </p>
         <Link
           to="/vocabulary"
@@ -441,11 +465,16 @@ export default function VocabularyPracticePage() {
             claimed={claimedResult}
           />
           {result.became_leech && (
-            <LeechPanel
-              resolved={leechChoice}
-              busy={leech.isPending}
-              onChoose={(choice) => leech.mutate({ lemma: current.lemma, choice })}
-            />
+            <>
+              <LeechPanel
+                resolved={leechChoice}
+                busy={leech.isPending}
+                onChoose={(choice) => leech.mutate({ lemma: current.lemma, choice })}
+              />
+              {leechChoice === "see_context" && result.leech_context && (
+                <LeechContextPanel context={result.leech_context} />
+              )}
+            </>
           )}
         </>
       )}
@@ -607,11 +636,12 @@ function ProducePrompt({
   );
 }
 
-/** `recognise`'s prompt, both directions. Passive marks the word inside its
- *  sentence (or shows the lemma alone — `before`/`after` are simply empty
- *  then) and offers English definitions; active shows the Uzbek meaning to
- *  translate and offers English lemmas. One component either way, because
- *  the split is which fields the server filled in, not a different task. */
+/** `recognise`'s prompt, both directions. Passive shows the English word
+ *  alone when there is no sentence to mark it inside (F3: `before`/`after`
+ *  empty, `target` the lemma) and offers English definitions; active shows
+ *  the Uzbek meaning to translate and offers English lemmas. One component
+ *  either way, because the split is which fields the server filled in, not
+ *  a different task. */
 function ChoicePrompt({
   prompt,
   selectedId,
@@ -628,6 +658,7 @@ function ChoicePrompt({
   onChoose: (id: string) => void;
 }) {
   const active = prompt.shown_meaning_uz !== null;
+  const hasSentence = Boolean(prompt.before || prompt.after);
   return (
     <div>
       {active ? (
@@ -636,7 +667,7 @@ function ChoicePrompt({
             {prompt.shown_meaning_uz}
           </p>
         </div>
-      ) : (
+      ) : hasSentence ? (
         <p className="text-center text-xl leading-relaxed text-foreground sm:text-left">
           {prompt.before}
           <mark className="rounded bg-primary/15 px-1 text-foreground">
@@ -644,6 +675,16 @@ function ChoicePrompt({
           </mark>
           {prompt.after}
         </p>
+      ) : (
+        // Passive `recognise`, per the spec's addendum: the English word
+        // alone, no sentence around it — shown the same prominent way
+        // active's Uzbek meaning is, rather than as a lone `<mark>` sitting
+        // in an otherwise empty sentence.
+        <div className="text-center">
+          <p className="mt-1 text-2xl font-semibold text-foreground">
+            {prompt.target}
+          </p>
+        </div>
       )}
       <div
         role="radiogroup"
@@ -667,6 +708,11 @@ function ChoicePrompt({
   );
 }
 
+/** All four the SAME height, whatever the length of the text behind them
+ *  (F3) — a `min-h` sized to comfortably fit two lines plus the row's own
+ *  padding, and `line-clamp-2` so a definition longer than that is clipped
+ *  rather than stretching its own row and giving the answer away by being
+ *  visibly the odd one out. */
 function OptionButton({
   index,
   option,
@@ -699,7 +745,7 @@ function OptionButton({
       disabled={disabled}
       onClick={() => onChoose(option.id)}
       className={cn(
-        "flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-left text-sm transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-default",
+        "flex min-h-16 items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-left text-sm transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-default",
         tone,
       )}
       // The same number the "1–4" hotkey uses, so a learner who has
@@ -709,7 +755,7 @@ function OptionButton({
       <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-current/40 font-mono text-[0.7rem] tabular-nums">
         {index + 1}
       </span>
-      <span>{option.text}</span>
+      <span className="line-clamp-2">{option.text}</span>
     </button>
   );
 }
@@ -750,12 +796,16 @@ function Reveal({
 
   return (
     <div className="mt-6 rounded-xl border border-border bg-card px-5 py-4">
-      {claimed && (
-        // A state, not a verb — this line says what the word IS now, the
-        // same way `STATUS_LABEL` does everywhere else; "Marked as known"
-        // is the button that asked for this, not the outcome of asking.
+      {/* Only on success (F4): a failed "I know this" check says nothing at
+       *  all and just continues as an ordinary item — no "In rotation"
+       *  line, which used to read as a small verdict on a guess that was
+       *  never meant to be graded out loud. A state, not a verb, when it
+       *  does show — this line says what the word IS now, the same way
+       *  `STATUS_CHIP_LABEL` does everywhere else; "Marked as known" is the
+       *  button that asked for this, not the outcome of asking. */}
+      {claimed && result.known && (
         <p className="text-sm font-semibold text-foreground">
-          {result.known ? STATUS_LABEL.known : IN_ROTATION_LABEL}
+          {STATUS_CHIP_LABEL.known}
         </p>
       )}
       <p className={cn("text-sm font-semibold", verdictTone)}>
@@ -813,10 +863,12 @@ function Reveal({
   );
 }
 
-/** The three choices a `became_leech` reveal offers (the spec's §5).
- *  `resolved` gates the Enter-to-advance handler above — a learner cannot
- *  fall through to the next word without picking one, since a leech is a
- *  deliberate fork the app is asking them to take, not a reflex. */
+/** The three choices a `became_leech` reveal offers, in place of the card
+ *  rather than a modal (F5) — `resolved` gates the Enter-to-advance handler
+ *  above so a learner cannot fall through to the next word without picking
+ *  one, since a leech is a deliberate fork the app is asking them to take,
+ *  not a reflex. Labels are `LEECH_LABEL`'s, exactly as the fixes brief
+ *  words them — the same three on the word page. */
 function LeechPanel({
   resolved,
   busy,
@@ -839,7 +891,7 @@ function LeechPanel({
           disabled={busy || resolved !== null}
           onClick={() => onChoose("set_aside")}
         >
-          Set aside for 30 days
+          {LEECH_LABEL.set_aside}
         </Button>
         <Button
           type="button"
@@ -848,7 +900,7 @@ function LeechPanel({
           disabled={busy || resolved !== null}
           onClick={() => onChoose("see_context")}
         >
-          See it where you met it
+          {LEECH_LABEL.see_context}
         </Button>
         <Button
           type="button"
@@ -857,9 +909,37 @@ function LeechPanel({
           disabled={busy || resolved !== null}
           onClick={() => onChoose("keep")}
         >
-          Keep practising
+          {LEECH_LABEL.keep}
         </Button>
       </div>
+    </div>
+  );
+}
+
+/** What "See it in context" shows, in the card rather than sending the
+ *  learner away (F5) — the word's newest sentence, marked, with the way to
+ *  the material it came from. Reuses the `<mark>` styling `ChoicePrompt`'s
+ *  sentence already wears, so a marked word reads the same wherever this
+ *  session shows one. */
+function LeechContextPanel({ context }: { context: PracticeLeechContext }) {
+  return (
+    <div className="mt-3 rounded-xl border border-border bg-card px-5 py-4">
+      <p className="text-sm leading-relaxed text-foreground">
+        {context.before}
+        <mark className="rounded bg-primary/15 px-1 text-foreground">
+          {context.target}
+        </mark>
+        {context.after}
+      </p>
+      {context.material_title && (
+        <Link
+          to={`/reading/${context.material_id}`}
+          className="mt-2 inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <BookOpen className="size-3" aria-hidden />
+          {context.material_title}
+        </Link>
+      )}
     </div>
   );
 }
@@ -919,10 +999,14 @@ function summarise(turns: Turn[]): SessionStats & {
 function EndScreen({
   turns,
   nextDueAt,
+  manualEmpty,
   onExit,
 }: {
   turns: Turn[];
   nextDueAt: string | null;
+  /** Whether a manual exercise type in Settings is why there was nothing
+   *  here — see the same flag at the call site (F2). */
+  manualEmpty: boolean;
   onExit: () => void;
 }) {
   const stats = useMemo(() => summarise(turns), [turns]);
@@ -940,7 +1024,9 @@ function EndScreen({
     return (
       <div className="mx-auto w-full max-w-xl py-20 text-center">
         <p className="text-sm text-muted-foreground">
-          Nothing to practise right now.
+          {manualEmpty
+            ? "No words are ready for this yet."
+            : "Nothing to practise right now."}
         </p>
         <Button type="button" onClick={onExit} className="mt-4">
           Back to Vocabulary

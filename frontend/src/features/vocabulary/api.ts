@@ -8,7 +8,6 @@ import type {
   PracticeAnswer,
   PracticeAnswerRequest,
   PracticeItem,
-  PracticeMode,
   PracticeSession,
   PracticeSummary,
   SavedWords,
@@ -46,10 +45,8 @@ export const vocabularyKey = (materialId: string) => ["vocabulary", materialId];
  *  line and the home screen's due count are the same fact and must update
  *  together, or going back to `/vocabulary` after a session shows the
  *  numbers it just made stale. */
-export const practiceSummaryKey = (tz: string, mode?: PracticeMode) =>
-  mode
-    ? (["vocabulary", "practice", "summary", tz, mode] as const)
-    : (["vocabulary", "practice", "summary", tz] as const);
+export const practiceSummaryKey = (tz: string) =>
+  ["vocabulary", "practice", "summary", tz] as const;
 
 /** The words list's cache key — one row per lemma, read by the list page,
  *  the word page's own list-invalidation and `ReviewVocabulary`'s
@@ -159,14 +156,15 @@ export const vocabularyApi = {
    *  budget, and the running totals. Cheap and side-effect-free — reading
    *  it never advances anything, unlike `session`.
    *
-   *  `mode` narrows the count to one task — the mode picker's own preview
-   *  of what pressing Start with that mode chosen would deliver, computed
-   *  the server's own way so the two numbers cannot drift (the spec's
-   *  §7). Omitted for `auto`, which is also the default the server assumes
-   *  from a caller that has never heard of modes. */
-  practiceSummary: (tz: string, mode?: PracticeMode) =>
+   *  No `mode` param from this client any more — the addendum's manual
+   *  choice lives in `VocabularySettings.exercise_types` now, a standing
+   *  preference the server reads on its own rather than a per-call
+   *  override, so what this returns already reflects it. The server still
+   *  accepts a `mode` query param for a caller that has never heard of the
+   *  setting; nothing here sends one. */
+  practiceSummary: (tz: string) =>
     api.get<PracticeSummary>("/api/vocabulary/practice/summary", {
-      params: { tz, mode: mode && mode !== "auto" ? mode : undefined },
+      params: { tz },
     }),
 
   /** Builds today's queue, now — reviews first, most overdue first, then as
@@ -176,18 +174,14 @@ export const vocabularyApi = {
    *  until an answer is posted, so reloading the practice page mid-session
    *  costs a re-plan, not a lost place. `materialId` narrows to one
    *  material's words; omitted for the home screen's "Start" button, which
-   *  practises everything due. `mode` is the spec's §7 forced mode — ONE
-   *  task, taken only from cards already at that level; it never skips the
-   *  ladder. */
-  practiceSession: (
-    tz: string,
-    opts: { materialId?: string; mode?: PracticeMode } = {},
-  ) =>
+   *  practises everything due. No `mode` here either, for the same reason
+   *  as `practiceSummary` above — the ladder task, when forced, comes from
+   *  Settings, and the server reads it without being told twice. */
+  practiceSession: (tz: string, opts: { materialId?: string } = {}) =>
     api.post<PracticeSession>("/api/vocabulary/practice/session", {
       params: { tz },
       json: {
         ...(opts.materialId ? { material_id: opts.materialId } : {}),
-        ...(opts.mode && opts.mode !== "auto" ? { mode: opts.mode } : {}),
       },
     }),
 
