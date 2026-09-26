@@ -220,6 +220,13 @@ class SavedWordOut(BaseModel):
     passive_stability: float | None = None
     active_stability: float | None = None
     lapses: int = 0
+    #: Lifetime lapse counts, split by direction and derived from the review
+    #: log's own state chain (``app.services.practice.lapse_counts_for``) --
+    #: a different figure from ``lapses`` above, which is the combined,
+    #: direction-agnostic count the FSRS bookkeeping already kept. The two
+    #: always agree: ``passive_lapses + active_lapses == lapses``.
+    passive_lapses: int = 0
+    active_lapses: int = 0
     reps: int = 0
     suspended_until: datetime | None = None
     #: True when an active card exists (``active_state`` not null) and the
@@ -354,11 +361,13 @@ class PracticeChoiceOptionOut(BaseModel):
 
 
 class PracticeChoiceOut(BaseModel):
-    """A recognise exercise's prompt, either direction. Passive marks the
-    word in its sentence (``before``/``target``/``after``); active shows
-    only ``shown_meaning_uz`` and leaves the sentence fields empty -- the
-    brief's active `recognise` is "Uzbek meaning + pos + 4 English lemmas",
-    with no sentence in it."""
+    """A recognise exercise's prompt, either direction -- neither shows a
+    sentence. Passive is the bare English word: ``before``/``after`` are
+    empty and ``target`` carries the lemma, so the client has something to
+    head the four definitions with. Active shows only ``shown_meaning_uz``
+    (``before``/``target``/``after`` all empty) -- the brief's active
+    `recognise` is "Uzbek meaning + pos + 4 English lemmas", with nothing
+    else in it."""
 
     kind: Literal["choice"] = "choice"
     before: str
@@ -420,6 +429,14 @@ class PracticeAnswerIn(BaseModel):
     ``given`` is reused across every exercise: the option id for
     `recognise`, the typed word for `recall`/`produce`. ``claim_known`` is
     set only by the "I know this" flow's single follow-up answer.
+
+    ``requeued`` marks this as the SAME item's second serving within one
+    session, after an earlier ``Again`` -- the client re-shows the failed
+    card at the end of the session rather than whatever the ladder would
+    now serve. Verified server-side against the word's own last logged
+    answer for this direction (see ``record_answer``); a claim that does
+    not match a recent ``Again`` at exactly this ``exercise_type`` is a 422,
+    not a silent no-op.
     """
 
     word_id: uuid.UUID
@@ -433,6 +450,7 @@ class PracticeAnswerIn(BaseModel):
     given: str = Field(default="", max_length=200)
     elapsed_ms: int = Field(ge=0)
     claim_known: bool = False
+    requeued: bool = False
 
 
 class PracticeAnswerWordOut(BaseModel):
@@ -454,6 +472,21 @@ class PracticeAnswerWordOut(BaseModel):
     material_title: str
 
 
+class LeechContextOut(BaseModel):
+    """The sentence "See it in context" shows, in place of the card, the
+    moment ``became_leech`` fires -- the word's own newest context that has
+    one. ``before``/``target``/``after`` are the same shape a passive
+    `recall` gap would mark it in, built by
+    ``app.services.practice.resolve_mark``, so the client only needs one
+    rendering rule for "the word, marked, inside a sentence"."""
+
+    before: str
+    target: str
+    after: str
+    material_id: uuid.UUID
+    material_title: str
+
+
 class PracticeAnswerOut(BaseModel):
     verdict: Verdict
     #: 1..4 = Again/Hard/Good/Easy, an ``fsrs.Rating`` value carried as a
@@ -467,7 +500,8 @@ class PracticeAnswerOut(BaseModel):
     answer: str
     #: True exactly when ``rating`` is Again. The client, not the server,
     #: re-queues the word at the end of THIS session -- see the brief's
-    #: decision on why no session state is kept here.
+    #: decision on why no session state is kept here, and
+    #: ``PracticeAnswerIn.requeued`` for the answer that comes back in.
     returns_this_session: bool
     next_due_at: datetime
     #: Set only when ``claim_known`` was sent AND the answer was correct --
@@ -477,6 +511,12 @@ class PracticeAnswerOut(BaseModel):
     #: True the moment this lapse pushed the word over either leech
     #: threshold -- the session then offers the three choices (§5).
     became_leech: bool
+    #: The sentence "See it in context" would show, filled in exactly when
+    #: ``became_leech`` is true and the word has a context with one --
+    #: ``None`` otherwise, including a leech word with no sentence anywhere
+    #: on its list. The client holds this to show it later; the leech
+    #: endpoint itself does not repeat it.
+    leech_context: LeechContextOut | None = None
     status: str
     #: The direction's level AFTER this answer -- what the NEXT encounter
     #: in this direction will be asked, once the ladder has had its say.
@@ -508,7 +548,9 @@ class VocabularySettingsIn(BaseModel):
     #: The brief's toggle has no "active only" -- ``passive`` is silence,
     #: ``both`` is the toggle switched on.
     direction: Literal["passive", "both"]
-    #: Null means "the system chooses"; a non-empty subset of the three
-    #: tasks otherwise -- an empty list would mean "practise nothing",
-    #: which is never what the picker is offering.
-    exercise_types: list[Level] | None = Field(default=None, min_length=1)
+    #: Null means "Automatic" (the system chooses); otherwise exactly ONE of
+    #: the three tasks -- the settings screen's exercise type is a single
+    #: choice (Automatic / Recognise / Recall / Produce), never a subset, so
+    #: both an empty list and a list of more than one are refused here
+    #: rather than accepted and silently narrowed to the first entry.
+    exercise_types: list[Level] | None = Field(default=None, min_length=1, max_length=1)

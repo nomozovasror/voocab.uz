@@ -67,11 +67,19 @@ EXERCISE_TYPES: tuple[str, ...] = ("recognise", "recall", "produce", "listen")
 #: ``recognise`` -> ``recall``; an active card climbs ``recognise`` ->
 #: ``produce`` -- two different top rungs because recognising a word from
 #: four options and typing it from nothing are different skills, per the
-#: brief. ``SavedWord.{direction}_level`` always holds one of these two for
-#: its direction; ``app.services.practice`` is the only place that moves a
-#: word between them.
-PASSIVE_LEVELS: tuple[str, str] = ("recognise", "recall")
-ACTIVE_LEVELS: tuple[str, str] = ("recognise", "produce")
+#: brief's addendum (which replaced the original brief's single shared
+#: ladder for exactly this reason: a single number ("level 2") would mean
+#: "recall" for one direction and "produce" for the other, which is a bug
+#: waiting to happen rather than a fact about the word). ``SavedWord.
+#: {direction}_level`` always holds one of these two for its direction, in
+#: TEXT matching :data:`EXERCISE_TYPES` exactly, never a bare integer.
+#: ``app.services.practice`` is the only place that moves a word along
+#: either ladder, and does so by INDEX -- one step within the list named
+#: here, not a hand-written floor/top special case -- so a ladder gaining a
+#: middle rung later is a one-line change to the list, not a rewrite of the
+#: function that walks it.
+PASSIVE_LADDER: tuple[str, str] = ("recognise", "recall")
+ACTIVE_LADDER: tuple[str, str] = ("recognise", "produce")
 
 
 class MaterialVocabulary(SQLModel, table=True):
@@ -408,8 +416,8 @@ class SavedWord(SQLModel, table=True):
     lapses: int = Field(default=0)
     reps: int = Field(default=0)
 
-    #: The task actually served for each direction -- see ``PASSIVE_LEVELS``/
-    #: ``ACTIVE_LEVELS``. Stored rather than derived from the FSRS state
+    #: The task actually served for each direction -- see ``PASSIVE_LADDER``/
+    #: ``ACTIVE_LADDER``. Stored rather than derived from the FSRS state
     #: because the ladder has its own rule (2 consecutive corrects to
     #: promote, 1 after a demotion; an Again at the top step to demote) that
     #: is deliberately NOT a schedule penalty -- FSRS keeps scheduling this
@@ -725,16 +733,32 @@ class VocabularyReviewLog(SQLModel, table=True):
     direction: str = Field(max_length=8)
     exercise_type: str = Field(max_length=16)
     #: What the ladder asked for, as opposed to ``exercise_type`` -- what was
-    #: actually served. They differ exactly on a distractor-pipeline fallback
-    #: (too short a definition, or too few good distractors survive the
-    #: guard -- see ``app.services.distractors``), which is also what makes
-    #: a fallback measurable: ``planned_exercise != exercise_type`` IS the
-    #: definition, not a separate flag that could drift from it.
+    #: actually served. On an ordinary ladder serving they differ exactly on
+    #: a distractor-pipeline fallback (too short a definition, or too few
+    #: good distractors survive the guard -- see ``app.services
+    #: .distractors``), which is also what makes a fallback measurable:
+    #: ``planned_exercise IS NOT NULL AND planned_exercise != exercise_type``
+    #: IS the definition, not a separate flag that could drift from it (the
+    #: ``IS NOT NULL`` matters -- see the next paragraph).
     #:
-    #: Nullable because every stage-1 row predates this column and never had
-    #: a plan distinct from what it served -- backfilling it would have to
-    #: guess, and a guessed row would be indistinguishable from a real one
-    #: the day somebody re-fits FSRS on this table.
+    #: Null on three kinds of row, all of them for the same reason: the
+    #: answer is not the ladder's own evidence about a level, and a value
+    #: here would forge some. Every stage-1 row predates this column and
+    #: never had a plan distinct from what it served (backfilling it would
+    #: have to guess, and a guessed row would be indistinguishable from a
+    #: real one the day somebody re-fits FSRS on this table). A known-check
+    #: ("I know this") answer is a BYPASS of the ladder, always at
+    #: ``recall``, regardless of what level the word's ladder is actually
+    #: at -- logging that as the ladder's OWN plan would let
+    #: ``app.services.practice._has_reached_level`` believe the word had
+    #: genuinely reached ``recall``. A verified same-session requeue is the
+    #: SAME task the learner already failed once this session, not fresh
+    #: evidence about it -- logging ``exercise_type`` here has the identical
+    #: forging problem. ``_promotion_streak``/``_has_reached_level`` both
+    #: skip a null-planned row entirely (neither breaking a streak nor
+    #: extending one, and never counting as "reached"), and null also keeps
+    #: both kinds of row out of the fallback metric above, since neither is
+    #: a fallback.
     planned_exercise: str | None = Field(default=None, max_length=16)
     #: 1..4 = Again/Hard/Good/Easy, an ``fsrs.Rating`` value stored as a
     #: plain int so this table never has to import the library either.

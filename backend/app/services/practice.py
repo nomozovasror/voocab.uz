@@ -83,8 +83,8 @@ from sqlmodel import select
 from app.core.database import AsyncSession
 from app.models.user import User
 from app.models.vocabulary import (
-    ACTIVE_LEVELS,
-    PASSIVE_LEVELS,
+    ACTIVE_LADDER,
+    PASSIVE_LADDER,
     SavedWord,
     SavedWordContext,
     VocabularyReviewLog,
@@ -176,6 +176,13 @@ PROMOTE_STREAK = 2
 #: ``recall``/``produce`` means no fallback is ever accepted there, and an
 #: ``exercise_type`` claiming one is rejected outright.
 FALLBACK_EXERCISE: dict[Direction, str] = {"passive": "recall", "active": "produce"}
+
+#: How long a client's claim that this answer is a same-session REQUEUE (see
+#: :func:`record_answer`'s ``requeued`` handling) may be validated against --
+#: generous enough for a genuinely long sitting, tight enough that a stale
+#: claim (a tab left open overnight, then resumed) cannot resurrect a task
+#: that really belongs to a different day's encounter.
+REQUEUE_WINDOW = timedelta(hours=6)
 
 #: Leech: either this many lapses since the last reset...
 LEECH_LAPSE_THRESHOLD = 6
@@ -424,11 +431,15 @@ def resolve_gap(word: SavedWord, context: SavedWordContext | None) -> Gap:
 
 
 def resolve_mark(word: SavedWord, context: SavedWordContext | None) -> Mark:
-    """The recognise prompt's sentence, with the word marked rather than
-    blanked. Same search as :func:`resolve_gap` (surface, then lemma, in
-    the same sentence) -- the two are the same rule wearing two hats,
-    kept apart because a gap's "answer" and a mark's "target" are different
-    facts even when the coordinates that find them are identical.
+    """A word marked in its sentence rather than blanked -- the leech card's
+    "see it in context" (:func:`record_answer`'s ``leech_context``), the one
+    place in this module a recognise-shaped prompt still shows a sentence.
+    (It no longer builds the recognise prompt itself -- see the brief: a
+    passive `recognise` item shows the bare word, not the word inside a
+    marked passage.) Same search as :func:`resolve_gap` (surface, then
+    lemma, in the same sentence) -- the two are the same rule wearing two
+    hats, kept apart because a gap's "answer" and a mark's "target" are
+    different facts even when the coordinates that find them are identical.
     """
     if context is not None and context.example:
         match = _find_surface(context.example, context.surface or word.lemma)
@@ -560,6 +571,26 @@ async def _contexts_by_word(
     return by_word
 
 
+async def _newest_context_with_sentence(
+    session: AsyncSession, word_id: uuid.UUID
+) -> SavedWordContext | None:
+    """The word's own newest context that actually has a sentence -- what
+    ``became_leech``'s ``leech_context`` is built from (see
+    :func:`record_answer`). A context saved from a fallback prompt (no
+    sentence at all) is skipped rather than shown empty; ``None`` when no
+    context has one, which is the brief's own "null if none"."""
+    rows = await session.exec(
+        select(SavedWordContext)
+        .where(
+            SavedWordContext.saved_word_id == word_id,
+            SavedWordContext.example != "",
+        )
+        .order_by(SavedWordContext.created_at.desc())
+        .limit(1)
+    )
+    return rows.first()
+
+
 # --- The ladder ----------------------------------------------------------------
 
 
@@ -583,6 +614,14 @@ async def _promotion_streak(
     condition is also the whole of "a wrong answer at recognise just resets
     the streak": the wrong answer becomes the newest row, and the very next
     read of this function stops on it immediately.
+
+    A ``planned_exercise IS NULL`` row -- a known-check answer or a verified
+    same-session requeue, neither of which is the ladder's own evidence
+    about a level (see ``VocabularyReviewLog.planned_exercise``'s own
+    docstring) -- is SKIPPED rather than treated as "a different level":
+    skipping it neither breaks a genuine streak sitting either side of it
+    nor extends one, because it never happened as far as the ladder is
+    concerned.
     """
     rows = await session.exec(
         select(
@@ -599,6 +638,13 @@ async def _promotion_streak(
     )
     streak = 0
     for exercise_type, rating, planned in rows.all():
+        if planned is None:
+            # A known-check answer or a verified same-session requeue --
+            # neither is the ladder's own evidence about this level (see
+            # the column's own docstring), so it is skipped rather than
+            # read as "a different level", which would wrongly END the
+            # streak the way a genuine answer at another level should.
+            continue
         if planned != level:
             break
         if not _was_correct(exercise_type, fsrs.Rating(rating)):
@@ -613,7 +659,15 @@ async def _has_reached_level(
     """Whether this word has EVER been asked at ``level`` before -- the
     ladder's re-promotion exception: a word demoted from the top rung goes
     back up after 1 correct, not :data:`PROMOTE_STREAK`, because it has
-    already proven it once."""
+    already proven it once.
+
+    ``planned_exercise IS NULL`` rows (a known-check answer, or a verified
+    same-session requeue) never satisfy this on their own -- the equality
+    below excludes them the same way SQL excludes any ``NULL`` from ``= ...``
+    -- because neither kind is the ladder's own evidence that the word has
+    reached ``level``; see ``VocabularyReviewLog.planned_exercise``'s own
+    docstring for why those two rows are logged with no plan at all.
+    """
     row = await session.exec(
         select(VocabularyReviewLog.id)
         .where(
@@ -624,6 +678,13 @@ async def _has_reached_level(
         .limit(1)
     )
     return row.first() is not None
+
+
+def _ladder_for(direction: Direction) -> tuple[str, str]:
+    """The direction's own ladder -- see :data:`PASSIVE_LADDER`/
+    :data:`ACTIVE_LADDER`'s own docstring for why this is a list walked by
+    INDEX rather than a hand-named ``low``/``high`` pair."""
+    return PASSIVE_LADDER if direction == "passive" else ACTIVE_LADDER
 
 
 async def _apply_ladder(
@@ -641,29 +702,34 @@ async def _apply_ladder(
     counts as evidence for promotion, and a fallback answered wrong still
     counts as a miss at the floor rather than nothing at all.
 
-    Demotion and promotion are mutually exclusive branches on purpose: the
-    floor (``recognise``) can only be promoted FROM, the top rung
-    (``recall``/``produce``) can only be demoted FROM, and there is no third
-    rung either direction could be asked at.
+    Promotion and demotion are one step of the ladder's own INDEX, not a
+    hand-written floor/top special case: the rung this answer was AT moves
+    one place towards the end of :func:`_ladder_for` on enough correct
+    answers, and one place back towards its start on an outright Again. The
+    floor can only be promoted FROM (there is nothing before index 0) and
+    the top rung can only be demoted FROM (there is nothing after the last
+    index) -- both are simply what "one step" already means at either end of
+    a list, so a ladder gaining a middle rung later needs no new branch here.
     """
-    low, high = PASSIVE_LEVELS if direction == "passive" else ACTIVE_LEVELS
-    if planned_exercise == low:
+    ladder = _ladder_for(direction)
+    index = ladder.index(planned_exercise)
+    if index == 0:
         if not _was_correct(exercise_type, rating):
             return
-        streak = await _promotion_streak(session, word.id, direction, low) + 1
+        streak = await _promotion_streak(session, word.id, direction, ladder[0]) + 1
         ever_reached_higher = await _has_reached_level(
-            session, word.id, direction, high
+            session, word.id, direction, ladder[-1]
         )
         threshold = 1 if ever_reached_higher else PROMOTE_STREAK
         if streak >= threshold:
-            setattr(word, f"{direction}_level", high)
-    elif planned_exercise == high:
+            setattr(word, f"{direction}_level", ladder[index + 1])
+    elif index == len(ladder) - 1:
         # Hard (spelling/plural, `close`) does NOT demote -- only an actual
         # Again does, which is exactly the rating a `wrong` verdict produces
         # at the top rung of either ladder (see RATING_TABLE: recall's
         # `close` is Hard, produce's is Good, neither is Again).
         if rating == fsrs.Rating.Again:
-            setattr(word, f"{direction}_level", low)
+            setattr(word, f"{direction}_level", ladder[index - 1])
 
 
 # --- Leech -----------------------------------------------------------------
@@ -705,6 +771,56 @@ async def _lapses_since_reset(
                 lapses.append(reviewed_at)
         previous_state = state
     return lapses
+
+
+async def lapse_counts_for(
+    session: AsyncSession, word_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, dict[Direction, int]]:
+    """Every word's LIFETIME lapse count, per direction -- the word page's
+    "lapses" under each direction's own state (§8 of the brief), which is a
+    different figure from :func:`_lapses_since_reset`'s: that one exists for
+    the leech threshold and forgets everything before the last reset, and a
+    reader looking at their own history has no reason to have a stale count
+    quietly reset out from under them. Reconstructed from the same state
+    chain (a REVIEW-state card answered Again), with no cutoff at all, so
+    ``passive_lapses + active_lapses`` on one word always adds back up to
+    ``SavedWord.lapses`` -- the one column that already counts both
+    directions together.
+
+    One query over every requested word rather than one per word (the words
+    list asks for all of them at once): grouped in Python because the
+    state-chain reconstruction needs the previous ROW's state, which is not
+    something worth a window-function query for what is, per word, at most a
+    few hundred rows.
+    """
+    if not word_ids:
+        return {}
+    counts: dict[uuid.UUID, dict[Direction, int]] = {
+        word_id: {"passive": 0, "active": 0} for word_id in word_ids
+    }
+    rows = await session.exec(
+        select(
+            VocabularyReviewLog.saved_word_id,
+            VocabularyReviewLog.direction,
+            VocabularyReviewLog.rating,
+            VocabularyReviewLog.state,
+        )
+        .where(VocabularyReviewLog.saved_word_id.in_(word_ids))
+        .order_by(
+            VocabularyReviewLog.saved_word_id,
+            VocabularyReviewLog.direction,
+            VocabularyReviewLog.reviewed_at,
+        )
+    )
+    previous_state: dict[tuple[uuid.UUID, str], int | None] = {}
+    for word_id, direction, rating, state in rows.all():
+        key = (word_id, direction)
+        if previous_state.get(key) == int(fsrs.State.Review) and rating == int(
+            fsrs.Rating.Again
+        ):
+            counts[word_id][direction] += 1
+        previous_state[key] = state
+    return counts
 
 
 def _is_leech(lapse_times: list[datetime], now: datetime) -> bool:
@@ -929,13 +1045,23 @@ async def active_in_progress_count(session: AsyncSession, user_id: uuid.UUID) ->
 
 def _effective_mode(mode: str, settings: VocabularySettings) -> str:
     """``auto`` unless the caller forced something, or the learner's own
-    default narrows it for them: a settings screen with exactly ONE
-    exercise type ticked is exactly as forceful as typing that mode by
+    default narrows it for them: the settings screen's exercise type is one
+    choice -- ``Automatic`` (``exercise_types`` null) or exactly one of
+    ``recognise``/``recall``/``produce`` (:class:`app.schemas.vocabulary
+    .VocabularySettingsIn` refuses more than one at the door) -- so a
+    non-null settings value is exactly as forceful as typing that mode by
     hand, and the brief's "bugun faqat yozish" is meant to work either way.
+    Mapped onto candidates by :func:`_gather_candidates`'s ``_matches_mode``:
+    ``recognise`` matches a `recognise`-level candidate in EITHER direction,
+    ``recall`` only ever matches passive (the active ladder has no
+    ``recall`` rung) and ``produce`` only ever matches active, so the
+    brief's table ("Recognise -> both directions' recognise cards; Recall ->
+    passive recall; Produce -> active produce") falls out of the ladders'
+    own shapes rather than needing a second table here.
     """
     if mode and mode != "auto":
         return mode
-    if settings.exercise_types and len(settings.exercise_types) == 1:
+    if settings.exercise_types:
         return settings.exercise_types[0]
     return "auto"
 
@@ -1311,14 +1437,19 @@ def _choice_item(
         word, context, direction=direction, exercise_type="recognise",
         planned_exercise="recognise", is_new=is_new,
     )
-    # Passive marks the sentence; active shows only the Uzbek meaning (per
-    # the brief) and has no sentence to mark.
-    mark = resolve_mark(word, context) if direction == "passive" else None
+    # Neither direction shows a sentence here -- passive `recognise` is the
+    # English word alone (the brief's "ingliz so'zi, ostida 4 ta ta'rif"),
+    # not the word marked inside a passage; active shows only the Uzbek
+    # meaning. `target` carries the lemma for passive, so the client has
+    # something to print above the four definitions without a sentence to
+    # find it in -- `resolve_mark`'s own sentence-marking is unused here on
+    # purpose (it still serves the leech card's "see it in context", which
+    # is the one place a marked sentence belongs in this module).
     item["prompt"] = {
         "kind": "choice",
-        "before": mark.before if mark else "",
-        "target": mark.target if mark else "",
-        "after": mark.after if mark else "",
+        "before": "",
+        "target": word.lemma if direction == "passive" else "",
+        "after": "",
         "shown_meaning_uz": shown_meaning_uz,
         "options": [{"id": option.id, "text": option.text} for option in options],
     }
@@ -1525,6 +1656,24 @@ async def build_known_check_item(
 # --- Recording an answer --------------------------------------------------------
 
 
+async def _last_log(
+    session: AsyncSession, word_id: uuid.UUID, direction: Direction
+) -> VocabularyReviewLog | None:
+    """The most recent answer logged for this word in this direction, or
+    ``None`` -- the whole of what a ``requeued`` claim is checked against
+    (see :func:`record_answer`)."""
+    rows = await session.exec(
+        select(VocabularyReviewLog)
+        .where(
+            VocabularyReviewLog.saved_word_id == word_id,
+            VocabularyReviewLog.direction == direction,
+        )
+        .order_by(VocabularyReviewLog.reviewed_at.desc())
+        .limit(1)
+    )
+    return rows.first()
+
+
 async def record_answer(
     session: AsyncSession,
     user: User,
@@ -1537,6 +1686,7 @@ async def record_answer(
     elapsed_ms: int,
     planned_exercise: str | None = None,
     claim_known: bool = False,
+    requeued: bool = False,
 ) -> dict | None:
     """Grade one answer, advance its card, move the ladder, and log it.
     Returns ``None`` for a word that is not this learner's -- the API turns
@@ -1574,7 +1724,42 @@ async def record_answer(
     practised (``passive_state is None``) -- "I know this" is a bypass
     offered on a brand-new word's first appearance and nothing else (see the
     brief), so a claim against a word already in rotation is rejected
-    outright rather than silently marking it known on a technicality.
+    outright rather than silently marking it known on a technicality. Its
+    one follow-up is logged with ``planned_exercise = NULL`` and skips
+    :func:`_apply_ladder` entirely -- it is served at ``recall`` on a word
+    the ladder has only ever asked at its floor, and logging that as the
+    ladder's own plan would make :func:`_has_reached_level` believe the
+    word had genuinely reached the top rung (pass OR fail: a wrong
+    known-check answer is still an answer AT ``recall``, and would forge
+    the same evidence), buying every later real promotion the cheap
+    1-correct re-promotion price it has not earned.
+
+    ``requeued`` is the brief's same-session requeue: after an ``Again`` the
+    CLIENT re-shows the same item at the end of the session ("u shu kartani
+    tugatadi") rather than jumping straight to whatever the ladder would now
+    serve. That second answer is graded normally -- FSRS scores it exactly
+    as any other answer, and a genuine new lapse can still tip the word into
+    leech -- but it is not fresh evidence about the TASK: it was served at
+    the same ``exercise_type`` the learner already failed, not at whatever
+    ``_current_level`` says now (which may already have been demoted by the
+    first Again), so it counts towards neither promotion nor a second
+    demotion. Verified server-side against :func:`_last_log`, not trusted on
+    the client's word alone: the word's own last logged answer in this
+    direction must be an ``Again`` at exactly this ``exercise_type``, within
+    :data:`REQUEUE_WINDOW` -- otherwise a client could claim ``requeued`` on
+    any answer to buy a free pass around the ladder's authority check below.
+    A verified requeue is logged with ``planned_exercise = NULL`` -- never
+    ``exercise_type``, which would forge the same "has reached this level"
+    evidence :func:`_has_reached_level` reads off a genuine ladder serving,
+    for a level this answer never actually earned -- and skips
+    :func:`_apply_ladder` entirely, which is what keeps it out of a second
+    demotion. ``_promotion_streak`` and ``_has_reached_level`` both skip a
+    ``NULL``-planned row rather than reading it as "a different level",
+    which would wrongly break a genuine streak sitting either side of it.
+    ``planned_exercise IS NULL`` also keeps the row out of the fallback
+    metric (``planned_exercise IS NOT NULL AND planned_exercise !=
+    exercise_type``) -- a requeue is neither the ladder's plan nor a
+    distractor-pipeline fallback, so it is measured as neither.
 
     The context named in the request is trusted only as far as it actually
     belongs to this word; a mismatched or unknown id is treated as no
@@ -1590,6 +1775,9 @@ async def record_answer(
         candidate = await session.get(SavedWordContext, context_id)
         if candidate is not None and candidate.saved_word_id == word.id:
             context = candidate
+
+    now = datetime.now(timezone.utc)
+    skip_ladder = False
 
     if claim_known:
         # The known-check bypass is new-word-only -- a passive card that has
@@ -1607,7 +1795,18 @@ async def record_answer(
                 "claim_known's one follow-up is always a passive recall "
                 "answer",
             )
-        planned_exercise = "recall"
+        # Logged with no plan at all -- see the docstring above and
+        # `VocabularyReviewLog.planned_exercise`'s own: a known-check
+        # answer is a BYPASS of the ladder, at `recall`, on a word the
+        # ladder has only ever served at its floor. Logging `planned_
+        # exercise="recall"` here would make `_has_reached_level` believe
+        # the word had genuinely reached the top rung, buying every later
+        # real promotion the cheap 1-correct re-promotion price instead of
+        # `PROMOTE_STREAK` -- and it skips `_apply_ladder` outright, for
+        # the same reason: this answer proves nothing about the ladder's
+        # own task.
+        planned_exercise = None
+        skip_ladder = True
     else:
         if direction == "active":
             already_started = (
@@ -1626,14 +1825,47 @@ async def record_answer(
                         "active practice is not unlocked for this word",
                     )
 
-        planned_exercise = _current_level(word, direction)
-        fallback = FALLBACK_EXERCISE.get(direction) if planned_exercise == "recognise" else None
-        if exercise_type != planned_exercise and exercise_type != fallback:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
-                "exercise_type does not match the ladder's planned level "
-                "for this word",
+        if requeued:
+            # The same-session requeue: this exact (word, direction) must
+            # have just failed at exactly this exercise, recently -- not
+            # whatever the ladder says now, which the first Again may have
+            # already moved. See the docstring above.
+            last_log = await _last_log(session, word.id, direction)
+            if (
+                last_log is None
+                or last_log.rating != int(fsrs.Rating.Again)
+                or last_log.exercise_type != exercise_type
+                or last_log.reviewed_at < now - REQUEUE_WINDOW
+            ):
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "requeued does not match a recent Again at this exercise "
+                    "for this word",
+                )
+            # Logged with no plan at all, not `exercise_type` -- the ladder
+            # asked for nothing this time round (this is the SAME task the
+            # learner already failed once this session, not fresh evidence
+            # about it), and a value here would make `_has_reached_level`
+            # believe the word had reached whatever this exercise was,
+            # however far above the ladder's own current floor -- the same
+            # forged-evidence problem `claim_known` has, above. It also
+            # keeps this row out of the fallback metric
+            # (`planned_exercise IS NOT NULL AND planned_exercise !=
+            # exercise_type`): a requeue is neither a fallback nor the
+            # ladder's plan, so it is neither.
+            planned_exercise = None
+            skip_ladder = True
+        else:
+            planned_exercise = _current_level(word, direction)
+            fallback = (
+                FALLBACK_EXERCISE.get(direction) if planned_exercise == "recognise" else None
             )
+            if exercise_type != planned_exercise and exercise_type != fallback:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "exercise_type does not match the ladder's planned level "
+                    "for this word",
+                )
 
     if exercise_type == "recognise":
         right_text = _recognise_right_text(word, context, direction)
@@ -1656,7 +1888,6 @@ async def record_answer(
     became_known = claim_known and verdict == "correct"
     rating = fsrs.Rating.Easy if became_known else rating_for(exercise_type, verdict)
 
-    now = datetime.now(timezone.utc)
     card = _load_card(word, direction)
     # The schedule this answer is judged against -- null for a card that has
     # never been reviewed, since there is no prior due date to have been
@@ -1682,7 +1913,11 @@ async def record_answer(
     # database. See `SavedWord.active_level`'s own docstring.
     if direction == "active" and word.active_level is None:
         word.active_level = "recognise"
-    await _apply_ladder(session, word, direction, planned_exercise, exercise_type, rating)
+    # A verified same-session requeue is not fresh evidence about the task
+    # -- see `record_answer`'s own docstring -- so the ladder does not move
+    # a second time off the same failure.
+    if not skip_ladder:
+        await _apply_ladder(session, word, direction, planned_exercise, exercise_type, rating)
 
     session.add(word)
     session.add(
@@ -1711,6 +1946,7 @@ async def record_answer(
     # never re-flagged (it is excluded from every queue the moment it
     # becomes one, so it cannot lapse again before the learner resolves it).
     became_leech = False
+    leech_context: dict | None = None
     if is_lapse and word.status != "known":
         lapses = await _lapses_since_reset(session, word, direction)
         if _is_leech(lapses, now):
@@ -1718,6 +1954,23 @@ async def record_answer(
             session.add(word)
             await session.commit()
             became_leech = True
+            # The newest context with an actual sentence -- "See it in
+            # context" (§5/§6 of the brief), null when the word has none.
+            sentence_context = await _newest_context_with_sentence(session, word.id)
+            if sentence_context is not None:
+                mark = resolve_mark(word, sentence_context)
+                context_titles = await materials_service.titles_for(
+                    session, [sentence_context.material_id]
+                )
+                leech_context = {
+                    "before": mark.before,
+                    "target": mark.target,
+                    "after": mark.after,
+                    "material_id": sentence_context.material_id,
+                    "material_title": context_titles.get(
+                        sentence_context.material_id, ""
+                    ),
+                }
 
     material_id = context.material_id if context else None
     material_title = ""
@@ -1733,6 +1986,7 @@ async def record_answer(
         "next_due_at": updated.due,
         "known": became_known,
         "became_leech": became_leech,
+        "leech_context": leech_context,
         "status": word.status,
         "level": getattr(word, f"{direction}_level") or "recognise",
         "word": {

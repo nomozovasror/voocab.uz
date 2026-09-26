@@ -15,19 +15,24 @@ from datetime import datetime, timedelta, timezone
 import fsrs
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlmodel import select
 
+from app.api.vocabulary import _saved_word_out
 from app.core.database import async_session_factory
 from app.models.material import Material
 from app.models.part import Part
 from app.models.user import User
 from app.models.vocabulary import (
+    ACTIVE_LADDER,
+    PASSIVE_LADDER,
     MaterialVocabulary,
     SavedWord,
     SavedWordContext,
     VocabularyReviewLog,
     VocabularySettings,
 )
+from app.schemas.vocabulary import VocabularySettingsIn
 from app.services import distractors
 from app.services import practice as practice_service
 from app.services import vocabulary as vocabulary_service
@@ -1644,5 +1649,631 @@ async def test_active_cards_pause_under_passive_and_resume_unchanged():
         assert reloaded.active_stability == 9.0  # untouched by the pause
         assert reloaded.active_due == word.active_due
         assert reloaded.active_level == "produce"
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+# --- B2: the ladder is a named list, walked by index --------------------------
+
+
+def test_ladder_constants_match_the_addendum_exactly():
+    """Named exactly as the addendum's own table, in text matching
+    `EXERCISE_TYPES`, never a bare integer -- see the constants' own
+    docstring for why a single shared "level 2" was the bug."""
+    assert PASSIVE_LADDER == ("recognise", "recall")
+    assert ACTIVE_LADDER == ("recognise", "produce")
+
+
+def test_ladder_for_direction_reads_the_named_lists():
+    assert practice_service._ladder_for("passive") is PASSIVE_LADDER
+    assert practice_service._ladder_for("active") is ACTIVE_LADDER
+
+
+# --- B1: the same-session requeue ---------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_requeued_answer_does_not_move_the_ladder_or_log_as_a_fallback():
+    """The client re-shows the SAME item after an Again, at the end of the
+    session. That second answer must not undo the demotion the first answer
+    already earned (it is not promotion evidence), and its log row is not a
+    fallback -- `planned_exercise` is logged NULL, never the exercise
+    actually served, so it can be neither the ladder's plan nor evidence
+    that the word has ever reached that level."""
+    email = f"requeue-top-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+    word = await _make_saved_word(
+        user.id, "lumen", status="review", passive_level="recall",
+        passive_state=int(fsrs.State.Review), passive_stability=12.0,
+        passive_difficulty=5.0, passive_due=now - timedelta(days=1),
+        passive_last_review=now - timedelta(days=13),
+    )
+    try:
+        async with async_session_factory() as session:
+            first = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=None,
+                direction="passive", exercise_type="recall",
+                planned_exercise="recall", given="completely wrong",
+                elapsed_ms=1000,
+            )
+        assert first["rating"] == int(fsrs.Rating.Again)
+        assert first["returns_this_session"] is True
+        assert (await _reload(word.id)).passive_level == "recognise"  # demoted
+
+        # The requeued serving of the SAME item, answered correctly.
+        async with async_session_factory() as session:
+            second = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=None,
+                direction="passive", exercise_type="recall",
+                planned_exercise="recall", given="lumen", elapsed_ms=1000,
+                requeued=True,
+            )
+        assert second is not None
+        assert second["verdict"] == "correct"
+        # Not promoted back up by this single answer -- it was never
+        # evidence towards it.
+        assert (await _reload(word.id)).passive_level == "recognise"
+
+        async with async_session_factory() as session:
+            logs = (
+                await session.exec(
+                    select(VocabularyReviewLog)
+                    .where(VocabularyReviewLog.saved_word_id == word.id)
+                    .order_by(VocabularyReviewLog.reviewed_at)
+                )
+            ).all()
+        assert len(logs) == 2
+        # Logged with NO plan at all -- never the exercise actually served,
+        # which would forge "this word has reached recall" evidence
+        # (`_has_reached_level`) for a rung this answer never earned, and
+        # never a fallback substitution for the (now-lower) floor either.
+        assert logs[1].planned_exercise is None
+        assert logs[1].exercise_type == "recall"
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+@pytest.mark.asyncio
+async def test_requeued_claim_rejected_without_a_matching_recent_again():
+    """A client cannot claim `requeued` out of nowhere -- there must be a
+    real, recent `Again` at exactly this exercise for this word."""
+    email = f"requeue-forged-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    word = await _make_saved_word(user.id, "lumen")  # never practised at all
+    try:
+        with pytest.raises(HTTPException) as excinfo:
+            async with async_session_factory() as session:
+                await practice_service.record_answer(
+                    session, user, word_id=word.id, context_id=None,
+                    direction="passive", exercise_type="recall",
+                    given="lumen", elapsed_ms=1000, requeued=True,
+                )
+        assert excinfo.value.status_code == 422
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+@pytest.mark.asyncio
+async def test_requeued_claim_rejected_once_the_window_has_passed():
+    """A stale claim -- an Again from days ago -- is not "the same
+    session"; :data:`practice_service.REQUEUE_WINDOW` is the cutoff."""
+    email = f"requeue-stale-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+    word = await _make_saved_word(
+        user.id, "lumen", status="review", passive_level="recall",
+        passive_state=int(fsrs.State.Review), passive_stability=12.0,
+        passive_due=now - timedelta(days=1),
+    )
+    try:
+        async with async_session_factory() as session:
+            session.add(VocabularyReviewLog(
+                user_id=user.id, saved_word_id=word.id, lemma=word.lemma,
+                direction="passive", exercise_type="recall",
+                planned_exercise="recall", rating=int(fsrs.Rating.Again),
+                reviewed_at=now - practice_service.REQUEUE_WINDOW - timedelta(minutes=1),
+                state=int(fsrs.State.Relearning), stability=4.0, difficulty=7.0,
+            ))
+            await session.commit()
+
+        with pytest.raises(HTTPException) as excinfo:
+            async with async_session_factory() as session:
+                await practice_service.record_answer(
+                    session, user, word_id=word.id, context_id=None,
+                    direction="passive", exercise_type="recall",
+                    given="lumen", elapsed_ms=1000, requeued=True,
+                )
+        assert excinfo.value.status_code == 422
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+# --- Ladder integrity: a known-check or a requeue is never ladder evidence --
+
+
+def _recognise_given(word: SavedWord, context: SavedWordContext | None) -> str:
+    """The correct `given` for a passive `recognise` answer -- the right
+    option's id, recomputed the same way `grade_choice` does, so a test can
+    answer a recognise item correctly without building the four options."""
+    right_text = practice_service._recognise_right_text(word, context, "passive")
+    return distractors.option_id(word.id, right_text)
+
+
+@pytest.mark.asyncio
+async def test_known_check_pass_does_not_grant_a_free_repromotion():
+    """A CORRECT "I know this" answer must be logged with no plan at all.
+    Logged as `planned_exercise="recall"` (the bug), it would make
+    `_has_reached_level` believe the word had genuinely reached the top
+    rung, so a single correct `recognise` answer afterwards would promote
+    it -- one, not the usual two."""
+    email = f"known-repromo-pass-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Known-check: no free repromotion (pass)")
+    word = await _make_saved_word(
+        user.id, "lumen", meaning_core_en="a unit of luminous flux",
+    )
+    context = await _make_context(
+        word.id, material.id, surface="lumen", example="A lumen measures light.",
+    )
+    try:
+        async with async_session_factory() as session:
+            known = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recall",
+                given="lumen", elapsed_ms=1200, claim_known=True,
+            )
+        assert known["known"] is True
+
+        async with async_session_factory() as session:
+            log = (
+                await session.exec(
+                    select(VocabularyReviewLog).where(
+                        VocabularyReviewLog.saved_word_id == word.id
+                    )
+                )
+            ).one()
+        assert log.planned_exercise is None
+
+        given = _recognise_given(word, context)
+        async with async_session_factory() as session:
+            first = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recognise",
+                given=given, elapsed_ms=1200,
+            )
+        # One correct is not enough -- the known-check row bought nothing.
+        assert first["level"] == "recognise"
+        assert (await _reload(word.id)).passive_level == "recognise"
+
+        async with async_session_factory() as session:
+            second = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recognise",
+                given=given, elapsed_ms=1200,
+            )
+        assert second["level"] == "recall"
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+@pytest.mark.asyncio
+async def test_known_check_fail_does_not_grant_a_free_repromotion():
+    """A WRONG "I know this" answer is still an answer AT `recall`, and must
+    be logged with no plan either -- pass or fail, per the brief's fix."""
+    email = f"known-repromo-fail-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Known-check: no free repromotion (fail)")
+    word = await _make_saved_word(
+        user.id, "lumen", meaning_core_en="a unit of luminous flux",
+    )
+    context = await _make_context(
+        word.id, material.id, surface="lumen", example="A lumen measures light.",
+    )
+    try:
+        async with async_session_factory() as session:
+            failed = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recall",
+                given="completely wrong", elapsed_ms=1200, claim_known=True,
+            )
+        assert failed["known"] is False
+
+        async with async_session_factory() as session:
+            log = (
+                await session.exec(
+                    select(VocabularyReviewLog).where(
+                        VocabularyReviewLog.saved_word_id == word.id
+                    )
+                )
+            ).one()
+        assert log.planned_exercise is None
+        assert (await _reload(word.id)).passive_level == "recognise"
+
+        given = _recognise_given(word, context)
+        async with async_session_factory() as session:
+            first = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recognise",
+                given=given, elapsed_ms=1200,
+            )
+        assert first["level"] == "recognise"
+
+        async with async_session_factory() as session:
+            second = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recognise",
+                given=given, elapsed_ms=1200,
+            )
+        assert second["level"] == "recall"
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+@pytest.mark.asyncio
+async def test_fallback_then_requeue_does_not_grant_a_free_repromotion():
+    """A fallback-served `recall` answered Again, then requeued and answered
+    correctly: the requeue's `exercise_type` ("recall") is the fallback's
+    HARDER task, never a rung the ladder itself promoted this word to, and
+    must not be logged as one -- either bug would let a single correct
+    `recognise` answer afterwards promote the word."""
+    email = f"fallback-repromo-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Fallback+requeue: no free repromotion")
+    word = await _make_saved_word(
+        user.id, "lumen", meaning_core_en="a unit of luminous flux",
+    )
+    context = await _make_context(
+        word.id, material.id, surface="lumen", example="A lumen measures light.",
+    )
+    try:
+        # A fallback-served `recall` answer at the passive floor, wrong.
+        async with async_session_factory() as session:
+            first = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recall",
+                given="completely wrong", elapsed_ms=1200,
+            )
+        assert first["rating"] == int(fsrs.Rating.Again)
+        assert (await _reload(word.id)).passive_level == "recognise"
+
+        # The client requeues that same fallback item and answers correctly.
+        async with async_session_factory() as session:
+            requeue = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recall",
+                given="lumen", elapsed_ms=1200, requeued=True,
+            )
+        assert requeue["verdict"] == "correct"
+
+        async with async_session_factory() as session:
+            logs = (
+                await session.exec(
+                    select(VocabularyReviewLog)
+                    .where(VocabularyReviewLog.saved_word_id == word.id)
+                    .order_by(VocabularyReviewLog.reviewed_at)
+                )
+            ).all()
+        assert len(logs) == 2
+        # Not "recall" -- that would claim the ladder itself served this
+        # word at its top rung, which it never did.
+        assert logs[1].planned_exercise is None
+        # Never a fallback either: the metric requires a non-null plan.
+        assert not (
+            logs[1].planned_exercise is not None
+            and logs[1].planned_exercise != logs[1].exercise_type
+        )
+        assert (await _reload(word.id)).passive_level == "recognise"
+
+        given = _recognise_given(word, context)
+        async with async_session_factory() as session:
+            second = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recognise",
+                given=given, elapsed_ms=1200,
+            )
+        # One correct is not enough -- the requeue row bought nothing.
+        assert second["level"] == "recognise"
+
+        async with async_session_factory() as session:
+            third = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recognise",
+                given=given, elapsed_ms=1200,
+            )
+        assert third["level"] == "recall"
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+# --- B3: passive recognise is the bare word, never a marked sentence --------
+
+
+@pytest.mark.asyncio
+async def test_passive_recognise_shows_the_bare_word_no_sentence():
+    """The brief: passive `recognise` is the English word alone. `before`/
+    `after` are empty and `target` is the lemma, even though this word HAS
+    a sentence that could have been marked."""
+    email = f"passive-recognise-bare-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Passive recognise: bare word")
+    part = await _make_part(material.id)
+    word = await _make_saved_word(
+        user.id, "steadfast", pos="adj",
+        meaning_core_en="firm and not changing in attitude or purpose",
+    )
+    context = await _make_context(
+        word.id, material.id, surface="steadfast", cefr_level="B2",
+        example="She remained steadfast despite the criticism.",
+    )
+    await _make_vocab_entry(
+        material.id, part.id, lemma="loyal", pos="adj", cefr_level="B2",
+        meaning_en="faithful to a person or cause",
+    )
+    await _make_vocab_entry(
+        material.id, part.id, lemma="rigid", pos="adj", cefr_level="B2",
+        meaning_en="unable to bend or be forced out of shape",
+    )
+    await _make_vocab_entry(
+        material.id, part.id, lemma="cautious", pos="adj", cefr_level="B2",
+        meaning_en="careful to avoid danger or mistakes",
+    )
+    try:
+        async with async_session_factory() as session:
+            passive_item = await practice_service._build_item(
+                session, word, "passive", "recognise", context, is_new=True,
+                source_material_ids=frozenset({material.id}),
+                family_keys=frozenset(),
+            )
+        assert passive_item["exercise_type"] == "recognise"
+        assert passive_item["prompt"]["kind"] == "choice"
+        assert passive_item["prompt"]["before"] == ""
+        assert passive_item["prompt"]["after"] == ""
+        assert passive_item["prompt"]["target"] == "steadfast"
+        assert len(passive_item["prompt"]["options"]) == 4
+
+        # Active `recognise` is unaffected -- still no target word, only
+        # the Uzbek meaning.
+        async with async_session_factory() as session:
+            active_item = await practice_service._build_item(
+                session, word, "active", "recognise", context, is_new=True,
+                source_material_ids=frozenset({material.id}),
+                family_keys=frozenset(),
+            )
+        assert active_item["prompt"]["target"] == ""
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+# --- B4: the settings screen's exercise type is ONE choice --------------------
+
+
+def test_settings_exercise_types_accepts_null_or_exactly_one():
+    auto = VocabularySettingsIn(daily_minutes=10, direction="passive",
+                                 exercise_types=None)
+    assert auto.exercise_types is None
+
+    one = VocabularySettingsIn(daily_minutes=10, direction="passive",
+                                exercise_types=["produce"])
+    assert one.exercise_types == ["produce"]
+
+    with pytest.raises(ValidationError):
+        VocabularySettingsIn(daily_minutes=10, direction="passive",
+                              exercise_types=["recognise", "produce"])
+
+    with pytest.raises(ValidationError):
+        VocabularySettingsIn(daily_minutes=10, direction="passive",
+                              exercise_types=[])
+
+
+@pytest.mark.asyncio
+async def test_manual_produce_choice_only_serves_active_produce_cards():
+    """`Produce` maps to active `produce` cards only -- a word still at
+    passive `recognise` offers nothing, per the addendum's table."""
+    email = f"manual-produce-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+    await _make_saved_word(
+        user.id, "recognise-only", status="review", passive_level="recognise",
+        passive_state=int(fsrs.State.Review), passive_stability=5.0,
+        passive_due=now - timedelta(minutes=5),
+    )
+    await _make_saved_word(
+        user.id, "produce-ready", status="review",
+        passive_state=int(fsrs.State.Review), passive_stability=25.0,
+        passive_due=now + timedelta(days=5),
+        active_level="produce",
+        active_state=int(fsrs.State.Review), active_stability=5.0,
+        active_due=now - timedelta(minutes=5),
+    )
+    try:
+        async with async_session_factory() as session:
+            await practice_service.update_settings(
+                session, user.id, daily_minutes=20, direction="both",
+                exercise_types=["produce"],
+            )
+        async with async_session_factory() as session:
+            items = await practice_service.build_session(session, user, tz=None)
+        lemmas = {item["lemma"] for item in items}
+        assert lemmas == {"produce-ready"}
+        assert all(item["exercise_type"] == "produce" for item in items)
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+# --- B5: per-direction lapse counts, derived from the logs ---------------------
+
+
+@pytest.mark.asyncio
+async def test_lapse_counts_for_split_by_direction_from_the_logs():
+    email = f"lapse-split-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+    word = await _make_saved_word(user.id, "split-lapses")
+    try:
+        async with async_session_factory() as session:
+            for marker in (
+                now - timedelta(days=10), now - timedelta(days=5),
+            ):
+                for log in _lapse_pair_logs(
+                    user.id, word, good_at=marker - timedelta(minutes=1),
+                    again_at=marker,
+                ):
+                    session.add(log)
+            session.add(VocabularyReviewLog(
+                user_id=user.id, saved_word_id=word.id, lemma=word.lemma,
+                direction="active", exercise_type="produce",
+                planned_exercise="produce", rating=int(fsrs.Rating.Good),
+                reviewed_at=now - timedelta(days=3, minutes=1),
+                state=int(fsrs.State.Review), stability=8.0, difficulty=5.0,
+            ))
+            session.add(VocabularyReviewLog(
+                user_id=user.id, saved_word_id=word.id, lemma=word.lemma,
+                direction="active", exercise_type="produce",
+                planned_exercise="produce", rating=int(fsrs.Rating.Again),
+                reviewed_at=now - timedelta(days=3),
+                state=int(fsrs.State.Relearning), stability=4.0, difficulty=7.0,
+            ))
+            await session.commit()
+
+        async with async_session_factory() as session:
+            counts = await practice_service.lapse_counts_for(session, [word.id])
+        assert counts[word.id] == {"passive": 2, "active": 1}
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+def test_saved_word_out_exposes_the_per_direction_lapse_counts():
+    word = SavedWord(user_id=uuid.uuid4(), lemma="tally", lapses=5)
+    out = _saved_word_out(
+        word, [], {}, direction="passive",
+        lapse_counts={"passive": 3, "active": 2},
+    )
+    assert out.passive_lapses == 3
+    assert out.active_lapses == 2
+
+
+# --- B6: the leech card's own context, and the "see it in context" choice ---
+
+
+@pytest.mark.asyncio
+async def test_leech_answer_returns_the_newest_context_with_a_sentence():
+    email = f"leech-context-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Leech: context")
+    now = datetime.now(timezone.utc)
+    word = await _make_saved_word(
+        user.id, "obstinate", status="review",
+        passive_state=int(fsrs.State.Review), passive_stability=8.0,
+        passive_difficulty=6.0, passive_due=now - timedelta(days=1),
+        passive_last_review=now - timedelta(days=20),
+    )
+    context = await _make_context(
+        word.id, material.id, surface="obstinate",
+        example="He was obstinate about the schedule.",
+    )
+    try:
+        async with async_session_factory() as session:
+            for i in range(5):
+                marker = now - timedelta(days=200 - i * 20)
+                for log in _lapse_pair_logs(
+                    user.id, word, good_at=marker - timedelta(minutes=1),
+                    again_at=marker,
+                ):
+                    session.add(log)
+            session.add(_review_anchor_log(user.id, word, at=now - timedelta(minutes=1)))
+            await session.commit()
+
+        async with async_session_factory() as session:
+            result = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recall",
+                planned_exercise="recall", given="completely wrong",
+                elapsed_ms=3000,
+            )
+        assert result["became_leech"] is True
+        leech_context = result["leech_context"]
+        assert leech_context is not None
+        assert leech_context["target"] == "obstinate"
+        assert leech_context["before"] == "He was "
+        assert leech_context["after"] == " about the schedule."
+        assert leech_context["material_id"] == material.id
+        assert leech_context["material_title"] == "Leech: context"
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+@pytest.mark.asyncio
+async def test_leech_answer_with_no_sentence_anywhere_returns_a_null_context():
+    email = f"leech-context-null-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+    word = await _make_saved_word(
+        user.id, "recalcitrant", status="review",
+        passive_state=int(fsrs.State.Review), passive_stability=8.0,
+        passive_difficulty=6.0, passive_due=now - timedelta(days=1),
+        passive_last_review=now - timedelta(days=20),
+    )
+    try:
+        async with async_session_factory() as session:
+            for i in range(5):
+                marker = now - timedelta(days=200 - i * 20)
+                for log in _lapse_pair_logs(
+                    user.id, word, good_at=marker - timedelta(minutes=1),
+                    again_at=marker,
+                ):
+                    session.add(log)
+            session.add(_review_anchor_log(user.id, word, at=now - timedelta(minutes=1)))
+            await session.commit()
+
+        async with async_session_factory() as session:
+            result = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=None,
+                direction="passive", exercise_type="recall",
+                planned_exercise="recall", given="completely wrong",
+                elapsed_ms=3000,
+            )
+        assert result["became_leech"] is True
+        assert result["leech_context"] is None
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+@pytest.mark.asyncio
+async def test_leech_see_context_choice_keeps_the_level_and_resets_lapses():
+    """"See it in context" is graded the same as "keep going" -- status
+    recomputed, lapse window reset -- and, per the brief, the word stays at
+    its own level: seeing the sentence again is not practice."""
+    email = f"leech-see-context-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+    word = await _make_saved_word(
+        user.id, "intransigent", status="leech", passive_level="recall",
+        passive_state=int(fsrs.State.Review), passive_stability=6.0,
+        passive_due=now + timedelta(days=1),
+    )
+    try:
+        async with async_session_factory() as session:
+            for log in _lapse_pair_logs(
+                user.id, word, good_at=now - timedelta(days=10, minutes=1),
+                again_at=now - timedelta(days=10),
+            ):
+                session.add(log)
+            await session.commit()
+
+        async with async_session_factory() as session:
+            resolved = await practice_service.resolve_leech(
+                session, user, lemma="intransigent", choice="see_context"
+            )
+        assert resolved is not None
+        assert resolved.status != "leech"
+        assert resolved.passive_level == "recall"  # unchanged
+        assert resolved.leech_reset_at is not None
+
+        async with async_session_factory() as session:
+            lapses = await practice_service._lapses_since_reset(
+                session, resolved, "passive"
+            )
+        assert lapses == []  # reset, same as the other two choices
     finally:
         await _cleanup(user_ids=[user.id])

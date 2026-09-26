@@ -274,8 +274,14 @@ async def get_saved_word(
         session, [context.material_id for context in contexts]
     )
     settings = await practice_service.get_settings(session, user.id)
+    lapse_counts = (
+        await practice_service.lapse_counts_for(session, [word.id])
+    ).get(word.id, {"passive": 0, "active": 0})
     return SavedWordDetailOut(
-        word=_saved_word_out(word, contexts, titles, direction=settings.direction),
+        word=_saved_word_out(
+            word, contexts, titles, direction=settings.direction,
+            lapse_counts=lapse_counts,
+        ),
         history=[
             WordHistoryEntryOut(
                 reviewed_at=log.reviewed_at,
@@ -317,11 +323,18 @@ async def leech_choice(
         session, [context.material_id for context in contexts]
     )
     settings = await practice_service.get_settings(session, user.id)
-    return _saved_word_out(word, contexts, titles, direction=settings.direction)
+    lapse_counts = (
+        await practice_service.lapse_counts_for(session, [word.id])
+    ).get(word.id, {"passive": 0, "active": 0})
+    return _saved_word_out(
+        word, contexts, titles, direction=settings.direction,
+        lapse_counts=lapse_counts,
+    )
 
 
 def _saved_word_out(
-    word, contexts, titles: dict, *, direction: str
+    word, contexts, titles: dict, *, direction: str,
+    lapse_counts: dict | None = None,
 ) -> SavedWordOut:
     """One saved word, in the extended shape stage 2 shows on the words list
     and the word page -- see :class:`SavedWordOut`'s own docstring for why
@@ -331,7 +344,13 @@ def _saved_word_out(
     stored on the word -- ``active_paused`` is true exactly when an active
     card exists and that setting is ``passive``, per
     ``practice._gather_candidates``'s pause rule.
+
+    ``lapse_counts`` is this one word's ``{"passive": n, "active": n}`` from
+    ``practice.lapse_counts_for`` -- computed by the caller, once, over
+    every word a listing needs rather than per row here, so a hundred saved
+    words cost one extra query and not a hundred and one.
     """
+    lapse_counts = lapse_counts or {"passive": 0, "active": 0}
     newest_cefr = contexts[-1].cefr_level if contexts else ""
     return SavedWordOut(
         lemma=word.lemma,
@@ -366,6 +385,8 @@ def _saved_word_out(
         passive_stability=word.passive_stability,
         active_stability=word.active_stability,
         lapses=word.lapses,
+        passive_lapses=lapse_counts["passive"],
+        active_lapses=lapse_counts["active"],
         reps=word.reps,
         suspended_until=word.suspended_until,
         active_paused=word.active_state is not None and direction == "passive",
@@ -389,10 +410,16 @@ async def _saved(session: AsyncSession, user_id: uuid.UUID) -> SavedWordsOut:
     }
     titles = await materials_service.titles_for(session, list(wanted))
     settings = await practice_service.get_settings(session, user_id)
+    lapse_counts = await practice_service.lapse_counts_for(
+        session, [word.id for word, _ in rows]
+    )
     return SavedWordsOut(
         total=len(rows),
         words=[
-            _saved_word_out(word, contexts, titles, direction=settings.direction)
+            _saved_word_out(
+                word, contexts, titles, direction=settings.direction,
+                lapse_counts=lapse_counts.get(word.id),
+            )
             for word, contexts in rows
         ],
     )
@@ -473,6 +500,7 @@ async def practice_answer(
         given=data.given,
         elapsed_ms=data.elapsed_ms,
         claim_known=data.claim_known,
+        requeued=data.requeued,
     )
     if result is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not on your list")

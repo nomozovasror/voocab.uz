@@ -349,22 +349,63 @@ in `distractors.py` instead, because that pipeline touches no card at all
 and is exactly the piece expected to be re-tuned once real sessions are
 watched.
 
-- **The ladder is a stored level, not a derived one.** `passive_level`
-  (`recognise`/`recall`) and `active_level` (`recognise`/`produce`, null =
-  not started) say which TASK is currently served; FSRS still schedules the
-  card exactly as stage 1 does, with no penalty of its own. Promotion at
-  the floor needs 2 consecutive corrects — or 1, if the word has ever been
-  at the top rung before (a re-promotion after a demotion should not cost
-  what the first promotion cost). Demotion is a single Again at the top
-  rung; `close` (Hard on `recall`, Good on `produce`) never demotes,
-  because a demotion is the ladder's judgement about the TASK, not FSRS's
-  about the schedule, and a spelling slip is not evidence the task is too
-  hard. Both are read from `vocabulary_review_logs.planned_exercise`
+- **The ladder is a stored level, not a derived one, named `PASSIVE_LADDER`/
+  `ACTIVE_LADDER`** (`app.models.vocabulary`) — `("recognise", "recall")`
+  and `("recognise", "produce")`, in TEXT matching `EXERCISE_TYPES` exactly,
+  never a bare integer: the brief's addendum replaced an earlier single
+  shared "level 2" for exactly this reason, since one number would mean
+  "recall" for one direction and "produce" for the other. `passive_level`/
+  `active_level` (null = not started) say which TASK is currently served;
+  FSRS still schedules the card exactly as stage 1 does, with no penalty of
+  its own. `_apply_ladder` moves a word by ONE STEP OF THE LADDER'S OWN
+  INDEX (`_ladder_for(direction).index(planned_exercise)` ± 1), not a
+  hand-written floor/top special case, so a ladder gaining a middle rung
+  later is a one-line change to the list. Promotion at the floor needs 2
+  consecutive corrects — or 1, if the word has ever been at the top rung
+  before (a re-promotion after a demotion should not cost what the first
+  promotion cost). Demotion is a single Again at the top rung; `close`
+  (Hard on `recall`, Good on `produce`) never demotes, because a demotion
+  is the ladder's judgement about the TASK, not FSRS's about the schedule,
+  and a spelling slip is not evidence the task is too hard. Both are read
+  from `vocabulary_review_logs.planned_exercise`
   (`_promotion_streak`/`_has_reached_level`), which is what the ladder
   actually asked for, not `exercise_type` (what was served) — so a
   distractor-pipeline fallback answered correctly still counts as evidence
   for promotion, and a fallback answered wrong still counts as a miss at
-  the floor.
+  the floor. A `planned_exercise IS NULL` row — a known-check answer or a
+  verified same-session requeue, neither of which is the ladder's own
+  evidence about a level — is SKIPPED by both functions rather than read as
+  "a different level": skipping it neither breaks a genuine streak sitting
+  either side of it nor ever counts as "reached".
+- **Passive `recognise` is the bare English word, never a marked
+  sentence.** `_choice_item` sends empty `before`/`after` for BOTH
+  directions and `target = word.lemma` for passive only (active leaves
+  `target` empty too, since it shows only `shown_meaning_uz`) — the brief's
+  "ingliz so'zi, ostida 4 ta ta'rif" has no sentence in it at all.
+  `resolve_mark` (surface, then lemma, in the sentence — the same search
+  `resolve_gap` uses) still exists and is still used, but only for the
+  leech card's `leech_context` below; it no longer builds the recognise
+  prompt.
+- **A same-session requeue is verified against the log, not trusted, and
+  earns the ladder nothing a second time.** After an `Again` the client
+  re-shows the SAME item at the end of the session rather than jumping to
+  whatever the ladder now serves (`PracticeAnswerIn.requeued`). `_last_log`
+  must show an `Again` at exactly this `exercise_type`, within
+  `REQUEUE_WINDOW` (6 hours) — otherwise 422, since a client that could
+  claim `requeued` freely could dodge the ordinary "exercise_type matches
+  the planned level" check on any answer. A verified requeue logs
+  `planned_exercise = NULL` — never `exercise_type`, which would forge the
+  same "this word has reached that level" evidence a genuine ladder
+  serving leaves, for a level this answer never actually earned — and
+  skips `_apply_ladder` entirely: it is graded by FSRS exactly like any
+  other answer (a genuine new lapse still counts towards leech), but it is
+  not fresh evidence about the TASK, because it is the SAME task the
+  learner already failed once this session. `_promotion_streak` and
+  `_has_reached_level` both skip a null-planned row rather than reading it
+  as a different level, and null also keeps it out of the fallback metric
+  below (`planned_exercise IS NOT NULL AND planned_exercise !=
+  exercise_type`) — a requeue is neither the ladder's plan nor a fallback,
+  so it is measured as neither.
 - **The active card starts only once the passive one has earned it.**
   `direction: "both"` AND passive stability ≥
   `ACTIVE_UNLOCK_STABILITY_DAYS` (21, the same number as
@@ -401,9 +442,19 @@ watched.
 - **A forced `mode` filters candidates by their CURRENT level, before the
   budget runs.** It never skips the ladder — asking for `produce` shows
   nothing for a word still at active `recognise` — and it is exactly as
-  forceful as a settings screen with one exercise type ticked
+  forceful as the settings screen's own exercise type
   (`_effective_mode`), because the brief's "bugun faqat yozish" is meant to
   work either way.
+- **The settings screen's exercise type is ONE choice, enforced at the
+  schema.** `VocabularySettingsIn.exercise_types` is null (`Automatic`) or a
+  list of exactly one of `recognise`/`recall`/`produce`
+  (`min_length=1, max_length=1`) — never a subset, so two or zero entries
+  are a 422 at the door rather than silently narrowed to the first. The
+  mapping onto candidates needs no separate table: `recognise` matches a
+  `recognise`-level candidate in EITHER direction, `recall` only ever
+  matches passive (the active ladder has no `recall` rung) and `produce`
+  only ever matches active, which falls straight out of the two ladders'
+  own shapes.
 - **Distractors come only from `material_vocabulary`, never from the
   learner's own list** — two learners' vocabularies would otherwise leak
   into each other's multiple-choice options, and a learner's list is
@@ -426,9 +477,13 @@ watched.
   distractors (< `MIN_DISTRACTORS`) serves this encounter as `recall`
   (passive) or `produce` (active) instead — the stored ladder level does
   not change. It is measurable on the wire and in the log for exactly this
-  reason: `PracticeItemOut.planned_exercise != exercise_type` IS the
-  definition of a fallback, not a second flag that could drift from it,
-  and `logger.info` at session build carries the reason
+  reason: `PracticeItemOut.planned_exercise != exercise_type` on the item,
+  `planned_exercise IS NOT NULL AND planned_exercise != exercise_type` on
+  the logged row, IS the definition of a fallback, not a second flag that
+  could drift from it — the `IS NOT NULL` matters once a row can be logged
+  with no plan at all (a known-check answer, a verified requeue: neither
+  is a fallback, and neither is the ladder's plan either), and
+  `logger.info` at session build carries the reason
   (`short_definition`/`too_few_candidates`) so the guard's thresholds can
   be raised once fallbacks turn out to be frequent.
 - **`record_answer` trusts nothing about the ladder that the client sent.**
@@ -454,8 +509,11 @@ watched.
 - **"I know this" is a bypass of the ladder, not a step on it.** Offered
   only on a brand-new word (never practised); the one follow-up is always
   `recall`, regardless of what level the ladder would otherwise be at (it
-  is not asked yet). Correct rates the card `Easy` and sets `known`
-  outright — a stronger signal than an ordinary correct answer, because
+  is not asked yet), and is logged with `planned_exercise = NULL` and skips
+  `_apply_ladder` entirely — pass OR fail, since a wrong known-check answer
+  is still an answer AT `recall` and would forge the same "reached the top
+  rung" evidence a correct one would. Correct rates the card `Easy` and sets
+  `known` outright — a stronger signal than an ordinary correct answer, because
   the learner asked for it by pressing a button rather than the scheduler
   inferring it. Anything else grades exactly as an ordinary recall answer
   and the word stays in rotation: an unreliable self-assessment ("I know
@@ -478,8 +536,28 @@ watched.
   (`resolve_leech`): "set aside" is the only one that actually leaves
   rotation (`suspended`, `suspended_until = now + 30d`); "see it where you
   met it" and "keep practising" are the SAME mutation (status recomputed,
-  `leech_reset_at = now`) because the difference between them is only
-  which screen asked, not a fact the server needs to remember.
+  `leech_reset_at = now`, level UNCHANGED — seeing the sentence again is a
+  reminder, not practice) because the difference between them is only which
+  screen asked, not a fact the server needs to remember.
+- **`became_leech` carries its own `leech_context`, built once, at the
+  moment it fires.** The word's newest `SavedWordContext` that actually has
+  a sentence (`_newest_context_with_sentence`; `None` when it has none, per
+  the brief's "null if none") is marked with `resolve_mark` — the same
+  before/target/after shape `PracticeChoiceOut` would have used for a
+  sentence-marked prompt, so the client has one rendering rule for "the
+  word, marked, inside a sentence" — plus the material's id and title. This
+  is the ONE place in stage 2 a leech word's context is resolved for the
+  client; the leech-choice endpoint that follows does not repeat it.
+- **Per-direction lapse counts are a lifetime count, not the leech
+  window's.** `lapse_counts_for` walks the same log state-chain as
+  `_lapses_since_reset` but with no `leech_reset_at` cutoff, because the
+  word page reports the word's whole history and a reader has no reason for
+  that number to reset out from under them the moment a leech is resolved.
+  `passive_lapses + active_lapses` on one word therefore always adds back
+  up to `SavedWord.lapses`, the column that already combines both
+  directions. Batched over every word a listing needs in one query (the
+  words list calls it once, not once per row) for the same reason
+  `titles_for` is batched.
 - **"Set aside" resolves lazily, in every query that would otherwise touch
   the word — no worker.** `_reap_suspensions` runs at the top of `summary`
   and `build_session` and fixes up anything whose `suspended_until` has
