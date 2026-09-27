@@ -39,11 +39,12 @@ checked.
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.api.deps import CurrentUser
 from app.api.materials import _load_owned_or_public
 from app.core.database import AsyncSession, get_session
+from app.models.lexicon import LexemeSense
 from app.models.material import Material
 from app.models.vocabulary import MaterialVocabulary
 from app.schemas.vocabulary import (
@@ -61,6 +62,8 @@ from app.schemas.vocabulary import (
     SavedWordOut,
     SavedWordsOut,
     SaveWordsIn,
+    TranslationReportIn,
+    TranslationReportOut,
     VocabularyEntryOut,
     VocabularyListOut,
     VocabularySettingsIn,
@@ -70,6 +73,7 @@ from app.schemas.vocabulary import (
     WordHistoryEntryOut,
     WordLeechChoiceIn,
 )
+from app.services import lexicon as lexicon_service
 from app.services import materials as materials_service
 from app.services import practice as practice_service
 from app.services import vocabulary as vocabulary_service
@@ -78,17 +82,40 @@ router = APIRouter(prefix="/api", tags=["vocabulary"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
+#: ``TranslationReportIn.where`` is the wire's own name for
+#: ``TranslationReport.source`` -- see that schema's docstring for why
+#: "practice" maps onto the stored ``practice_reveal`` rather than the
+#: column gaining a third value.
+_REPORT_SOURCE = {"word_page": "word_page", "practice": "practice_reveal"}
+
 
 def _entry(
-    entry: MaterialVocabulary, material: Material, *, saved: bool = False
+    entry: MaterialVocabulary,
+    material: Material,
+    *,
+    sense: LexemeSense | None = None,
+    saved: bool = False,
+    saved_word_id: uuid.UUID | None = None,
+    other_sense_saved: bool = False,
 ) -> VocabularyEntryOut:
+    # A row written since P3 no longer carries its own usual-meaning copy
+    # (`app.services.lexicon.link_row`) -- filled here from the row's own
+    # sense where empty, so the review page and the popover keep showing a
+    # usual meaning without the frontend reader changing at all.
+    meaning_core_en = entry.meaning_core_en
+    meaning_core_uz = entry.meaning_core_uz
+    if not meaning_core_en and sense is not None:
+        meaning_core_en = sense.definition_en
+        meaning_core_uz = sense.meaning_uz
     return VocabularyEntryOut(
         id=entry.id,
+        lexeme_id=entry.lexeme_id,
+        sense_id=entry.sense_id,
         lemma=entry.lemma,
         surface=entry.surface,
         pos=entry.pos,
-        meaning_core_en=entry.meaning_core_en,
-        meaning_core_uz=entry.meaning_core_uz,
+        meaning_core_en=meaning_core_en,
+        meaning_core_uz=meaning_core_uz,
         meaning_en=entry.meaning_en,
         meaning_uz=entry.meaning_uz,
         sense_differs=entry.sense_differs,
@@ -102,6 +129,8 @@ def _entry(
         also_at=entry.also_at,
         stale=vocabulary_service.stale(material, entry),
         saved=saved,
+        saved_word_id=saved_word_id,
+        other_sense_saved=other_sense_saved,
     )
 
 
@@ -143,23 +172,27 @@ async def look_up_word(
     # used to be left at its default of false, so a reader who saved a word,
     # closed the card and opened it again was offered Save a second time --
     # the page having forgotten what they had just done. One query over at
-    # most two lemmas.
+    # most two entries, keyed by SENSE now (P4): `bank` the river and `bank`
+    # the financial institution answer "saved" separately.
     answers = [entry for entry in found.values() if entry is not None]
-    saved = await vocabulary_service.saved_lemmas(
-        session, user.id, [entry.lemma for entry in answers]
-    )
-    return LookupOut(
-        word=(
-            _entry(found["word"], material,
-                   saved=found["word"].lemma in saved)
-            if found["word"] else None
-        ),
-        phrase=(
-            _entry(found["phrase"], material,
-                   saved=found["phrase"].lemma in saved)
-            if found["phrase"] else None
-        ),
-    )
+    saved_state = await vocabulary_service.saved_state_for(session, user.id, answers)
+    senses = await vocabulary_service.usual_meanings_for(session, answers)
+
+    def _answer(entry: MaterialVocabulary | None) -> VocabularyEntryOut | None:
+        if entry is None:
+            return None
+        state = saved_state.get(
+            entry.id, {"saved": False, "saved_word_id": None, "other_sense_saved": False}
+        )
+        return _entry(
+            entry, material,
+            sense=senses.get(entry.sense_id) if entry.sense_id else None,
+            saved=state["saved"],
+            saved_word_id=state["saved_word_id"],
+            other_sense_saved=state["other_sense_saved"],
+        )
+
+    return LookupOut(word=_answer(found["word"]), phrase=_answer(found["phrase"]))
 
 
 @router.get(
@@ -182,9 +215,8 @@ async def material_vocabulary(
             "The vocabulary of a passage opens when you have finished it.",
         )
     entries = await vocabulary_service.entries(session, material_id)
-    saved = await vocabulary_service.saved_lemmas(
-        session, user.id, [entry.lemma for entry in entries]
-    )
+    saved_state = await vocabulary_service.saved_state_for(session, user.id, entries)
+    senses = await vocabulary_service.usual_meanings_for(session, entries)
     levels = {level: 0 for level in vocabulary_service.LEVELS}
     for entry in entries:
         if entry.cefr_level in levels:
@@ -200,7 +232,14 @@ async def material_vocabulary(
         # sense here is not the one they know, common or not.
         unusual=sum(1 for entry in entries if entry.sense_differs),
         entries=[
-            _entry(entry, material, saved=entry.lemma in saved)
+            _entry(
+                entry, material,
+                sense=senses.get(entry.sense_id) if entry.sense_id else None,
+                **saved_state.get(
+                    entry.id,
+                    {"saved": False, "saved_word_id": None, "other_sense_saved": False},
+                ),
+            )
             for entry in entries
         ],
     )
@@ -239,25 +278,28 @@ async def list_saved_words(
 
 
 @router.delete(
-    "/vocabulary/words/{lemma}", status_code=status.HTTP_204_NO_CONTENT
+    "/vocabulary/words/{word_id}", status_code=status.HTTP_204_NO_CONTENT
 )
 async def forget_word(
-    lemma: str, user: CurrentUser, session: SessionDep
+    word_id: uuid.UUID, user: CurrentUser, session: SessionDep
 ) -> None:
-    if not await vocabulary_service.forget(session, user.id, lemma):
+    """By id (P4) -- a lemma is no longer unique to one saved word, so the
+    lemma-path route this used to be is gone."""
+    if not await vocabulary_service.forget(session, user.id, word_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not on your list")
 
 
-@router.get("/vocabulary/words/{lemma}", response_model=SavedWordDetailOut)
+@router.get("/vocabulary/words/{word_id}", response_model=SavedWordDetailOut)
 async def get_saved_word(
-    lemma: str, user: CurrentUser, session: SessionDep
+    word_id: uuid.UUID, user: CurrentUser, session: SessionDep
 ) -> SavedWordDetailOut:
     """The word page: the word, every context, and its review history.
 
-    404 for a lemma that is not this learner's -- including one that
-    belongs to somebody else -- rather than distinguishing "never saved"
-    from "somebody else's word", which would tell a caller something about
-    another learner's list.
+    By id (P4): two rows may share a lemma now (`bank` finance, `bank`
+    river), so a lemma can no longer name one on its own. 404 for an id that
+    is not this learner's -- including one that belongs to somebody else --
+    rather than distinguishing "never saved" from "somebody else's word",
+    which would tell a caller something about another learner's list.
     """
     # The lazy half of "set aside for 30 days" -- resolved here too, not
     # only at the top of a practice queue, so a word whose 30 days passed
@@ -265,7 +307,7 @@ async def get_saved_word(
     # one screen that would otherwise print a stale status.
     await practice_service._reap_suspensions(session, user.id)
     found = await vocabulary_service.saved_word_with_history(
-        session, user.id, lemma
+        session, user.id, word_id
     )
     if found is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not on your list")
@@ -277,10 +319,11 @@ async def get_saved_word(
     lapse_counts = (
         await practice_service.lapse_counts_for(session, [word.id])
     ).get(word.id, {"passive": 0, "active": 0})
+    sense = await session.get(LexemeSense, word.lexeme_sense_id)
     return SavedWordDetailOut(
         word=_saved_word_out(
             word, contexts, titles, direction=settings.direction,
-            lapse_counts=lapse_counts,
+            lapse_counts=lapse_counts, sense=sense,
         ),
         history=[
             WordHistoryEntryOut(
@@ -301,18 +344,52 @@ async def bulk_word_action(
     data: WordBulkActionIn, user: CurrentUser, session: SessionDep
 ) -> WordBulkActionOut:
     changed = await vocabulary_service.bulk_action(
-        session, user_id=user.id, lemmas=data.lemmas, action=data.action
+        session, user_id=user.id, word_ids=data.word_ids, action=data.action
     )
     return WordBulkActionOut(changed=changed)
 
 
-@router.post("/vocabulary/words/{lemma}/leech", response_model=SavedWordOut)
+@router.post(
+    "/vocabulary/translation-reports",
+    response_model=TranslationReportOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def report_translation(
+    data: TranslationReportIn,
+    user: CurrentUser,
+    session: SessionDep,
+    response: Response,
+) -> TranslationReportOut:
+    """"This translation is wrong" -- the word page, or right after a
+    practice reveal (`data.where`). One open report per ``(user, sense)``:
+    a repeat is a no-op that answers 200 with the report already open,
+    rather than a second row -- set here rather than left at this route's
+    201 default, since FastAPI has already committed to the decorator's
+    status code by the time a handler runs.
+    """
+    if await session.get(LexemeSense, data.sense_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Sense not found")
+    report, created = await lexicon_service.report_translation(
+        session,
+        user_id=user.id,
+        sense_id=data.sense_id,
+        source=_REPORT_SOURCE[data.where],
+        note=(data.note or "").strip(),
+    )
+    if not created:
+        response.status_code = status.HTTP_200_OK
+    return TranslationReportOut(
+        id=report.id, sense_id=report.lexeme_sense_id, status=report.status,
+    )
+
+
+@router.post("/vocabulary/words/{word_id}/leech", response_model=SavedWordOut)
 async def leech_choice(
-    lemma: str, data: WordLeechChoiceIn, user: CurrentUser, session: SessionDep
+    word_id: uuid.UUID, data: WordLeechChoiceIn, user: CurrentUser, session: SessionDep
 ) -> SavedWordOut:
     await practice_service._reap_suspensions(session, user.id)
     word = await practice_service.resolve_leech(
-        session, user, lemma=vocabulary_service.normalise(lemma), choice=data.choice
+        session, user, word_id=word_id, choice=data.choice
     )
     if word is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not on your list")
@@ -326,15 +403,17 @@ async def leech_choice(
     lapse_counts = (
         await practice_service.lapse_counts_for(session, [word.id])
     ).get(word.id, {"passive": 0, "active": 0})
+    sense = await session.get(LexemeSense, word.lexeme_sense_id)
     return _saved_word_out(
         word, contexts, titles, direction=settings.direction,
-        lapse_counts=lapse_counts,
+        lapse_counts=lapse_counts, sense=sense,
     )
 
 
 def _saved_word_out(
     word, contexts, titles: dict, *, direction: str,
     lapse_counts: dict | None = None,
+    sense: LexemeSense | None = None,
 ) -> SavedWordOut:
     """One saved word, in the extended shape stage 2 shows on the words list
     and the word page -- see :class:`SavedWordOut`'s own docstring for why
@@ -349,10 +428,24 @@ def _saved_word_out(
     ``practice.lapse_counts_for`` -- computed by the caller, once, over
     every word a listing needs rather than per row here, so a hundred saved
     words cost one extra query and not a hundred and one.
+
+    ``sense`` is the word's own ``LexemeSense`` (P4), also batched by the
+    caller -- its ``definition_en``/``meaning_uz``/``cefr`` are what the
+    word's usual meaning/CEFR are read LIVE from, never the dead
+    ``SavedWord.meaning_core_*`` columns. Absent only for a row the P4
+    migration could not resolve at all (should not happen; every saved word
+    has a `lexeme_sense_id`), in which case the word's own dead copy is the
+    last thing left to show rather than an empty line.
     """
     lapse_counts = lapse_counts or {"passive": 0, "active": 0}
     newest_cefr = contexts[-1].cefr_level if contexts else ""
+    definition_en = sense.definition_en if sense is not None else word.meaning_core_en
+    meaning_uz = sense.meaning_uz if sense is not None else word.meaning_core_uz
+    sense_cefr = (sense.cefr or "") if sense is not None else ""
     return SavedWordOut(
+        id=word.id,
+        lexeme_id=sense.lexeme_id if sense is not None else None,
+        sense_id=word.lexeme_sense_id,
         lemma=word.lemma,
         created_at=word.created_at,
         contexts=[
@@ -375,8 +468,14 @@ def _saved_word_out(
         ],
         status=word.status,
         pos=word.pos,
-        meaning_core_en=word.meaning_core_en,
-        meaning_core_uz=word.meaning_core_uz,
+        # DEAD stored copy replaced by the sense's own live values (P4) --
+        # same field names, so a caller that has not moved onto
+        # `definition_en`/`meaning_uz` yet keeps seeing the right thing.
+        meaning_core_en=definition_en,
+        meaning_core_uz=meaning_uz,
+        definition_en=definition_en,
+        meaning_uz=meaning_uz,
+        sense_cefr=sense_cefr,
         cefr_level=newest_cefr,
         passive_level=word.passive_level,
         active_level=word.active_level,
@@ -413,12 +512,16 @@ async def _saved(session: AsyncSession, user_id: uuid.UUID) -> SavedWordsOut:
     lapse_counts = await practice_service.lapse_counts_for(
         session, [word.id for word, _ in rows]
     )
+    senses = await vocabulary_service.senses_by_id(
+        session, {word.lexeme_sense_id for word, _ in rows}
+    )
     return SavedWordsOut(
         total=len(rows),
         words=[
             _saved_word_out(
                 word, contexts, titles, direction=settings.direction,
                 lapse_counts=lapse_counts.get(word.id),
+                sense=senses.get(word.lexeme_sense_id),
             )
             for word, contexts in rows
         ],

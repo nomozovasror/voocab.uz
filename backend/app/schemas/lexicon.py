@@ -37,6 +37,13 @@ class ReviewRowOut(BaseModel):
     #: How many `material_vocabulary` rows use this sense -- what the "peek
     #: sentences" link is offered on (zero means nothing to show).
     material_example_count: int
+    #: How many OPEN "this translation is wrong" reports this sense
+    #: currently carries (P4) -- zero for the ordinary row, and what puts a
+    #: row in the "Reported" bucket ahead of everything else.
+    report_count: int = 0
+    #: The non-empty notes those open reports carry, so a reviewer reads
+    #: what a learner actually said without a second request.
+    report_notes: list[str] = []
 
 
 class ReviewQueueOut(BaseModel):
@@ -46,6 +53,10 @@ class ReviewQueueOut(BaseModel):
     #: the queue's second bucket (`brief-lexicon.md` §6.2), counted
     #: separately from `reason_counts` because it isn't a review REASON.
     core_pending: int
+    #: Senses with an open translation report -- the queue's FIRST bucket
+    #: (P4), counted the same way as `core_pending` because "reported" is
+    #: not a review reason either.
+    reported_pending: int = 0
     rows: list[ReviewRowOut]
 
 

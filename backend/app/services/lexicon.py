@@ -75,13 +75,14 @@ documents both copies and how they are kept in sync.
 from __future__ import annotations
 
 import re
+import uuid
 from pathlib import Path
 
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from app.core.database import AsyncSession
-from app.models.lexicon import Lexeme, LexemeSense
+from app.models.lexicon import Lexeme, LexemeSense, TranslationReport
 from app.models.vocabulary import MaterialVocabulary
 
 #: `backend/app/data/wordlists` -- see the module docstring's last section.
@@ -449,3 +450,74 @@ async def _find_or_create_sense(
     lexeme.enriched_at = None
     session.add(lexeme)
     return sense
+
+
+# --- "This translation is wrong" -------------------------------------------
+
+
+async def report_translation(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    sense_id: uuid.UUID,
+    source: str,
+    note: str,
+    material_vocabulary_id: uuid.UUID | None = None,
+) -> tuple[TranslationReport, bool]:
+    """File "this translation is wrong" against one sense. Returns the
+    report and whether this call created it.
+
+    One open report per ``(user_id, sense_id)`` -- a repeat is a no-op that
+    hands back the report already open, not a second row -- because a
+    learner pressing the link twice on the same word has said the same
+    thing twice, not filed two complaints. Enforced by a partial unique
+    index (`status = 'open'` only, the P4 migration) rather than only here,
+    which is what makes it safe against two requests racing: this function
+    checks first for the ordinary case, then falls back to a re-read on the
+    index's own `IntegrityError` for the race, rather than trusting the
+    check alone.
+    """
+    existing = (
+        await session.exec(
+            select(TranslationReport).where(
+                TranslationReport.user_id == user_id,
+                TranslationReport.lexeme_sense_id == sense_id,
+                TranslationReport.status == "open",
+            )
+        )
+    ).first()
+    if existing is not None:
+        return existing, False
+
+    report = TranslationReport(
+        user_id=user_id,
+        lexeme_sense_id=sense_id,
+        material_vocabulary_id=material_vocabulary_id,
+        source=source,
+        note=note,
+    )
+    session.add(report)
+    try:
+        async with session.begin_nested():
+            await session.flush()
+    except IntegrityError:
+        # Another request filed the identical report between the SELECT
+        # above and this INSERT -- the same shape of race `_find_or_create_
+        # lexeme` already guards against, and answered the same way: find
+        # the winner rather than fail this request over a race a learner
+        # never caused.
+        await session.rollback()
+        found = (
+            await session.exec(
+                select(TranslationReport).where(
+                    TranslationReport.user_id == user_id,
+                    TranslationReport.lexeme_sense_id == sense_id,
+                    TranslationReport.status == "open",
+                )
+            )
+        ).first()
+        assert found is not None
+        return found, False
+    await session.commit()
+    await session.refresh(report)
+    return report, True

@@ -75,6 +75,7 @@ from sqlmodel import select
 
 from app.core.config import settings
 from app.core.database import AsyncSession
+from app.models.lexicon import LexemeSense
 from app.models.material import Material
 from app.models.vocabulary import MaterialVocabulary, SavedWord
 
@@ -290,8 +291,41 @@ async def _candidates(
     return found
 
 
-def _definition_of(entry: MaterialVocabulary) -> str:
-    return entry.meaning_core_en or entry.meaning_en
+async def _senses_by_id(
+    session: AsyncSession, sense_ids: set[uuid.UUID | None]
+) -> dict[uuid.UUID, LexemeSense]:
+    """A batch of `LexemeSense` rows for a candidate pool, keyed by id -- one
+    query for the whole pool, not one per candidate. A free-standing copy of
+    ``app.services.vocabulary.senses_by_id`` rather than an import of it:
+    ``vocabulary`` already imports ``practice``, which imports this module,
+    and importing back would close that into a cycle.
+    """
+    ids = {sense_id for sense_id in sense_ids if sense_id is not None}
+    if not ids:
+        return {}
+    rows = await session.exec(select(LexemeSense).where(LexemeSense.id.in_(ids)))
+    return {sense.id: sense for sense in rows.all()}
+
+
+def _definition_of(
+    entry: MaterialVocabulary, senses: dict[uuid.UUID, LexemeSense]
+) -> str:
+    """A candidate's usual meaning -- the same fallback order as the API's
+    own ``_entry()`` shim (``app/api/vocabulary.py``): the row's own
+    ``meaning_core_en`` when it has one, else its `LexemeSense`'s
+    ``definition_en`` live, else the row's per-material CONTEXTUAL gloss
+    (`meaning_en`) as the last resort for a row with no sense linked at all.
+    A row written since P3 carries no copy of its own (see `link_row`'s
+    docstring) but always has a sense (P3's own guarantee), so it is the
+    middle step -- not the last one -- that stops a distractor's "usual
+    meaning" from silently becoming the wrong, per-material field.
+    """
+    if entry.meaning_core_en:
+        return entry.meaning_core_en
+    sense = senses.get(entry.sense_id) if entry.sense_id else None
+    if sense is not None and sense.definition_en:
+        return sense.definition_en
+    return entry.meaning_en
 
 
 @dataclass(frozen=True)
@@ -359,13 +393,17 @@ async def build(
     # not a Python sort here, is what keeps that preference correct even
     # when `CANDIDATE_FETCH_LIMIT` caps how many rows were fetched at all.
 
+    # Batched once over the whole pool -- see `_definition_of` -- rather
+    # than one query per candidate.
+    senses = await _senses_by_id(session, {c.sense_id for c in candidates})
+
     right_words = content_words(right_definition)
     chosen: list[MaterialVocabulary] = []
     chosen_texts: set[str] = set()
     for candidate in candidates:
         if len(chosen) >= MIN_DISTRACTORS:
             break
-        definition = _definition_of(candidate)
+        definition = _definition_of(candidate, senses)
         if len(right_words & content_words(definition)) >= SIMILARITY_SHARED_WORDS:
             continue
         text = candidate.lemma if option_field == "lemma" else definition
@@ -379,7 +417,7 @@ async def build(
         return Built(options=None, fallback_reason="too_few_candidates")
 
     texts = [right_text] + [
-        (c.lemma if option_field == "lemma" else _definition_of(c)) for c in chosen
+        (c.lemma if option_field == "lemma" else _definition_of(c, senses)) for c in chosen
     ]
     order = list(range(len(texts)))
     # `random.Random(rng_seed)` rather than the shared process RNG -- a

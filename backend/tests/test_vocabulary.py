@@ -37,6 +37,7 @@ from app.core.database import async_session_factory
 from app.core.security import create_access_token
 from app.main import app
 from app.models.attempt import Attempt, AttemptStatus
+from app.models.lexicon import Lexeme, LexemeSense, TranslationReport
 from app.models.material import Material
 from app.models.part import Part
 from app.models.user import User
@@ -428,7 +429,7 @@ async def test_one_word_met_twice_is_one_word_with_two_contexts() -> None:
             }
 
             gone = await client.delete(
-                "/api/vocabulary/words/vogue", headers=_headers(user)
+                f"/api/vocabulary/words/{words[0]['id']}", headers=_headers(user)
             )
             assert gone.status_code == 204
             assert (
@@ -1158,15 +1159,22 @@ async def test_a_saved_word_gains_the_usual_meaning_without_losing_its_own(
             )
             assert kept.status_code == 201
 
-        # Saved before the field existed: the fixture's `vogue` has no usual
-        # meaning on it.
+        # `save` now fills the context's usual meaning live from the entry's
+        # sense at save time (P4), so a freshly saved word is no longer the
+        # way to construct "saved before the field existed" -- that state is
+        # forced by hand here instead, standing in for a context this
+        # migration's backfill left with the pre-P4 gap it always could have
+        # had.
         async with async_session_factory() as session:
             saved = [
                 row
                 for row in (await session.exec(select(SavedWordContext))).all()
                 if row.material_id == material.id
             ]
-            assert saved[0].meaning_core_en == ""
+            saved[0].meaning_core_en = ""
+            saved[0].meaning_core_uz = ""
+            session.add(saved[0])
+            await session.commit()
 
         # The pipeline runs again, with the new fields this time.
         async with async_session_factory() as session:
@@ -1444,9 +1452,13 @@ async def test_a_saved_word_can_be_taken_off_the_list_again() -> None:
             head = {"material_id": str(material.id), "lemmas": ["vogue"]}
             assert (await client.post("/api/vocabulary/words", json=head,
                                       headers=_headers(user))).status_code == 201
+            listed = await client.get(
+                "/api/vocabulary/words", headers=_headers(user)
+            )
+            word_id = listed.json()["words"][0]["id"]
 
             gone = await client.delete(
-                "/api/vocabulary/words/vogue", headers=_headers(user)
+                f"/api/vocabulary/words/{word_id}", headers=_headers(user)
             )
             assert gone.status_code == 204
 
@@ -1472,3 +1484,264 @@ async def test_a_saved_word_can_be_taken_off_the_list_again() -> None:
             ] is True
     finally:
         await _cleanup(material.id, email)
+
+
+# --- P4: a saved word is a sense, not a spelling ----------------------------
+
+
+async def _make_material_with_linked_entry(
+    author_id: uuid.UUID, *, lemma: str, sense_id: uuid.UUID, lexeme_id: uuid.UUID,
+    meaning_en: str, meaning_uz: str,
+) -> tuple[Material, MaterialVocabulary]:
+    """A one-entry material whose row is ALREADY linked to a given sense --
+    what every real writer (`replace_extracted`/`_generate`) guarantees via
+    `link_row`, built by hand here so two rows can be pointed at two
+    DIFFERENT senses of the SAME lexeme on purpose."""
+    async with async_session_factory() as session:
+        material = Material(
+            author_id=author_id, type="reading",
+            title=f"Sense fixture {uuid.uuid4()}", visibility="public",
+        )
+        session.add(material)
+        await session.flush()
+        text = f"A sentence about the {lemma}."
+        part = Part(
+            material_id=material.id, order_index=0, title="Reading Passage 1",
+            passage={"paragraphs": [{"label": "A", "text": text}], "subtitle": None,
+                    "source": None},
+            first_number=1,
+        )
+        session.add(part)
+        await session.flush()
+        at = text.find(lemma)
+        entry = MaterialVocabulary(
+            material_id=material.id, part_id=part.id, lemma=lemma, surface=lemma,
+            pos="n", meaning_en=meaning_en, meaning_uz=meaning_uz, example=text,
+            offset_start=at, offset_end=at + len(lemma), cefr_level="B1",
+            lexeme_id=lexeme_id, sense_id=sense_id,
+        )
+        session.add(entry)
+        await session.commit()
+        await session.refresh(material)
+        await session.refresh(entry)
+        return material, entry
+
+
+async def _make_two_senses(lemma: str) -> tuple[Lexeme, LexemeSense, LexemeSense]:
+    async with async_session_factory() as session:
+        lexeme = Lexeme(lemma=lemma, pos="n")
+        session.add(lexeme)
+        await session.flush()
+        first = LexemeSense(
+            lexeme_id=lexeme.id, sense_rank=1,
+            definition_en="a financial institution", meaning_uz="bank",
+        )
+        second = LexemeSense(
+            lexeme_id=lexeme.id, sense_rank=2,
+            definition_en="the land beside a river", meaning_uz="qirg'oq",
+        )
+        session.add_all([first, second])
+        await session.commit()
+        await session.refresh(lexeme)
+        await session.refresh(first)
+        await session.refresh(second)
+        return lexeme, first, second
+
+
+async def _cleanup_lexeme(lexeme_id: uuid.UUID) -> None:
+    async with async_session_factory() as session:
+        for report in (
+            await session.exec(
+                select(TranslationReport).where(
+                    TranslationReport.lexeme_sense_id.in_(
+                        select(LexemeSense.id).where(LexemeSense.lexeme_id == lexeme_id)
+                    )
+                )
+            )
+        ).all():
+            await session.delete(report)
+        await session.flush()
+        for sense in (
+            await session.exec(select(LexemeSense).where(LexemeSense.lexeme_id == lexeme_id))
+        ).all():
+            await session.delete(sense)
+        await session.flush()
+        lexeme = await session.get(Lexeme, lexeme_id)
+        if lexeme is not None:
+            await session.delete(lexeme)
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_saving_one_sense_leaves_a_different_sense_of_the_same_lemma_unsaved() -> None:
+    """`bank` the financial institution and `bank` the river are two words
+    to a learner, and the popover has to be able to tell them apart: saving
+    one must not make the OTHER answer `saved: true`, and it must say a
+    different meaning of the same lemma IS on the list, quietly."""
+    email = f"vocab-sense-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    lexeme, finance, river = await _make_two_senses("bank")
+    material_a, _ = await _make_material_with_linked_entry(
+        user.id, lemma="bank", sense_id=finance.id, lexeme_id=lexeme.id,
+        meaning_en="a financial institution", meaning_uz="bank",
+    )
+    material_b, _ = await _make_material_with_linked_entry(
+        user.id, lemma="bank", sense_id=river.id, lexeme_id=lexeme.id,
+        meaning_en="the land beside a river", meaning_uz="qirg'oq",
+    )
+    try:
+        async with _client() as client:
+            saved = await client.post(
+                "/api/vocabulary/words",
+                json={"material_id": str(material_a.id), "lemmas": ["bank"]},
+                headers=_headers(user),
+            )
+            assert saved.status_code == 201
+
+            await _submit_something(material_b.id, user.id)
+            other = await client.get(
+                f"/api/materials/{material_b.id}/vocabulary", headers=_headers(user)
+            )
+            entry_b = other.json()["entries"][0]
+            assert entry_b["saved"] is False
+            assert entry_b["other_sense_saved"] is True
+
+            await _submit_something(material_a.id, user.id)
+            mine = await client.get(
+                f"/api/materials/{material_a.id}/vocabulary", headers=_headers(user)
+            )
+            entry_a = mine.json()["entries"][0]
+            assert entry_a["saved"] is True
+            assert entry_a["saved_word_id"] == saved.json()["words"][0]["id"]
+            assert entry_a["other_sense_saved"] is False
+
+            # And the words list carries the two apart, by sense: saving the
+            # second sense too is a SECOND word, not a merge into the first.
+            saved_b = await client.post(
+                "/api/vocabulary/words",
+                json={"material_id": str(material_b.id), "lemmas": ["bank"]},
+                headers=_headers(user),
+            )
+            assert saved_b.status_code == 201
+            listed = await client.get(
+                "/api/vocabulary/words", headers=_headers(user)
+            )
+            words = listed.json()["words"]
+            assert len(words) == 2
+            assert {word["lemma"] for word in words} == {"bank"}
+            assert {word["sense_id"] for word in words} == {str(finance.id), str(river.id)}
+    finally:
+        await _cleanup(material_b.id)
+        await _cleanup(material_a.id, email)
+        await _cleanup_lexeme(lexeme.id)
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_saved_word_survives_a_racing_duplicate_insert() -> None:
+    """Two requests racing to save the SAME sense for the SAME learner can
+    both pass `save`'s own SELECT check before either commits its INSERT --
+    `_get_or_create_saved_word` is what the loser falls back to instead of
+    raising `IntegrityError` out of the request. Simulated by committing
+    the "winning" row directly first, then calling the helper exactly as
+    the loser would: it must return that winner rather than raise, and must
+    never leave a second row behind."""
+    email = f"vocab-race-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    lexeme, sense, _unused = await _make_two_senses("racehorse")
+    try:
+        async with async_session_factory() as session:
+            winner = SavedWord(
+                user_id=user.id, lemma="racehorse", pos="n", lexeme_sense_id=sense.id,
+            )
+            session.add(winner)
+            await session.commit()
+            await session.refresh(winner)
+
+        async with async_session_factory() as session:
+            word, created = await vocabulary_service._get_or_create_saved_word(
+                session, user_id=user.id, sense_id=sense.id, lemma="racehorse", pos="n",
+            )
+            await session.commit()
+        assert created is False
+        assert word.id == winner.id
+
+        async with async_session_factory() as session:
+            rows = (
+                await session.exec(
+                    select(SavedWord).where(
+                        SavedWord.user_id == user.id,
+                        SavedWord.lexeme_sense_id == sense.id,
+                    )
+                )
+            ).all()
+        assert len(rows) == 1  # the race never leaves a duplicate behind
+    finally:
+        async with async_session_factory() as session:
+            for word_row in (
+                await session.exec(select(SavedWord).where(SavedWord.user_id == user.id))
+            ).all():
+                await session.delete(word_row)
+            await session.flush()
+            stale_user = (
+                await session.exec(select(User).where(User.email == email))
+            ).first()
+            if stale_user is not None:
+                await session.delete(stale_user)
+            await session.commit()
+        await _cleanup_lexeme(lexeme.id)
+
+
+@pytest.mark.asyncio
+async def test_translation_report_is_one_open_row_per_user_and_sense() -> None:
+    email = f"vocab-report-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    lexeme, finance, _river = await _make_two_senses("bank-report")
+    try:
+        async with _client() as client:
+            first = await client.post(
+                "/api/vocabulary/translation-reports",
+                json={"sense_id": str(finance.id), "where": "word_page",
+                     "note": "this should say financial institution"},
+                headers=_headers(user),
+            )
+            assert first.status_code == 201
+            body = first.json()
+            assert body["sense_id"] == str(finance.id)
+            assert body["status"] == "open"
+
+            # A repeat from the same learner about the same sense is a
+            # no-op: 200, not a second row.
+            again = await client.post(
+                "/api/vocabulary/translation-reports",
+                json={"sense_id": str(finance.id), "where": "practice"},
+                headers=_headers(user),
+            )
+            assert again.status_code == 200
+            assert again.json()["id"] == body["id"]
+
+            # A sense that does not exist is a 404, not a foreign key crash.
+            missing = await client.post(
+                "/api/vocabulary/translation-reports",
+                json={"sense_id": str(uuid.uuid4()), "where": "word_page"},
+                headers=_headers(user),
+            )
+            assert missing.status_code == 404
+
+        async with async_session_factory() as session:
+            reports = (
+                await session.exec(
+                    select(TranslationReport).where(
+                        TranslationReport.lexeme_sense_id == finance.id
+                    )
+                )
+            ).all()
+            assert len(reports) == 1
+            assert reports[0].source == "word_page"  # the FIRST call's source
+            assert reports[0].note == "this should say financial institution"
+    finally:
+        await _cleanup_lexeme(lexeme.id)
+        async with async_session_factory() as session:
+            found = (await session.exec(select(User).where(User.email == email))).first()
+            if found is not None:
+                await session.delete(found)
+                await session.commit()

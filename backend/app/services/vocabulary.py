@@ -77,6 +77,7 @@ from sqlmodel import select
 
 from app.core.database import AsyncSession
 from app.models.attempt import Attempt, AttemptStatus
+from app.models.lexicon import LexemeSense
 from app.models.material import Material
 from app.models.part import Part
 from app.models.vocabulary import (
@@ -667,6 +668,56 @@ def _sentence_at(text: str, start: int, end: int) -> str:
 # --- The learner's own list -------------------------------------------------
 
 
+async def _get_or_create_saved_word(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    sense_id: uuid.UUID,
+    lemma: str,
+    pos: str,
+) -> tuple[SavedWord, bool]:
+    """One saved word for `(user_id, sense_id)`, created if `save`'s own
+    existence check (below) found none -- guarded the same way
+    `lexicon.report_translation` guards its own partial unique index:
+    attempted inside a SAVEPOINT (`session.begin_nested()`), so a second
+    request racing to save the SAME sense for the SAME learner between that
+    check and this INSERT collides on `uq_saved_user_lexeme_sense`.
+
+    A failed flush leaves the SESSION needing `Session.rollback()` before it
+    will run another statement at all -- and that call rolls back the
+    session's WHOLE transaction, not just this SAVEPOINT (verified against
+    this project's own asyncpg driver: the savepoint's own auto-rollback on
+    exception is not enough to make the session usable again). ``save``
+    therefore commits after every lemma it fully processes, specifically so
+    that by the time a LATER lemma in the same call reaches this function,
+    nothing from an earlier one is still sitting uncommitted for this
+    rollback to destroy -- unlike `report_translation`, which never has more
+    than the one row in flight and can afford a plain rollback.
+
+    The winner -- already committed by whichever request got there first --
+    is read back after the rollback and returned instead of raising.
+    Returns `(word, created)`.
+    """
+    candidate = SavedWord(user_id=user_id, lemma=lemma, pos=pos, lexeme_sense_id=sense_id)
+    session.add(candidate)
+    try:
+        async with session.begin_nested():
+            await session.flush()
+    except IntegrityError:
+        await session.rollback()
+        winner = (
+            await session.exec(
+                select(SavedWord).where(
+                    SavedWord.user_id == user_id,
+                    SavedWord.lexeme_sense_id == sense_id,
+                )
+            )
+        ).first()
+        assert winner is not None
+        return winner, False
+    return candidate, True
+
+
 async def save(
     session: AsyncSession,
     *,
@@ -674,13 +725,16 @@ async def save(
     material_id: uuid.UUID,
     lemmas: list[str],
 ) -> int:
-    """Put these words on the learner's list. Returns how many are new to it.
+    """Put these words on the learner's list, THE SENSE THIS MATERIAL ROW
+    HAS. Returns how many are new to it.
 
     Idempotent in both directions: saving a word twice is one word, and
-    saving it from a second material is one word with two contexts -- which
-    is the whole point of the split. Somebody who met ``spring`` in a passage
-    about seasons and again in one about coils has one card with two meanings
-    on it, and that card teaches more than either would alone.
+    saving it from a second material is one word with two contexts -- AS
+    LONG AS both materials gloss the same sense (P4): `bank` the financial
+    institution met twice is one card with two example sentences, which
+    teaches more than either alone; `bank` the river met from a different
+    passage is a DIFFERENT saved word, because it is a different thing to
+    learn. The key is `entry.sense_id`, not `entry.lemma`.
     """
     wanted = {normalise(lemma) for lemma in lemmas} - {""}
     if not wanted:
@@ -696,38 +750,68 @@ async def save(
     if not found:
         return 0
 
+    # Every row this project writes has been find-or-create linked since P3
+    # (`link_row`, called from both writers) -- but a row can still reach
+    # here unlinked: a fixture, or an import that predates that rule. This
+    # is the last chance to fix that before a saved word is created with
+    # nothing to point at, so it is repaired here rather than skipped.
+    relinked = False
+    for entry in found:
+        if entry.sense_id is None:
+            await link_row(session, entry)
+            session.add(entry)
+            relinked = True
+    if relinked:
+        # Committed, not merely flushed: `_get_or_create_saved_word` below
+        # may call `session.rollback()` on a later lemma in this same call,
+        # which -- see its own docstring -- rolls back this session's WHOLE
+        # transaction, not just its own SAVEPOINT. A row this project must
+        # never leave unlinked (`CLAUDE.md`, "every writer... is
+        # find-or-create") needs its link durable before that can happen.
+        await session.commit()
+
     existing = await session.exec(
         select(SavedWord).where(
             SavedWord.user_id == user_id,
-            SavedWord.lemma.in_([entry.lemma for entry in found]),
+            SavedWord.lexeme_sense_id.in_(
+                [entry.sense_id for entry in found if entry.sense_id is not None]
+            ),
         )
     )
-    words = {word.lemma: word for word in existing.all()}
+    words = {word.lexeme_sense_id: word for word in existing.all()}
+    # The context's own `meaning_core_en`/`meaning_core_uz` snapshot no
+    # longer depends on `entry.meaning_core_en` (dead on a row written since
+    # P3) -- it is filled from the entry's SENSE instead, batched once over
+    # everything this call might save.
+    senses = await senses_by_id(
+        session, {entry.sense_id for entry in found if entry.sense_id is not None}
+    )
 
     added = 0
     for entry in found:
-        word = words.get(entry.lemma)
+        if entry.sense_id is None:
+            continue  # link_row above failed silently -- nothing sane to key on
+        word = words.get(entry.sense_id)
         if word is None:
-            # The word-level fields the practice module reads
-            # (`app.services.practice`) filled from THIS entry, once, at
-            # creation. A later save from a second material never
-            # overwrites them -- same reasoning as `enrich_saved_contexts`
-            # below: what a learner has stays what they first met, and a
-            # gap left by an entry with no usual meaning yet is topped up
-            # by the same migration/enrichment pass that backfills every
-            # other saved word, not by whichever material happens to save
-            # the word next.
-            word = SavedWord(
+            # `lemma`/`pos` are the display copy only (P4) -- the word's
+            # usual meaning/definition/CEFR are read LIVE from
+            # `lexeme_sense_id`'s `LexemeSense` from now on
+            # (`app.services.vocabulary`'s readers), which is what lets an
+            # admin's fix in Studio reach everybody already studying the
+            # word. Nothing here writes `meaning_core_en`/`meaning_core_uz`
+            # any more. Guarded against a second request racing to save the
+            # same sense between the SELECT above and this INSERT -- see
+            # `_get_or_create_saved_word`.
+            word, created = await _get_or_create_saved_word(
+                session,
                 user_id=user_id,
+                sense_id=entry.sense_id,
                 lemma=entry.lemma,
                 pos=entry.pos,
-                meaning_core_en=entry.meaning_core_en or entry.meaning_en,
-                meaning_core_uz=entry.meaning_core_uz or entry.meaning_uz,
             )
-            session.add(word)
-            await session.flush()
-            words[entry.lemma] = word
-            added += 1
+            words[entry.sense_id] = word
+            if created:
+                added += 1
         already = await session.exec(
             select(SavedWordContext.id).where(
                 SavedWordContext.saved_word_id == word.id,
@@ -736,6 +820,7 @@ async def save(
         )
         if already.first() is not None:
             continue
+        sense = senses.get(entry.sense_id)
         session.add(
             SavedWordContext(
                 saved_word_id=word.id,
@@ -743,8 +828,14 @@ async def save(
                 vocabulary_id=entry.id,
                 surface=entry.surface,
                 pos=entry.pos,
-                meaning_core_en=entry.meaning_core_en,
-                meaning_core_uz=entry.meaning_core_uz,
+                meaning_core_en=(
+                    entry.meaning_core_en
+                    or (sense.definition_en if sense is not None else "")
+                ),
+                meaning_core_uz=(
+                    entry.meaning_core_uz
+                    or (sense.meaning_uz if sense is not None else "")
+                ),
                 meaning_en=entry.meaning_en,
                 meaning_uz=entry.meaning_uz,
                 sense_differs=entry.sense_differs,
@@ -753,26 +844,83 @@ async def save(
                 is_phrase=entry.is_phrase,
             )
         )
-    await session.commit()
+        # Committed per lemma, not once at the end of the whole call -- for
+        # the same reason as the relink step above: a race on a LATER lemma
+        # rolls back everything still uncommitted in this session, and this
+        # lemma's word and context must already be durable before that can
+        # ever run.
+        await session.commit()
     return added
 
 
-async def saved_lemmas(
-    session: AsyncSession, user_id: uuid.UUID, lemmas: list[str]
-) -> set[str]:
-    """Which of these the learner already has, so a button can say `Saved`.
+async def saved_state_for(
+    session: AsyncSession, user_id: uuid.UUID, entries: list[MaterialVocabulary]
+) -> dict[uuid.UUID, dict]:
+    """For each entry (keyed by its own `MaterialVocabulary.id`): whether
+    THIS SENSE is already saved, the saved word id if so, and whether some
+    OTHER sense of the same lexeme is saved instead (P4 -- a lemma is no
+    longer the unit a "saved" button asks about).
 
-    Asked for the words on one page rather than for the whole list, because
-    the list grows without limit and the page is eighty-six rows.
+    Asked for the entries on one page rather than for the whole list,
+    because the list grows without limit and the page is eighty-six rows.
+    One query over every lexeme those entries belong to, not one per row.
     """
-    if not lemmas:
-        return set()
+    lexeme_ids = {entry.lexeme_id for entry in entries if entry.lexeme_id is not None}
+    if not lexeme_ids:
+        return {}
     rows = await session.exec(
-        select(SavedWord.lemma).where(
-            SavedWord.user_id == user_id, SavedWord.lemma.in_(lemmas)
-        )
+        select(SavedWord.id, SavedWord.lexeme_sense_id, LexemeSense.lexeme_id)
+        .join(LexemeSense, LexemeSense.id == SavedWord.lexeme_sense_id)
+        .where(SavedWord.user_id == user_id, LexemeSense.lexeme_id.in_(lexeme_ids))
     )
-    return set(rows.all())
+    by_sense: dict[uuid.UUID, uuid.UUID] = {}
+    by_lexeme: dict[uuid.UUID, set[uuid.UUID]] = {}
+    for word_id, sense_id, lexeme_id in rows.all():
+        by_sense[sense_id] = word_id
+        by_lexeme.setdefault(lexeme_id, set()).add(sense_id)
+
+    state: dict[uuid.UUID, dict] = {}
+    for entry in entries:
+        if entry.sense_id is None:
+            state[entry.id] = {
+                "saved": False, "saved_word_id": None, "other_sense_saved": False,
+            }
+            continue
+        saved_word_id = by_sense.get(entry.sense_id)
+        other = bool(by_lexeme.get(entry.lexeme_id, set()) - {entry.sense_id})
+        state[entry.id] = {
+            "saved": saved_word_id is not None,
+            "saved_word_id": saved_word_id,
+            "other_sense_saved": other,
+        }
+    return state
+
+
+async def senses_by_id(
+    session: AsyncSession, sense_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, LexemeSense]:
+    """A batch of `LexemeSense` rows, keyed by id -- one query for however
+    many a caller needs (a page of material entries, a page of saved
+    words), never one per row."""
+    sense_ids = {sense_id for sense_id in sense_ids if sense_id is not None}
+    if not sense_ids:
+        return {}
+    rows = await session.exec(select(LexemeSense).where(LexemeSense.id.in_(sense_ids)))
+    return {sense.id: sense for sense in rows.all()}
+
+
+async def usual_meanings_for(
+    session: AsyncSession, entries: list[MaterialVocabulary]
+) -> dict[uuid.UUID, LexemeSense]:
+    """Every `LexemeSense` these entries point at, batched -- the shim for a
+    row written since P3, which no longer carries its own
+    `meaning_core_en`/`meaning_core_uz` copy (see `link_row`'s docstring):
+    where a row's own copy is empty, the caller reads the usual meaning LIVE
+    from here instead, keyed by `entry.sense_id`.
+    """
+    return await senses_by_id(
+        session, {entry.sense_id for entry in entries if entry.sense_id is not None}
+    )
 
 
 async def saved_list_for(
@@ -819,21 +967,19 @@ MAX_HISTORY = 100
 
 
 async def saved_word_with_history(
-    session: AsyncSession, user_id: uuid.UUID, lemma: str
+    session: AsyncSession, user_id: uuid.UUID, word_id: uuid.UUID
 ) -> tuple[SavedWord, list[SavedWordContext], list[VocabularyReviewLog]] | None:
     """The word page's whole answer: the word, its contexts, and its
     review history (newest first, capped at :data:`MAX_HISTORY`). ``None``
-    for a lemma this learner does not have -- including one that belongs
+    for a word id this learner does not have -- including one that belongs
     to somebody else, which the caller turns into a 404 that says nothing
     about whether the word exists at all.
+
+    Addressed by id (P4), not lemma -- a lemma is no longer unique to one
+    saved word, so it cannot name one on its own any more.
     """
-    rows = await session.exec(
-        select(SavedWord).where(
-            SavedWord.user_id == user_id, SavedWord.lemma == normalise(lemma)
-        )
-    )
-    word = rows.first()
-    if word is None:
+    word = await session.get(SavedWord, word_id)
+    if word is None or word.user_id != user_id:
         return None
     contexts = (await saved_list_for(session, [word.id])).get(word.id, [])
     history_rows = await session.exec(
@@ -849,21 +995,20 @@ async def bulk_action(
     session: AsyncSession,
     *,
     user_id: uuid.UUID,
-    lemmas: list[str],
+    word_ids: list[uuid.UUID],
     action: str,
 ) -> int:
     """``known``/``suspend``/``restore``/``forget`` over a batch of the
-    caller's OWN words -- the ``in_`` clause below is scoped to
-    ``user_id``, so a lemma somebody else owns is silently not theirs to
+    caller's OWN words, by id (P4) -- the ``in_`` clause below is scoped to
+    ``user_id``, so an id somebody else owns is silently not theirs to
     change rather than an error that would confirm it exists.
 
-    ``forget`` is delegated to :func:`forget`, one lemma at a time, because
+    ``forget`` is delegated to :func:`forget`, one id at a time, because
     it has its own contexts-then-word delete order to preserve; the other
-    three are a plain column write over whichever of the requested lemmas
+    three are a plain column write over whichever of the requested ids
     this learner actually has.
     """
-    wanted = {normalise(lemma) for lemma in lemmas} - {""}
-    if not wanted:
+    if not word_ids:
         return 0
 
     # The lazy 30-day return, same as every other read/write path that
@@ -873,14 +1018,14 @@ async def bulk_action(
 
     if action == "forget":
         changed = 0
-        for lemma in wanted:
-            if await forget(session, user_id, lemma):
+        for word_id in word_ids:
+            if await forget(session, user_id, word_id):
                 changed += 1
         return changed
 
     rows = await session.exec(
         select(SavedWord).where(
-            SavedWord.user_id == user_id, SavedWord.lemma.in_(wanted)
+            SavedWord.user_id == user_id, SavedWord.id.in_(word_ids)
         )
     )
     words = list(rows.all())
@@ -902,17 +1047,12 @@ async def bulk_action(
 
 
 async def forget(
-    session: AsyncSession, user_id: uuid.UUID, lemma: str
+    session: AsyncSession, user_id: uuid.UUID, word_id: uuid.UUID
 ) -> bool:
-    """Take a word off the list, with everywhere it was met. Returns whether
-    there was one."""
-    row = await session.exec(
-        select(SavedWord).where(
-            SavedWord.user_id == user_id, SavedWord.lemma == normalise(lemma)
-        )
-    )
-    word = row.first()
-    if word is None:
+    """Take a word off the list, with everywhere it was met, by id (P4).
+    Returns whether there was one."""
+    word = await session.get(SavedWord, word_id)
+    if word is None or word.user_id != user_id:
         return False
     contexts = await session.exec(
         select(SavedWordContext).where(SavedWordContext.saved_word_id == word.id)
@@ -1074,6 +1214,13 @@ async def enrich_saved_contexts(
     where it can be followed. The pointer is not what the card shows, so
     nothing a learner sees moves with it.
 
+    The fill source is the entry's own `LexemeSense` now (P4), not
+    `entry.meaning_core_en` -- a row written since P3 never carries that
+    copy at all (`link_row`'s docstring names this exact gap as the reason
+    a later phase would need to move here), so reading only the dead column
+    would mean this function stopped closing the gap it exists for the
+    moment the pipeline it runs beside stopped writing that column.
+
     Flushes; the CALLER commits, like :func:`replace_extracted` beside it
     and for the same reason -- the one caller is the passage importer,
     part-way through writing a material.
@@ -1094,6 +1241,9 @@ async def enrich_saved_contexts(
         )
     )
     by_lemma = {entry.lemma: entry for entry in fresh.all()}
+    senses = await senses_by_id(
+        session, {entry.sense_id for entry in by_lemma.values() if entry.sense_id}
+    )
 
     filled = 0
     for context, lemma in contexts:
@@ -1102,10 +1252,13 @@ async def enrich_saved_contexts(
             continue
         if context.vocabulary_id is None:
             context.vocabulary_id = entry.id
-        if context.meaning_core_en or not entry.meaning_core_en:
+        sense = senses.get(entry.sense_id) if entry.sense_id else None
+        usual_en = entry.meaning_core_en or (sense.definition_en if sense else "")
+        usual_uz = entry.meaning_core_uz or (sense.meaning_uz if sense else "")
+        if context.meaning_core_en or not usual_en:
             continue
-        context.meaning_core_en = entry.meaning_core_en
-        context.meaning_core_uz = entry.meaning_core_uz
+        context.meaning_core_en = usual_en
+        context.meaning_core_uz = usual_uz
         # Only meaningful beside a usual meaning, so it travels with one and
         # never on its own: a context marked "not the usual sense" with no
         # usual sense to show is a promise the card cannot keep.

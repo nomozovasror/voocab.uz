@@ -13,11 +13,11 @@ import uuid
 from sqlmodel import select
 
 from app.core.database import async_session_factory
-from app.models.lexicon import Lexeme, LexemeSense
+from app.models.lexicon import Lexeme, LexemeSense, TranslationReport
 from app.models.material import Material
 from app.models.part import Part
 from app.models.user import User
-from app.models.vocabulary import MaterialVocabulary
+from app.models.vocabulary import MaterialVocabulary, SavedWord, SavedWordContext
 from app.services import lexicon_enrich as le
 
 OEWN = [
@@ -445,4 +445,266 @@ async def test_enrich_writes_merges_relinks_and_a_rerun_reuses_everything() -> N
                 if obj is not None:
                     await session.delete(obj)
                     await session.flush()
+            await session.commit()
+
+
+async def test_a_merged_sense_repoints_the_saved_words_that_pointed_at_it() -> None:
+    """`saved_words.lexeme_sense_id` is NOT NULL (P4): `_absorb`'s own merge
+    of two senses into one must not leave a saved word pointing at the row
+    about to be deleted, the same obligation it already meets for
+    `material_vocabulary.sense_id` and `translation_reports.lexeme_sense_id`.
+
+    Two cases in one test: a plain word (nobody else's) just moves to the
+    surviving sense; a learner who had SEPARATELY saved a word for BOTH
+    senses collides on `uq_saved_user_lexeme_sense` and the two merge into
+    one, contexts combined, the material they shared not duplicated.
+    """
+    tag = uuid.uuid4().hex[:8]
+    async with async_session_factory() as session:
+        user_plain = User(email=f"repoint-plain-{tag}@test.local", display_name="p")
+        user_collide = User(email=f"repoint-collide-{tag}@test.local", display_name="c")
+        session.add_all([user_plain, user_collide])
+        await session.flush()
+        material_shared = Material(author_id=user_plain.id, type="reading",
+                                   title=f"repoint shared {tag}", visibility="private")
+        material_only_old = Material(author_id=user_plain.id, type="reading",
+                                     title=f"repoint old {tag}", visibility="private")
+        session.add_all([material_shared, material_only_old])
+        await session.flush()
+
+        lexeme = Lexeme(lemma=f"repoint{tag}", pos="n")
+        session.add(lexeme)
+        await session.flush()
+        old_sense = LexemeSense(lexeme_id=lexeme.id, sense_rank=2,
+                                definition_en="old", meaning_uz="eski")
+        new_sense = LexemeSense(lexeme_id=lexeme.id, sense_rank=1,
+                                definition_en="new", meaning_uz="yangi")
+        session.add_all([old_sense, new_sense])
+        await session.flush()
+
+        plain_word = SavedWord(
+            user_id=user_plain.id, lemma=lexeme.lemma, lexeme_sense_id=old_sense.id
+        )
+        session.add(plain_word)
+        await session.flush()
+        session.add(SavedWordContext(
+            saved_word_id=plain_word.id, material_id=material_shared.id,
+            meaning_en="m", meaning_uz="u",
+        ))
+
+        collide_old = SavedWord(
+            user_id=user_collide.id, lemma=lexeme.lemma, lexeme_sense_id=old_sense.id
+        )
+        collide_new = SavedWord(
+            user_id=user_collide.id, lemma=lexeme.lemma, lexeme_sense_id=new_sense.id
+        )
+        session.add_all([collide_old, collide_new])
+        await session.flush()
+        session.add(SavedWordContext(
+            saved_word_id=collide_old.id, material_id=material_shared.id,
+            meaning_en="m", meaning_uz="u",
+        ))
+        session.add(SavedWordContext(
+            saved_word_id=collide_old.id, material_id=material_only_old.id,
+            meaning_en="m", meaning_uz="u",
+        ))
+        session.add(SavedWordContext(
+            saved_word_id=collide_new.id, material_id=material_shared.id,
+            meaning_en="m", meaning_uz="u",
+        ))
+        await session.commit()
+
+        ids = dict(
+            lexeme=lexeme.id, old=old_sense.id, new=new_sense.id,
+            plain_word=plain_word.id, collide_old=collide_old.id,
+            collide_new=collide_new.id, user_plain=user_plain.id,
+            user_collide=user_collide.id, material_shared=material_shared.id,
+            material_only_old=material_only_old.id,
+        )
+
+    try:
+        async with async_session_factory() as session:
+            await le._repoint_saved_words(session, ids["old"], ids["new"])
+            await session.commit()
+
+        async with async_session_factory() as session:
+            plain = await session.get(SavedWord, ids["plain_word"])
+            assert plain is not None
+            assert plain.lexeme_sense_id == ids["new"]
+
+            # The collision: `collide_old` is gone, absorbed into
+            # `collide_new`, which now holds both materials.
+            assert await session.get(SavedWord, ids["collide_old"]) is None
+            survivor = await session.get(SavedWord, ids["collide_new"])
+            assert survivor is not None
+            assert survivor.lexeme_sense_id == ids["new"]
+            contexts = (
+                await session.exec(
+                    select(SavedWordContext.material_id).where(
+                        SavedWordContext.saved_word_id == survivor.id
+                    )
+                )
+            ).all()
+            assert set(contexts) == {ids["material_shared"], ids["material_only_old"]}
+    finally:
+        async with async_session_factory() as session:
+            for word_id in (ids["plain_word"], ids["collide_old"], ids["collide_new"]):
+                for ctx in (
+                    await session.exec(
+                        select(SavedWordContext).where(
+                            SavedWordContext.saved_word_id == word_id
+                        )
+                    )
+                ).all():
+                    await session.delete(ctx)
+            await session.flush()
+            for word_id in (ids["plain_word"], ids["collide_old"], ids["collide_new"]):
+                word = await session.get(SavedWord, word_id)
+                if word is not None:
+                    await session.delete(word)
+            await session.flush()
+            for sense_id in (ids["old"], ids["new"]):
+                sense = await session.get(LexemeSense, sense_id)
+                if sense is not None:
+                    await session.delete(sense)
+            await session.flush()
+            lexeme = await session.get(Lexeme, ids["lexeme"])
+            if lexeme is not None:
+                await session.delete(lexeme)
+            for material_id in (ids["material_shared"], ids["material_only_old"]):
+                material = await session.get(Material, material_id)
+                if material is not None:
+                    await session.delete(material)
+            await session.flush()
+            for user_id in (ids["user_plain"], ids["user_collide"]):
+                user = await session.get(User, user_id)
+                if user is not None:
+                    await session.delete(user)
+            await session.commit()
+
+
+async def test_a_merged_sense_repoints_translation_reports_and_merges_open_collisions() -> None:
+    """`translation_reports` has a partial unique index -- one OPEN report
+    per `(user_id, lexeme_sense_id)` -- so a blind bulk repoint of
+    `lexeme_sense_id` onto the survivor, as a merge used to do, can violate
+    it the moment one learner has an open report on BOTH senses being
+    merged. `_repoint_translation_reports` must handle that collision the
+    way `_repoint_saved_words` handles its own: one report survives, the
+    other's note is folded in and it is marked resolved rather than left as
+    a second open row.
+
+    Three reports in one test: a plain one (nobody else's business) just
+    moves to the surviving sense; an already-resolved one moves too, since
+    it cannot collide with anything; the OPEN collision is the one that
+    would have raised `IntegrityError` before this fix.
+    """
+    tag = uuid.uuid4().hex[:8]
+    async with async_session_factory() as session:
+        user_plain = User(email=f"report-plain-{tag}@test.local", display_name="p")
+        user_collide = User(email=f"report-collide-{tag}@test.local", display_name="c")
+        session.add_all([user_plain, user_collide])
+        await session.flush()
+
+        lexeme = Lexeme(lemma=f"reportword{tag}", pos="n")
+        session.add(lexeme)
+        await session.flush()
+        old_sense = LexemeSense(lexeme_id=lexeme.id, sense_rank=2,
+                                definition_en="old", meaning_uz="eski")
+        new_sense = LexemeSense(lexeme_id=lexeme.id, sense_rank=1,
+                                definition_en="new", meaning_uz="yangi")
+        session.add_all([old_sense, new_sense])
+        await session.flush()
+
+        plain_report = TranslationReport(
+            user_id=user_plain.id, lexeme_sense_id=old_sense.id,
+            source="word_page", note="plain report", status="open",
+        )
+        already_resolved = TranslationReport(
+            user_id=user_collide.id, lexeme_sense_id=old_sense.id,
+            source="word_page", note="already handled", status="resolved",
+        )
+        collide_old = TranslationReport(
+            user_id=user_collide.id, lexeme_sense_id=old_sense.id,
+            source="word_page", note="wrong on the old sense", status="open",
+        )
+        collide_new = TranslationReport(
+            user_id=user_collide.id, lexeme_sense_id=new_sense.id,
+            source="practice_reveal", note="wrong on the new sense too",
+            status="open",
+        )
+        session.add_all([plain_report, already_resolved, collide_old, collide_new])
+        await session.commit()
+
+        ids = dict(
+            lexeme=lexeme.id, old=old_sense.id, new=new_sense.id,
+            plain_report=plain_report.id, already_resolved=already_resolved.id,
+            collide_old=collide_old.id, collide_new=collide_new.id,
+            user_plain=user_plain.id, user_collide=user_collide.id,
+        )
+
+    try:
+        async with async_session_factory() as session:
+            await le._repoint_translation_reports(session, ids["old"], ids["new"])
+            await session.commit()
+
+        async with async_session_factory() as session:
+            plain = await session.get(TranslationReport, ids["plain_report"])
+            assert plain is not None
+            assert plain.lexeme_sense_id == ids["new"]
+            assert plain.status == "open"
+
+            resolved = await session.get(TranslationReport, ids["already_resolved"])
+            assert resolved is not None
+            assert resolved.lexeme_sense_id == ids["new"]
+            assert resolved.status == "resolved"
+
+            # The collision: `collide_old` is resolved AND still repointed
+            # to the survivor sense (not left referencing `old`, which is
+            # about to be deleted), and never ends up a SECOND open row
+            # against `new` beside `collide_new`.
+            merged_away = await session.get(TranslationReport, ids["collide_old"])
+            assert merged_away is not None
+            assert merged_away.status == "resolved"
+            assert merged_away.lexeme_sense_id == ids["new"]
+
+            survivor = await session.get(TranslationReport, ids["collide_new"])
+            assert survivor is not None
+            assert survivor.status == "open"
+            assert survivor.lexeme_sense_id == ids["new"]
+            assert "wrong on the new sense too" in survivor.note
+            assert "wrong on the old sense" in survivor.note
+
+            open_rows = (
+                await session.exec(
+                    select(TranslationReport).where(
+                        TranslationReport.user_id == ids["user_collide"],
+                        TranslationReport.lexeme_sense_id == ids["new"],
+                        TranslationReport.status == "open",
+                    )
+                )
+            ).all()
+            assert len(open_rows) == 1  # the index this fix exists to satisfy
+    finally:
+        async with async_session_factory() as session:
+            for report_id in (
+                ids["plain_report"], ids["already_resolved"],
+                ids["collide_old"], ids["collide_new"],
+            ):
+                report = await session.get(TranslationReport, report_id)
+                if report is not None:
+                    await session.delete(report)
+            await session.flush()
+            for sense_id in (ids["old"], ids["new"]):
+                sense = await session.get(LexemeSense, sense_id)
+                if sense is not None:
+                    await session.delete(sense)
+            await session.flush()
+            lexeme = await session.get(Lexeme, ids["lexeme"])
+            if lexeme is not None:
+                await session.delete(lexeme)
+            await session.flush()
+            for user_id in (ids["user_plain"], ids["user_collide"]):
+                user = await session.get(User, user_id)
+                if user is not None:
+                    await session.delete(user)
             await session.commit()

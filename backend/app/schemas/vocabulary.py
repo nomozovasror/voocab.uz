@@ -43,6 +43,13 @@ class VocabularyEntryOut(BaseModel):
     """One word or phrase, in this passage's sense."""
 
     id: uuid.UUID
+    #: This row's place in the global lexicon (P4) -- null only for a row
+    #: some path outside the ordinary writers left unlinked (should not
+    #: happen; see `app.services.lexicon.link_row`). What "saved" below asks
+    #: about is `sense_id`, not `lemma`: `bank` the river and `bank` the
+    #: financial institution are two different answers to "is this saved".
+    lexeme_id: uuid.UUID | None = None
+    sense_id: uuid.UUID | None = None
     lemma: str
     #: The form as it stands in the passage. Not printed on its own — the
     #: reader can see it — and carried so the client can mark the right
@@ -97,9 +104,18 @@ class VocabularyEntryOut(BaseModel):
     #: Whether the passage has been edited since this was glossed, so the
     #: offsets may no longer point at the right words. Derived, never stored.
     stale: bool = False
-    #: Whether this learner already has it on their list. Absent (false) for
-    #: a caller asking about somebody else's material.
+    #: Whether THIS SENSE (P4) is already on the learner's list -- the row's
+    #: own `sense_id`, not its `lemma`. Absent (false) for a caller asking
+    #: about somebody else's material.
     saved: bool = False
+    #: The saved word this sense IS, when `saved` is true -- what the ✕ on
+    #: the popover/review row deletes. Null when not saved.
+    saved_word_id: uuid.UUID | None = None
+    #: A DIFFERENT sense of the same lexeme is on the learner's list, while
+    #: this one is not -- the popover's quiet line ("You've saved another
+    #: meaning of this word.") shows exactly when this is true AND `saved`
+    #: is false.
+    other_sense_saved: bool = False
 
 
 class LookupIn(BaseModel):
@@ -200,8 +216,25 @@ class SavedWordOut(BaseModel):
     are what the words list (plan screen 4) and the word page (screen 5)
     need to show a row or a header without a second round trip: the
     learner's own progress, not the catalogue's.
+
+    ``id``/``lexeme_id``/``sense_id``/``definition_en``/``meaning_uz``/
+    ``sense_cefr`` are P4's own additions -- a saved word is now one sense,
+    addressed by ``id`` (the lemma-path routes are gone), and its usual
+    meaning/definition/CEFR are read LIVE from that sense rather than a
+    stored copy, so an admin's fix in Studio reaches everybody already
+    studying the word. ``meaning_core_en``/``meaning_core_uz`` STAY and are
+    filled with exactly the same live values, for a caller that has not
+    moved onto the new field names yet -- see ``app.models.vocabulary
+    .SavedWord`` for why the columns behind them are dead.
     """
 
+    id: uuid.UUID
+    #: Both are guaranteed non-null in the database (`lexeme_sense_id` is a
+    #: NOT NULL FK) -- optional here only so a caller building this schema
+    #: from a bare in-memory ``SavedWord`` with no sense loaded (a unit test
+    #: that never touches the database) is not forced to fabricate one.
+    lexeme_id: uuid.UUID | None = None
+    sense_id: uuid.UUID | None = None
     lemma: str
     created_at: datetime
     contexts: list[SavedContextOut]
@@ -210,6 +243,14 @@ class SavedWordOut(BaseModel):
     pos: str = ""
     meaning_core_en: str = ""
     meaning_core_uz: str = ""
+    #: The sense's own English definition and Uzbek meaning, read live --
+    #: the same values as ``meaning_core_en``/``meaning_core_uz`` above,
+    #: under the names P4's callers use.
+    definition_en: str = ""
+    meaning_uz: str = ""
+    #: The sense's own graded level -- distinct from ``cefr_level`` below,
+    #: which is the newest CONTEXT's level and unchanged in meaning.
+    sense_cefr: str = ""
     #: The newest context's CEFR level -- "newest" because that is the
     #: sense most likely to still be how the learner thinks of the word.
     cefr_level: str = ""
@@ -268,9 +309,12 @@ class WordBulkActionIn(BaseModel):
     """``suspend`` is "set aside for 30 days"; ``restore`` recomputes status
     from the card and clears both ``suspended_until`` and the leech
     lapse-count window; ``forget`` is stage 1's forget, unchanged (the logs
-    survive). Always scoped to the caller's own words."""
+    survive). Always scoped to the caller's own words.
 
-    lemmas: list[str] = Field(min_length=1, max_length=200)
+    ``word_ids`` (P4) -- a lemma is no longer unique to one saved word, so a
+    batch action has to name the rows by id."""
+
+    word_ids: list[uuid.UUID] = Field(min_length=1, max_length=200)
     action: Literal["known", "suspend", "restore", "forget"]
 
 
@@ -458,8 +502,14 @@ class PracticeAnswerWordOut(BaseModel):
     context, the word on its own. Mirrors ``VocabularyEntryOut``'s meaning
     fields rather than reusing that schema outright: this is a narrower
     slice (no offsets, no ``also_at``) and a saved word's own copy rather
-    than a live read of ``material_vocabulary``."""
+    than a live read of ``material_vocabulary``.
 
+    ``sense_id`` (P4) is what the practice reveal's own "this translation is
+    wrong" link reports against -- one of the exactly two places the brief
+    allows that link, the word page being the other.
+    """
+
+    sense_id: uuid.UUID
     lemma: str
     pos: str
     cefr_level: str
@@ -554,3 +604,30 @@ class VocabularySettingsIn(BaseModel):
     #: both an empty list and a list of more than one are refused here
     #: rather than accepted and silently narrowed to the first entry.
     exercise_types: list[Level] | None = Field(default=None, min_length=1, max_length=1)
+
+
+# --- "This translation is wrong" (P4) ---------------------------------------
+
+
+class TranslationReportIn(BaseModel):
+    """Filed from exactly two places -- the word page, and the practice
+    reveal right after an answer -- never the lookup popover, which "is
+    small and busy" (`brief-lexicon.md` §6.3). ``where`` is the wire's own
+    name for `app.models.lexicon.TranslationReport.source`; ``practice``
+    maps onto the stored ``practice_reveal`` (unchanged since P1, so the
+    admin queue's existing reading of that column needs no migration of its
+    own for this rename)."""
+
+    sense_id: uuid.UUID
+    where: Literal["word_page", "practice"]
+    note: str | None = Field(default=None, max_length=500)
+
+
+class TranslationReportOut(BaseModel):
+    """A minimal ack -- "Thanks, we'll check it." needs nothing more. 201
+    the first time; 200, same shape, on a repeat report for the same
+    ``(user, sense)`` -- see ``app.services.lexicon.report_translation``."""
+
+    id: uuid.UUID
+    sense_id: uuid.UUID
+    status: str

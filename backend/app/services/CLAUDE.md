@@ -250,10 +250,56 @@ reader shown five senses. Forty rows cost four kilobytes; a global table
 costs the feature.
 
 Deduplication happens once, where it means something: `saved_words` is per
-lemma, because what somebody is STUDYING is one word however many passages
-they met it in. Each meeting is a `SavedWordContext` and **copies** the
-gloss rather than pointing at it — a material can be re-glossed, and a saved
-word changing meaning underneath somebody is worse than one that has aged.
+**sense** (P4 — it was per lemma before, and that was wrong: see below),
+because what somebody is STUDYING is one MEANING however many passages they
+met it in. Each meeting is a `SavedWordContext` and **copies** the
+contextual gloss rather than pointing at it — a material can be re-glossed,
+and a saved word changing meaning underneath somebody is worse than one that
+has aged.
+
+### A saved word is a sense, not a spelling (P4)
+
+`bank` (the river) and `bank` (the financial institution) are two things to
+learn, not one. Deduplicating by lemma alone — the design from stage 1 —
+gave them one FSRS schedule and one "usual meaning" slot between them,
+which is a card that cannot teach either meaning honestly: the ladder
+promotes them together though a learner may know one cold and have never
+seen the other, and the "usual meaning" line has to pick one of two
+unrelated answers and is wrong about the other. `spring` (the season) met
+twice is genuinely one word and belongs on one card; the two cases look
+identical from the lemma alone and are told apart only by *sense* —
+`MaterialVocabulary.sense_id`, the row's own link into the global lexicon
+(`app.models.lexicon.LexemeSense`) that P3's `link_row` already guarantees
+on every row.
+
+So `saved_words.lexeme_sense_id` — not `lemma` — is the key: unique per
+`(user_id, lexeme_sense_id)`. `lemma` stays as a plain denormalised column
+for display and search (two rows may now legitimately share it) but answers
+nothing about identity any more. Saving a word from a passage
+(`vocabulary.save`) resolves THE SENSE THAT MATERIAL ROW HAS
+(`entry.sense_id`) and keys on that, not on `entry.lemma`: two materials
+glossing the same lemma with the same sense still merge into one saved word
+with two contexts, exactly as before; two materials glossing it with
+*different* senses now correctly produce two saved words, which they never
+could before.
+
+The word's usual meaning/definition/CEFR are read LIVE from that
+`LexemeSense` (`SavedWord.meaning_core_en`/`meaning_core_uz` are dead
+columns — kept, never written or read, past this phase) rather than copied
+onto the row at save time: an admin fixing a wrong translation in Studio's
+review tab now reaches every learner already studying the word, not only
+the next one who saves it. `SavedWordContext` is unaffected by any of this
+— it keeps copying the CONTEXTUAL gloss and sentence exactly as before, for
+exactly the reason above (a re-glossed material must not change what
+somebody already saved); only its own `meaning_core_en`/`meaning_core_uz`
+snapshot changed WHERE it reads from (the entry's sense, live, since the
+entry itself stopped carrying that copy in P3) — never whether it is
+snapshotted at all.
+
+Every route that used to address a saved word by lemma (`DELETE
+/vocabulary/words/{lemma}`, the word page, the leech choice, the bulk
+action) now addresses it by `id`, for the same reason: a lemma can no
+longer name one row on its own.
 
 - **`entries` is gated on having submitted** (`may_see_all`). The budget of
   three lookups lives in the browser, where a rule meant to make somebody
@@ -415,12 +461,12 @@ actual `Card`, in either direction.
   training signal is not owed a favour to the row it came from, and
   `lemma` is copied onto the log so it still means something once the
   pointer goes null.
-- **`vocabulary.save` fills a new word's `pos`/`meaning_core_*` once, at
-  creation, from the entry that caused it** — falling back to that entry's
-  contextual meaning when it has no usual one yet, the same fallback the
-  migration's backfill and every `MaterialVocabulary` reader use. A second
-  save of the same lemma from another material never touches those columns
-  again; only the context list grows.
+- **`vocabulary.save` fills a new word's `pos`/`lexeme_sense_id` once, at
+  creation, from the entry that caused it** (P4: `meaning_core_*` are dead
+  and no longer filled at all — see "A saved word is a sense, not a
+  spelling" above). A second save of the SAME SENSE from another material
+  never touches the word row again; only the context list grows. A save of
+  a DIFFERENT sense sharing the lemma is a different word entirely.
 - **`Mastered` and `Learning` are a partition, computed in Python over one
   query** (`_totals`), not three separate counts — `known` status OR
   `passive_stability ≥ 21` days (`MASTERED_STABILITY_DAYS`) is `mastered`;

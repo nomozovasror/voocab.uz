@@ -29,13 +29,20 @@ router = APIRouter(prefix="/api", tags=["lexicon"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
-#: `reason=` on the queue accepts a real review reason or the synthetic
-#: "core" bucket -- anything else is a 422, not a silently-empty page.
-_VALID_REASONS = frozenset({*REVIEW_REASONS, lexicon_review.CORE_REASON})
+#: `reason=` on the queue accepts a real review reason or one of the two
+#: synthetic bucket names ("core", "reported") -- anything else is a 422,
+#: not a silently-empty page.
+_VALID_REASONS = frozenset(
+    {*REVIEW_REASONS, lexicon_review.CORE_REASON, lexicon_review.REPORTED_REASON}
+)
 
 
 def _row_out(
-    sense: LexemeSense, lexeme: Lexeme, example_count: int
+    sense: LexemeSense,
+    lexeme: Lexeme,
+    example_count: int,
+    report_count: int = 0,
+    report_notes: list[str] | None = None,
 ) -> ReviewRowOut:
     return ReviewRowOut(
         sense_id=sense.id,
@@ -56,6 +63,8 @@ def _row_out(
         approved_by=sense.approved_by,
         approved_at=sense.approved_at,
         material_example_count=example_count,
+        report_count=report_count,
+        report_notes=report_notes or [],
     )
 
 
@@ -79,12 +88,12 @@ async def get_review_queue(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> ReviewQueueOut:
-    """`needs_review` first (a rank-1 `pos_mismatch` sense ahead of every
-    other reason), then the core bucket -- see
-    `app.services.lexicon_review`'s own docstring for the two-bucket
-    ordering. `reason_counts`/`core_pending` are always over the WHOLE
-    backlog, regardless of the current filter, so the chips never blank out
-    as a reviewer narrows the list."""
+    """Reported first (P4), then `needs_review` (a rank-1 `pos_mismatch`
+    sense ahead of every other reason), then the core bucket -- see
+    `app.services.lexicon_review`'s own docstring for the three-bucket
+    ordering. `reason_counts`/`core_pending`/`reported_pending` are always
+    over the WHOLE backlog, regardless of the current filter, so the chips
+    never blank out as a reviewer narrows the list."""
     if reason is not None and reason not in _VALID_REASONS:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Unknown reason")
 
@@ -93,11 +102,16 @@ async def get_review_queue(
     )
     counts = await lexicon_review.reason_counts(session)
     core_pending = await lexicon_review.core_pending_count(session)
+    reported_pending = await lexicon_review.reported_count(session)
     return ReviewQueueOut(
         total=total,
         reason_counts=counts,
         core_pending=core_pending,
-        rows=[_row_out(sense, lexeme, n) for sense, lexeme, n in rows],
+        reported_pending=reported_pending,
+        rows=[
+            _row_out(sense, lexeme, n, reports, notes)
+            for sense, lexeme, n, reports, notes in rows
+        ],
     )
 
 

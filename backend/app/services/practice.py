@@ -81,6 +81,7 @@ from sqlalchemy import exists, func
 from sqlmodel import select
 
 from app.core.database import AsyncSession
+from app.models.lexicon import LexemeSense
 from app.models.user import User
 from app.models.vocabulary import (
     ACTIVE_LADDER,
@@ -385,7 +386,9 @@ def _find_surface(text: str, surface: str) -> tuple[int, int] | None:
     return (match.start(), match.end()) if match else None
 
 
-def resolve_gap(word: SavedWord, context: SavedWordContext | None) -> Gap:
+def resolve_gap(
+    word: SavedWord, context: SavedWordContext | None, sense: LexemeSense | None = None
+) -> Gap:
     """The recall prompt for one word, in one context.
 
     Tries the context's own sentence first, searching for its ``surface``
@@ -419,7 +422,7 @@ def resolve_gap(word: SavedWord, context: SavedWordContext | None) -> Gap:
                 answer=answer,
             )
 
-    definition = word.meaning_core_en or (context.meaning_en if context else "") or ""
+    definition = _passive_definition(word, context, sense)
     return Gap(
         before="",
         after="",
@@ -455,28 +458,45 @@ def resolve_mark(word: SavedWord, context: SavedWordContext | None) -> Mark:
     return Mark(before="", target=word.lemma, after="")
 
 
-def _passive_definition(word: SavedWord, context: SavedWordContext | None) -> str:
+def _passive_definition(
+    word: SavedWord, context: SavedWordContext | None, sense: LexemeSense | None = None
+) -> str:
     """The ENGLISH definition a passive `recognise` right answer shows, and
     the text the similarity guard compares every candidate against, for
-    both directions -- see ``app.services.distractors``."""
-    return word.meaning_core_en or (context.meaning_en if context else "") or ""
+    both directions -- see ``app.services.distractors``.
+
+    Read LIVE from the word's own ``LexemeSense`` (P4) -- ``SavedWord
+    .meaning_core_en`` is dead, never written past the P4 migration's
+    backfill -- falling back to it anyway for a caller that could not
+    afford the extra fetch (``sense=None``), and to the context's own
+    contextual gloss only once both are empty.
+    """
+    live = sense.definition_en if sense is not None else ""
+    return live or word.meaning_core_en or (context.meaning_en if context else "") or ""
 
 
-def _active_meaning_uz(word: SavedWord, context: SavedWordContext | None) -> str:
+def _active_meaning_uz(
+    word: SavedWord, context: SavedWordContext | None, sense: LexemeSense | None = None
+) -> str:
     """The Uzbek meaning an active item shows -- the prompt itself, for
-    `recognise` and `produce` alike."""
-    return word.meaning_core_uz or (context.meaning_uz if context else "") or ""
+    `recognise` and `produce` alike. Read live from the sense, same as
+    :func:`_passive_definition`."""
+    live = sense.meaning_uz if sense is not None else ""
+    return live or word.meaning_core_uz or (context.meaning_uz if context else "") or ""
 
 
 def _recognise_right_text(
-    word: SavedWord, context: SavedWordContext | None, direction: Direction
+    word: SavedWord,
+    context: SavedWordContext | None,
+    direction: Direction,
+    sense: LexemeSense | None = None,
 ) -> str:
     """The text the CORRECT option shows: a definition for passive, the
     lemma itself for active -- see ``app.services.distractors.build``'s
     ``option_field``."""
     if direction == "active":
         return word.lemma
-    return _passive_definition(word, context)
+    return _passive_definition(word, context, sense)
 
 
 def grade_choice(given: str, word_id: uuid.UUID, right_text: str) -> Verdict:
@@ -553,6 +573,20 @@ async def _last_used_map(
         .group_by(VocabularyReviewLog.context_id)
     )
     return dict(rows.all())
+
+
+async def _senses_for(
+    session: AsyncSession, words: list[SavedWord]
+) -> dict[uuid.UUID, LexemeSense]:
+    """Every `LexemeSense` a batch of words point at, keyed by
+    `lexeme_sense_id` -- one query for a whole session's queue (P4), not one
+    per item, so the live-meaning reads in `_build_item` cost nothing extra
+    at the size a session actually is."""
+    sense_ids = {word.lexeme_sense_id for word in words}
+    if not sense_ids:
+        return {}
+    rows = await session.exec(select(LexemeSense).where(LexemeSense.id.in_(sense_ids)))
+    return {sense.id: sense for sense in rows.all()}
 
 
 async def _contexts_by_word(
@@ -837,21 +871,19 @@ async def resolve_leech(
     session: AsyncSession,
     user: User,
     *,
-    lemma: str,
+    word_id: uuid.UUID,
     choice: Literal["set_aside", "see_context", "keep"],
 ) -> SavedWord | None:
-    """One of the three choices the brief gives a leech word. "Set aside"
-    is the only one that actually leaves the word out of rotation; "see it
-    where you met it" and "keep practising" are the SAME mutation --
-    status recomputed, lapse count reset -- because the difference between
-    them is only which screen the learner asked from, not anything the
-    server needs to remember.
+    """One of the three choices the brief gives a leech word, addressed by
+    id (P4 -- a lemma is no longer unique to one word). "Set aside" is the
+    only one that actually leaves the word out of rotation; "see it where
+    you met it" and "keep practising" are the SAME mutation -- status
+    recomputed, lapse count reset -- because the difference between them is
+    only which screen the learner asked from, not anything the server needs
+    to remember.
     """
-    rows = await session.exec(
-        select(SavedWord).where(SavedWord.user_id == user.id, SavedWord.lemma == lemma)
-    )
-    word = rows.first()
-    if word is None:
+    word = await session.get(SavedWord, word_id)
+    if word is None or word.user_id != user.id:
         return None
     now = datetime.now(timezone.utc)
     if choice == "set_aside":
@@ -1388,8 +1420,9 @@ def _recall_item(
     direction: Direction,
     planned_exercise: str,
     is_new: bool,
+    sense: LexemeSense | None = None,
 ) -> dict:
-    gap = resolve_gap(word, context)
+    gap = resolve_gap(word, context, sense)
     item = _base_item(
         word, context, direction=direction, exercise_type="recall",
         planned_exercise=planned_exercise, is_new=is_new,
@@ -1410,6 +1443,7 @@ def _produce_item(
     *,
     is_new: bool,
     planned_exercise: str,
+    sense: LexemeSense | None = None,
 ) -> dict:
     item = _base_item(
         word, context, direction="active", exercise_type="produce",
@@ -1417,7 +1451,7 @@ def _produce_item(
     )
     item["prompt"] = {
         "kind": "produce",
-        "meaning_uz": _active_meaning_uz(word, context),
+        "meaning_uz": _active_meaning_uz(word, context, sense),
         "pos": item["pos"],
         "cue": word.lemma[:1],
     }
@@ -1474,24 +1508,32 @@ async def _build_item(
     is_new: bool,
     source_material_ids: frozenset[uuid.UUID],
     family_keys: frozenset[str],
+    sense: LexemeSense | None = None,
 ) -> dict:
     """One queued (word, direction) -> one item, dispatching on the
     ladder's current level. ``recall``/``produce`` are direct; ``recognise``
     tries the distractor pipeline first and falls back one step FORWARD
     (never sideways to a worse prompt) when it comes back empty -- see the
     module docstring and ``app.services.distractors``.
+
+    ``sense`` is the word's own ``LexemeSense`` (P4), batched by the caller
+    over the whole queue -- every prompt below reads its usual
+    meaning/definition LIVE from it rather than the dead ``SavedWord
+    .meaning_core_*`` columns.
     """
     if direction == "passive" and level == "recall":
         return _recall_item(
             word, context, direction="passive", planned_exercise="recall",
-            is_new=is_new,
+            is_new=is_new, sense=sense,
         )
     if direction == "active" and level == "produce":
-        return _produce_item(word, context, is_new=is_new, planned_exercise="produce")
+        return _produce_item(
+            word, context, is_new=is_new, planned_exercise="produce", sense=sense,
+        )
 
     # `recognise`, either direction.
-    right_text = _recognise_right_text(word, context, direction)
-    definition = _passive_definition(word, context)
+    right_text = _recognise_right_text(word, context, direction, sense)
+    definition = _passive_definition(word, context, sense)
     built = await distractors.build(
         session,
         word_id=word.id,
@@ -1517,14 +1559,14 @@ async def _build_item(
         if direction == "passive":
             return _recall_item(
                 word, context, direction="passive", planned_exercise="recognise",
-                is_new=is_new,
+                is_new=is_new, sense=sense,
             )
         return _produce_item(
-            word, context, is_new=is_new, planned_exercise="recognise"
+            word, context, is_new=is_new, planned_exercise="recognise", sense=sense,
         )
 
     shown_meaning_uz = (
-        _active_meaning_uz(word, context) if direction == "active" else None
+        _active_meaning_uz(word, context, sense) if direction == "active" else None
     )
     return _choice_item(
         word, context, direction=direction, is_new=is_new, options=built.options,
@@ -1618,6 +1660,7 @@ async def build_session(
     ]
     last_used = await _last_used_map(session, all_context_ids)
     family_keys = await distractors.learning_family_keys(session, user.id)
+    senses = await _senses_for(session, [candidate.word for candidate in queue])
 
     items = []
     for candidate in queue:
@@ -1628,6 +1671,7 @@ async def build_session(
             session, candidate.word, candidate.direction, candidate.level, context,
             is_new=candidate.is_new, source_material_ids=source_material_ids,
             family_keys=family_keys,
+            sense=senses.get(candidate.word.lexeme_sense_id),
         )
         items.append(item)
     return items
@@ -1648,8 +1692,10 @@ async def build_known_check_item(
     contexts = contexts_by_word.get(word.id, [])
     last_used = await _last_used_map(session, [context.id for context in contexts])
     context = _pick_context(contexts, last_used)
+    sense = await session.get(LexemeSense, word.lexeme_sense_id)
     return _recall_item(
-        word, context, direction="passive", planned_exercise="recall", is_new=True
+        word, context, direction="passive", planned_exercise="recall", is_new=True,
+        sense=sense,
     )
 
 
@@ -1769,6 +1815,9 @@ async def record_answer(
     word = await session.get(SavedWord, word_id)
     if word is None or word.user_id != user.id:
         return None
+    # Read once, up front -- every branch below that would otherwise read
+    # `word.meaning_core_*` (dead since P4) reads this instead.
+    sense = await session.get(LexemeSense, word.lexeme_sense_id)
 
     context: SavedWordContext | None = None
     if context_id is not None:
@@ -1868,7 +1917,7 @@ async def record_answer(
                 )
 
     if exercise_type == "recognise":
-        right_text = _recognise_right_text(word, context, direction)
+        right_text = _recognise_right_text(word, context, direction, sense)
         verdict = grade_choice(given, word.id, right_text)
         answer_text = right_text
     elif exercise_type == "produce":
@@ -1876,7 +1925,7 @@ async def record_answer(
         verdict = _kindest([verdict_for(given, form) for form in forms])
         answer_text = word.lemma
     else:  # "recall" -- including every fallback that lands here
-        gap = resolve_gap(word, context)
+        gap = resolve_gap(word, context, sense)
         verdict = verdict_for(given, gap.answer)
         answer_text = gap.answer
 
@@ -1978,6 +2027,16 @@ async def record_answer(
         titles = await materials_service.titles_for(session, [material_id])
         material_title = titles.get(material_id, "")
 
+    # The word's usual meaning is read LIVE from its sense (P4, fetched once
+    # above), same as every other reader of a saved word --
+    # `SavedWord.meaning_core_*` is dead. `sense_id` itself travels too: it
+    # is what the practice reveal's own "this translation is wrong" link
+    # reports against (`POST /vocabulary/translation-reports`), the other of
+    # the exactly two places the brief allows that link (the word page is
+    # the first).
+    definition_en = sense.definition_en if sense is not None else word.meaning_core_en
+    meaning_uz = sense.meaning_uz if sense is not None else word.meaning_core_uz
+
     return {
         "verdict": verdict,
         "rating": int(rating),
@@ -1990,12 +2049,13 @@ async def record_answer(
         "status": word.status,
         "level": getattr(word, f"{direction}_level") or "recognise",
         "word": {
+            "sense_id": word.lexeme_sense_id,
             "lemma": word.lemma,
             "pos": word.pos or (context.pos if context else ""),
             "cefr_level": context.cefr_level if context else "",
-            "meaning_core_en": word.meaning_core_en
+            "meaning_core_en": definition_en
             or (context.meaning_core_en if context else ""),
-            "meaning_core_uz": word.meaning_core_uz
+            "meaning_core_uz": meaning_uz
             or (context.meaning_core_uz if context else ""),
             "meaning_en": context.meaning_en if context else "",
             "meaning_uz": context.meaning_uz if context else "",

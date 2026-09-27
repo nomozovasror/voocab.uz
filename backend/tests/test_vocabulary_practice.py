@@ -16,10 +16,12 @@ import fsrs
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
+from sqlalchemy import func
 from sqlmodel import select
 
 from app.api.vocabulary import _saved_word_out
 from app.core.database import async_session_factory
+from app.models.lexicon import Lexeme, LexemeSense
 from app.models.material import Material
 from app.models.part import Part
 from app.models.user import User
@@ -235,8 +237,50 @@ async def _make_part(material_id: uuid.UUID) -> Part:
 
 
 async def _make_saved_word(user_id: uuid.UUID, lemma: str, **fields) -> SavedWord:
+    """A saved word, with a real `LexemeSense` behind it (P4:
+    `lexeme_sense_id` is NOT NULL) -- built fresh, one per call, unless the
+    caller already has one to reuse (`lexeme_sense_id=...`). Its
+    `definition_en`/`meaning_uz` mirror whatever `meaning_core_en`/
+    `meaning_core_uz` the caller passed, so every existing assertion about
+    "the word's usual meaning" keeps holding whether it happens to read the
+    dead column or the live sense.
+    """
     async with async_session_factory() as session:
-        word = SavedWord(user_id=user_id, lemma=lemma, **fields)
+        sense_id = fields.pop("lexeme_sense_id", None)
+        if sense_id is None:
+            pos = fields.get("pos", "") or ""
+            # Found first, not blindly created: two calls for the SAME
+            # lemma (two users saving "shared-lemma", or a second word on
+            # the same one) must not collide on `uq_lexeme_lemma_pos` --
+            # the same find-or-create shape `app.services.lexicon.link_row`
+            # itself uses.
+            lexeme = (
+                await session.exec(
+                    select(Lexeme).where(Lexeme.lemma == lemma, Lexeme.pos == pos)
+                )
+            ).first()
+            if lexeme is None:
+                lexeme = Lexeme(lemma=lemma, pos=pos)
+                session.add(lexeme)
+                await session.flush()
+            existing_senses = (
+                await session.exec(
+                    select(func.count(LexemeSense.id)).where(
+                        LexemeSense.lexeme_id == lexeme.id
+                    )
+                )
+            ).one()
+            sense = LexemeSense(
+                lexeme_id=lexeme.id, sense_rank=existing_senses + 1,
+                definition_en=fields.get("meaning_core_en", "") or "",
+                meaning_uz=fields.get("meaning_core_uz", "") or "",
+            )
+            session.add(sense)
+            await session.flush()
+            sense_id = sense.id
+        word = SavedWord(
+            user_id=user_id, lemma=lemma, lexeme_sense_id=sense_id, **fields
+        )
         session.add(word)
         await session.commit()
         await session.refresh(word)
@@ -312,16 +356,44 @@ async def _cleanup(*, user_ids=(), material_ids=()) -> None:
             ).all():
                 await session.delete(row)
         await session.flush()
+        # `_make_saved_word` mints a fresh `Lexeme`/`LexemeSense` per call
+        # (P4: `lexeme_sense_id` is NOT NULL) -- collected here, before the
+        # words themselves go, so a lemma this run made up (`"intransigent"`,
+        # `"shared-lemma"`, ...) does not collide with the next run's use of
+        # the same word: `(lemma, pos)` is globally unique on `lexemes`.
+        sense_ids: set[uuid.UUID] = set()
         for user_id in user_ids:
-            for row in (
+            for word in (
                 await session.exec(
                     select(SavedWord).where(SavedWord.user_id == user_id)
                 )
             ).all():
-                await session.delete(row)
+                sense_ids.add(word.lexeme_sense_id)
+                await session.delete(word)
             settings = await session.get(VocabularySettings, user_id)
             if settings is not None:
                 await session.delete(settings)
+        await session.flush()
+        lexeme_ids: set[uuid.UUID] = set()
+        for sense_id in sense_ids:
+            sense = await session.get(LexemeSense, sense_id)
+            if sense is not None:
+                lexeme_ids.add(sense.lexeme_id)
+                await session.delete(sense)
+        await session.flush()
+        for lexeme_id in lexeme_ids:
+            remaining = (
+                await session.exec(
+                    select(func.count(LexemeSense.id)).where(
+                        LexemeSense.lexeme_id == lexeme_id
+                    )
+                )
+            ).one()
+            if remaining:
+                continue  # another sense (outside this cleanup) still uses it
+            lexeme = await session.get(Lexeme, lexeme_id)
+            if lexeme is not None:
+                await session.delete(lexeme)
         await session.flush()
         for material_id in material_ids:
             for row in (
@@ -549,7 +621,7 @@ async def test_forgetting_a_word_keeps_the_logs_it_produced():
         assert logs_before[0].saved_word_id == word.id
 
         async with async_session_factory() as session:
-            gone = await vocabulary_service.forget(session, user.id, "vogue")
+            gone = await vocabulary_service.forget(session, user.id, word.id)
         assert gone is True
 
         async with async_session_factory() as session:
@@ -571,7 +643,15 @@ async def test_forgetting_a_word_keeps_the_logs_it_produced():
 
 
 @pytest.mark.asyncio
-async def test_saving_a_word_fills_its_core_meaning_once_not_on_every_material():
+async def test_saving_a_word_twice_finds_the_same_sense_and_does_not_split():
+    """P4: a saved word is one SENSE, not one lemma. Two materials glossing
+    `threshold` with the same wording resolve to the same `LexemeSense`
+    (`link_row`'s own dedup-by-wording rule) and therefore the same saved
+    word -- the context list grows, the word's identity and its live usual
+    meaning do not move. (Two materials glossing a lemma with a genuinely
+    DIFFERENT meaning are a different sense and a different word -- see
+    `test_vocabulary.py`'s own save/split coverage for that half.)
+    """
     email = f"practice-save-{uuid.uuid4()}@test.local"
     user = await _make_user(email)
     first = await _make_material(user.id, "Practice: save (first)")
@@ -582,7 +662,8 @@ async def test_saving_a_word_fills_its_core_meaning_once_not_on_every_material()
         async with async_session_factory() as session:
             # No `meaning_core_en` yet -- an entry from before that column
             # was enriched -- so the fallback to the contextual meaning is
-            # what has to reach the saved word.
+            # what `link_row` builds the sense from, and the SAME wording on
+            # the second row is what makes it resolve to the SAME sense.
             session.add(
                 MaterialVocabulary(
                     material_id=first.id, part_id=first_part.id,
@@ -596,9 +677,8 @@ async def test_saving_a_word_fills_its_core_meaning_once_not_on_every_material()
                 MaterialVocabulary(
                     material_id=second.id, part_id=second_part.id,
                     lemma="threshold", surface="thresholds", pos="n",
-                    meaning_core_en="a DIFFERENT usual meaning entirely",
-                    meaning_core_uz="boshqa asosiy ma'no",
-                    meaning_en="a different contextual sense",
+                    meaning_en="A point that must be crossed for something "
+                              "to happen!",
                     meaning_uz="boshqa ma'no", cefr_level="B2",
                 )
             )
@@ -619,15 +699,17 @@ async def test_saving_a_word_fills_its_core_meaning_once_not_on_every_material()
                 )
             ).one()
             assert saved.pos == "n"
+            sense = await session.get(LexemeSense, saved.lexeme_sense_id)
             # Fell back to the contextual meaning, because the entry had no
-            # usual one.
-            assert saved.meaning_core_en == (
+            # usual one of its own.
+            assert sense.definition_en == (
                 "a point that must be crossed for something to happen"
             )
-            assert saved.meaning_core_uz == "chegara"
+            assert sense.meaning_uz == "chegara"
 
-        # A second save, from a material whose entry has a DIFFERENT core
-        # meaning, must not touch what the learner already has.
+        # A second save, from a material whose entry glosses the SAME
+        # meaning in different words, must find the same sense and the same
+        # word -- not split it, and not touch what is already there.
         async with async_session_factory() as session:
             await vocabulary_service.save(
                 session, user_id=user.id, material_id=second.id,
@@ -635,16 +717,29 @@ async def test_saving_a_word_fills_its_core_meaning_once_not_on_every_material()
             )
 
         async with async_session_factory() as session:
-            saved_again = (
+            words = (
                 await session.exec(
                     select(SavedWord).where(
                         SavedWord.user_id == user.id, SavedWord.lemma == "threshold"
                     )
                 )
-            ).one()
-            assert saved_again.meaning_core_en == (
+            ).all()
+            assert len(words) == 1
+            saved_again = words[0]
+            assert saved_again.id == saved.id
+            sense_again = await session.get(LexemeSense, saved_again.lexeme_sense_id)
+            assert sense_again.id == sense.id
+            assert sense_again.definition_en == (
                 "a point that must be crossed for something to happen"
             )
+            contexts = (
+                await session.exec(
+                    select(SavedWordContext).where(
+                        SavedWordContext.saved_word_id == saved.id
+                    )
+                )
+            ).all()
+            assert {c.material_id for c in contexts} == {first.id, second.id}
     finally:
         await _cleanup(user_ids=[user.id], material_ids=[first.id, second.id])
 
@@ -1028,6 +1123,77 @@ async def test_distractor_guard_drops_near_duplicate_definitions():
 
 
 @pytest.mark.asyncio
+async def test_distractor_reads_the_candidates_sense_when_meaning_core_is_empty():
+    """A candidate written since P3 carries no `meaning_core_en` of its own
+    (see `link_row`'s docstring) -- its distractor text must come from its
+    own `LexemeSense.definition_en`, the same fallback order as the API's
+    `_entry()` shim, not from `meaning_en` (the per-material CONTEXTUAL
+    gloss), which would show a plausible-but-wrong distractor built from
+    the wrong field entirely.
+    """
+    email = f"distractor-sense-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Distractors: sense fallback")
+    part = await _make_part(material.id)
+    try:
+        lexeme = Lexeme(lemma="rival", pos="n")
+        async with async_session_factory() as session:
+            session.add(lexeme)
+            await session.commit()
+            await session.refresh(lexeme)
+            sense = LexemeSense(
+                lexeme_id=lexeme.id, sense_rank=1,
+                definition_en="somebody competing for the same prize",
+                meaning_uz="raqib",
+            )
+            session.add(sense)
+            await session.commit()
+            await session.refresh(sense)
+
+        await _make_vocab_entry(
+            material.id, part.id, lemma="rival", pos="n", cefr_level="B2",
+            # `meaning_core_en` empty (a row written since P3); `meaning_en`
+            # is a CONTEXTUAL gloss that must NOT be what a distractor shows.
+            meaning_core_en="", meaning_en="the material's own contextual gloss",
+            lexeme_id=lexeme.id, sense_id=sense.id,
+        )
+        await _make_vocab_entry(material.id, part.id, lemma="colleague", pos="n",
+                                 cefr_level="B2", meaning_en="somebody you work with")
+        await _make_vocab_entry(material.id, part.id, lemma="outcome", pos="n",
+                                 cefr_level="B2",
+                                 meaning_en="the result of an action or event")
+
+        async with async_session_factory() as session:
+            built = await distractors.build(
+                session, word_id=uuid.uuid4(),
+                right_text="a formal agreement between two or more countries",
+                right_definition="a formal agreement between two or more countries",
+                pos="n", cefr_level="B2", source_material_ids=frozenset(),
+                family_keys=frozenset(), exclude_lemma="alliance",
+                option_field="definition", rng_seed=1,
+            )
+        assert built.fallback_reason is None
+        texts = {option.text for option in built.options}
+        assert any("competing for the same prize" in text for text in texts)
+        assert not any("contextual gloss" in text for text in texts)
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+        async with async_session_factory() as session:
+            db_sense = (
+                await session.exec(
+                    select(LexemeSense).where(LexemeSense.lexeme_id == lexeme.id)
+                )
+            ).first()
+            if db_sense is not None:
+                await session.delete(db_sense)
+            await session.flush()
+            db_lexeme = await session.get(Lexeme, lexeme.id)
+            if db_lexeme is not None:
+                await session.delete(db_lexeme)
+            await session.commit()
+
+
+@pytest.mark.asyncio
 async def test_distractor_fallback_on_a_short_definition():
     async with async_session_factory() as session:
         built = await distractors.build(
@@ -1341,7 +1507,7 @@ async def test_leech_choices_reset_the_lapse_window():
 
         async with async_session_factory() as session:
             resolved = await practice_service.resolve_leech(
-                session, user, lemma="chronic", choice="keep"
+                session, user, word_id=word.id, choice="keep"
             )
         assert resolved is not None
         assert resolved.status != "leech"
@@ -1355,7 +1521,7 @@ async def test_leech_choices_reset_the_lapse_window():
 
         async with async_session_factory() as session:
             set_aside = await practice_service.resolve_leech(
-                session, user, lemma="chronic", choice="set_aside"
+                session, user, word_id=word.id, choice="set_aside"
             )
         assert set_aside.status == "suspended"
         assert set_aside.suspended_until is not None
@@ -1397,7 +1563,7 @@ async def test_bulk_action_only_touches_the_callers_own_words():
     try:
         async with async_session_factory() as session:
             changed = await vocabulary_service.bulk_action(
-                session, user_id=owner.id, lemmas=["shared-lemma"], action="known"
+                session, user_id=owner.id, word_ids=[mine.id], action="known"
             )
         assert changed == 1
         assert (await _reload(mine.id)).status == "known"
@@ -1410,17 +1576,17 @@ async def test_bulk_action_only_touches_the_callers_own_words():
 async def test_word_detail_is_404_for_another_users_word():
     owner = await _make_user(f"detail-owner-{uuid.uuid4()}@test.local")
     other = await _make_user(f"detail-other-{uuid.uuid4()}@test.local")
-    await _make_saved_word(owner.id, "private-word")
+    mine = await _make_saved_word(owner.id, "private-word")
     try:
         async with async_session_factory() as session:
             as_other = await vocabulary_service.saved_word_with_history(
-                session, other.id, "private-word"
+                session, other.id, mine.id
             )
         assert as_other is None
 
         async with async_session_factory() as session:
             as_owner = await vocabulary_service.saved_word_with_history(
-                session, owner.id, "private-word"
+                session, owner.id, mine.id
             )
         assert as_owner is not None
         word, _contexts, history = as_owner
@@ -2263,7 +2429,7 @@ async def test_leech_see_context_choice_keeps_the_level_and_resets_lapses():
 
         async with async_session_factory() as session:
             resolved = await practice_service.resolve_leech(
-                session, user, lemma="intransigent", choice="see_context"
+                session, user, word_id=word.id, choice="see_context"
             )
         assert resolved is not None
         assert resolved.status != "leech"

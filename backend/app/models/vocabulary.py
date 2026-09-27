@@ -340,15 +340,30 @@ class MaterialVocabulary(SQLModel, table=True):
 class SavedWord(SQLModel, table=True):
     """A word one learner is studying, whatever passage they met it in.
 
-    Deduplicated by lemma, which is the opposite decision to
-    :class:`MaterialVocabulary` and right for the opposite reason. There, the
-    question is "what does this word mean in this passage" and the answer
-    differs per passage. Here the question is "what am I learning", and a
-    learner who meets ``spring`` in two materials is learning one word.
+    ## Deduplicated by SENSE, not by lemma (P4)
 
-    The senses are not thrown away: each context arrives as a
-    :class:`SavedWordContext`, so the word carries two meanings and two
-    example sentences, which is a better flashcard than either alone.
+    It used to be deduplicated by lemma alone, on the theory that what
+    somebody is STUDYING is one word however many passages they met it in.
+    That was wrong the day a learner saved `bank` the river and `bank` the
+    financial institution from two different passages and got one card that
+    tried to be both: one FSRS schedule, one "usual meaning" slot, for two
+    things that have nothing to do with each other except their spelling.
+    `bank` (finance) and `bank` (river) are two words to learn and two FSRS
+    cards, exactly as `spring` (season) met twice is still one word --
+    the two cases look identical until you ask what a learner is being
+    tested ON, and a sense is the honest unit for that question in a way a
+    lemma never was.
+
+    So the key is now :attr:`lexeme_sense_id`, one row per
+    ``(user_id, lexeme_sense_id)`` -- `uq_saved_user_lexeme_sense` -- and
+    ``lemma`` stays as a plain denormalised copy, for display and search
+    only (two rows may now legitimately share it). The senses are not thrown
+    away: each context arrives as a :class:`SavedWordContext`, so the word
+    carries every example sentence it was met in, which is a better
+    flashcard than either alone -- but every context hanging off one saved
+    word must genuinely be an instance of the SAME sense; see the P4
+    migration's backfill for what happens to a saved word whose contexts
+    turn out to disagree about that.
 
     ## No longer thin
 
@@ -385,12 +400,34 @@ class SavedWord(SQLModel, table=True):
 
     __tablename__ = "saved_words"
     __table_args__ = (
-        UniqueConstraint("user_id", "lemma", name="uq_saved_user_lemma"),
+        UniqueConstraint(
+            "user_id", "lexeme_sense_id", name="uq_saved_user_lexeme_sense"
+        ),
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: uuid.UUID = Field(foreign_key="users.id", index=True)
+    #: Denormalised display/search copy of the sense's own lexeme's lemma,
+    #: set once at creation (see ``vocabulary.save``) and never the key any
+    #: more (P4) -- two rows may share it, e.g. `bank` (finance) and `bank`
+    #: (river). Kept rather than dropped because every reader that shows a
+    #: word or searches the list wants a plain string without a join, and
+    #: because the migration that stopped it being unique had no reason to
+    #: also make every caller join through `LexemeSense`/`Lexeme` for a
+    #: field this cheap to keep in step.
     lemma: str = Field(max_length=80, index=True)
+    #: THE fact that makes this row one sense rather than one spelling
+    #: (P4) -- see the class docstring. Never null: every saved word points
+    #: at exactly one `LexemeSense`, found (via the material row that caused
+    #: the save) or, failing that, backfilled to the lexeme's rank-1 sense
+    #: by the P4 migration. No ``ondelete`` -- a sense a saved word points at
+    #: must be REPOINTED before it is ever deleted (`lexicon_enrich._absorb`
+    #: now does this for a merge, alongside `MaterialVocabulary.sense_id`
+    #: and `TranslationReport.lexeme_sense_id`), never silently nulled or
+    #: cascaded away: a learner's card disappearing because two provisional
+    #: senses turned out to be the same meaning is a worse failure than the
+    #: delete raising loudly on an oversight.
+    lexeme_sense_id: uuid.UUID = Field(foreign_key="lexeme_senses.id", index=True)
 
     #: ``n``, ``v``, ``adj``, ... -- copied from the newest context at save
     #: time (see ``vocabulary.save``) and by the migration's backfill for
@@ -398,10 +435,15 @@ class SavedWord(SQLModel, table=True):
     #: does not depend on which passage it came from often enough to be
     #: worth tracking per context.
     pos: str = Field(default="", max_length=8)
-    #: The word's usual sense, copied the same way and for the same reason
-    #: ``MaterialVocabulary.meaning_core_en`` exists: a card that only ever
-    #: shows the sense of the ONE context practised teaches the passage, not
-    #: the word.
+    #: DEAD from P4 onward: no writer sets these two any more (see
+    #: ``vocabulary.save``) and no reader reads them -- the word's usual
+    #: meaning/Uzbek/CEFR are read LIVE from :attr:`lexeme_sense_id`'s
+    #: `LexemeSense` instead, so an admin fixing a translation in Studio
+    #: propagates to everybody studying the word without touching a row per
+    #: learner. The columns stay rather than being dropped: dropping a
+    #: column a running server might still have a stale read path for is how
+    #: a migration turns into an outage, and there is no cost to a column
+    #: nothing reads.
     meaning_core_en: str = Field(default="", max_length=200)
     meaning_core_uz: str = Field(default="", max_length=200)
 

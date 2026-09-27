@@ -19,7 +19,7 @@ from sqlmodel import select
 from app.core.database import async_session_factory
 from app.core.security import create_access_token
 from app.main import app
-from app.models.lexicon import Lexeme, LexemeSense
+from app.models.lexicon import Lexeme, LexemeSense, TranslationReport
 from app.models.material import Material
 from app.models.part import Part
 from app.models.user import User
@@ -386,3 +386,153 @@ async def test_licences_page_is_generated_and_public() -> None:
             assert "model" not in by_key
     finally:
         await _cleanup(lexeme_ids=(lex_ngsl.id, lex_offlist.id))
+
+
+# --- P4: "this translation is wrong" reports lead the queue -----------------
+
+
+@pytest.mark.asyncio
+async def test_a_reported_sense_leads_the_queue_and_carries_its_notes() -> None:
+    """An open report outranks even a `pos_mismatch` `needs_review` row --
+    a learner already did the finding a reviewer would otherwise have to do
+    themselves."""
+    admin = await _make_user(admin=True)
+    reporter = await _make_user(admin=False)
+    token = create_access_token(str(admin.id))
+    tag = uuid.uuid4().hex[:8]
+
+    lex_reported = await _make_lexeme(
+        f"rep{tag}", frequency_band="wider", frequency_source="ngsl"
+    )
+    sense_reported = await _make_sense(
+        lex_reported.id, sense_rank=1, definition_en="def reported",
+        meaning_uz="uz reported", needs_review=False,
+    )
+    lex_flagged = await _make_lexeme(
+        f"flag{tag}", frequency_band="wider", frequency_source="ngsl"
+    )
+    sense_flagged = await _make_sense(
+        lex_flagged.id, sense_rank=1, definition_en="def flagged",
+        meaning_uz="uz flagged", needs_review=True,
+        review_reasons=["pos_mismatch"],
+    )
+
+    async with async_session_factory() as session:
+        session.add(TranslationReport(
+            user_id=reporter.id, lexeme_sense_id=sense_reported.id,
+            source="word_page", note="this is not what it means",
+        ))
+        await session.commit()
+
+    try:
+        async with _client() as client:
+            cookies = {"access_token": token}
+            r = await client.get(
+                "/api/admin/lexicon/review", params={"limit": 200}, cookies=cookies
+            )
+            assert r.status_code == 200, r.text
+            body = r.json()
+            ids = [row["sense_id"] for row in body["rows"]]
+            i_reported = ids.index(str(sense_reported.id))
+            i_flagged = ids.index(str(sense_flagged.id))
+            assert i_reported < i_flagged
+            assert body["reported_pending"] >= 1
+
+            row = body["rows"][i_reported]
+            assert row["report_count"] == 1
+            assert row["report_notes"] == ["this is not what it means"]
+
+            # The synthetic "reported" filter isolates exactly this bucket.
+            r = await client.get(
+                "/api/admin/lexicon/review",
+                params={"reason": "reported", "limit": 200},
+                cookies=cookies,
+            )
+            assert r.status_code == 200
+            reported_ids = [row["sense_id"] for row in r.json()["rows"]]
+            assert str(sense_reported.id) in reported_ids
+            assert str(sense_flagged.id) not in reported_ids
+
+            # Approving closes the report -- it no longer leads the queue.
+            approved = await client.post(
+                f"/api/admin/lexicon/review/{sense_reported.id}/approve",
+                cookies=cookies,
+            )
+            assert approved.status_code == 200
+            assert approved.json()["report_count"] == 0
+
+        async with async_session_factory() as session:
+            refreshed = (
+                await session.exec(
+                    select(TranslationReport).where(
+                        TranslationReport.lexeme_sense_id == sense_reported.id
+                    )
+                )
+            ).one()
+            assert refreshed.status == "resolved"
+            assert refreshed.resolved_at is not None
+    finally:
+        async with async_session_factory() as session:
+            for row in (
+                await session.exec(
+                    select(TranslationReport).where(
+                        TranslationReport.lexeme_sense_id == sense_reported.id
+                    )
+                )
+            ).all():
+                await session.delete(row)
+            await session.commit()
+        await _cleanup(
+            lexeme_ids=(lex_reported.id, lex_flagged.id),
+            user_ids=(admin.id, reporter.id),
+        )
+
+
+@pytest.mark.asyncio
+async def test_fixing_a_sense_also_closes_its_open_report() -> None:
+    admin = await _make_user(admin=True)
+    reporter = await _make_user(admin=False)
+    token = create_access_token(str(admin.id))
+    tag = uuid.uuid4().hex[:8]
+
+    lexeme = await _make_lexeme(f"fixrep{tag}", frequency_band="core", frequency_source="ngsl")
+    sense = await _make_sense(
+        lexeme.id, sense_rank=1, definition_en="old def", meaning_uz="old uz",
+    )
+    async with async_session_factory() as session:
+        session.add(TranslationReport(
+            user_id=reporter.id, lexeme_sense_id=sense.id, source="practice_reveal",
+        ))
+        await session.commit()
+
+    try:
+        async with _client() as client:
+            r = await client.post(
+                f"/api/admin/lexicon/review/{sense.id}/fix",
+                json={"meaning_uz": "new uz"},
+                cookies={"access_token": token},
+            )
+            assert r.status_code == 200, r.text
+            assert r.json()["report_count"] == 0
+
+        async with async_session_factory() as session:
+            refreshed = (
+                await session.exec(
+                    select(TranslationReport).where(
+                        TranslationReport.lexeme_sense_id == sense.id
+                    )
+                )
+            ).one()
+            assert refreshed.status == "resolved"
+    finally:
+        async with async_session_factory() as session:
+            for row in (
+                await session.exec(
+                    select(TranslationReport).where(
+                        TranslationReport.lexeme_sense_id == sense.id
+                    )
+                )
+            ).all():
+                await session.delete(row)
+            await session.commit()
+        await _cleanup(lexeme_ids=(lexeme.id,), user_ids=(admin.id, reporter.id))

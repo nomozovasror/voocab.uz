@@ -101,7 +101,7 @@ from sqlmodel import select
 
 from app.core.config import settings
 from app.models.lexicon import Lexeme, LexemeSense, TranslationReport
-from app.models.vocabulary import MaterialVocabulary
+from app.models.vocabulary import MaterialVocabulary, SavedWord, SavedWordContext
 from app.services.dictionary import GEMINI_CHAT_URL
 from app.services.lexicon import WORDLISTS
 
@@ -1269,6 +1269,126 @@ async def load_works(session, lexeme_ids: list[uuid.UUID],
     return works
 
 
+async def _repoint_saved_words(
+    session, old_sense_id: uuid.UUID, new_sense_id: uuid.UUID | None
+) -> None:
+    """A sense absorbed into another (P4: `saved_words.lexeme_sense_id` is
+    NOT NULL) must not leave a saved word pointing at a row about to be
+    deleted -- repointed one word at a time, because whether it collides
+    with a word the SAME learner already has for the survivor is a per-row
+    question `sa_update`'s bulk form cannot ask.
+
+    No collision: a plain repoint, exactly like `MaterialVocabulary.sense_id`
+    and `TranslationReport.lexeme_sense_id` above. A collision -- the
+    learner already has a saved word for `new_sense_id`, which happens when
+    two provisional senses they had separately saved words for turn out to
+    be the same meaning -- MERGES the two: every context the absorbed word
+    carried moves onto the survivor (a context for a material the survivor
+    already has is dropped rather than violating `uq_saved_context_material`
+    -- the survivor's own meeting of the word stands), and the absorbed word
+    is deleted. Its FSRS history is lost in that case; there is no honest
+    way to combine two schedules into one, and losing a duplicate card's
+    history is a smaller failure than an `IntegrityError` crashing the
+    worker's enrichment loop.
+    """
+    if new_sense_id is None:
+        # No survivor at all -- nothing sane to repoint to. Left alone; the
+        # caller's delete will raise loudly if a saved word is ever really
+        # left stranded this way, which has not been observed and is
+        # preferable to guessing.
+        return
+    words = (await session.exec(
+        select(SavedWord).where(SavedWord.lexeme_sense_id == old_sense_id)
+    )).all()
+    for word in words:
+        survivor = (await session.exec(
+            select(SavedWord).where(
+                SavedWord.user_id == word.user_id,
+                SavedWord.lexeme_sense_id == new_sense_id,
+            )
+        )).first()
+        if survivor is None:
+            word.lexeme_sense_id = new_sense_id
+            session.add(word)
+            continue
+        contexts = (await session.exec(
+            select(SavedWordContext).where(SavedWordContext.saved_word_id == word.id)
+        )).all()
+        existing_materials = set((await session.exec(
+            select(SavedWordContext.material_id).where(
+                SavedWordContext.saved_word_id == survivor.id
+            )
+        )).all())
+        for context in contexts:
+            if context.material_id in existing_materials:
+                await session.delete(context)
+            else:
+                context.saved_word_id = survivor.id
+                session.add(context)
+        await session.flush()
+        await session.delete(word)
+    await session.flush()
+
+
+async def _repoint_translation_reports(
+    session, old_sense_id: uuid.UUID, new_sense_id: uuid.UUID | None
+) -> None:
+    """A sense absorbed into another must not leave a translation report
+    pointing at a row about to be deleted -- repointed one row at a time,
+    exactly like :func:`_repoint_saved_words` above and for the same reason:
+    whether it collides with a report the SAME learner already has OPEN
+    against the survivor is a per-row question the bulk ``sa_update`` two
+    lines below this function's call site cannot ask, and the collision is
+    real -- one open report per ``(user_id, lexeme_sense_id)`` is a partial
+    unique index, and a learner who reported the same wrong translation once
+    under each of two senses that turn out to be the same meaning has one
+    open row against both today.
+
+    No collision, or the report is already resolved: a plain repoint --
+    ``lexeme_sense_id`` moves to the survivor either way, because
+    ``old_sense_id`` is about to be deleted and the column is NOT NULL with
+    no ``ON DELETE`` of its own (unlike `SavedWordContext.vocabulary_id`).
+    A collision ALSO keeps the survivor's OWN open report (it is the one
+    that will keep being shown in the review queue), appends the absorbed
+    report's note onto it so neither complaint is lost, and resolves the
+    absorbed report -- the same terminal state `_close_open_reports`
+    (`lexicon_review.py`) already puts a report into once it has been acted
+    on, since a merge is exactly that: an answer, not a second open row a
+    reviewer would otherwise have to notice is a duplicate. Resolved rows
+    are exempt from the partial unique index, so two resolved reports (or a
+    resolved one and an open one) sharing `(user_id, new_sense_id)` is not a
+    collision at all -- only two OPEN ones are.
+    """
+    if new_sense_id is None:
+        return
+    reports = (await session.exec(
+        select(TranslationReport).where(
+            TranslationReport.lexeme_sense_id == old_sense_id
+        )
+    )).all()
+    for report in reports:
+        if report.status == "open":
+            survivor = (await session.exec(
+                select(TranslationReport).where(
+                    TranslationReport.user_id == report.user_id,
+                    TranslationReport.lexeme_sense_id == new_sense_id,
+                    TranslationReport.status == "open",
+                )
+            )).first()
+            if survivor is not None:
+                if report.note and report.note not in survivor.note:
+                    merged_note = (
+                        f"{survivor.note}\n{report.note}" if survivor.note else report.note
+                    )
+                    survivor.note = merged_note[:500]
+                    session.add(survivor)
+                report.status = "resolved"
+                report.resolved_at = datetime.now(timezone.utc)
+        report.lexeme_sense_id = new_sense_id
+        session.add(report)
+    await session.flush()
+
+
 async def apply_work(session, work: LexemeWork) -> None:
     """Write one planned lexeme. The caller commits; ``enriched_at`` is set
     in the same transaction, so a crash leaves the lexeme untouched."""
@@ -1314,10 +1434,17 @@ async def apply_work(session, work: LexemeWork) -> None:
             sa_update(MaterialVocabulary).where(MaterialVocabulary.sense_id == old_id)
             .values(sense_id=new_id)
         )
-        await session.execute(
-            sa_update(TranslationReport).where(TranslationReport.lexeme_sense_id == old_id)
-            .values(lexeme_sense_id=new_id)
-        )
+        # Not a bulk `sa_update` like the one above -- an OPEN report is
+        # guarded by a partial unique index on `(user_id, lexeme_sense_id)`,
+        # which a blind bulk repoint can violate the moment one learner has
+        # an open report on both the absorbed sense and the survivor. See
+        # `_repoint_translation_reports`'s own docstring.
+        await _repoint_translation_reports(session, old_id, new_id)
+        # `saved_words.lexeme_sense_id` is NOT NULL (P4): a sense about to be
+        # deleted must not leave a saved word pointing at it, the same
+        # obligation the update above already meets for material rows and
+        # the repoint just above meets for reports.
+        await _repoint_saved_words(session, old_id, new_id)
         if old_id in existing:
             await session.delete(existing[old_id])
     await session.flush()

@@ -308,11 +308,19 @@ class TranslationReport(SQLModel, table=True):
     answer is revealed, because those are the only two moments a learner is
     actually shown a translation.
 
-    Schema only in P1 -- nothing writes to this table yet, and nothing reads
-    it until P5's Studio review tab exists. It is created now, alongside the
-    rest of the lexicon's schema, so that P3/P4 (which DO wire up the
-    reporting link) are a code change against an existing table rather than
-    a migration bundled with unrelated product work.
+    Schema only in P1 -- nothing wrote to this table yet, and nothing read
+    it before P4/P5. It was created early, alongside the rest of the
+    lexicon's schema, so that wiring up the reporting link (P4,
+    ``app.services.lexicon.report_translation``,
+    ``POST /vocabulary/translation-reports``) and the review queue reading it
+    (P5, ``app.services.lexicon_review`` -- the "Reported" bucket, sorted
+    first) are a code change against an existing table rather than a
+    migration bundled with unrelated product work. One open report per
+    ``(user_id, lexeme_sense_id)`` -- a partial unique index, `status =
+    'open'` only, added in the P4 migration -- makes a repeat report from
+    the same learner about the same sense a no-op rather than a second row;
+    approving or fixing the sense in Studio closes every open report against
+    it in the same transaction.
 
     ``material_vocabulary_id`` is nullable and ``ON DELETE SET NULL``: a
     report from the word page has no material in view at all, and one filed
