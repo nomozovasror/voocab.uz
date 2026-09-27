@@ -203,16 +203,35 @@ export function ReviewItem({
       {!evidence && row.transcript && (
         <div className="col-start-2 mt-2.5 flex items-start gap-3 rounded-lg bg-surface-sunken px-3 py-2.5">
           {onPlay && (
-            <button
-              type="button"
-              disabled={!canPlay}
-              onClick={() => onPlay?.(row.startMs, row.endMs)}
-              aria-label={`Hear where the answer to question ${row.number} is said`}
-              title="Hear this"
-              className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-foreground/10 text-primary transition-colors hover:bg-foreground/20 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40"
-            >
-              <Play className="size-3" fill="currentColor" aria-hidden />
-            </button>
+            <div className="mt-0.5 flex shrink-0 flex-col items-center gap-1.5">
+              {/* The LARGER button: the answer's own moment, unchanged from
+                  before the neighbour sentences existed. */}
+              <button
+                type="button"
+                disabled={!canPlay}
+                onClick={() => onPlay(row.startMs, row.endMs)}
+                aria-label="Play the answer"
+                title="Play the answer"
+                className="flex size-7 items-center justify-center rounded-full bg-foreground/10 text-primary transition-colors hover:bg-foreground/20 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40"
+              >
+                <Play className="size-3" fill="currentColor" aria-hidden />
+              </button>
+              {/* The SMALLER button: the whole shown passage — the dimmer
+                  sentences either side, through to the answer itself. Drawn
+                  smaller because it is the less common thing to reach for:
+                  most of the time the answer alone is the moment worth
+                  hearing again. */}
+              <button
+                type="button"
+                disabled={!canPlay}
+                onClick={() => onPlay(row.contextStartMs, row.contextEndMs)}
+                aria-label="Play with context"
+                title="Play with context"
+                className="flex size-5 items-center justify-center rounded-full text-muted-foreground ring-1 ring-inset ring-border transition-colors hover:text-foreground hover:ring-foreground/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40"
+              >
+                <Play className="size-2" fill="currentColor" aria-hidden />
+              </button>
+            </div>
           )}
           <div className="min-w-0 flex-1">
             {row.startMs != null && (
@@ -230,7 +249,17 @@ export function ReviewItem({
                 Paragraph {row.where.label}
               </button>
             )}
+            {/* The answer's own sentence keeps its existing emphasis; the
+                sentence before and after it — where the no-crossing rule and
+                the length cut in `review-context.ts` leave one — reads
+                dimmer on either side, in the same flowing line rather than
+                a second quote box. It is shown even where a different
+                speaker said it: that neighbour is usually the question that
+                led to the answer. */}
             <p className="text-sm leading-relaxed text-foreground/80">
+              {row.before && (
+                <span className="text-muted-foreground">{row.before.text} </span>
+              )}
               {markAnswer(row.transcript, result.correct_answers).map(
                 (run, i) =>
                   run.hit ? (
@@ -243,6 +272,9 @@ export function ReviewItem({
                   ) : (
                     <span key={i}>{run.text}</span>
                   ),
+              )}
+              {row.after && (
+                <span className="text-muted-foreground"> {row.after.text}</span>
               )}
             </p>
           </div>

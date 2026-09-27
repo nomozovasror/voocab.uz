@@ -1398,15 +1398,36 @@ class AttemptSubmit(BaseModel):
     looked_up: list[str] = Field(default_factory=list, max_length=20)
 
 
+class TranscriptWordOut(BaseModel):
+    """One word of a transcript line, timed. The same word timings
+    ``apply_overrides`` already carries on every line — needed so the review
+    can cut a line at a pause and mark the exact word an answer starts on,
+    without asking the server a second question to get it."""
+
+    word: str
+    start_ms: int
+    end_ms: int
+
+
 class TranscriptLineOut(BaseModel):
     """One line of the transcript, as the AUTHOR left it: the ASR's
     segmentation with the author's corrections laid over the top. The ASR's
     raw guess is never what a learner is shown — if the author fixed a
-    misheard word, the review has to agree with the answer key."""
+    misheard word, the review has to agree with the answer key.
+
+    ``role`` says why the line is here at all. ``"answer"`` is a line the
+    question's marked range actually touches; ``"before"``/``"after"`` are
+    the one line immediately either side of that touching set, included so a
+    review can show the sentence the answer sits inside even when the author
+    snapped the range exactly to a sentence boundary — a neighbour may belong
+    to a different speaker, and is sent anyway, dimmer, rather than left out
+    for disagreeing about who said it."""
 
     start_ms: int
     end_ms: int
     text: str
+    words: list[TranscriptWordOut] = Field(default_factory=list)
+    role: Literal["answer", "before", "after"] = "answer"
 
 
 class EvidenceSpanOut(BaseModel):
@@ -1514,9 +1535,13 @@ class QuestionResultOut(BaseModel):
     #: wrong — and for every statement where no single word settles it.
     keywords: list[EvidenceSpanOut] = Field(default_factory=list)
     #: The transcript across this answer's moment — every line the marked
-    #: range touches, in playback order. Empty when the author marked no
-    #: range, or when the recording has no transcript yet (practice doesn't
-    #: wait for one; the review just has less to show).
+    #: range touches (``role: "answer"``), plus the one line immediately
+    #: before and the one immediately after (``"before"``/``"after"``), in
+    #: playback order. Empty when the author marked no range, or when the
+    #: recording has no transcript yet (practice doesn't wait for one; the
+    #: review just has less to show). Always empty for a reading question —
+    #: there is no audio to quote, so ``EvidenceSpanOut`` above is reading's
+    #: counterpart instead.
     transcript: list[TranscriptLineOut] = Field(default_factory=list)
     #: What kind of wrong this answer was — ``spelling``, ``missed``,
     #: ``plural``, ``word_limit``, ``format``, ``wrong``. See

@@ -962,12 +962,33 @@ export interface AttemptSubmit {
   looked_up?: string[];
 }
 
+/** One word of a transcript line, timed. The same timings
+ *  `apply_overrides` already carries on every segment — sent so the review
+ *  can cut a neighbour sentence at a pause and play exactly the words shown,
+ *  without a second trip to the server. Empty on a line whose segment has no
+ *  word timings; `review-context.ts` reads that as "skip the pause stage",
+ *  never as zero words. */
+export interface TranscriptWord {
+  word: string;
+  start_ms: number;
+  end_ms: number;
+}
+
 /** One line of the transcript across an answer's moment — the author's
- *  corrected text, not the ASR's raw guess. */
+ *  corrected text, not the ASR's raw guess.
+ *
+ *  `role` says why the line is here. `"answer"` is a line the question's own
+ *  marked range touches; `"before"`/`"after"` are the one line immediately
+ *  either side of that touching set, sent so the review can show the
+ *  sentence the answer sits inside even when the author's range snapped
+ *  exactly to a sentence boundary — see `review-context.ts`. A neighbour may
+ *  belong to a different speaker and is sent anyway. */
 export interface TranscriptLine {
   start_ms: number;
   end_ms: number;
   text: string;
+  words: TranscriptWord[];
+  role: "answer" | "before" | "after";
 }
 
 /** Where one answer is found in a passage, in the coordinates everything

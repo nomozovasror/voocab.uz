@@ -146,6 +146,124 @@ def test_no_marked_range_quotes_nothing() -> None:
     assert grading_service.transcript_across(_LINES, []) == []
 
 
+# --- The review's transcript: the touching lines plus one neighbour either side
+
+
+def test_context_marks_the_touching_line_answer_with_neighbours_either_side() -> None:
+    got = grading_service.transcript_with_context(_LINES, [(6_000, 8_000)])
+    assert [(line["text"], line["role"]) for line in got] == [
+        ("first", "before"),
+        ("second", "answer"),
+        ("third", "after"),
+    ]
+
+
+def test_context_has_no_before_at_the_first_line() -> None:
+    got = grading_service.transcript_with_context(_LINES, [(1_000, 2_000)])
+    assert [(line["text"], line["role"]) for line in got] == [
+        ("first", "answer"),
+        ("second", "after"),
+    ]
+
+
+def test_context_has_no_after_at_the_last_line() -> None:
+    got = grading_service.transcript_with_context(_LINES, [(11_000, 12_000)])
+    assert [(line["text"], line["role"]) for line in got] == [
+        ("second", "before"),
+        ("third", "answer"),
+    ]
+
+
+def test_context_finds_a_neighbour_per_run_for_a_question_answered_twice() -> None:
+    """A "choose TWO letters" question can be answered a minute apart — the
+    lines in between are neither answer nor neighbour, and each touching run
+    gets its own before/after rather than the two runs sharing the overall
+    span's edges."""
+    lines = [
+        {"start_ms": 0, "end_ms": 5_000, "text": "a"},
+        {"start_ms": 5_000, "end_ms": 10_000, "text": "b"},
+        {"start_ms": 10_000, "end_ms": 15_000, "text": "c"},
+        {"start_ms": 15_000, "end_ms": 20_000, "text": "d"},
+        {"start_ms": 20_000, "end_ms": 25_000, "text": "e"},
+    ]
+    got = grading_service.transcript_with_context(lines, [(1_000, 2_000), (21_000, 22_000)])
+    assert [(line["text"], line["role"]) for line in got] == [
+        ("a", "answer"),
+        ("b", "after"),
+        ("d", "before"),
+        ("e", "answer"),
+    ]
+
+
+def test_context_quotes_nothing_when_the_question_marks_no_range() -> None:
+    assert grading_service.transcript_with_context(_LINES, []) == []
+
+
+def test_context_quotes_nothing_over_an_empty_transcript() -> None:
+    assert grading_service.transcript_with_context([], [(1_000, 2_000)]) == []
+
+
+def test_context_carries_each_line_s_word_timings() -> None:
+    lines = [
+        {
+            "start_ms": 0,
+            "end_ms": 5_000,
+            "text": "first",
+            "words": [{"word": "first", "start_ms": 0, "end_ms": 1_000}],
+        },
+        {"start_ms": 5_000, "end_ms": 10_000, "text": "second", "words": []},
+    ]
+    got = grading_service.transcript_with_context(lines, [(6_000, 7_000)])
+    assert got[0]["words"] == [{"word": "first", "start_ms": 0, "end_ms": 1_000}]
+    assert got[1]["words"] == []
+
+
+# --- The drill leak: a neighbour is omitted, never swapped for one further out
+
+
+def test_a_hidden_neighbour_is_dropped_rather_than_shown() -> None:
+    """A drill's guard against handing back another, un-drilled question's
+    answer as this one's "before"/"after" line."""
+    got = grading_service.transcript_with_context(
+        _LINES, [(6_000, 8_000)], hidden={0}
+    )
+    assert [(line["text"], line["role"]) for line in got] == [
+        ("second", "answer"),
+        ("third", "after"),
+    ]
+
+
+def test_a_hidden_neighbour_on_both_sides_leaves_only_the_answer() -> None:
+    got = grading_service.transcript_with_context(
+        _LINES, [(6_000, 8_000)], hidden={0, 2}
+    )
+    assert [(line["text"], line["role"]) for line in got] == [("second", "answer")]
+
+
+def test_hidden_never_widens_past_the_omitted_neighbour() -> None:
+    """Omitting the hidden line must not fall back to the line beyond it —
+    that would still be leaking the out-of-scope question's turn, one line
+    further out."""
+    lines = [
+        {"start_ms": 0, "end_ms": 5_000, "text": "a"},
+        {"start_ms": 5_000, "end_ms": 10_000, "text": "b"},
+        {"start_ms": 10_000, "end_ms": 15_000, "text": "c"},
+        {"start_ms": 15_000, "end_ms": 20_000, "text": "d"},
+    ]
+    got = grading_service.transcript_with_context(lines, [(10_000, 12_000)], hidden={1})
+    assert [(line["text"], line["role"]) for line in got] == [
+        ("c", "answer"),
+        ("d", "after"),
+    ]
+
+
+def test_no_hidden_set_behaves_exactly_like_a_full_sitting() -> None:
+    """The default is a no-op — a full sitting never passes ``hidden``."""
+    assert grading_service.transcript_with_context(
+        _LINES, [(6_000, 8_000)]
+    ) == grading_service.transcript_with_context(_LINES, [(6_000, 8_000)], hidden=set())
+
+
 # --- Fixtures for the round trip ---------------------------------------------
 
 
@@ -187,7 +305,8 @@ async def _make_audio(owner_id: uuid.UUID) -> AudioAsset:
                     start_ms=start,
                     end_ms=end,
                     text=text,
-                    words=[],
+                    words=[{"word": w, "start_ms": start, "end_ms": start}
+                           for w in text.split()],
                 )
             )
         asset = AudioAsset(
@@ -514,17 +633,30 @@ async def test_the_result_quotes_the_authors_transcript_not_the_machines() -> No
             assert r.status_code == 200, r.text
             results = {row["number"]: row for row in r.json()["results"]}
 
-            # 2–4s falls in the untouched first line.
-            assert [line["text"] for line in results[1]["transcript"]] == [
-                "the machine heard this"
+            # 2–4s falls in the first (and here, only preceding) line; the
+            # second line rides along as its "after" neighbour, since a
+            # question at the very first line has no "before".
+            assert [
+                (line["text"], line["role"]) for line in results[1]["transcript"]
+            ] == [
+                ("the machine heard this", "answer"),
+                ("the author fixed this", "after"),
             ]
-            # 12–14s falls in the line the author corrected. Quoting the ASR's
-            # "wrong guess" would show the learner a transcript that
-            # contradicts the answer key written against the correction.
-            assert [line["text"] for line in results[2]["transcript"]] == [
-                "the author fixed this"
+            # 12–14s falls in the line the author corrected, quoted as such —
+            # quoting the ASR's "wrong guess" would show the learner a
+            # transcript that contradicts the answer key written against the
+            # correction — with the first line riding along as its "before"
+            # neighbour, since the last line has no "after".
+            assert [
+                (line["text"], line["role"]) for line in results[2]["transcript"]
+            ] == [
+                ("the machine heard this", "before"),
+                ("the author fixed this", "answer"),
             ]
-            assert results[2]["transcript"][0]["start_ms"] == 10_000
+            assert results[2]["transcript"][1]["start_ms"] == 10_000
+            # Word timings ride along on every line, neighbour or not.
+            assert results[1]["transcript"][0]["words"][0]["word"] == "the"
+            assert results[1]["transcript"][1]["words"][0]["word"] == "wrong"
     finally:
         await _cleanup(material.id, email)
 

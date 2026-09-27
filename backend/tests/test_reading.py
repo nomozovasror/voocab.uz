@@ -611,6 +611,11 @@ async def test_evidence_reaches_the_review_and_never_the_take():
             # check whether the field is there before reading it is a review
             # with two ways of saying "nothing".
             assert results[2]["evidence"] == []
+            # A reading question has no audio to quote — the listening
+            # transcript-with-neighbours addition must not conjure lines out
+            # of nothing for a paper with no recording at all.
+            assert results[1]["transcript"] == []
+            assert results[2]["transcript"] == []
     finally:
         await _cleanup(material.id, email)
 
