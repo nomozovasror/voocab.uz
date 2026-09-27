@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Plus, TriangleAlert, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getErrorMessage } from "@/lib/api";
@@ -267,16 +267,23 @@ export function LookupPopover({
    *  Told so the page can move the list beside the passage without a round
    *  trip. Without it the card was the only thing that knew: press Save,
    *  close the card, and the row on the right still offered `＋` — which is
-   *  a save that looks as though it did not happen. */
-  onSaved?: (lemma: string, saved: boolean) => void;
+   *  a save that looks as though it did not happen. The id travels too,
+   *  since a saved word is one `LexemeSense` per learner now and the page's
+   *  own copy of this entry needs it to remove exactly this sense later. */
+  onSaved?: (lemma: string, saved: boolean, savedWordId: string | null) => void;
   onClose: () => void;
 }) {
+  const qc = useQueryClient();
+  const lookupKey = ["lookup", materialId, word.toLowerCase(), where?.offset ?? -1];
   const found = useQuery({
-    queryKey: ["lookup", materialId, word.toLowerCase(), where?.offset ?? -1],
+    queryKey: lookupKey,
     queryFn: () =>
       vocabularyApi.lookUp(materialId, word, where, budget ? "take" : "review"),
     // A word looked up twice in one sitting is the same word: the budget
-    // says so, and re-asking the server would contradict it.
+    // says so, and re-asking the server would contradict it. Save and
+    // Remove below invalidate this deliberately — that isn't a second
+    // look-up, it's picking up the `saved`/`saved_word_id` the mutation
+    // itself just changed.
     staleTime: Infinity,
     retry: false,
   });
@@ -333,12 +340,31 @@ export function LookupPopover({
   // second time, as though the page had forgotten.
   const [saved, setSaved] = useState<boolean | null>(null);
   const on = saved ?? Boolean(lead?.saved);
+  // The saved word's own id — what Remove needs, since a lemma no longer
+  // names one row. `null` from a fresh `keep` until the refetch below
+  // brings `lead.saved_word_id` back; falling through to the server's own
+  // answer rather than clearing this to null the moment it lands is what
+  // lets Remove work the instant the id shows up, with no second flag to
+  // reconcile.
+  const [wordId, setWordId] = useState<string | null>(null);
+  const savedWordId = wordId ?? lead?.saved_word_id ?? null;
 
   const keep = useMutation({
     mutationFn: (lemma: string) => vocabularyApi.save(materialId, [lemma]),
-    onSuccess: (_answer, lemma) => {
+    onSuccess: async (_answer, lemma) => {
       setSaved(true);
-      onSaved?.(lemma, true);
+      // Not a second look-up in spirit — this word is already answered, and
+      // `onFound`/`onKept` above are idempotent either way. It is the only
+      // way this card learns the new word's own id, which the save
+      // response (the learner's whole list) doesn't hand back in a shape
+      // worth searching for one row. Awaited, rather than merely
+      // invalidated, so the parent hears the real id and not a placeholder
+      // `null` it would otherwise have no reason to ask about again.
+      const refreshed = await found.refetch();
+      const freshLead = refreshed.data?.phrase ?? refreshed.data?.word ?? null;
+      const id = freshLead?.saved_word_id ?? null;
+      setWordId(id);
+      onSaved?.(lemma, true, id);
     },
     onError: (e) => toast(getErrorMessage(e)),
   });
@@ -347,10 +373,12 @@ export function LookupPopover({
   // decision the reader cannot take back, and the whole invitation here is
   // to press it on a hunch.
   const drop = useMutation({
-    mutationFn: (lemma: string) => vocabularyApi.forget(lemma),
-    onSuccess: (_answer, lemma) => {
+    mutationFn: (id: string) => vocabularyApi.forget(id),
+    onSuccess: (_answer, _id) => {
       setSaved(false);
-      onSaved?.(lemma, false);
+      setWordId(null);
+      onSaved?.(lead?.lemma ?? word, false, null);
+      void qc.invalidateQueries({ queryKey: lookupKey });
     },
     onError: (e) => toast(getErrorMessage(e)),
   });
@@ -492,14 +520,29 @@ export function LookupPopover({
           </p>
         )}
 
+        {/* Information, not a warning — saving a second sense of a lemma
+            already on the list is an ordinary thing to do, so this is said
+            quietly and never as a badge. */}
+        {!on && lead?.other_sense_saved && (
+          <p className="mt-1.5 text-[0.68rem] text-muted-foreground/70 italic">
+            You&apos;ve saved another meaning of this word.
+          </p>
+        )}
+
         {lead && (
           <div className="mt-2.5 flex items-center gap-2.5 border-t border-border pt-2">
             <button
               type="button"
-              disabled={keep.isPending || drop.isPending}
+              // Disabled a beat longer on Remove than the pending mutations
+              // alone would: right after Save, `savedWordId` can still be
+              // null while the refetch that would carry it is in flight,
+              // and there is nothing yet for Remove to act on.
+              disabled={keep.isPending || drop.isPending || (on && !savedWordId)}
               title={on ? "Take it off your list" : "Add to your vocabulary"}
               onClick={() =>
-                on ? drop.mutate(lead.lemma) : keep.mutate(lead.lemma)
+                on
+                  ? savedWordId && drop.mutate(savedWordId)
+                  : keep.mutate(lead.lemma)
               }
               className={cn(
                 "group flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[0.7rem] transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50",

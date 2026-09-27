@@ -11,6 +11,8 @@ import type {
   PracticeSession,
   PracticeSummary,
   SavedWords,
+  TranslationReportRequest,
+  TranslationReportResult,
   VocabularyList,
   VocabularySettings,
   WordDetail,
@@ -54,11 +56,13 @@ export const practiceSummaryKey = (tz: string) =>
  *  vocabulary, a different endpoint entirely — see `vocabularyKey`). */
 export const vocabularyWordsKey = ["vocabulary", "words"] as const;
 
-/** One word's own page. Kept apart from the list's key rather than a
- *  sub-key of it, because invalidating the list must NOT throw away a word
- *  page's `history`, which the list response never carries. */
-export const wordDetailKey = (lemma: string) =>
-  ["vocabulary", "words", "detail", lemma] as const;
+/** One word's own page, keyed by its id — a lemma stopped naming one row
+ *  the moment two senses of it could each be saved. Kept apart from the
+ *  list's key rather than a sub-key of it, because invalidating the list
+ *  must NOT throw away a word page's `history`, which the list response
+ *  never carries. */
+export const wordDetailKey = (wordId: string) =>
+  ["vocabulary", "words", "detail", wordId] as const;
 
 export const vocabularyApi = {
   /** One tapped word, in this passage's sense.
@@ -119,17 +123,20 @@ export const vocabularyApi = {
   words: () => api.get<SavedWords>("/api/vocabulary/words"),
 
   /** One word's own page: the same row plus its review history, newest
-   *  first. 404s for a lemma that is not this learner's — the server never
+   *  first. 404s for an id that is not this learner's — the server never
    *  says whose it is instead. */
-  wordDetail: (lemma: string) =>
-    api.get<WordDetail>(`/api/vocabulary/words/${encodeURIComponent(lemma)}`),
+  wordDetail: (wordId: string) =>
+    api.get<WordDetail>(`/api/vocabulary/words/${wordId}`),
 
-  forget: (lemma: string) =>
-    api.delete<void>(`/api/vocabulary/words/${encodeURIComponent(lemma)}`),
+  /** By id, not by lemma — a lemma stopped naming one saved word the moment
+   *  `bank` the finance term and `bank` the river bank became two rows,
+   *  each with its own card. */
+  forget: (wordId: string) =>
+    api.delete<void>(`/api/vocabulary/words/${wordId}`),
 
   /** Mark known, set aside, restore or forget several words at once — the
    *  words list's and the word page's bulk actions share this one call,
-   *  since a single word is just a `lemmas` array of one. */
+   *  since a single word is just a `word_ids` array of one. */
   bulkWords: (payload: BulkWordsRequest) =>
     api.post<BulkWordsResponse>("/api/vocabulary/words/bulk", {
       json: payload,
@@ -137,11 +144,20 @@ export const vocabularyApi = {
 
   /** Resolving a leech — the three choices of the spec's §5, offered from
    *  the session's reveal, the word page and the words list alike. */
-  leech: (lemma: string, choice: LeechChoice) =>
+  leech: (wordId: string, choice: LeechChoice) =>
     api.post<LeechChoiceResponse>(
-      `/api/vocabulary/words/${encodeURIComponent(lemma)}/leech`,
+      `/api/vocabulary/words/${wordId}/leech`,
       { json: { choice } },
     ),
+
+  /** "This translation is wrong" — the word page and the practice reveal's
+   *  quiet link, never the lookup popover. One open report per (learner,
+   *  sense); a repeat is a 200 that changes nothing on the server, so the
+   *  client never has to check before sending. */
+  translationReport: (payload: TranslationReportRequest) =>
+    api.post<TranslationReportResult>("/api/vocabulary/translation-reports", {
+      json: payload,
+    }),
 
   // --- Practice ----------------------------------------------------------
   //

@@ -77,8 +77,20 @@ export interface VocabularyEntry {
   /** The passage has been edited since this was glossed, so the offsets may
    *  no longer point at the right words. */
   stale: boolean;
-  /** Already on this learner's list. */
+  /** Whether THIS SENSE — `bank` the finance term, not `bank` the side of a
+   *  river — is already on this learner's list. A saved word is one
+   *  `LexemeSense` per learner now, so two rows sharing a lemma may disagree
+   *  about this and each has to be asked on its own. */
   saved: boolean;
+  /** The saved word this sense lives at, once `saved` is true — what the
+   *  ✕ button removes. `null` while unsaved. */
+  saved_word_id: string | null;
+  /** A DIFFERENT sense of this lemma is already saved, this one is not.
+   *  Drives the popover's and the review row's quiet line ("You've saved
+   *  another meaning of this word.") — never a warning, since keeping a
+   *  second sense of a lemma already on the list is an ordinary thing to
+   *  do. */
+  other_sense_saved: boolean;
 }
 
 /**
@@ -164,9 +176,12 @@ export type WordStatus = "learning" | "review" | "known" | "suspended" | "leech"
 
 /** One word the learner is studying.
  *
- *  Deduplicated by lemma across every passage it was met in — somebody
- *  studying `spring` is studying one word — with each meeting kept as a
- *  context, so the card carries two senses and two example sentences.
+ *  Deduplicated by SENSE, not by lemma, across every passage it was met in
+ *  (P4) — `spring` the season met twice is one word, but `bank` the
+ *  financial institution and `bank` the river are two, because what
+ *  somebody is STUDYING is one meaning however many passages they met it
+ *  in. Each meeting of the SAME sense is kept as a context, so the card
+ *  carries two example sentences rather than two unrelated meanings.
  *
  *  The fields below `contexts` did not exist in stage 1, where this shape
  *  was the saved-words page's own and nothing else read it. Stage 2's words
@@ -174,16 +189,35 @@ export type WordStatus = "learning" | "review" | "known" | "suspended" | "leech"
  *  `GET /vocabulary/words` now, so one interface has to answer for a list
  *  row, a leech choice and a card's schedule at once. */
 export interface SavedWord {
+  /** The saved word's own id — a `LexemeSense` per learner, unique on
+   *  `(user_id, lexeme_sense_id)`. Routes, delete, leech and bulk actions
+   *  all address a word by THIS now: a lemma stopped being unique the
+   *  moment `bank` the finance term and `bank` the river bank became two
+   *  rows. `lemma` below stays, denormalised, for display and search. */
+  id: string;
+  lexeme_id: string;
+  sense_id: string;
   lemma: string;
   created_at: string;
   contexts: SavedContext[];
   status: WordStatus;
   pos: string;
-  /** The word's own meaning, copied onto the word itself rather than read
-   *  off its first context — see `meaning.ts` for why a card needs this
-   *  said once rather than once per meeting. Empty on a word saved before
-   *  either field existed; callers fall back to a context's, exactly as
-   *  the saved list already did in stage 1. */
+  /** Read LIVE off the word's `LexemeSense` — an admin fixing a definition
+   *  or a translation is visible here without the learner doing anything.
+   *  `definition_en`/`meaning_uz` are the headline meaning wherever a saved
+   *  word is shown; `meaning_core_en`/`meaning_core_uz` below are what
+   *  stage 1 copied onto the row at save time and are now dead weight kept
+   *  only for a word saved before either sense field existed. */
+  definition_en: string;
+  meaning_uz: string;
+  /** The sense's own CEFR — the headline level on the word page and the
+   *  list, sharper than `cefr_level` below (the newest CONTEXT's level,
+   *  which can differ where the same sense was met at more than one
+   *  difficulty). */
+  sense_cefr: string;
+  /** @deprecated Stage 1's copy, frozen at save time. Superseded by
+   *  `definition_en`/`meaning_uz` above; kept only as a fallback for a word
+   *  saved before those existed. */
   meaning_core_en: string;
   meaning_core_uz: string;
   /** The newest context's level. A word met in an easier passage after a
@@ -265,7 +299,8 @@ export interface WordDetail {
 export type BulkAction = "known" | "suspend" | "restore" | "forget";
 
 export interface BulkWordsRequest {
-  lemmas: string[];
+  /** Saved word ids, not lemmas — a lemma no longer names one row. */
+  word_ids: string[];
   action: BulkAction;
 }
 
@@ -469,6 +504,9 @@ export interface PracticeAnswerWord extends Glossed {
   lemma: string;
   pos: string;
   cefr_level: string;
+  /** The sense this card is practising — what the reveal's "This
+   *  translation is wrong" link reports against. */
+  sense_id: string;
   material_id: string | null;
   material_title: string | null;
 }
@@ -550,4 +588,27 @@ export interface VocabularySettings {
    *  to do that has no other way to know there is anything to pause. Zero
    *  the ordinary case for someone who has never turned it on. */
   active_in_progress: number;
+}
+
+/**
+ * "This translation is wrong" — a quiet link on the word page and in the
+ * practice reveal, never in the lookup popover (that screen is spending a
+ * budget on a first look, not judging one). One report per (learner, sense)
+ * stays open; asking twice is a 200 that changes nothing, which is why the
+ * client never has to check first. `where` is the wire's own name for the
+ * screen that filed it (`TranslationReportIn.where`), mapped server-side
+ * onto `TranslationReport.source`.
+ */
+export type TranslationReportWhere = "word_page" | "practice";
+
+export interface TranslationReportRequest {
+  sense_id: string;
+  where: TranslationReportWhere;
+  note?: string;
+}
+
+export interface TranslationReportResult {
+  id: string;
+  sense_id: string;
+  status: string;
 }

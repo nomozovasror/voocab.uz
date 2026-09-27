@@ -17,6 +17,7 @@ import {
   CEFR_LEVELS,
   CORE_REASON,
   REASON_LABEL,
+  REPORTED_REASON,
   REVIEW_REASONS,
 } from "@/features/lexicon/reasons";
 import type { ReviewRow } from "@/features/lexicon/types";
@@ -78,6 +79,26 @@ function ReasonBadges({ reasons }: { reasons: string[] }) {
         >
           {REASON_LABEL[reason as keyof typeof REASON_LABEL] ?? reason}
         </span>
+      ))}
+    </div>
+  );
+}
+
+/** What a learner actually said, when they said anything — the whole reason
+ *  a reported row sorts first: it is already the finding a reviewer would
+ *  otherwise have to make themselves. A report with no note still counts
+ *  (the chip and `report_count`), it just has nothing to quote here. */
+function ReportNotes({ count, notes }: { count: number; notes: string[] }) {
+  if (count === 0) return null;
+  return (
+    <div className="mt-2 space-y-1 rounded-lg border border-attention/30 bg-attention/10 px-3 py-2">
+      <p className="text-xs font-medium text-attention">
+        Reported by {count} {count === 1 ? "learner" : "learners"}
+      </p>
+      {notes.map((note, i) => (
+        <p key={i} className="text-xs text-foreground/80">
+          “{note}”
+        </p>
       ))}
     </div>
   );
@@ -276,6 +297,7 @@ function Row({
           <div className="mt-2">
             <ReasonBadges reasons={row.review_reasons} />
           </div>
+          <ReportNotes count={row.report_count} notes={row.report_notes} />
 
           {editing && (
             <EditForm row={row} onCancel={onEditToggle} onSave={onSave} saving={saving} />
@@ -467,6 +489,15 @@ export default function StudioReviewPage() {
   return (
     <div className="studio-panel">
       <div className="mb-4 flex flex-wrap items-center gap-2">
+        {/* First, ahead of "All" — a learner's own report is the cheapest,
+            highest-confidence signal this queue has, and it is wasted
+            sitting behind a backlog nobody asked about. */}
+        <ReasonChip
+          label="Reported"
+          count={data?.reported_pending ?? null}
+          active={reason === REPORTED_REASON}
+          onClick={() => setReason(REPORTED_REASON)}
+        />
         <ReasonChip
           label="All"
           count={null}

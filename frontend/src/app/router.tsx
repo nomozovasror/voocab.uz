@@ -77,11 +77,12 @@ export const router = createBrowserRouter([
             path: "vocabulary/words",
             ...page(() => import("@/pages/vocabulary/VocabularyPage")),
           },
-          // The word page, added alongside the rebuilt list — a lemma reads
-          // as a path segment same as a material id does elsewhere in this
-          // file.
+          // The word page, added alongside the rebuilt list — addressed by
+          // the saved word's own id, same as a material id reads as a path
+          // segment elsewhere in this file. A lemma stopped naming one row
+          // the moment two senses of it could each be saved.
           {
-            path: "vocabulary/words/:lemma",
+            path: "vocabulary/words/:id",
             ...page(() => import("@/pages/vocabulary/VocabularyWordPage")),
           },
           {

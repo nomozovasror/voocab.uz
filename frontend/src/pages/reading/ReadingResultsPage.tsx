@@ -371,7 +371,7 @@ export default function ReadingResultsPage() {
    *  is invisible everywhere except the thing that is about to be closed
    *  is a save the reader has no reason to believe happened. */
   const onSaved = useCallback(
-    (lemma: string, saved: boolean) => {
+    (lemma: string, saved: boolean, savedWordId: string | null) => {
       if (!data?.material_id) return;
       qc.setQueryData<VocabularyList>(
         vocabularyKey(data.material_id),
@@ -380,7 +380,9 @@ export default function ReadingResultsPage() {
             ? {
                 ...was,
                 entries: was.entries.map((entry) =>
-                  entry.lemma === lemma ? { ...entry, saved } : entry,
+                  entry.lemma === lemma
+                    ? { ...entry, saved, saved_word_id: savedWordId }
+                    : entry,
                 ),
               }
             : was,

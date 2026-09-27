@@ -9,6 +9,7 @@ import { getErrorMessage } from "@/lib/api";
 import { fmtClock, timeAgo, timeUntil } from "@/lib/time";
 import { CefrTag } from "@/features/vocabulary/components/CefrTag";
 import { StatusChip } from "@/features/vocabulary/components/StatusChip";
+import { ReportTranslation } from "@/features/vocabulary/components/ReportTranslation";
 import { meanings } from "@/features/vocabulary/meaning";
 import {
   ACTION_LABEL,
@@ -26,17 +27,21 @@ import { vocabularyApi, vocabularyWordsKey, wordDetailKey } from "@/features/voc
 import type { LeechChoice, SavedWord } from "@/features/vocabulary/types";
 
 /**
- * `/vocabulary/words/:lemma` — the plan's screen 5, and the one screen
- * this module shows a single word from every angle at once: what it means,
+ * `/vocabulary/words/:id` — the plan's screen 5, and the one screen this
+ * module shows a single word from every angle at once: what it means,
  * everywhere it was met, where each direction's card stands, and the trail
  * of answers that put it there.
+ *
+ * Addressed by id, not by lemma: a saved word is one `LexemeSense` per
+ * learner, and `bank` the finance term and `bank` the river bank are two
+ * rows with two ids.
  *
  * It is reached from the words list and, in stage 2, also from "See it
  * where you met it" on a leech's reveal — the spec's §5 names this page
  * as that choice's destination in words, not a modal over the session.
  */
 export default function VocabularyWordPage() {
-  const { lemma = "" } = useParams<{ lemma: string }>();
+  const { id = "" } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const qc = useQueryClient();
   // Registers this page too, alongside the words list, as somewhere
@@ -47,17 +52,17 @@ export default function VocabularyWordPage() {
   useFlushPendingDeletesOnLeave();
 
   const { data, isPending, isError } = useQuery({
-    queryKey: wordDetailKey(lemma),
-    queryFn: () => vocabularyApi.wordDetail(lemma),
+    queryKey: wordDetailKey(id),
+    queryFn: () => vocabularyApi.wordDetail(id),
   });
 
   const bulk = useMutation({
     mutationFn: (action: "known" | "suspend" | "restore") =>
-      vocabularyApi.bulkWords({ lemmas: [lemma], action }),
+      vocabularyApi.bulkWords({ word_ids: [id], action }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: vocabularyWordsKey });
       void qc.invalidateQueries({ queryKey: ["vocabulary", "practice", "summary"] });
-      void qc.invalidateQueries({ queryKey: wordDetailKey(lemma) });
+      void qc.invalidateQueries({ queryKey: wordDetailKey(id) });
     },
     onError: (e) => toast(getErrorMessage(e)),
   });
@@ -67,14 +72,14 @@ export default function VocabularyWordPage() {
   // this navigates to at once) shows "Removed · Undo" in its place. See
   // `VocabularyPage.tsx`'s `RemovedRow` for the other half of this.
   function handleDelete() {
-    scheduleDelete(lemma);
+    scheduleDelete(id);
     navigate("/vocabulary/words");
   }
 
   const leech = useMutation({
-    mutationFn: (choice: LeechChoice) => vocabularyApi.leech(lemma, choice),
+    mutationFn: (choice: LeechChoice) => vocabularyApi.leech(id, choice),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: wordDetailKey(lemma) });
+      void qc.invalidateQueries({ queryKey: wordDetailKey(id) });
       void qc.invalidateQueries({ queryKey: vocabularyWordsKey });
       // Same reason as the bulk actions below: a leech choice can move
       // this word out of `due_now` (set aside) or back into it (keep), so
@@ -122,7 +127,7 @@ export default function VocabularyWordPage() {
       <header className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <h1 className="text-2xl font-semibold text-foreground">{word.lemma}</h1>
         {word.pos && <span className="text-sm text-muted-foreground italic">{word.pos}</span>}
-        <CefrTag level={word.cefr_level} />
+        <CefrTag level={word.sense_cefr || word.cefr_level} />
         <StatusChip status={word.status} />
       </header>
 
@@ -133,6 +138,10 @@ export default function VocabularyWordPage() {
             <span className="ml-2 text-sm text-muted-foreground">{meaning.en}</span>
           )}
         </p>
+      )}
+
+      {word.sense_id && (
+        <ReportTranslation senseId={word.sense_id} where="word_page" className="mt-1.5" />
       )}
 
       {word.status === "leech" && (
@@ -271,8 +280,13 @@ export default function VocabularyWordPage() {
 /** The word's own meaning — see `VocabularyPage.tsx`'s `wordMeaning`, the
  *  same fallback repeated rather than shared, since one is read off a list
  *  row and this off the word half of a `WordDetail` and importing one from
- *  the other would tie two pages together for four lines. */
+ *  the other would tie two pages together for a few lines. `definition_en`/
+ *  `meaning_uz` are read LIVE off the word's sense and lead; the rest is
+ *  what a word saved before those fields existed falls back to. */
 function wordHeadline(word: SavedWord): { en: string; uz: string } {
+  if (word.definition_en || word.meaning_uz) {
+    return { en: word.definition_en, uz: word.meaning_uz };
+  }
   if (word.meaning_core_en || word.meaning_core_uz) {
     return { en: word.meaning_core_en, uz: word.meaning_core_uz };
   }

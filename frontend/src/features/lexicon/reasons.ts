@@ -30,6 +30,13 @@ export const REASON_LABEL: Record<ReviewReason, string> = {
  *  .CORE_REASON`). */
 export const CORE_REASON = "core";
 
+/** The synthetic FIRST bucket: a sense with an open "this translation is
+ *  wrong" report, sorted ahead of everything else, `needs_review` included
+ *  — a learner who reported it has already done the finding a reviewer
+ *  would otherwise have to do themselves (`lexicon_review.REPORTED_REASON`,
+ *  `ReviewQueue.reported_pending`). */
+export const REPORTED_REASON = "reported";
+
 /** What "Fix" may set a sense's level to — independent of the reading
  *  scale's `CEFR_LEVELS` (`features/vocabulary/cefr.ts`, B1–C1 only): a
  *  lexicon sense is graded freely across the whole framework, and an

@@ -10,6 +10,7 @@ import { getErrorMessage } from "@/lib/api";
 import { localTimeZone, timeUntil } from "@/lib/time";
 import { GapField } from "@/features/paper/components/GapField";
 import { CefrTag } from "@/features/vocabulary/components/CefrTag";
+import { ReportTranslation } from "@/features/vocabulary/components/ReportTranslation";
 import { meanings } from "@/features/vocabulary/meaning";
 import { pickJoke, type SessionStats } from "@/features/vocabulary/jokes";
 import { practiceSummaryKey, vocabularyApi } from "@/features/vocabulary/api";
@@ -189,8 +190,8 @@ export default function VocabularyPracticePage() {
   });
 
   const leech = useMutation({
-    mutationFn: ({ lemma, choice }: { lemma: string; choice: LeechChoice }) =>
-      vocabularyApi.leech(lemma, choice),
+    mutationFn: ({ wordId, choice }: { wordId: string; choice: LeechChoice }) =>
+      vocabularyApi.leech(wordId, choice),
     onSuccess: (_res, { choice }) => {
       setLeechChoice(choice);
       // "See it in context" stays ON this card — `result.leech_context`
@@ -469,7 +470,7 @@ export default function VocabularyPracticePage() {
               <LeechPanel
                 resolved={leechChoice}
                 busy={leech.isPending}
-                onChoose={(choice) => leech.mutate({ lemma: current.lemma, choice })}
+                onChoose={(choice) => leech.mutate({ wordId: current.word_id, choice })}
               />
               {leechChoice === "see_context" && result.leech_context && (
                 <LeechContextPanel context={result.leech_context} />
@@ -855,6 +856,13 @@ function Reveal({
           <BookOpen className="size-3" aria-hidden />
           {result.word.material_title}
         </Link>
+      )}
+      {result.word.sense_id && (
+        <ReportTranslation
+          senseId={result.word.sense_id}
+          where="practice"
+          className="mt-2"
+        />
       )}
       <p className="mt-3 text-xs text-muted-foreground">
         Enter for the next word · Esc to stop

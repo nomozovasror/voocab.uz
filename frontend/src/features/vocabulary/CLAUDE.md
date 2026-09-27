@@ -194,8 +194,30 @@ goes back to guessing, having spent one of three for the privilege.
 the card's `Save` both become a tick, and pressing the tick takes the word
 off the learner's whole list — the icon changes to `✕` under the pointer,
 because a button that says `Saved` and removes on press is one nobody
-presses twice on purpose. `forget` is per lemma rather than per passage,
-which is what the button means: it is the same word wherever they met it.
+presses twice on purpose.
+
+**`forget` is per SENSE now, not per lemma (P4).** It used to be: a saved
+word was deduplicated by lemma, so ✕ meant "the same word wherever they met
+it," full stop. That broke the day `bank` (the river) and `bank` (the
+financial institution) turned out to be two things somebody could save from
+two different passages — one FSRS card trying to teach both taught neither,
+because a "usual meaning" and a schedule are properties of a MEANING, not a
+spelling. A saved word is now one `LexemeSense` per learner
+(`saved_words.lexeme_sense_id`, unique per user), so the popover and the
+review row's Save/✕ each act on the sense THAT ROW is showing
+(`VocabularyEntry.saved`/`saved_word_id`, both per sense) — pressing ✕ on
+the `bank` you met as a river leaves the financial `bank` you saved last
+month untouched. Where a different sense of the same lemma is already
+saved, the card and the row both say so in one quiet line ("You've saved
+another meaning of this word.") rather than a warning: keeping two senses
+of one spelling is the ordinary case this rule exists to support, not an
+edge case to flag.
+
+In the words list this is also why the same lemma can legitimately appear
+twice — two rows, two meanings — and why the MEANING, not the lemma, is
+what a learner has to read to tell them apart; see "A saved word is one
+word with several contexts" below, which this section supersedes for what
+"one word" now means.
 
 **The card has to say what the list says.** Its Save button is a question
 about the learner's list, and the lookup endpoint was answering it from a
@@ -383,16 +405,26 @@ passage a student struggled with.
   for itself, and it does not reach a review where the same word now sits
   beside a filter with that name on it.)
 
-## A saved word is one word with several contexts
+## A saved word is one SENSE with several contexts
 
-`spring` met in a passage about seasons and again in one about coils is ONE
-word with two meanings. The list deduplicates by lemma and hangs each meeting
-off it; both meanings and both example sentences survive, which makes a
-better card than either alone.
+`spring` met twice in two passages about the season is ONE word: the list
+deduplicates by sense and hangs each meeting off it, and both example
+sentences survive, which makes a better card than either alone. `spring`
+the season and `spring` the coil are a DIFFERENT pair now (P4) — two
+`LexemeSense`s, two saved words, two FSRS cards — which is the fix for the
+bug the lemma-only version of this rule used to be: one card trying to
+carry two unrelated meanings taught neither properly, and there was no way
+to be "3/4 done learning `bank`" when the two `bank`s a learner had met
+had nothing to do with each other. See the forget/✕ section above for why
+and what it changed.
 
 The gloss is **copied** at the moment of saving, never read back through the
-material. A passage can be edited and re-glossed, and a saved word changing
-meaning underneath somebody is worse than one that has aged.
+material — except the word's own headline meaning (`definition_en`/
+`meaning_uz`/`sense_cefr`), which is read LIVE off the sense so an admin's
+fix in Studio reaches everybody already studying the word. Each CONTEXT's
+own gloss stays a copy: a passage can be edited and re-glossed, and a
+saved word's sentence changing underneath somebody is worse than one that
+has aged.
 
 `/vocabulary` is the list and not the spaced-repetition module — no
 scheduling, no queue, no "next due". That is its own brief, and inventing an
@@ -445,8 +477,8 @@ for.
 `/vocabulary` (home), `/vocabulary/practice` (session + end) and
 `/vocabulary/words` (the list above, moved here unchanged) are stage 1 of a
 separate module built on top of `SavedWord`/`SavedContext` — the server
-calls them `UserWord`/`UserWordContext` in the brief, same tables, same
-dedup-by-lemma. A saved word used to be inert; this is what turns it into
+calls them `UserWord`/`UserWordContext` in the brief, same tables (dedup by
+SENSE since P4, not by lemma — see above). A saved word used to be inert; this is what turns it into
 something scheduled, with FSRS on the server (`app/services/practice.py`
 owns the only place that touches it) and rationed by TIME rather than by
 word count — see the stage 1 spec for why a daily word quota is the thing
@@ -518,7 +550,7 @@ Stage 1 shipped one exercise (`recall`, `passive`) because that was enough
 to prove the module worked. Stage 2 is what makes it the thing the plan
 actually describes: a card that gets HARDER as a learner proves themselves,
 a second direction for writing rather than only reading, and the two
-screens (`/vocabulary/words`, `/vocabulary/words/:lemma`) that let somebody
+screens (`/vocabulary/words`, `/vocabulary/words/:id`) that let somebody
 ask about a word instead of only being asked one.
 
 - **The level is stored, not derived.** `SavedWord.passive_level` and
@@ -608,7 +640,7 @@ ask about a word instead of only being asked one.
     this: both are registered at once for the beat the router takes to
     swap them, which is what tells the flush apart from someone leaving
     the pages that could ever offer Undo at all.
-- **The word page (`/vocabulary/words/:lemma`) is `WordDetail`: a
+- **The word page (`/vocabulary/words/:id`) is `WordDetail`: a
   `SavedWord` plus `history`.** It is reached from the list, and — per the
   spec's §5 — is also "See it where you met it"'s destination from a
   leech's reveal, so a learner sent there mid-session lands on the exact

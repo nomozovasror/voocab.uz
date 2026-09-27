@@ -24,6 +24,12 @@ export interface ReviewRow {
   approved_by: string | null;
   approved_at: string | null;
   material_example_count: number;
+  /** How many OPEN "this translation is wrong" reports this sense
+   *  currently carries — zero for the ordinary row, and what puts a row in
+   *  the "Reported" bucket ahead of everything else. */
+  report_count: number;
+  /** The non-empty notes those open reports carry. */
+  report_notes: string[];
 }
 
 export interface ReviewQueue {
@@ -32,6 +38,10 @@ export interface ReviewQueue {
   /** Top-frequency lexemes' rank-1 sense, never flagged and never approved —
    *  the queue's second bucket, not a review reason. */
   core_pending: number;
+  /** Senses with an open translation report — the queue's FIRST bucket,
+   *  counted the same way as `core_pending` because "reported" isn't a
+   *  review reason either. */
+  reported_pending: number;
   rows: ReviewRow[];
 }
 

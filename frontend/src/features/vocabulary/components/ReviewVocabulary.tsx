@@ -22,6 +22,7 @@ import {
   type WordFilter,
 } from "@/features/vocabulary/filter";
 import type {
+  SavedWord,
   VocabularyEntry,
   VocabularyList,
 } from "@/features/vocabulary/types";
@@ -91,6 +92,28 @@ import type {
  * should I learn first".
  */
 
+/** Which of the words a save just returned answers for THIS material's row.
+ *
+ *  `POST /vocabulary/words` still hands back the learner's whole list, not
+ *  just what changed — the same shape `GET /vocabulary/words` returns — so a
+ *  save has to pick its own row out of it. Lemma alone cannot: a learner who
+ *  already keeps `bank` the river bank and has just saved `bank` the finance
+ *  term now has two rows called `bank` in that list. Matching on a context
+ *  from THIS material is what tells them apart, since only the row just
+ *  created or touched carries one. */
+function savedWordIdFor(
+  words: SavedWord[],
+  lemma: string,
+  materialId: string,
+): string | null {
+  const found = words.find(
+    (word) =>
+      word.lemma === lemma &&
+      word.contexts.some((ctx) => ctx.material_id === materialId),
+  );
+  return found?.id ?? null;
+}
+
 export function ReviewVocabulary({
   materialId,
   data,
@@ -150,14 +173,22 @@ export function ReviewVocabulary({
     // the learner's whole list, which is not what this page is showing, and
     // a refetch of eighty-six rows to change one button is a page that
     // flickers every time somebody presses Save.
-    onSuccess: (_result, lemmas) => {
+    onSuccess: (result, lemmas) => {
       qc.setQueryData<VocabularyList>(key, (was) =>
         was
           ? {
               ...was,
               entries: was.entries.map((entry) =>
                 lemmas.includes(entry.lemma)
-                  ? { ...entry, saved: true }
+                  ? {
+                      ...entry,
+                      saved: true,
+                      saved_word_id: savedWordIdFor(
+                        result.words,
+                        entry.lemma,
+                        materialId,
+                      ),
+                    }
                   : entry,
               ),
             }
@@ -177,20 +208,22 @@ export function ReviewVocabulary({
 
   /** And off the list again.
    *
-   *  `forget` takes the word off the learner's whole vocabulary, not just
-   *  off this passage, which is what the button on this row means: it is
-   *  the same word wherever they met it. Patched in place like the save,
-   *  for the same reason — the server's answer is their entire list, which
-   *  is not what this page is showing. */
+   *  By id, not by lemma — a saved word is one `LexemeSense` per learner
+   *  now, so `bank` the finance term and `bank` the river bank are two rows
+   *  and the ✕ on this one must remove only the sense this row is showing.
+   *  Patched in place like the save, for the same reason — the server's
+   *  answer is their entire list, which is not what this page is showing. */
   const drop = useMutation({
-    mutationFn: (lemma: string) => vocabularyApi.forget(lemma),
-    onSuccess: (_result, lemma) => {
+    mutationFn: (wordId: string) => vocabularyApi.forget(wordId),
+    onSuccess: (_result, wordId) => {
       qc.setQueryData<VocabularyList>(key, (was) =>
         was
           ? {
               ...was,
               entries: was.entries.map((entry) =>
-                entry.lemma === lemma ? { ...entry, saved: false } : entry,
+                entry.saved_word_id === wordId
+                  ? { ...entry, saved: false, saved_word_id: null }
+                  : entry,
               ),
             }
           : was,
@@ -339,8 +372,8 @@ export function ReviewVocabulary({
               onPoint={onPoint}
               busy={save.isPending || drop.isPending}
               onSave={() =>
-                entry.saved
-                  ? drop.mutate(entry.lemma)
+                entry.saved && entry.saved_word_id
+                  ? drop.mutate(entry.saved_word_id)
                   : save.mutate([entry.lemma])
               }
               onGoTo={onGoTo}
@@ -593,6 +626,15 @@ function Word({
               <span className="block text-xs text-muted-foreground">
                 {sense.here.uz}
               </span>
+            </p>
+          )}
+          {/* Said once, quietly, never as a badge — see `LookupPopover`'s
+              own copy of this line. Saving a second sense of a lemma
+              already on the list is ordinary; this is information, not a
+              warning. */}
+          {!entry.saved && entry.other_sense_saved && (
+            <p className="mt-1 text-[0.68rem] text-muted-foreground/70 italic">
+              You&apos;ve saved another meaning of this word.
             </p>
           )}
         </div>

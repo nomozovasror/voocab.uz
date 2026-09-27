@@ -78,6 +78,7 @@ export default function VocabularyPage() {
   const [cefr, setCefr] = useState<"all" | CefrLevel>("all");
   const [material, setMaterial] = useState<"all" | string>("all");
   const [direction, setDirection] = useState<DirectionFilter>("all");
+  // Word ids, not lemmas — a lemma no longer names one row.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // Bulk delete's own count, held apart from `selected.size` so the dialog's
   // "Delete 12 words?" doesn't relabel itself if the selection changes while
@@ -129,32 +130,32 @@ export default function VocabularyPage() {
     });
   }, [data, status, cefr, material, direction]);
 
-  function toggleSelected(lemma: string) {
+  function toggleSelected(id: string) {
     setSelected((was) => {
       const next = new Set(was);
-      if (next.has(lemma)) next.delete(lemma);
-      else next.add(lemma);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }
 
   const allVisibleSelected =
-    filtered.length > 0 && filtered.every((w) => selected.has(w.lemma));
+    filtered.length > 0 && filtered.every((w) => selected.has(w.id));
 
   function toggleSelectAll() {
     setSelected((was) => {
       if (allVisibleSelected) {
         const next = new Set(was);
-        for (const w of filtered) next.delete(w.lemma);
+        for (const w of filtered) next.delete(w.id);
         return next;
       }
-      return new Set([...was, ...filtered.map((w) => w.lemma)]);
+      return new Set([...was, ...filtered.map((w) => w.id)]);
     });
   }
 
   const bulk = useMutation({
     mutationFn: (action: BulkAction) =>
-      vocabularyApi.bulkWords({ lemmas: [...selected], action }),
+      vocabularyApi.bulkWords({ word_ids: [...selected], action }),
     onSuccess: (result, action) => {
       setSelected(new Set());
       setDeleteDialogCount(null);
@@ -181,8 +182,8 @@ export default function VocabularyPage() {
   // once it's confirmed.
   function handleDeleteClick() {
     if (selected.size === 1) {
-      const [lemma] = selected;
-      scheduleDelete(lemma);
+      const [id] = selected;
+      scheduleDelete(id);
       setSelected(new Set());
     } else if (selected.size > 1) {
       setDeleteDialogCount(selected.size);
@@ -193,8 +194,8 @@ export default function VocabularyPage() {
   // calls the same endpoint — `bulk` is scoped to `selected` and clears it
   // on success, which a single row's own menu has no business touching.
   const rowAction = useMutation({
-    mutationFn: ({ lemma, action }: { lemma: string; action: BulkAction }) =>
-      vocabularyApi.bulkWords({ lemmas: [lemma], action }),
+    mutationFn: ({ id, action }: { id: string; action: BulkAction }) =>
+      vocabularyApi.bulkWords({ word_ids: [id], action }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: vocabularyWordsKey });
       void qc.invalidateQueries({ queryKey: ["vocabulary", "practice", "summary"] });
@@ -312,21 +313,21 @@ export default function VocabularyPage() {
                 </label>
               </li>
               {filtered.map((word) =>
-                pendingDeletes.has(word.lemma) ? (
+                pendingDeletes.has(word.id) ? (
                   <RemovedRow
-                    key={word.lemma}
+                    key={word.id}
                     lemma={word.lemma}
-                    onUndo={() => undoDelete(word.lemma)}
+                    onUndo={() => undoDelete(word.id)}
                   />
                 ) : (
                   <Word
-                    key={word.lemma}
+                    key={word.id}
                     word={word}
-                    selected={selected.has(word.lemma)}
-                    onToggleSelected={() => toggleSelected(word.lemma)}
-                    onAction={(action) => rowAction.mutate({ lemma: word.lemma, action })}
+                    selected={selected.has(word.id)}
+                    onToggleSelected={() => toggleSelected(word.id)}
+                    onAction={(action) => rowAction.mutate({ id: word.id, action })}
                     actionBusy={rowAction.isPending}
-                    onDelete={() => scheduleDelete(word.lemma)}
+                    onDelete={() => scheduleDelete(word.id)}
                   />
                 ),
               )}
@@ -465,11 +466,17 @@ function BulkBar({
   );
 }
 
-/** The word's own meaning, said once. Prefers the field stage 2 put on the
- *  word itself; falls back to a context that has one, exactly as stage 1's
- *  saved list already did — a word kept before either field existed has
- *  neither, and prints nothing rather than guessing. */
+/** The word's own meaning, said once — and, now that a saved word is one
+ *  SENSE rather than one lemma, the thing that tells two `bank` rows apart.
+ *  Prefers `definition_en`/`meaning_uz`, read live off the word's
+ *  `LexemeSense` (an admin's fix shows up here with no migration); falls
+ *  back to stage 1's frozen `meaning_core_en`/`meaning_core_uz`, then to a
+ *  context that has one — a word kept before any of these fields existed
+ *  has none, and prints nothing rather than guessing. */
 function wordMeaning(word: SavedWord): { en: string; uz: string } {
+  if (word.definition_en || word.meaning_uz) {
+    return { en: word.definition_en, uz: word.meaning_uz };
+  }
   if (word.meaning_core_en || word.meaning_core_uz) {
     return { en: word.meaning_core_en, uz: word.meaning_core_uz };
   }
@@ -528,7 +535,7 @@ function Word({
           label={`Select ${word.lemma}`}
         />
         <Link
-          to={`/vocabulary/words/${encodeURIComponent(word.lemma)}`}
+          to={`/vocabulary/words/${word.id}`}
           className="min-w-0 flex-1 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
           <p className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
@@ -546,11 +553,16 @@ function Word({
               </span>
             )}
           </p>
+          {/* The MEANING, not the lemma, is what tells two `bank` rows
+              apart — a saved word is one sense now, so this line carries
+              the weight the header used to carry alone. Medium rather than
+              the list's ordinary body weight, the same step up `CefrTag`
+              takes over plain text. */}
           {(meaning.uz || meaning.en) && (
-            <p className="mt-0.5 text-sm text-foreground">
+            <p className="mt-0.5 text-sm font-medium text-foreground">
               {meaning.uz}
               {meaning.en && (
-                <span className="ml-1.5 text-xs text-muted-foreground">
+                <span className="ml-1.5 text-xs font-normal text-muted-foreground">
                   {meaning.en}
                 </span>
               )}

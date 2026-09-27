@@ -10,13 +10,17 @@ import { vocabularyApi, vocabularyWordsKey, wordDetailKey } from "@/features/voc
  * word is already gone and one press brings it straight back. This is that
  * window: the row leaves the list at once, the DELETE itself waits.
  *
+ * Keyed by the saved word's own id, not its lemma — a lemma stopped naming
+ * one row the moment two senses of it could each be saved, and "Removed ·
+ * Undo" has to name the exact card leaving, not every row that happens to
+ * share a spelling.
+ *
  * Module-level rather than a hook's own state, for the one requirement a
  * hook can't meet on its own: pressing delete on the word page navigates to
  * the list, unmounting the page that started the timer. A `setTimeout` held
  * in a component's closure dies with it; one held here keeps running
  * whichever page — or neither — is on screen, and the list picks the same
- * lemma back up out of this map rather than out of a prop it was never
- * handed.
+ * id back up out of this map rather than out of a prop it was never handed.
  *
  * Bulk delete (more than one word at once) does NOT go through here — see
  * `DeleteWordsDialog`. A dialog already asks the question this window
@@ -54,33 +58,33 @@ function getSnapshot(): ReadonlySet<string> {
   return snapshot;
 }
 
-/** The lemmas currently sitting in "Removed · Undo", live. */
+/** The word ids currently sitting in "Removed · Undo", live. */
 export function usePendingDeletes(): ReadonlySet<string> {
   return useSyncExternalStore(subscribe, getSnapshot);
 }
 
-export function isPendingDelete(lemma: string): boolean {
-  return pending.has(lemma);
+export function isPendingDelete(wordId: string): boolean {
+  return pending.has(wordId);
 }
 
 /** Sends the DELETE now instead of waiting out the window. Called by the
  *  timer itself, and by anything that has to leave before the timer would
  *  fire (`useFlushPendingDeletesOnLeave`, the tab closing). Safe to call more
- *  than once for the same lemma — only the first call still finds it
+ *  than once for the same id — only the first call still finds it
  *  unflushed. */
-function flush(lemma: string): void {
-  const entry = pending.get(lemma);
+function flush(wordId: string): void {
+  const entry = pending.get(wordId);
   if (!entry || entry.flushed) return;
   entry.flushed = true;
   clearTimeout(entry.timer);
   void vocabularyApi
-    .forget(lemma)
+    .forget(wordId)
     .catch((e: unknown) => toast(getErrorMessage(e)))
     .finally(() => {
-      pending.delete(lemma);
+      pending.delete(wordId);
       publish();
       void queryClient.invalidateQueries({ queryKey: vocabularyWordsKey });
-      void queryClient.invalidateQueries({ queryKey: wordDetailKey(lemma) });
+      void queryClient.invalidateQueries({ queryKey: wordDetailKey(wordId) });
       void queryClient.invalidateQueries({
         queryKey: ["vocabulary", "practice", "summary"],
       });
@@ -90,25 +94,25 @@ function flush(lemma: string): void {
 /** Marks one word for deletion. Idempotent — pressing Delete again on a row
  *  already in the window (there is no button left to press, but nothing here
  *  assumes that) restarts nothing and does not queue a second request. */
-export function scheduleDelete(lemma: string): void {
-  if (pending.has(lemma)) return;
-  const timer = setTimeout(() => flush(lemma), GRACE_MS);
-  pending.set(lemma, { timer, flushed: false });
+export function scheduleDelete(wordId: string): void {
+  if (pending.has(wordId)) return;
+  const timer = setTimeout(() => flush(wordId), GRACE_MS);
+  pending.set(wordId, { timer, flushed: false });
   publish();
 }
 
 /** Undo. Only ever clears the timer — the DELETE was never sent, so there is
  *  nothing on the server to put back. */
-export function undoDelete(lemma: string): void {
-  const entry = pending.get(lemma);
+export function undoDelete(wordId: string): void {
+  const entry = pending.get(wordId);
   if (!entry || entry.flushed) return;
   clearTimeout(entry.timer);
-  pending.delete(lemma);
+  pending.delete(wordId);
   publish();
 }
 
 function flushAll(): void {
-  for (const lemma of pending.keys()) flush(lemma);
+  for (const wordId of pending.keys()) flush(wordId);
 }
 
 let hosts = 0;
