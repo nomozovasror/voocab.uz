@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.audio import router as audio_router
 from app.api.auth import router as auth_router
 from app.api.collections import router as collections_router
+from app.api.lexicon import router as lexicon_router
 from app.api.listening import router as listening_router
 from app.api.papers import paper_router
 from app.models.material import PAPER_TYPES
@@ -47,6 +48,7 @@ for _skill in PAPER_TYPES:
 app.include_router(collections_router)
 app.include_router(studio_router)
 app.include_router(vocabulary_router)
+app.include_router(lexicon_router)
 
 # In dev (no R2), serve uploaded media off local disk. In prod the R2 public
 # base URL fronts the bucket, so no local mount is needed.

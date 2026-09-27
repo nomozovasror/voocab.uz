@@ -1,8 +1,10 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { useStudioPapers } from "@/features/studio/queries";
 import { useMyCollections } from "@/features/listening/queries";
+import { useCurrentUser } from "@/auth/useCurrentUser";
+import { useReviewQueueCount } from "@/features/lexicon/queries";
 
 /**
  * The studio's own header: one title, and the halves of authoring as tabs.
@@ -41,7 +43,7 @@ import { useMyCollections } from "@/features/listening/queries";
  * as 0: the studio's rule everywhere is that a fabricated zero is worse than
  * a missing figure.
  */
-export type StudioTab = "listening" | "reading" | "collections";
+export type StudioTab = "listening" | "reading" | "collections" | "review";
 
 const TABS: Array<{ id: StudioTab; label: string; to: string }> = [
   { id: "listening", label: "Listening", to: "/studio/listening" },
@@ -49,18 +51,37 @@ const TABS: Array<{ id: StudioTab; label: string; to: string }> = [
   { id: "collections", label: "Collections", to: "/studio/collections" },
 ];
 
+//: Studio's admin review tab (`brief-lexicon.md` §6.2) — the only tab in
+//: this list not visible to everybody. It exists in `TABS` conditionally
+//: (below), never rendered at all for a non-admin, because the client-side
+//: hiding rule is "the tab doesn't exist", not "the tab is disabled": every
+//: endpoint underneath enforces the same flag independently
+//: (`app.api.deps.AdminUser`), so hiding it here is a convenience for an
+//: admin's own navigation, not the access control.
+const REVIEW_TAB = { id: "review" as const, label: "Review", to: "/studio/review" };
+
 export function StudioTabsHeader({ active }: { active: StudioTab }) {
+  const { user } = useCurrentUser();
+  const isAdmin = user?.is_admin ?? false;
+
   // Cached queries, all of which the page under this header is likely to be
   // using anyway — so a tab's count costs one small request once per visit
   // and nothing after it.
   const listening = useStudioPapers("listening");
   const reading = useStudioPapers("reading");
   const collections = useMyCollections();
+  const review = useReviewQueueCount(isAdmin);
+
+  const tabs = useMemo(
+    () => (isAdmin ? [...TABS, REVIEW_TAB] : TABS),
+    [isAdmin],
+  );
 
   const counts: Record<StudioTab, number | null> = {
     listening: listening.data?.total ?? null,
     reading: reading.data?.total ?? null,
     collections: collections.data?.length ?? null,
+    review: review.data ?? null,
   };
 
   // Where the lit pill sits. Null until the first measure, and the pill is
@@ -90,7 +111,7 @@ export function StudioTabsHeader({ active }: { active: StudioTab }) {
     observer.observe(track);
     observer.observe(tab);
     return () => observer.disconnect();
-  }, [active, counts.listening, counts.reading, counts.collections]);
+  }, [active, counts.listening, counts.reading, counts.collections, counts.review]);
 
   return (
     // One row, held apart: the page's name at one end and the two halves of
@@ -124,7 +145,7 @@ export function StudioTabsHeader({ active }: { active: StudioTab }) {
             }}
           />
 
-          {TABS.map((tab) => {
+          {tabs.map((tab) => {
             const count = counts[tab.id];
             const current = active === tab.id;
             return (
@@ -178,7 +199,9 @@ export function StudioTabsLayout() {
     ? "collections"
     : pathname.startsWith("/studio/reading")
       ? "reading"
-      : "listening";
+      : pathname.startsWith("/studio/review")
+        ? "review"
+        : "listening";
 
   return (
     <div className="mx-auto w-full max-w-[56.25rem] font-mono">

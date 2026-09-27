@@ -265,6 +265,28 @@ class LexemeSense(SQLModel, table=True):
     )
     provisional: bool = Field(default=True, index=True)
 
+    #: Who last cleared this sense in Studio's admin review tab (P5), and
+    #: when -- null means "never approved", which is a different fact from
+    #: `needs_review is False`: a P1 provisional sense with no reasons at all
+    #: has never been reviewed by anybody, and the review queue's "core"
+    #: bucket (`app.services.lexicon_review`) is exactly the top-frequency
+    #: senses this is still null for. `ON DELETE SET NULL` -- losing the
+    #: reviewer's account is not a reason to lose the fact that a human
+    #: looked at this sense, the same tolerance `TranslationReport
+    #: .material_vocabulary_id` already uses.
+    approved_by: uuid.UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            SA_UUID(as_uuid=True),
+            ForeignKey("users.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+    )
+    approved_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True, index=True),
+    )
+
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False),

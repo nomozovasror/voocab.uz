@@ -54,6 +54,13 @@ export const router = createBrowserRouter([
         path: "login",
         ...page(() => import("@/pages/login/LoginPage")),
       },
+      // Public, unauthenticated, generated from the database rather than a
+      // hand-written page (`brief-lexicon.md` §9) — the small footer link
+      // on every page has to work for a signed-out visitor too.
+      {
+        path: "licences",
+        ...page(() => import("@/pages/licences/LicencesPage")),
+      },
       // --- Protected ---
       {
         element: <RequireAuth />,
@@ -248,6 +255,13 @@ export const router = createBrowserRouter([
                 ...page(
                   () => import("@/pages/studio/collections/StudioCollectionsPage"),
                 ),
+              },
+              // Admin-only (`brief-lexicon.md` §6.2) — the tab that leads
+              // here is hidden for anybody else, and the page itself asks
+              // the server, which 403s regardless of what the client shows.
+              {
+                path: "review",
+                ...page(() => import("@/pages/studio/review/StudioReviewPage")),
               },
             ],
           },

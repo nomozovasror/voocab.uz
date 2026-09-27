@@ -1,0 +1,388 @@
+"""Studio's admin review tab (`app.api.lexicon`, `app.services.lexicon_review`)
+and the public licences page (`app.services.lexicon_licences`) --
+`brief-lexicon.md` §6.2, §9.
+
+Real DB, ASGI transport + minted cookie, same pattern as
+`test_studio_stats.py`. Every fixture is tagged with a fresh uuid so this
+file can run beside whatever else the test database already holds, and
+assertions about shared aggregates (the reason counts, the licences page)
+are written as "our row is present with the right shape", never as an exact
+total over the whole table.
+"""
+
+import uuid
+
+import httpx
+import pytest
+from sqlmodel import select
+
+from app.core.database import async_session_factory
+from app.core.security import create_access_token
+from app.main import app
+from app.models.lexicon import Lexeme, LexemeSense
+from app.models.material import Material
+from app.models.part import Part
+from app.models.user import User
+from app.models.vocabulary import MaterialVocabulary
+
+
+def _client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+
+
+async def _make_user(*, admin: bool) -> User:
+    async with async_session_factory() as session:
+        user = User(
+            email=f"lexicon-review-{uuid.uuid4().hex}@test.local",
+            display_name="review test",
+            is_admin=admin,
+        )
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+        return user
+
+
+async def _make_lexeme(tag: str, **kwargs) -> Lexeme:
+    async with async_session_factory() as session:
+        lexeme = Lexeme(lemma=f"lex{tag}", pos="n", **kwargs)
+        session.add(lexeme)
+        await session.commit()
+        await session.refresh(lexeme)
+        return lexeme
+
+
+async def _make_sense(lexeme_id: uuid.UUID, **kwargs) -> LexemeSense:
+    async with async_session_factory() as session:
+        sense = LexemeSense(lexeme_id=lexeme_id, **kwargs)
+        session.add(sense)
+        await session.commit()
+        await session.refresh(sense)
+        return sense
+
+
+async def _cleanup(
+    *,
+    lexeme_ids: tuple[uuid.UUID, ...] = (),
+    material_ids: tuple[uuid.UUID, ...] = (),
+    user_ids: tuple[uuid.UUID, ...] = (),
+) -> None:
+    async with async_session_factory() as session:
+        for material_id in material_ids:
+            for row in (
+                await session.exec(
+                    select(MaterialVocabulary).where(
+                        MaterialVocabulary.material_id == material_id
+                    )
+                )
+            ).all():
+                await session.delete(row)
+            await session.flush()
+            for part in (
+                await session.exec(select(Part).where(Part.material_id == material_id))
+            ).all():
+                await session.delete(part)
+            await session.flush()
+            material = await session.get(Material, material_id)
+            if material is not None:
+                await session.delete(material)
+        await session.flush()
+
+        for lexeme_id in lexeme_ids:
+            for sense in (
+                await session.exec(
+                    select(LexemeSense).where(LexemeSense.lexeme_id == lexeme_id)
+                )
+            ).all():
+                await session.delete(sense)
+            await session.flush()
+            lexeme = await session.get(Lexeme, lexeme_id)
+            if lexeme is not None:
+                await session.delete(lexeme)
+        await session.flush()
+
+        for user_id in user_ids:
+            user = await session.get(User, user_id)
+            if user is not None:
+                await session.delete(user)
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_review_endpoints_403_for_non_admin() -> None:
+    user = await _make_user(admin=False)
+    token = create_access_token(str(user.id))
+    try:
+        async with _client() as client:
+            cookies = {"access_token": token}
+            r = await client.get("/api/admin/lexicon/review", cookies=cookies)
+            assert r.status_code == 403
+
+            r = await client.post(
+                f"/api/admin/lexicon/review/{uuid.uuid4()}/approve", cookies=cookies
+            )
+            assert r.status_code == 403
+
+            r = await client.post(
+                f"/api/admin/lexicon/review/{uuid.uuid4()}/fix",
+                json={"meaning_uz": "x"},
+                cookies=cookies,
+            )
+            assert r.status_code == 403
+    finally:
+        await _cleanup(user_ids=(user.id,))
+
+
+@pytest.mark.asyncio
+async def test_queue_priority_pos_mismatch_then_needs_review_then_core() -> None:
+    admin = await _make_user(admin=True)
+    token = create_access_token(str(admin.id))
+    tag = uuid.uuid4().hex[:8]
+
+    # A: rank-1, needs_review, pos_mismatch -- must sort first.
+    lex_a = await _make_lexeme(f"a{tag}", frequency_band="wider", frequency_source="ngsl")
+    sense_a = await _make_sense(
+        lex_a.id, sense_rank=1, definition_en="def a", meaning_uz="uz a",
+        needs_review=True, review_reasons=["pos_mismatch"],
+    )
+    # B: rank-1, needs_review for an unrelated reason -- sorts after A.
+    lex_b = await _make_lexeme(f"b{tag}", frequency_band="wider", frequency_source="ngsl")
+    sense_b = await _make_sense(
+        lex_b.id, sense_rank=1, definition_en="def b", meaning_uz="uz b",
+        needs_review=True, review_reasons=["judge_unsure"],
+    )
+    # C: rank-1, never flagged, never approved, core-frequency -- the core
+    # bucket, sorting after every needs_review row.
+    lex_c = await _make_lexeme(f"c{tag}", frequency_band="core", frequency_source="ngsl")
+    sense_c = await _make_sense(
+        lex_c.id, sense_rank=1, definition_en="def c", meaning_uz="uz c",
+        needs_review=False,
+    )
+
+    try:
+        async with _client() as client:
+            cookies = {"access_token": token}
+            r = await client.get(
+                "/api/admin/lexicon/review", params={"limit": 200}, cookies=cookies
+            )
+            assert r.status_code == 200, r.text
+            body = r.json()
+            ids = [row["sense_id"] for row in body["rows"]]
+            assert str(sense_a.id) in ids and str(sense_b.id) in ids and str(sense_c.id) in ids
+            i_a, i_b, i_c = ids.index(str(sense_a.id)), ids.index(str(sense_b.id)), ids.index(str(sense_c.id))
+            assert i_a < i_b < i_c
+
+            assert body["reason_counts"]["pos_mismatch"] >= 1
+            assert body["reason_counts"]["judge_unsure"] >= 1
+            assert body["core_pending"] >= 1
+
+            row_c = body["rows"][i_c]
+            assert row_c["lemma"] == lex_c.lemma
+            assert row_c["frequency_band"] == "core"
+            assert row_c["approved_at"] is None
+
+            # Filtering by reason narrows to exactly that reason.
+            r = await client.get(
+                "/api/admin/lexicon/review",
+                params={"reason": "pos_mismatch", "limit": 200},
+                cookies=cookies,
+            )
+            assert r.status_code == 200
+            filtered_ids = [row["sense_id"] for row in r.json()["rows"]]
+            assert str(sense_a.id) in filtered_ids
+            assert str(sense_b.id) not in filtered_ids
+            assert str(sense_c.id) not in filtered_ids
+
+            # The synthetic "core" filter isolates the second bucket.
+            r = await client.get(
+                "/api/admin/lexicon/review",
+                params={"reason": "core", "limit": 200},
+                cookies=cookies,
+            )
+            assert r.status_code == 200
+            core_ids = [row["sense_id"] for row in r.json()["rows"]]
+            assert str(sense_c.id) in core_ids
+            assert str(sense_a.id) not in core_ids
+
+            # An unknown reason is a 422, not a silently empty page.
+            r = await client.get(
+                "/api/admin/lexicon/review",
+                params={"reason": "not_a_real_reason"},
+                cookies=cookies,
+            )
+            assert r.status_code == 422
+    finally:
+        await _cleanup(
+            lexeme_ids=(lex_a.id, lex_b.id, lex_c.id), user_ids=(admin.id,)
+        )
+
+
+@pytest.mark.asyncio
+async def test_approve_clears_needs_review_and_records_reviewer() -> None:
+    admin = await _make_user(admin=True)
+    token = create_access_token(str(admin.id))
+    tag = uuid.uuid4().hex[:8]
+    lexeme = await _make_lexeme(f"appr{tag}", frequency_band="wider", frequency_source="ngsl")
+    sense = await _make_sense(
+        lexeme.id, sense_rank=1, definition_en="def", meaning_uz="uz",
+        needs_review=True, review_reasons=["judge_unsure"],
+    )
+
+    try:
+        async with _client() as client:
+            r = await client.post(
+                f"/api/admin/lexicon/review/{sense.id}/approve",
+                cookies={"access_token": token},
+            )
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["needs_review"] is False
+            assert body["approved_by"] == str(admin.id)
+            assert body["approved_at"] is not None
+            # The reasons stay, as the audit trail of what was once flagged.
+            assert body["review_reasons"] == ["judge_unsure"]
+
+        async with async_session_factory() as session:
+            refreshed = await session.get(LexemeSense, sense.id)
+            assert refreshed is not None
+            assert refreshed.needs_review is False
+            assert refreshed.approved_by == admin.id
+            assert refreshed.approved_at is not None
+    finally:
+        await _cleanup(lexeme_ids=(lexeme.id,), user_ids=(admin.id,))
+
+
+@pytest.mark.asyncio
+async def test_fix_edits_fields_approves_and_updates_lexeme_cefr() -> None:
+    admin = await _make_user(admin=True)
+    token = create_access_token(str(admin.id))
+    tag = uuid.uuid4().hex[:8]
+    lexeme = await _make_lexeme(
+        f"fix{tag}", frequency_band="core", frequency_source="ngsl", cefr="B1"
+    )
+    sense = await _make_sense(
+        lexeme.id, sense_rank=1, definition_en="old def", meaning_uz="old uz",
+        cefr="B1", needs_review=True, review_reasons=["ngsl_conflict"],
+    )
+
+    try:
+        async with _client() as client:
+            r = await client.post(
+                f"/api/admin/lexicon/review/{sense.id}/fix",
+                json={"meaning_uz": "new uz", "definition_en": "new def", "cefr": "A2"},
+                cookies={"access_token": token},
+            )
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["meaning_uz"] == "new uz"
+            assert body["definition_en"] == "new def"
+            assert body["cefr"] == "A2"
+            assert body["needs_review"] is False
+            assert body["approved_by"] == str(admin.id)
+
+        async with async_session_factory() as session:
+            refreshed_lexeme = await session.get(Lexeme, lexeme.id)
+            assert refreshed_lexeme is not None
+            # sense_rank == 1: the lexeme's own denormalised cefr follows.
+            assert refreshed_lexeme.cefr == "A2"
+
+            # An unknown CEFR level is refused before anything is written.
+        async with _client() as client:
+            r = await client.post(
+                f"/api/admin/lexicon/review/{sense.id}/fix",
+                json={"cefr": "Z9"},
+                cookies={"access_token": token},
+            )
+            assert r.status_code == 422
+    finally:
+        await _cleanup(lexeme_ids=(lexeme.id,), user_ids=(admin.id,))
+
+
+@pytest.mark.asyncio
+async def test_review_contexts_peek_at_material_sentences() -> None:
+    admin = await _make_user(admin=True)
+    token = create_access_token(str(admin.id))
+    tag = uuid.uuid4().hex[:8]
+    lexeme = await _make_lexeme(f"ctx{tag}", frequency_band="wider", frequency_source="ngsl")
+    sense = await _make_sense(
+        lexeme.id, sense_rank=1, definition_en="def", meaning_uz="uz",
+    )
+
+    async with async_session_factory() as session:
+        author = User(email=f"ctx-author-{tag}@test.local", display_name="ctx author")
+        session.add(author)
+        await session.flush()
+        material = Material(
+            author_id=author.id, type="reading", title=f"ctx material {tag}",
+            visibility="private",
+        )
+        session.add(material)
+        await session.flush()
+        part = Part(
+            material_id=material.id, order_index=0, title="P",
+            passage={"paragraphs": []}, first_number=1,
+        )
+        session.add(part)
+        await session.flush()
+        session.add(MaterialVocabulary(
+            material_id=material.id, part_id=part.id, lemma=f"ctx{tag}",
+            surface="ctx-surface", pos="n", meaning_en="m", meaning_uz="uz",
+            example="A sentence using ctx-surface.", cefr_level="B1",
+            lexeme_id=lexeme.id, sense_id=sense.id,
+        ))
+        await session.commit()
+
+    try:
+        async with _client() as client:
+            r = await client.get(
+                f"/api/admin/lexicon/review/{sense.id}/contexts",
+                cookies={"access_token": token},
+            )
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert len(body) == 1
+            assert body[0]["material_title"] == material.title
+            assert body[0]["surface"] == "ctx-surface"
+            assert "ctx-surface" in body[0]["example"]
+    finally:
+        await _cleanup(
+            lexeme_ids=(lexeme.id,),
+            material_ids=(material.id,),
+            user_ids=(admin.id, author.id),
+        )
+
+
+@pytest.mark.asyncio
+async def test_licences_page_is_generated_and_public() -> None:
+    tag = uuid.uuid4().hex[:8]
+    lex_ngsl = await _make_lexeme(f"lic-ngsl{tag}", frequency_source="ngsl", frequency_band="core")
+    lex_offlist = await _make_lexeme(f"lic-off{tag}", frequency_source="off-list")
+    sense = await _make_sense(
+        lex_ngsl.id, sense_rank=1, definition_en="def", meaning_uz="uz",
+        source_id="oewn", licence="cc-by-4.0",
+    )
+
+    try:
+        # No auth cookie at all -- the page is public.
+        async with _client() as client:
+            r = await client.get("/api/licences")
+            assert r.status_code == 200, r.text
+            body = r.json()
+            by_key = {row["key"]: row for row in body["sources"]}
+
+            assert "ngsl" in by_key
+            assert by_key["ngsl"]["authors"] == "Browne, C., Culligan, B. & Phillips, J."
+            assert by_key["ngsl"]["licence_name"] == "CC BY-SA 4.0"
+            assert by_key["ngsl"]["licence_url"].startswith("https://creativecommons.org/licenses/by-sa/")
+            assert by_key["ngsl"]["count"] >= 1
+
+            assert "oewn" in by_key
+            assert by_key["oewn"]["authors"] == "Open English WordNet Team"
+            assert by_key["oewn"]["licence_name"] == "CC BY 4.0"
+            assert by_key["oewn"]["count"] >= 1
+
+            # off-list and model are not third-party sources -- never listed.
+            assert "off-list" not in by_key
+            assert "model" not in by_key
+    finally:
+        await _cleanup(lexeme_ids=(lex_ngsl.id, lex_offlist.id))

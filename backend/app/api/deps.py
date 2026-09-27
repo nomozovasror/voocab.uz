@@ -37,3 +37,19 @@ async def get_current_user(
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+async def get_current_admin(user: CurrentUser) -> User:
+    """The whole of this project's admin gate (`lexicon-spec.md` D7): one
+    flag on `User`, checked here so every admin-only route enforces it the
+    same way. 403, not 404 -- the route exists and the caller is signed in,
+    they are simply not allowed to see it, which is a different fact from
+    "not found" and the one the client's own tab-hiding logic mirrors."""
+    if not user.is_admin:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Admin access required"
+        )
+    return user
+
+
+AdminUser = Annotated[User, Depends(get_current_admin)]

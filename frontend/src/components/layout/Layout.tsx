@@ -4,6 +4,7 @@ import { Logo } from "@/components/Logo";
 import { PageLoader } from "@/components/ui/spinner";
 import { RouteProgress } from "@/components/ui/route-progress";
 import { UserMenu } from "@/components/layout/UserMenu";
+import { Footer } from "@/components/layout/Footer";
 import {
   HeaderCentreProvider,
   useHeaderCentreState,
@@ -221,6 +222,7 @@ export function Layout() {
               <Outlet />
             </Suspense>
           </main>
+          <Footer />
         </div>
       </HeaderTaskProvider>
     </HeaderCentreProvider>

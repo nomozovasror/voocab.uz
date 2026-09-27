@@ -59,6 +59,12 @@ class UserRead(BaseModel):
     display_name: str
     email: str | None
     avatar_url: str | None
+    #: Whether Studio's admin review tab (P5) should be offered at all --
+    #: the client hides it on this alone, and the server enforces the same
+    #: flag independently on every endpoint underneath (`AdminUser`), so a
+    #: stale or forged client value can hide the tab wrongly but never show
+    #: data it shouldn't.
+    is_admin: bool
 
 
 def _cookie_domain() -> str | None:

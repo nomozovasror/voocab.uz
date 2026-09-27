@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { ArrowLeft, Bell } from "lucide-react";
+import { ArrowLeft, Bell, Info } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { PageLoader } from "@/components/ui/spinner";
 import { RouteProgress } from "@/components/ui/route-progress";
@@ -69,6 +69,17 @@ function StudioShell() {
             <div ref={setActionsEl} className="flex items-center gap-2" />
             {!actionsTaken && (
               <>
+                {/* The one footer link every other page carries
+                    (`brief-lexicon.md` §9) — Studio has no scrolling footer
+                    of its own to put it in, so it rides here instead. */}
+                <NavLink
+                  to="/licences"
+                  aria-label="Data sources and licences"
+                  title="Data sources and licences"
+                  className="flex size-7 items-center justify-center rounded-full border border-foreground/10 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  <Info className="size-3.5" />
+                </NavLink>
                 <button
                   type="button"
                   onClick={() => navigate("/")}
