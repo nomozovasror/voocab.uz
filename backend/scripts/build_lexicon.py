@@ -115,9 +115,7 @@ import argparse
 import asyncio
 import gzip
 import json
-import re
 import subprocess
-import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -127,112 +125,25 @@ from sqlmodel import select as sm_select
 from app.core.database import async_session_factory
 from app.models.lexicon import Lexeme, LexemeSense
 from app.models.vocabulary import MaterialVocabulary, SavedWord, SavedWordContext, LookupEvent
+from app.services.lexicon import (
+    FrequencyLists,
+    WORDLISTS,
+    build_merge_map,
+    lexeme_is_phrase as _lexeme_is_phrase,
+    merge_candidate as _merge_candidate,
+    normalise_meaning as _normalise_meaning,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-WORDLISTS = REPO_ROOT / "seed" / "wordlists"
 
 CEFR_ORDER: tuple[str, ...] = ("A1", "A2", "B1", "B2", "C1", "C2")
 
 
 # --- Step 1: the frequency/domain lists --------------------------------------
-
-
-def _rows(name: str, encoding: str = "utf-8-sig") -> list[list[str]]:
-    """One vendored CSV, comment lines and blank lines dropped.
-
-    The same shape as `seed/vocabulary.py`'s own reader, kept separate
-    (rather than imported) because that module lives outside this project's
-    installed package -- `seed/` is a standalone pipeline with its own venv,
-    and this script runs inside the backend's. Duplicating nine lines is
-    cheaper than wiring two independent Python environments together for
-    them.
-    """
-    path = WORDLISTS / name
-    text = path.read_bytes().decode(encoding, "replace")
-    return [[cell.strip() for cell in line.split(",")]
-            for line in text.splitlines()
-            if line.strip() and not line.startswith("##")]
-
-
-class FrequencyLists:
-    """The five NGSL-family lists plus the supplementary one, read once.
-
-    ``frequency_band`` keeps the exact meaning `seed/vocabulary.py`'s
-    reading pipeline has always given it -- core/common/wider by NGSL rank
-    tier, academic for NAWL, off-list otherwise -- because the arithmetic
-    that already reads that scale (`material_difficulty`, the distractor
-    pipeline's CEFR-band matching) must keep comparing what it always has.
-    BSL/TSL/MOEL do not extend that scale; they are domain lists and only
-    ever contribute to ``domain_tags``.
-    """
-
-    def __init__(self) -> None:
-        self.ngsl_rank: dict[str, int] = {}
-        self.nawl: set[str] = set()
-        self.supplementary: set[str] = set()
-        self.bsl: set[str] = set()
-        self.tsl: set[str] = set()
-        self.moel: set[str] = set()
-
-        for row in _rows("NGSL_12_stats.csv"):
-            if row[0] == "Lemma":
-                continue
-            self.ngsl_rank[row[0].lower()] = int(row[1])
-        for row in _rows("NAWL_12_lemmatized_for_research.csv", "latin-1"):
-            self.nawl.add(row[0].lower())
-        for row in _rows("SUP_lemmatized.csv"):
-            self.supplementary.add(row[0].lower())
-        for row in _rows("BSL_120_lemmatized_for_research.csv"):
-            self.bsl.add(row[0].lower())
-        for row in _rows("TSL_12_lemmatized_for_research.csv", "latin-1"):
-            self.tsl.add(row[0].lower())
-        for line in (WORDLISTS / "MOEL_terms.csv").read_text(encoding="utf-8").splitlines():
-            term = line.strip().lower()
-            if term:
-                self.moel.add(term)
-
-    def band(self, lemma: str) -> str:
-        if lemma in self.supplementary:
-            return "core"
-        rank = self.ngsl_rank.get(lemma)
-        if rank is not None:
-            return "core" if rank <= 1000 else "common" if rank <= 2000 else "wider"
-        return "academic" if lemma in self.nawl else "off-list"
-
-    def source(self, lemma: str) -> str | None:
-        """The single list credited for this lemma's classification, in
-        priority order -- see `app.models.lexicon.FREQUENCY_SOURCES`. A word
-        can be on more than one list (`portfolio` is BSL and NGSL-common);
-        `domain_tags` is what keeps the OTHER memberships from being lost
-        when only one can be the `frequency_source`.
-        """
-        if lemma in self.ngsl_rank or lemma in self.supplementary:
-            return "ngsl"
-        if lemma in self.nawl:
-            return "nawl"
-        if lemma in self.bsl:
-            return "bsl"
-        if lemma in self.tsl:
-            return "tsl"
-        if lemma in self.moel:
-            return "moel"
-        return "off-list"
-
-    def domain_tags(self, lemma: str) -> list[str]:
-        tags = []
-        if lemma in self.nawl:
-            tags.append("academic")
-        if lemma in self.bsl:
-            tags.append("business")
-        if lemma in self.tsl:
-            tags.append("toeic")
-        if lemma in self.moel:
-            tags.append("medical")
-        return tags
-
-    def all_lemmas(self) -> set[str]:
-        return (set(self.ngsl_rank) | self.nawl | self.supplementary
-                | self.bsl | self.tsl | self.moel)
+#
+# `FrequencyLists` and `WORDLISTS` itself now live in `app.services.lexicon`,
+# shared with P3's `link_row` -- see that module's own docstring for why the
+# files moved inside `backend/`. What stays here is P1's own use of them.
 
 
 # --- OEWN sense inventory (attached, not yet matched) ------------------------
@@ -295,122 +206,19 @@ class OewnIndex:
 
 
 # --- Step 2: lemma-collision detection ---------------------------------------
-
-#: Purely inflectional endings for verbs -- tense/aspect, never a
-#: derivational change of meaning. ``("", "e")`` etc. are the replacements
-#: tried after the ending is stripped, in order.
-_VERB_SUFFIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("ying", ("ie",)),
-    ("ies", ("y",)),
-    ("ied", ("y",)),
-    ("ing", ("", "e")),
-    ("ed", ("", "e")),
-    ("es", ("", "e")),
-    ("s", ("",)),
-)
-#: Comparative/superlative -- always the same underlying adjective in
-#: English, unlike a noun's `-er` (agent noun: `printer` != `print`).
-_ADJ_SUFFIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("iest", ("y",)),
-    ("ier", ("y",)),
-    ("est", ("", "e")),
-    ("er", ("", "e")),
-)
-_SIBILANT_PLURAL = re.compile(r"^(.{2,}(?:ch|sh|[oxz]))es$")
-_DOUBLED_CONSONANT = re.compile(r"^(.*[bcdfghjklmnpqrstvwxz])\1(ed|ing)$")
-
-
-def _merge_candidate(lemma: str, pos: str, known: set[str]) -> str | None:
-    """The other lemma, of the SAME `pos`, that ``lemma`` is an inflected
-    form of -- or ``None``. See the module docstring for why the suffix
-    sets are this narrow and per-`pos`.
-    """
-    if pos == "v":
-        for ending, replacements in _VERB_SUFFIXES:
-            if lemma.endswith(ending) and len(lemma) - len(ending) >= 2:
-                stem = lemma[: -len(ending)]
-                for replacement in replacements:
-                    candidate = stem + replacement
-                    if candidate != lemma and candidate in known:
-                        return candidate
-        doubled = _DOUBLED_CONSONANT.match(lemma)
-        if doubled:
-            base = lemma[: len(doubled.group(0)) - len(doubled.group(2)) - 1]
-            for candidate in (base, base + "e"):
-                if candidate in known:
-                    return candidate
-    elif pos == "adj":
-        for ending, replacements in _ADJ_SUFFIXES:
-            if lemma.endswith(ending) and len(lemma) - len(ending) >= 2:
-                stem = lemma[: -len(ending)]
-                for replacement in replacements:
-                    candidate = stem + replacement
-                    if candidate != lemma and candidate in known:
-                        return candidate
-    elif pos == "n":
-        sibilant = _SIBILANT_PLURAL.match(lemma)
-        if sibilant and sibilant.group(1) in known:
-            return sibilant.group(1)
-        if lemma.endswith("ies") and len(lemma) > 4:
-            candidate = lemma[:-3] + "y"
-            if candidate in known:
-                return candidate
-        if lemma.endswith("s") and not lemma.endswith("ss") and len(lemma) > 3:
-            candidate = lemma[:-1]
-            if candidate in known:
-                return candidate
-    return None
-
-
-def build_merge_map(word_pairs: set[tuple[str, str]]) -> dict[tuple[str, str], tuple[str, str]]:
-    """Every (lemma, pos) in ``word_pairs`` mapped to its canonical form.
-
-    A pair not involved in any merge maps to itself, so every raw pair this
-    project has ever produced always has an entry -- callers never need a
-    ``.get(pair, pair)`` fallback scattered through them.
-    """
-    by_pos: dict[str, set[str]] = defaultdict(set)
-    for lemma, pos in word_pairs:
-        by_pos[pos].add(lemma)
-
-    one_hop: dict[tuple[str, str], tuple[str, str]] = {}
-    for lemma, pos in word_pairs:
-        target = _merge_candidate(lemma, pos, by_pos[pos])
-        if target is not None:
-            one_hop[(lemma, pos)] = (target, pos)
-
-    def resolve(pair: tuple[str, str]) -> tuple[str, str]:
-        seen = {pair}
-        while pair in one_hop:
-            pair = one_hop[pair]
-            if pair in seen:  # a cycle would mean two lemmas reduce to each
-                break         # other; never observed, guarded rather than assumed
-            seen.add(pair)
-        return pair
-
-    return {pair: resolve(pair) for pair in word_pairs}
+#
+# `_merge_candidate` and `build_merge_map` now live in `app.services.lexicon`
+# (imported above), shared with P3's `link_row` -- see that module's own
+# docstring, and the ORIGINAL reasoning for the rule itself in this script's
+# module docstring above ("The merge rule, and why it is not
+# `seed.vocabulary.stripped()`").
 
 
 # --- Step 4: provisional sense clustering ------------------------------------
-
-_PUNCT_RE = re.compile(r"[^a-z0-9 ]+")
-_WS_RE = re.compile(r"\s+")
-
-
-def _normalise_meaning(text: str) -> str:
-    """A meaning string reduced to bare words, for GROUPING only -- never
-    shown to anybody. Two material rows glossing the same sense of a word
-    rarely use identical wording (that variation, 3 568 groups of it, is
-    §1's whole reason for this brief), so exact-string clustering after this
-    normalisation is what P1 can afford without a model: it groups
-    "an action of moving downward" with "An Action Of Moving Downward!" and
-    leaves "an action of moving downward" and "the act of falling" as two
-    provisional senses -- correctly, since P1 cannot know they mean the same
-    thing. Merging those is P2's job, matched against OEWN.
-    """
-    lowered = text.lower().strip()
-    despunct = _PUNCT_RE.sub(" ", lowered)
-    return _WS_RE.sub(" ", despunct).strip()
+#
+# `_normalise_meaning` likewise now lives in `app.services.lexicon`, reused
+# by P3 so a row's "is this sense already here" check groups a meaning
+# exactly the way this step's own clustering would.
 
 
 def _usual_meaning(row: dict) -> tuple[str, str]:
@@ -507,21 +315,6 @@ async def _fetch_material_rows(session) -> list[dict]:
         }
         for row in result.all()
     ]
-
-
-def _lexeme_is_phrase(lemma: str, pos: str) -> bool:
-    """A lexeme counts as a phrase if its lemma is plainly multi-word, OR
-    its part of speech was tagged `phr` -- checked with OR rather than
-    trusting either signal alone, because the corpus has both: 58 rows with
-    a multi-word lemma (`"they are"`, `"tip-of-the-tongue"`) tagged some
-    other `pos` by mistake, and one single-token-looking phrase
-    (`"ai safety"`, which IS multi-word -- the point is the flag on the ROW,
-    `is_phrase`, is not reliably set either way, so the lexicon build trusts
-    neither the row's own flag nor `pos` alone and instead asks the one
-    question that is actually reliable: does the string contain a space, or
-    was it filed as a phrase.
-    """
-    return (" " in lemma) or (pos == "phr")
 
 
 async def build(session, allow_wipe: bool = False) -> dict:

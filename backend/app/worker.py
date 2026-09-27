@@ -1,7 +1,8 @@
-"""The background process: transcription, and the difficulty refresh.
+"""The background process: transcription, the difficulty refresh, and the
+lexicon's own enrichment.
 
-Two loops, run concurrently, and they have nothing to do with each other
-beyond both being work that must not happen inside a request.
+Three loops, run concurrently, and they have nothing to do with each other
+beyond all three being work that must not happen inside a request.
 
 **Transcription** (§9 of the audio-ingestion brief). The queue is
 ``audio_blob.transcript_status`` itself — no Redis, no external broker
@@ -22,6 +23,22 @@ set by the queue, and it sleeps out a doubling backoff after a failed ASR
 call. A refresh queued behind that would run when the audio provider felt
 like letting it.
 
+**Lexicon enrichment** (`app.services.lexicon_enrich`, `lexicon-spec.md`
+P3). `app.services.lexicon.link_row` runs synchronously on every
+``material_vocabulary`` write (seed import and live lookup alike) and never
+calls a model — it gives the row a ``Lexeme`` and a PROVISIONAL
+``LexemeSense`` built from its own wording, and clears that lexeme's
+``enriched_at``. This loop is what turns a provisional sense into a real
+dictionary entry: the same per-lexeme, idempotent enrichment
+``scripts/enrich_lexicon.py --all`` runs by hand, on a timer, picking up
+whatever ``enriched_at IS NULL`` — a lexeme ``link_row`` just created, or one
+an earlier pass of THIS loop failed on and left exactly as it found it
+(:func:`app.services.lexicon_enrich.enrich` writes nothing until every
+model step for a lexeme has answered). Its own loop for the same reason
+difficulty is: a Gemini call has nothing to do with polling the
+transcription queue, and gating either on the other's pace would be an
+accident of implementation, not a decision.
+
 Entrypoint: ``python -m app.worker``.
 
 Logic is split into small, independently testable functions (rather than one
@@ -40,7 +57,9 @@ from sqlmodel import select
 from app.core.config import settings
 from app.core.database import AsyncSession, async_session_factory
 from app.models.audio_blob import AudioBlob, TranscriptStatus
+from app.models.lexicon import Lexeme
 from app.services import difficulty as difficulty_service
+from app.services import lexicon_enrich as lexicon_enrich_service
 from app.services.asr import ASRProvider, GroqASR, TranscriptResult
 from app.services.audio import persist_transcript_result
 from app.services.storage import get_storage
@@ -323,6 +342,86 @@ async def _difficulty_loop() -> None:
         await _sleep_or_stop(interval)
 
 
+async def _lexicon_enrich_once(
+    gemini: lexicon_enrich_service.Gemini, oewn: dict[tuple[str, str], list[dict]]
+) -> int:
+    """One pass: enrich up to ``lexicon_enrich_batch_size`` lexemes still
+    ``enriched_at IS NULL`` -- a brand-new find-or-create ``Lexeme``
+    (:func:`app.services.lexicon.link_row`), or one an earlier pass left
+    exactly as it found it. Returns how many were attempted; 0 means either
+    the queue is empty or the whole batch failed together (never raises --
+    see below).
+    """
+    async with async_session_factory() as session:
+        ids = list((await session.exec(
+            select(Lexeme.id)
+            .where(Lexeme.enriched_at.is_(None))
+            .order_by(Lexeme.created_at)
+            .limit(settings.lexicon_enrich_batch_size)
+        )).all())
+    if not ids:
+        return 0
+    try:
+        await lexicon_enrich_service.enrich(async_session_factory, gemini, ids, oewn)
+    except Exception:  # noqa: BLE001 - logged; the same ids are retried next pass
+        # `enrich` writes nothing until every model step for every lexeme in
+        # the batch has answered (one transaction, `enriched_at` set last),
+        # so a failure here has changed nothing: the same ids are still
+        # `enriched_at IS NULL` and are picked up again next pass, the same
+        # "swallow, log, retry next interval" shape as the difficulty
+        # refresh above.
+        logger.exception(
+            "lexicon enrichment failed for %d lexeme(s); retried next interval",
+            len(ids),
+        )
+        return 0
+    return len(ids)
+
+
+async def _lexicon_loop() -> None:
+    """Turn `link_row`'s provisional senses into a real dictionary entry --
+    see the module docstring's "Lexicon enrichment" section.
+
+    Disabled the same way the difficulty refresh is (``interval <= 0``), and
+    additionally when no ``GEMINI_API_KEY`` is configured: there is nothing
+    this loop could do without one, and logging a failed request every
+    interval forever is worse than saying so once at startup.
+    """
+    interval = settings.lexicon_enrich_interval_s
+    if interval <= 0:
+        logger.info("lexicon enrichment disabled (interval <= 0)")
+        return
+    if not settings.gemini_api_key:
+        logger.info("lexicon enrichment disabled (no GEMINI_API_KEY)")
+        return
+
+    oewn = lexicon_enrich_service.load_oewn()
+    usage = lexicon_enrich_service.UsageLog()
+    gemini = lexicon_enrich_service.Gemini(usage)
+    logger.info(
+        "lexicon enrichment every %.0fs, batch %d",
+        interval, settings.lexicon_enrich_batch_size,
+    )
+    try:
+        while not _stop_event.is_set():
+            done = await _lexicon_enrich_once(gemini, oewn)
+            if done:
+                logger.info(
+                    "lexicon: enriched %d lexeme(s), running cost $%.4f",
+                    done, usage.total_cost(),
+                )
+            else:
+                logger.info("lexicon: 0 pending")
+            # A full batch means there is likely more behind it -- keep
+            # draining rather than waiting out the whole interval. Anything
+            # short of a full batch, including 0, waits the ordinary pace.
+            await _sleep_or_stop(
+                1.0 if done >= settings.lexicon_enrich_batch_size else interval
+            )
+    finally:
+        await gemini.aclose()
+
+
 async def _transcription_loop(provider: ASRProvider) -> None:
     async with async_session_factory() as session:
         recovered = await recover_stale(session)
@@ -393,13 +492,14 @@ async def main() -> None:
             pass
 
     logger.info("worker started")
-    # Both loops watch the same stop event, so one SIGTERM ends both and
-    # `gather` returns when the slower of the two has finished its current
-    # step. Neither is allowed to fail the other: the transcription loop
-    # guards every blob it touches, and the refresh swallows its own errors.
+    # All three loops watch the same stop event, so one SIGTERM ends them
+    # all and `gather` returns when the slowest has finished its current
+    # step. None is allowed to fail another: the transcription loop guards
+    # every blob it touches, and both refreshers swallow their own errors.
     await asyncio.gather(
         _transcription_loop(get_asr_provider()),
         _difficulty_loop(),
+        _lexicon_loop(),
     )
 
     logger.info("worker stopping")

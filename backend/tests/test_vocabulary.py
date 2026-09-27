@@ -1176,14 +1176,30 @@ async def test_a_saved_word_gains_the_usual_meaning_without_losing_its_own(
                 part_id=part.id,
                 rows=[
                     {"lemma": "vogue", "surface": "vogue",
-                     "meaning_core_en": "a fashion that is popular now",
-                     "meaning_core_uz": "moda",
                      "meaning_en": "in fashion at this moment",
                      "meaning_uz": "urfda",
                      "sense_differs": False,
                      "index": 0, "start": 0, "end": 5, "cefr_level": "B2"},
                 ],
             )
+            # `replace_extracted` no longer WRITES `meaning_core_en`/
+            # `meaning_core_uz` onto `material_vocabulary` (`lexicon-spec.md`
+            # P3: that meaning now lives on the row's `LexemeSense`) -- set
+            # directly here so this test keeps exercising
+            # `enrich_saved_contexts`'s own fill-when-empty rule on its own
+            # terms, not the mapping this used to piggyback on.
+            fresh = (await session.exec(
+                select(MaterialVocabulary).where(
+                    MaterialVocabulary.material_id == material.id,
+                    MaterialVocabulary.lemma == "vogue",
+                )
+            )).first()
+            fresh.meaning_core_en = "a fashion that is popular now"
+            fresh.meaning_core_uz = "moda"
+            session.add(fresh)
+            await session.commit()
+
+        async with async_session_factory() as session:
             filled = await vocabulary_service.enrich_saved_contexts(
                 session, material_id=material.id)
             await session.commit()

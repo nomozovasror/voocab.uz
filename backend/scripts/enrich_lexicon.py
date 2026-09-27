@@ -25,11 +25,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import gzip
 import json
 import logging
 import random
-import sys
 import time
 import uuid
 from collections import Counter, defaultdict
@@ -43,29 +41,9 @@ from app.models.lexicon import Lexeme, LexemeSense
 from app.models.vocabulary import MaterialVocabulary
 from app.services import lexicon_enrich as le
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-OEWN_PATH = REPO_ROOT / "seed" / "wordlists" / "oewn_senses.jsonl.gz"
-
-
-def load_oewn() -> dict[tuple[str, str], list[dict]]:
-    """(lemma, pos) -> senses in OEWN order. Two entries for one key
-    (`adj` folds WordNet's `a` and `s`) are concatenated and re-ranked."""
-    index: dict[tuple[str, str], list[dict]] = defaultdict(list)
-    with gzip.open(OEWN_PATH, "rt", encoding="utf-8") as fh:
-        for line in fh:
-            record = json.loads(line)
-            index[(record["lemma"], record["pos"])].extend(record["senses"])
-    out = {}
-    for key, senses in index.items():
-        seen, ranked = set(), []
-        for sense in senses:
-            if sense["synset"] in seen:
-                continue
-            seen.add(sense["synset"])
-            ranked.append({"synset": sense["synset"], "rank": len(ranked) + 1,
-                           "definition": sense["definition"]})
-        out[key] = ranked
-    return out
+#: `load_oewn` now lives on `le` (`app.services.lexicon_enrich`), shared with
+#: `app.worker`'s lexicon loop -- see that function's own docstring.
+load_oewn = le.load_oewn
 
 
 # --- Sample ------------------------------------------------------------------

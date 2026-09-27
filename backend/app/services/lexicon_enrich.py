@@ -85,6 +85,7 @@ model sense.
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import logging
 import random
@@ -102,6 +103,7 @@ from app.core.config import settings
 from app.models.lexicon import Lexeme, LexemeSense, TranslationReport
 from app.models.vocabulary import MaterialVocabulary
 from app.services.dictionary import GEMINI_CHAT_URL
+from app.services.lexicon import WORDLISTS
 
 logger = logging.getLogger("app.services.lexicon_enrich")
 
@@ -154,6 +156,42 @@ MATCH_REASONS = {"pos_mismatch"}
 POS_WORDS = {"n", "v", "adj", "adv", "prep", "conj"}
 UZ_MAX = 400
 DEF_MAX = 400
+
+
+# --- OEWN sense inventory ------------------------------------------------------
+
+OEWN_PATH = WORDLISTS / "oewn_senses.jsonl.gz"
+
+
+def load_oewn() -> dict[tuple[str, str], list[dict]]:
+    """(lemma, pos) -> senses in OEWN order, for :func:`load_works` and
+    :func:`enrich` below. Two entries for one key (`adj` folds WordNet's `a`
+    and `s`) are concatenated and re-ranked.
+
+    Moved here from `scripts/enrich_lexicon.py` (which now calls
+    ``le.load_oewn()``) so `app.worker`'s lexicon loop -- which needs exactly
+    the same dict, on the same cadence P2's CLI run always loaded it fresh --
+    can read it without importing the `scripts` package into the running
+    app. ``OEWN_PATH`` sits inside `backend/` (`app.services.lexicon.
+    WORDLISTS`) rather than `seed/wordlists/`, for the reason that module's
+    own docstring gives: only `backend/` reaches into the Docker worker.
+    """
+    index: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    with gzip.open(OEWN_PATH, "rt", encoding="utf-8") as fh:
+        for line in fh:
+            record = json.loads(line)
+            index[(record["lemma"], record["pos"])].extend(record["senses"])
+    out = {}
+    for key, senses in index.items():
+        seen, ranked = set(), []
+        for sense in senses:
+            if sense["synset"] in seen:
+                continue
+            seen.add(sense["synset"])
+            ranked.append({"synset": sense["synset"], "rank": len(ranked) + 1,
+                           "definition": sense["definition"]})
+        out[key] = ranked
+    return out
 
 
 # --- Usage / cost -------------------------------------------------------------

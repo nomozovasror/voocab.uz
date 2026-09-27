@@ -266,6 +266,53 @@ word changing meaning underneath somebody is worse than one that has aged.
   the `vocabulary_id` the re-extraction nulled. Idempotent by construction,
   because it runs on every import.
 
+## Every writer of `material_vocabulary` is find-or-create
+
+`material_vocabulary` and the global lexicon (`Lexeme`/`LexemeSense`,
+`app/models/lexicon.py`) answer different questions — see that model's own
+docstring for why a second table exists at all — and a row of the first is
+never allowed to be unlinked from the second, not even for the length of one
+request (`brief-lexicon.md` §8, `lexicon-spec.md` D6). `replace_extracted`
+(the seed import path) and `_generate` (a live lookup, above) are the two
+places this table is written, and both call `app.services.lexicon.link_row`
+on every row they create, before it is committed:
+
+- **Find**, by `(lemma, pos)` — and where nothing matches, by the SAME
+  inflectional merge rule `scripts/build_lexicon.py`'s one-off P1 rebuild
+  uses (`descend`/`descending`, not `digest`/`dig` — see that script's own
+  docstring for the rule and why it is this narrow), applied one row at a
+  time against whatever the database already holds rather than the
+  whole-corpus graph P1 can afford to build at once. The rule itself lives in
+  `app.services.lexicon` now, imported by `build_lexicon.py` rather than the
+  other way round, so P1's batch rule and P3's incremental one cannot drift
+  apart.
+- **Create**, when nothing is found: a PROVISIONAL `LexemeSense` built from
+  the row's own wording, `source_id="model"`, `cefr` copied from the row's
+  own `cefr_level` — UNLESS an existing sense of that lexeme already has the
+  identical `normalise_meaning`d text, the exact grouping key P1's own
+  clustering uses, in which case the row joins that sense instead of buying
+  a near-duplicate one P1 would only merge away on its next rebuild.
+- **No model call in the request path, ever.** Everything above is a lookup
+  against tables this project already has, or arithmetic over the row it was
+  given. Grading a provisional sense for real is `app.services.lexicon_enrich`'s
+  job, run continuously by `app.worker`'s lexicon loop against whatever is
+  `Lexeme.enriched_at IS NULL` — including a sense `link_row` just added to a
+  lexeme P2 had already finished, which is exactly why creating one clears
+  `enriched_at` back to null rather than leaving it enriched-but-stale.
+- **`meaning_core_en`/`meaning_core_uz` are no longer written to
+  `material_vocabulary`**, by either writer, from this point on (the brief's
+  own §3: the column is the one deliberate exception to "no columns are
+  dropped in this phase", kept for existing readers but dead for writes).
+  That "usual meaning" now lives on the row's `LexemeSense` instead — both
+  writers still set it on the in-memory row before calling `link_row` (so
+  the provisional sense is built from the real usual-sense answer, not a
+  fallback to the CONTEXTUAL gloss) and clear it back to `""` immediately
+  after, before the row is ever added to the session. `enrich_saved_contexts`
+  and `vocabulary.save`'s initial fill still read the row's
+  `meaning_core_en` and will therefore see nothing on a freshly written row
+  until a later phase moves them onto `LexemeSense` — a known, accepted gap,
+  not a bug to chase inside this phase.
+
 ## Vocabulary practice (stage 1) — `practice.py` is the only module that imports `fsrs`
 
 `saved_words` carries two independent FSRS cards (`passive_*`, `active_*`,

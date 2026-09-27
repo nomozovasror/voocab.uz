@@ -49,6 +49,20 @@ somebody studying ``spring`` is studying one word. The join between the two
 is :class:`app.models.vocabulary.SavedWordContext`, which copies the gloss
 rather than pointing at it: a material can be re-glossed, and a saved word
 changing its meaning underneath somebody is worse than one that has aged.
+
+## Every row this module writes is find-or-create
+
+`replace_extracted` (the seed import path) and `_generate` (a live lookup)
+are the two writers of `material_vocabulary` this project has, and both call
+`app.services.lexicon.link_row` on every row they create, before it is
+committed -- see that module's own docstring (`lexicon-spec.md` D6). A row
+never sits without a `lexeme_id`/`sense_id`, not even for the length of one
+request, and neither writer's ``meaning_core_en``/``meaning_core_uz`` is set
+any more: that field's job -- the word's USUAL meaning, independent of this
+passage -- now belongs to `LexemeSense.definition_en`/`meaning_uz`, which
+`link_row` fills from the very same wording. The column stays on
+`MaterialVocabulary` (existing readers still read it; migrating them is a
+later phase) but nothing here writes it going forward.
 """
 
 import logging
@@ -75,6 +89,7 @@ from app.models.vocabulary import (
 )
 from app.services import dictionary as dictionary_service
 from app.services import practice as practice_service
+from app.services.lexicon import link_row
 
 logger = logging.getLogger("app.services.vocabulary")
 
@@ -511,8 +526,6 @@ async def _generate(
         lemma=gloss.lemma,
         surface=surface,
         pos=gloss.pos,
-        meaning_core_en=gloss.meaning_core_en,
-        meaning_core_uz=gloss.meaning_core_uz,
         meaning_en=gloss.meaning_en,
         meaning_uz=gloss.meaning_uz,
         sense_differs=gloss.sense_differs,
@@ -528,6 +541,23 @@ async def _generate(
         is_phrase=" " in surface,
         source="review_lookup" if context == "review" else "extracted",
     )
+    # Find-or-create, before this row is ever visible to anybody else: see
+    # `app.services.lexicon.link_row` (`lexicon-spec.md` D6). No model call
+    # here -- the gloss the reader is waiting on already answered that.
+    #
+    # `meaning_core_en`/`meaning_core_uz` are no longer WRITTEN to this row
+    # (`lexicon-spec.md` P3) -- that job now belongs to the row's
+    # `LexemeSense`. They are set here only to give `link_row` the model's
+    # own usual-sense answer to build the provisional sense from (its own
+    # fallback would otherwise reach for the CONTEXTUAL gloss, which is
+    # right for an old row that predates this field but wrong when the
+    # usual sense is sitting right here), then cleared before this row is
+    # ever added to the session, so what lands in the database is exactly
+    # what every future row will have: nothing.
+    entry.meaning_core_en = gloss.meaning_core_en
+    entry.meaning_core_uz = gloss.meaning_core_uz
+    await link_row(session, entry)
+    entry.meaning_core_en = entry.meaning_core_uz = ""
     session.add(entry)
     try:
         await session.commit()
@@ -960,39 +990,50 @@ async def replace_extracted(
         if not lemma or lemma in seen:
             continue
         seen.add(lemma)
-        session.add(
-            MaterialVocabulary(
-                material_id=material_id,
-                part_id=part_id,
-                lemma=lemma,
-                surface=row.get("surface") or lemma,
-                pos=row.get("pos") or "",
-                meaning_core_en=row.get("meaning_core_en") or "",
-                meaning_core_uz=row.get("meaning_core_uz") or "",
-                meaning_en=row.get("meaning_en") or "",
-                meaning_uz=row.get("meaning_uz") or "",
-                sense_differs=bool(row.get("sense_differs")),
-                example=row.get("example") or "",
-                paragraph_index=int(row.get("index") or 0),
-                offset_start=int(row.get("start") or 0),
-                offset_end=int(row.get("end") or 0),
-                # Trusted as far as its shape and no further: three
-                # integers or the place is dropped. It is drawn as a mark
-                # over the passage, and a malformed triple is a highlight
-                # somewhere nobody meant.
-                also_at=[
-                    [int(place[0]), int(place[1]), int(place[2])]
-                    for place in (row.get("again") or [])
-                    if isinstance(place, (list, tuple)) and len(place) == 3
-                ],
-                cefr_level=row.get("cefr_level") or "",
-                frequency_band=row.get("frequency_band") or "",
-                is_phrase=bool(row.get("is_phrase")),
-                unusual=bool(row.get("unusual")),
-                source="extracted",
-                generated_at=now,
-            )
+        entry = MaterialVocabulary(
+            material_id=material_id,
+            part_id=part_id,
+            lemma=lemma,
+            surface=row.get("surface") or lemma,
+            pos=row.get("pos") or "",
+            meaning_en=row.get("meaning_en") or "",
+            meaning_uz=row.get("meaning_uz") or "",
+            sense_differs=bool(row.get("sense_differs")),
+            example=row.get("example") or "",
+            paragraph_index=int(row.get("index") or 0),
+            offset_start=int(row.get("start") or 0),
+            offset_end=int(row.get("end") or 0),
+            # Trusted as far as its shape and no further: three
+            # integers or the place is dropped. It is drawn as a mark
+            # over the passage, and a malformed triple is a highlight
+            # somewhere nobody meant.
+            also_at=[
+                [int(place[0]), int(place[1]), int(place[2])]
+                for place in (row.get("again") or [])
+                if isinstance(place, (list, tuple)) and len(place) == 3
+            ],
+            cefr_level=row.get("cefr_level") or "",
+            frequency_band=row.get("frequency_band") or "",
+            is_phrase=bool(row.get("is_phrase")),
+            unusual=bool(row.get("unusual")),
+            source="extracted",
+            generated_at=now,
         )
+        # Find-or-create before this row is ever visible to anybody else
+        # (`app.services.lexicon.link_row`, `lexicon-spec.md` D6) -- no
+        # model call in this loop, only a lookup against what P1/P2 and
+        # earlier imports have already built.
+        #
+        # `meaning_core_en`/`meaning_core_uz` are no longer WRITTEN to this
+        # row (P3): that job now belongs to the row's `LexemeSense`. Set here
+        # only so `link_row` builds the provisional sense from the
+        # extraction's own usual-sense answer rather than falling back to
+        # the CONTEXTUAL gloss, then cleared before the row is added.
+        entry.meaning_core_en = row.get("meaning_core_en") or ""
+        entry.meaning_core_uz = row.get("meaning_core_uz") or ""
+        await link_row(session, entry)
+        entry.meaning_core_en = entry.meaning_core_uz = ""
+        session.add(entry)
         written += 1
     await session.flush()
     return written, len(kept)

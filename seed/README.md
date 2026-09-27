@@ -2884,6 +2884,38 @@ once. The estimate made before running it said two cents a passage, so the
 oldest lesson here holds again: the only honest number is the one in
 `work/usage.jsonl`.
 
+### What this stage feeds now: the global lexicon, find-or-create
+
+`brief-lexicon.md` builds a second table on top of everything above:
+`material_vocabulary` is right for "what does this word mean IN THIS
+PASSAGE", one row per material, and the lexicon (`Lexeme`/`LexemeSense`) is
+"how many words does this platform teach", one row per word or meaning,
+independent of any passage. `backend/scripts/build_lexicon.py` (P1) built it
+once from everything this stage had already written; from P3 on, every
+`material_vocabulary` row a re-import writes is linked to a `Lexeme` and a
+`LexemeSense` the moment it is written (`app.services.lexicon.link_row`,
+called from `app.services.vocabulary.replace_extracted`) — no separate
+backfill pass needed for a re-import of a passage that already went through
+`import_passage.py` once.
+
+Two consequences for anything reading this stage's own output:
+
+* **`meaning_core_en`/`meaning_core_uz`, in the `vocabulary.json` this stage
+  writes, are no longer copied onto `material_vocabulary`.** The column
+  stays (existing rows keep reading it) but nothing writes it from P3
+  onward — that "usual meaning" now lives on the row's `LexemeSense`
+  instead (`app.services.lexicon.link_row` reads the same two fields off the
+  row it is given to build that sense, then the caller clears them before
+  the row is persisted). This stage's OWN output is unaffected: it still
+  answers both `meaning_core_*` and `meaning_en`/`meaning_uz` for every
+  entry, per the module docstring above — it is only the database column
+  copy that stopped.
+* **The frequency lists and OEWN extract this repo vendors under
+  `seed/wordlists/` now have a second, backend-side copy** under
+  `backend/app/data/wordlists/` — see that directory's own README note and
+  `seed/wordlists/README.md`'s provenance section for why (Docker's backend
+  and worker containers only ever see `backend/`).
+
 ## Evidence: where in the passage each answer is
 
 `read_evidence.py` adds a seventh stage to `run_reading.py`, and it exists

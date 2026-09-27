@@ -101,6 +101,21 @@ class Settings(BaseSettings):
     # (a second worker instance that shouldn't duplicate the work, or a test).
     difficulty_refresh_interval_s: float = 900.0
 
+    # --- Lexicon enrichment (Faza P3: app/worker.py's continuous version of
+    # scripts/enrich_lexicon.py) ---
+    # How often the worker looks for lexemes still `enriched_at IS NULL` --
+    # a brand-new find-or-create Lexeme (`app.services.lexicon.link_row`),
+    # or one an earlier pass failed on. Short relative to the difficulty
+    # refresh: a word a reader just looked up is worth finishing within
+    # minutes, not a quarter of an hour, and an empty pass costs one query.
+    # 0 disables it (a second worker instance, or a test).
+    lexicon_enrich_interval_s: float = 60.0
+    # Lexemes per pass, matching `scripts/enrich_lexicon.py --unit`'s own
+    # default: small enough that one pass's Gemini cost and latency stay
+    # predictable, large enough that a seed import's whole batch of new
+    # words does not take all day to catch up.
+    lexicon_enrich_batch_size: int = 10
+
     # --- Local media (dev fallback when R2 isn't configured) ---
     # Uploads land here and are served at ``media_url_prefix``. Relative to the
     # backend working directory.

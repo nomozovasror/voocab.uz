@@ -9,6 +9,29 @@ download; every quirk in a source file is absorbed by the reader that parses
 it, not by hand-fixing the file, so a file in this directory can always be
 diffed against what its publisher actually shipped.
 
+## There is a second copy, inside `backend/`
+
+`oewn_senses.jsonl.gz` and the six NGSL-family files the lexicon build reads
+(`NGSL_12_stats.csv`, `NAWL_12_lemmatized_for_research.csv`,
+`SUP_lemmatized.csv`, `BSL_120_lemmatized_for_research.csv`,
+`TSL_12_lemmatized_for_research.csv`, `MOEL_terms.csv`) are also vendored,
+byte for byte, at `backend/app/data/wordlists/`. This directory stays the
+canonical one — provenance, licence and how each file was produced are
+documented here and only here, and `extract_oewn.py`/`extract_moel.py`
+still write their output here — but `docker-compose.yml` bind-mounts only
+`backend/` into the `backend` and `worker` containers, and `backend/
+Dockerfile`'s `COPY . .` only ever sees `backend/` too, so nothing outside
+it exists inside either the dev container or a built image.
+
+`app.services.lexicon.WORDLISTS` (imported by `scripts/build_lexicon.py`,
+`scripts/enrich_lexicon.py`, `app.services.lexicon_enrich`, and `app.worker`'s
+lexicon loop) points at the `backend/` copy; `seed/vocabulary.py`'s own
+reading-pipeline `Lists`, which runs on the host in the seed venv rather than
+in either container, keeps reading the copy in THIS directory. Re-vendoring
+either list (a new NGSL release, a newer OEWN tag) means updating both
+copies — there is no symlink between them, because `backend/` has to stay a
+buildable, self-contained Docker context on its own.
+
 ## The NGSL family
 
 Six files, all from the same project (Browne, Culligan & Phillips), same
