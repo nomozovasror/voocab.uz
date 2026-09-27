@@ -120,6 +120,48 @@ the first. While the rule sat in `grading`, `mistakes` had to import
 them, which is why `attempt_result` could not classify anything. `grading`
 re-exports the name; the split is about who may import whom.
 
+## The review's transcript carries its neighbours, and its word timings
+
+`grading.transcript_with_context` (§71's follow-up) is what
+`attempt_result` actually sends, not `transcript_across`. The two share one
+definition of "touches" (`_touching_indices`, itself built on `_touches`) on
+purpose — a review whose neighbour lines used a looser or stricter rule than
+its answer line would show a boundary that disagrees with itself line by
+line.
+
+- Every line sent carries a `role`: `"answer"` for a line the question's
+  marked range actually touches, `"before"`/`"after"` for the one line
+  immediately either side of that touching set. Nothing further out — a
+  review is quoting the moment, not the paragraph.
+- **A neighbour is added regardless of who says it.** The recording's speaker
+  changes are not the review's business; the frontend cuts these lines into
+  sentences by pause length on its own, and a neighbour withheld for
+  belonging to someone else would break exactly the case — a change of
+  speaker — where showing it matters most.
+- **Found per contiguous run of touching lines, not once over the overall
+  span.** A "choose TWO letters" question can be answered a minute apart;
+  treating the whole stretch between as "inside" would hand back most of the
+  recording. Neither neighbour exists past the first/last line of the
+  material — there is no "before" it starts.
+- **`words` rides on every line** — the same `{word, start_ms, end_ms}`
+  triples `apply_overrides` already puts on each segment, copied through
+  unchanged. This is what lets the frontend's second replay button (the
+  whole shown passage) and its own pause-based sentence cuts work from
+  timings the server already computed, rather than asking for a second
+  transcription pass.
+- Still keyed on the question's marked ranges alone: no ranges, or no
+  transcript at all, sends `[]`. This is also why a **reading** question —
+  which never has audio lines to hand this from — always gets `[]` back
+  unaffected; `EvidenceSpanOut` is its counterpart into the passage instead.
+- **A DRILL never lets a neighbour leak another group's answer.**
+  `attempt_result` still transcribes off the whole material's lines when
+  `attempt.group_id` is set — a drilled question's evidence can sit next to
+  a turn that belongs to a question nobody has sat yet. `hidden` is the set
+  of line indices any OUT-OF-SCOPE question's marked range (`replay_start`/
+  `replay_end_ms`, or an option replay) touches; a neighbour landing on one
+  of them is left out entirely rather than widened past it. A full sitting
+  passes nothing — there is no out-of-scope question to leak.
+
 ## Difficulty is measured, never stored
 
 A material's `Easy`/`Medium`/`Hard`/`New` band is a function of

@@ -84,6 +84,55 @@ nor the answer can be read.
   trusting the row. Widened to the lines the range TOUCHES, never to every
   line present: a "choose TWO" is answered in two places a minute apart, and
   the outer bounds of all of them would play the minute in between.
+- **The sentence before and after the answer is shown too, dimmer** —
+  `features/paper/review-context.ts`, drawn either side of the marked answer
+  in `ReviewItem`'s one flowing quote. Half of why somebody missed a question
+  is what led them to it, and that is very often the QUESTION rather than
+  the answer's own sentence — a different speaker's turn entirely, in a
+  Part 1 dialogue. Withholding a neighbour for belonging to someone else
+  would cut the one case — a change of speaker — where showing it matters
+  most, so it is shown regardless of who says it.
+
+  The data is `grading.transcript_with_context` (backend): every line the
+  question's own range touches (`role: "answer"`, unchanged from before)
+  plus the ONE line immediately either side (`role: "before"`/`"after"`),
+  each carrying its own word-level timings. Three rules, in this order, over
+  the sentence adjacent to the answer within that neighbour line:
+
+  1. **Never cross into another question's evidence span.** A neighbour
+     line sits between two questions, and showing the other one's answer as
+     "context" would be showing an answer. Trimmed from the far end inward,
+     stopping at the first word that collides — a collision at the very
+     first word drops the neighbour entirely rather than showing nothing
+     useful. A line with no word timings at all is checked as a WHOLE
+     against the collision (no per-word precision to trim finer than that)
+     and dropped outright rather than partially.
+  2. **Longer than 20 words (`MAX_NEIGHBOUR_WORDS`) is cut on the side AWAY
+     from the answer**, in three stages, each searched from the natural
+     20-word point outward so it keeps as many words as the limit allows:
+     a pause of 350ms or more between two words (`PAUSE_MS`, most speech has
+     one within twenty words, and a cut there is inaudible as a cut); failing
+     that, the nearest comma/semicolon/colon/dash; failing both, a hard cut
+     to 12 words (`FALLBACK_WORDS`), marked with "…" because — unlike the
+     other two — it does not land on anything a reader recognises as a stop.
+     A line whose segment has no word timings skips stage one outright: there
+     is no gap to measure without one.
+  3. **The sentence adjacent to the answer, not the whole neighbour line.**
+     Only relevant on the rare line holding more than one sentence — the
+     LAST sentence of the "before" line, the FIRST of the "after" one.
+
+  Pure and untested by any runner: `frontend/package.json` has no test
+  framework (no vitest, no jest). Written as small, independently callable
+  functions for exactly that reason.
+- **Two replay buttons, not one.** The larger plays only the answer's own
+  moment (`row.startMs`/`row.endMs`, unchanged); the smaller plays the whole
+  shown passage — the context sentences' own bounds through to the answer's,
+  from `contextSpanOf` (`row.contextStartMs`/`row.contextEndMs`). Drawn
+  smaller because it is the less common thing to reach for: most of the
+  time the answer alone is the moment worth hearing again. `aria-label`s say
+  exactly that — "Play the answer" / "Play with context" — rather than
+  repeating the question number a screen reader already has from the row's
+  own `aria-label`.
 - **The kind of mistake comes from the server**, per question
   (`QuestionResultOut.mistake`), classified by the same `mistakes.classify`
   the practice page's "Where you lose marks" is counted from. One classifier,

@@ -209,14 +209,89 @@ def _touches(line: dict, moment: tuple[int, int]) -> bool:
     return line["start_ms"] < end and line["end_ms"] > start
 
 
+def _touching_indices(lines: list[dict], ranges: list[tuple[int, int]]) -> set[int]:
+    """Which lines, by position, a question's moments fall in — the one
+    definition of "touches" :func:`transcript_across` and
+    :func:`transcript_with_context` both build on, so a change to `_touches`
+    changes what both of them send rather than one of them quietly falling
+    behind."""
+    return {i for i, line in enumerate(lines) if any(_touches(line, r) for r in ranges)}
+
+
 def transcript_across(lines: list[dict], ranges: list[tuple[int, int]]) -> list[dict]:
     """The lines a question's moments fall in, in playback order, each line
     once however many of the moments it covers."""
+    touching = _touching_indices(lines, ranges)
     return [
         {"start_ms": line["start_ms"], "end_ms": line["end_ms"], "text": line["text"]}
-        for line in lines
-        if any(_touches(line, r) for r in ranges)
+        for i, line in enumerate(lines)
+        if i in touching
     ]
+
+
+def transcript_with_context(
+    lines: list[dict],
+    ranges: list[tuple[int, int]],
+    *,
+    hidden: set[int] | None = None,
+) -> list[dict]:
+    """What the review actually sends (brief §71's follow-up): the same
+    touching set :func:`transcript_across` finds, each line marked
+    ``"answer"``, PLUS the one line immediately before and the one
+    immediately after that set, marked ``"before"``/``"after"``.
+
+    A neighbour is added even when it belongs to a different speaker — the
+    review shows the sentence before and after regardless of who says it, and
+    a transcript that dropped a neighbour for that reason would cut the one
+    place a change of speaker actually matters to a listener. Nothing is
+    added past the first/last line of the material: there is no "before" the
+    recording starts.
+
+    Touching lines are not always contiguous — a "choose TWO letters"
+    question can be answered a minute apart — so neighbours are found per
+    contiguous run rather than once at the overall min/max, or a long silent
+    question would swallow every line between its two answers as
+    "in-between" rather than "outside".
+
+    Still keyed on ``ranges`` alone, exactly like :func:`transcript_across`:
+    an empty question (no marked range) or a transcript-less material (no
+    lines) sends nothing, which is also why a reading question — which never
+    has audio lines to hand this — always gets ``[]`` back.
+
+    ``hidden`` is a DRILL's guard, not an ordinary caller's: a sitting always
+    passes ``None``. Drilling one group still transcribes off the whole
+    material's lines, so without this a neighbour line could be the very
+    turn where an UN-drilled question's answer is said — showing the learner
+    that answer before they ever sit its group. ``hidden`` is the set of line
+    indices any out-of-scope question's marked range touches; a neighbour
+    that lands on one is left out rather than swapped for the line past it,
+    which is what "omit it" (not "widen it") means here."""
+    touching = _touching_indices(lines, ranges)
+    if not touching:
+        return []
+    hidden = hidden or set()
+
+    roles: dict[int, str] = {i: "answer" for i in touching}
+    for i in sorted(touching):
+        before, after = i - 1, i + 1
+        if before not in touching and before >= 0 and before not in hidden:
+            roles.setdefault(before, "before")
+        if after not in touching and after < len(lines) and after not in hidden:
+            roles.setdefault(after, "after")
+
+    out: list[dict] = []
+    for i in sorted(roles):
+        line = lines[i]
+        out.append(
+            {
+                "start_ms": line["start_ms"],
+                "end_ms": line["end_ms"],
+                "text": line["text"],
+                "words": line.get("words") or [],
+                "role": roles[i],
+            }
+        )
+    return out
 
 
 async def last_submitted_attempt(
@@ -583,6 +658,22 @@ async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
     # walk would have to arrive at 15 by agreeing with this one, and two walks
     # that must agree are two walks that eventually don't.
     scope = attempt.group_id
+    # A DRILL's guard against the leak the whole-material transcript would
+    # otherwise open: the lines any OUT-OF-SCOPE question's marked range
+    # touches, so a drilled question's "before"/"after" neighbour can never
+    # turn out to be the turn where another, un-drilled group's answer is
+    # said. Built once, over every question the walk below would otherwise
+    # skip, rather than per-question — the out-of-scope set doesn't change
+    # as the walk crosses into the drilled group. Empty, and so a no-op,
+    # for a full sitting: ``scope is None`` means there IS no out-of-scope.
+    hidden_indices: set[int] = set()
+    if scope is not None:
+        out_of_scope_ranges: list[tuple[int, int]] = []
+        for other_question, other_group in questions:
+            if other_group.id == scope:
+                continue
+            out_of_scope_ranges.extend(question_ranges(other_question))
+        hidden_indices = _touching_indices(lines, out_of_scope_ranges)
     # Where every OPTION of a matching task is answered, by group.
     #
     # A matching box is a shared pool and — where it may not be re-used —
@@ -716,7 +807,9 @@ async def attempt_result(session: AsyncSession, attempt: Attempt) -> dict:
                         and {"index", "start", "end"} <= span.keys()
                     ]
                 ),
-                "transcript": transcript_across(lines, ranges),
+                "transcript": transcript_with_context(
+                    lines, ranges, hidden=hidden_indices
+                ),
             }
         )
         printed += marks

@@ -6,6 +6,12 @@ import {
 import { matchIndex } from "@/features/paper/matching";
 import { questionNumbersShort, sorted } from "@/features/paper/numbering";
 import { QUESTION_TYPE_LABEL } from "@/features/paper/question-types";
+import {
+  answerSpansOf,
+  contextSpanOf,
+  questionContext,
+  type NeighbourContext,
+} from "@/features/paper/review-context";
 import { isCompletion } from "@/features/paper/types";
 import { paperParts } from "@/features/paper/take-paper";
 import type {
@@ -381,9 +387,16 @@ export function markAnswer(text: string, answers: string[]): MarkedRun[] {
 /** The transcript across one answer's moment, as one line of prose. Several
  *  segments are joined rather than listed: they are consecutive sentences of
  *  the same speech, and stacking them turns a quotation into a transcript
- *  viewer. */
+ *  viewer.
+ *
+ *  Answer-role lines only. `result.transcript` also carries the one
+ *  neighbour line either side (`role: "before"`/`"after"`, see
+ *  `review-context.ts`) for the dimmer context sentence — this is still the
+ *  row's own quote, which is the answer's moment and nothing either side of
+ *  it. */
 export function transcriptText(lines: TranscriptLine[] | undefined): string {
   return (lines ?? [])
+    .filter((line) => line.role === "answer")
     .map((line) => line.text.trim())
     .filter(Boolean)
     .join(" ");
@@ -408,17 +421,23 @@ export function transcriptText(lines: TranscriptLine[] | undefined): string {
  * "choose TWO letters" is answered in two places a minute apart and both
  * moments' lines come back together; taking the outer bounds of all of them
  * would play the minute of unrelated speech between.
+ *
+ * Only `role: "answer"` lines are widened over — `result.transcript` also
+ * carries one neighbour line either side now (see `review-context.ts`), and
+ * those are never part of the "hear this" span; they get their own, dimmer,
+ * "Play with context" button instead.
  */
 function spoken(
   startMs: number | null,
   endMs: number | null,
   lines: TranscriptLine[] | undefined,
 ): [number | null, number | null] {
-  if (startMs == null || endMs == null || !lines?.length)
+  const answer = (lines ?? []).filter((line) => line.role === "answer");
+  if (startMs == null || endMs == null || !answer.length)
     return [startMs, endMs];
   let from = startMs;
   let to = endMs;
-  for (const line of lines) {
+  for (const line of answer) {
     // Strictly overlapping, the same test the server used to pick these
     // lines — so a line that merely ends where the mark begins is not
     // dragged in here either.
@@ -461,8 +480,24 @@ export interface ReviewRow {
    *  quote is placed by a clock instead, and null for a passage the book
    *  does not letter. */
   where: QuoteSource | null;
+  /** The answer's own moment — what the LARGER "Play the answer" button
+   *  plays. Unchanged in meaning from before the neighbour sentences
+   *  existed; `spoken()` now reads only `role: "answer"` lines to compute
+   *  it. */
   startMs: number | null;
   endMs: number | null;
+  /** The sentence right before the answer, dimmer, and the one right after —
+   *  see `review-context.ts` for the cut and the no-crossing rule. Null on
+   *  either side at the edge of the recording, or where an adjacent
+   *  question's own evidence crowds it out entirely. */
+  before: NeighbourContext | null;
+  after: NeighbourContext | null;
+  /** The whole shown passage's own bounds — before-sentence start through
+   *  after-sentence end, standing in for either where there is none. What
+   *  the SMALLER "Play with context" button plays; null only alongside
+   *  `startMs`/`endMs` both null, when there is no transcript at all. */
+  contextStartMs: number | null;
+  contextEndMs: number | null;
 }
 
 /**
@@ -559,6 +594,14 @@ export function reviewRows(
     walk.flatMap((part) => part.rows.map((row) => [row.id, row] as const)),
   );
 
+  // Every question's own marked spans, by id — what the no-crossing rule
+  // (`review-context.ts`) keeps a NEIGHBOUR sentence clear of. Computed once
+  // over the whole paper rather than inside the map below, where every row
+  // would recompute every other row's spans afresh.
+  const spansByQuestion = new Map(
+    results.map((r) => [r.question_id, answerSpansOf(r)] as const),
+  );
+
   return results
     .map((result) => {
       const at = place.get(result.question_id);
@@ -570,6 +613,12 @@ export function reviewRows(
         result.replay_end_ms,
         result.transcript,
       );
+      // Every OTHER question's spans, for THIS row's no-crossing check.
+      const otherSpans = results
+        .filter((r) => r.question_id !== result.question_id)
+        .flatMap((r) => spansByQuestion.get(r.question_id) ?? []);
+      const neighbours = questionContext(result.transcript ?? [], otherSpans);
+      const contextSpan = contextSpanOf(neighbours);
       const options = found?.options ?? [];
       const labels = found?.group.config.label_style ?? "letters";
       const groupType = asGroupType(found?.group.type);
@@ -596,6 +645,10 @@ export function reviewRows(
         where: quoted.where,
         startMs,
         endMs,
+        before: neighbours.before,
+        after: neighbours.after,
+        contextStartMs: contextSpan?.startMs ?? null,
+        contextEndMs: contextSpan?.endMs ?? null,
       };
     })
     .sort((a, b) => a.number - b.number);

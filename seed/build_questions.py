@@ -27,6 +27,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+from collections import Counter
 
 import markers as marker_syntax
 from answer_key import parse_answer
@@ -250,6 +251,10 @@ LETTER_RANGE = re.compile(r"letters?,?\s+([A-Z])\s*[-–—]\s*([A-Z])", re.I)
 #: The key prints "A, E  IN EITHER ORDER" against a pair. The phrase is a note
 #: to the marker, not part of the answer.
 KEY_NOTE = re.compile(r"\b(in either order|in any order)\b", re.I)
+#: A name given letter by letter -- "L-E-I-G-H", "M-A-U-G-H-A-N". Nobody
+#: pauses between the hyphens, so the alignment keeps it as one word; this is
+#: what tells that word apart from an ordinary hyphenated one.
+SPELLED_OUT = re.compile(r"^(?:[A-Za-z]\.?-){2,}[A-Za-z]\.?$")
 
 
 def gaps_that_render(template: str) -> set[int] | None:
@@ -394,6 +399,91 @@ def heard(section_id: str) -> dict[int, tuple[int, int]]:
             for number, pair in said.items()}
 
 
+def dominant_speaker(turns: list[dict], marked_at: dict[int, int]) -> str | None:
+    """Whichever speaker the section's OWN markers mostly land on, if there is
+    a clear one.
+
+    Not the speaker of more words -- a Part 2 or 4 monologue never reaches
+    this at all, because there is only one speaker and nothing to disagree
+    with. It matters in an interview: the form is filled in about ONE of the
+    two speakers, and knowing which one is what tells a marker sitting on the
+    OTHER speaker's turn from a marker that is exactly where it should be.
+
+    Silent under three markers, on anything short of a two-to-one majority,
+    or where a "respondent" is not really the section's shape at all.
+    `cam10-t1-s1` is the case that set the bar: an interviewee for the first
+    half of a Part 1 conversation, then the one asking the questions for the
+    second half, once the travel agent starts pricing tours -- 6 markers on
+    one speaker and 4 on the other is not a section with a wrong turn, it is
+    a section with two respondents. Two data points, a tie, or a margin that
+    thin is a guess with the same shape as a real majority, and a wrong guess
+    here would widen a span onto the wrong person's reply.
+    """
+    speakers = [turns[i].get("speaker") for i in marked_at.values()
+                if 0 <= i < len(turns) and turns[i].get("speaker")]
+    if len(speakers) < 3:
+        return None
+    counts = sorted(Counter(speakers).items(), key=lambda pair: -pair[1])
+    if len(counts) < 2 or counts[0][1] < counts[1][1] * 2:
+        return None
+    return counts[0][0]
+
+
+def spelled_word(token: str) -> str:
+    """The letters a spelled-out token names, run together: "L-E-I-G-H."
+    becomes "leigh". For comparing what is SPOKEN against an answer's own
+    spelling, not for building a phrasing from it -- `answer_key.py` already
+    decides what a candidate may type.
+    """
+    return re.sub(r"[^a-z]", "", token.lower())
+
+
+def spelling(answers: list[str], aligned: list[dict], lo: int, hi: int
+            ) -> tuple[int, int] | None:
+    """Where an answer is confirmed letter by letter inside ``(lo, hi]``, if
+    it is.
+
+    A form-completion answer is a word the candidate WRITES, and a name has
+    more than one plausible spelling -- `answer_key.py`'s own worked example,
+    `M-A-U-G-H-A-N`, is only ever right because it was spelled aloud. Where
+    the recording spells one out, that moment is the evidence for how to
+    write it; an earlier plain mention is only proof that a name was given.
+
+    ``hi`` is the next question's own evidence starting -- never this one's
+    to take. Checked against the word's END too, not only where it starts:
+    a word that starts inside ``(lo, hi]`` but runs past ``hi`` still ends
+    inside the next question's span, and returning it would widen this
+    answer onto that ground regardless of which edge let it in.
+    """
+    wanted = {spelled_word(a) for a in answers}
+    for word in aligned:
+        if (lo < word["start_ms"] <= hi and word["end_ms"] <= hi
+                and SPELLED_OUT.match(word["word"])):
+            if spelled_word(word["word"]) in wanted:
+                return word["start_ms"], word["end_ms"]
+    return None
+
+
+def next_marker_start(spans: dict[int, tuple[int, int]], number: int) -> int:
+    """Where the next DIFFERENT question's own span begins, or the end of
+    the world.
+
+    The ceiling a correction may widen up to: past this is another answer's
+    evidence, not this one's. "Q21/22" against a single turn is one question
+    worth two marks, not two answers, so `spans[21]` and `spans[22]` are the
+    same tuple -- a "choose TWO" pair shares its marker turn the same way a
+    "choose TWO" pair shares its paper number range in `build()`'s own
+    `covered` check above. Reading 22's start as 21's ceiling would read back
+    21's OWN start and block any widen outright, which is exactly the bug
+    `cam18-t3-s3` Q21/22 turned up: never ceilinged by a span the question
+    already holds, whatever number it is filed under.
+    """
+    own = spans.get(number)
+    above = min((n for n in spans if n > number and spans[n] != own),
+                default=None)
+    return spans[above][0] if above is not None else 1 << 62
+
+
 def in_order(questions: list[dict]) -> tuple[int, int]:
     """Keep the largest set of replay spans that a recording could produce,
     and drop the rest. Returns ``(moved, dropped)``.
@@ -491,6 +581,12 @@ def build(section_id: str) -> int:
     #: by NUMBER rather than by the marker string, because one turn can carry
     #: two of them ("Q21/22") and both answers are given in it.
     spans: dict[int, tuple[int, int]] = {}
+    #: paper number -> the index of the turn its marker names. Kept beside
+    #: `spans` rather than folded into it, for the same reason `_heard_at` is
+    #: kept beside a question rather than written over it: what a correction
+    #: needs to reason about (which turn, which speaker) is not the same
+    #: shape as what everything downstream reads (a span in milliseconds).
+    marked_at: dict[int, int] = {}
     if aligned and turns:
         for index, turn in enumerate(turns):
             wanted = marker_syntax.numbers(turn.get("marker"))
@@ -500,6 +596,7 @@ def build(section_id: str) -> int:
             if words:
                 for n in wanted:
                     spans[n] = (words[0]["start_ms"], words[-1]["end_ms"])
+                    marked_at[n] = index
     #: The spans a person settled by hand -- see `heard`. Held apart from
     #: `spans` deliberately. `spans` is the MARKER map, and the windows that
     #: rescue an unmarked answer are measured off its neighbours: dropping a
@@ -527,6 +624,67 @@ def build(section_id: str) -> int:
             continue
         kept.append(group)
     src = {**src, "groups": kept}
+
+    # A marker names the TURN an answer is given in, and in a two-speaker
+    # interview that is sometimes the question rather than the reply: the
+    # underline sits on the exact word the key prints, wherever it is spoken.
+    # `cam21-t4-s1` asks "thinks there are too many places selling ___" and
+    # the WOMAN says "coffee shops" in the very question that raises it; the
+    # MAN's "there are too many of them", which is what actually answers it,
+    # is the next turn and carries no marker of its own.
+    #
+    # The section already says who it is about: the speaker its OWN OTHER
+    # markers agree on. A marker on anyone else, with that speaker's own
+    # reply the very next turn and unclaimed by another question, is widened
+    # to take the reply in -- never moved, because the question is still
+    # where the topic is raised and the reply is where it is answered. One
+    # turn, on the same reasoning as `reaches`: further than that is a
+    # placement to look at by hand rather than a rule to keep stretching.
+    #
+    # Bounded by `next_marker_start`, the same ceiling the spelling widen
+    # below is bounded by: the reply turn is not always short, and a turn
+    # that runs on can carry the very moment the NEXT question is answered
+    # from, marked or not -- widening this question's span across all of it
+    # would hand that moment to question `n` instead. Only the part of the
+    # reply turn that ends at or before the next question's own evidence is
+    # taken; nothing survives past it, this widen is skipped rather than
+    # truncated to a mid-word cut.
+    reassigned = 0
+    if aligned and turns:
+        dominant = dominant_speaker(turns, marked_at)
+        if dominant:
+            for n, index in marked_at.items():
+                if n not in spans or turns[index].get("speaker") == dominant:
+                    continue
+                nxt = index + 1
+                if (nxt >= len(turns) or turns[nxt].get("speaker") != dominant
+                        or marker_syntax.numbers(turns[nxt].get("marker"))):
+                    continue
+                ceiling = next_marker_start(spans, n)
+                words = [w for w in aligned
+                         if w["turn"] == nxt and w["end_ms"] <= ceiling]
+                if words:
+                    spans[n] = (spans[n][0], words[-1]["end_ms"])
+                    reassigned += 1
+
+    # A marker's turn says a name was GIVEN; it says nothing about how to
+    # WRITE it. `cam21-t4-s1`'s Q1 marks "Martyn Leigh" -- the plain mention
+    # -- and the recording spells the surname out two turns later: "It's
+    # L-E-I-G-H." Widened to include it, bounded by the next question's own
+    # span so this never wanders into someone else's answer.
+    spelled_in = 0
+    if aligned:
+        keys_by_paper = {q.get("paper_number"): q.get("key")
+                         for g in kept for q in g["questions"]}
+        for n, (lo_ms, hi_ms) in list(spans.items()):
+            printed = KEY_NOTE.sub("", keys_by_paper.get(n) or "").strip(" ,;")
+            if not printed:
+                continue
+            found = spelling(parse_answer(printed), aligned, hi_ms,
+                             next_marker_start(spans, n))
+            if found:
+                spans[n] = (lo_ms, found[1])
+                spelled_in += 1
 
     # What is left has to be the whole section. Dropping a neighbour's group is
     # right, and dropping so much that four questions stand in for ten is a
@@ -1035,6 +1193,14 @@ def build(section_id: str) -> int:
             "questions": questions,
         })
 
+    if reassigned:
+        print(f"note: {reassigned} replay span(s) widened off the interviewer's "
+              "question and onto the reply that actually answers it",
+              file=sys.stderr)
+    if spelled_in:
+        print(f"note: {spelled_in} replay span(s) widened to include a name "
+              "or word being spelled out, past the turn that first said it",
+              file=sys.stderr)
     if recovered:
         print(f"note: {recovered} replay span(s) found by searching the alignment for "
               "the answer's own words, the book having marked no margin number",
@@ -1109,3 +1275,4 @@ if __name__ == "__main__":
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("section_id")
     sys.exit(build(ap.parse_args().section_id))
+
