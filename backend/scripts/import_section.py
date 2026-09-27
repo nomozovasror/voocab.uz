@@ -40,22 +40,25 @@ import sqlite3
 import sys
 import uuid
 
-from sqlalchemy import func
 from sqlmodel import select
 
 from app.core.database import async_session_factory
+from app.models.attempt import Attempt
 from app.models.audio_segment import AudioSegment
 from app.models.material import Material
 from app.models.part import Part
 from app.models.question import Question
 from app.models.question_attempt import QuestionAttempt
-from app.models.question_group import QuestionGroup
+from app.models.question_group import QuestionGroup, same_question_kind
 from app.models.user import User
 from pydantic import TypeAdapter
 
 from app.schemas.listening import QuestionGroupIn
 from app.services import audio as audio_service
+from app.services import difficulty as difficulty_service
+from app.services import grading as grading_service
 from app.services import images as image_service
+from app.services import listening as listening_service
 from app.services.asr import TranscriptResult, TranscriptSegment, WordTiming
 from app.services.image_codec import read_image
 from app.services.storage import (
@@ -203,15 +206,6 @@ def printed_name(section_id: str) -> str | None:
     return None
 
 
-async def answered_in(session, part_id: uuid.UUID) -> int:
-    """How many of this part's questions somebody has already answered."""
-    return int((await session.exec(
-        select(func.count(QuestionAttempt.id))
-        .join(Question, Question.id == QuestionAttempt.question_id)  # type: ignore[arg-type]
-        .join(QuestionGroup, QuestionGroup.id == Question.group_id)  # type: ignore[arg-type]
-        .where(QuestionGroup.part_id == part_id))).one())
-
-
 def derived_name(section_id: str) -> str | None:
     """What `seed/name_sections.py` decided the recording is about.
 
@@ -274,83 +268,129 @@ def paper_first(section_no: int) -> int:
     return (section_no - 1) * 10 + 1
 
 
+async def _picture_blob_id(session, section_id: str, order_index: int,
+                           picture: dict) -> uuid.UUID:
+    """Store a group's picture (or dedup one already stored) and hand back its
+    blob id, ready to drop into ``config.image``.
+
+    A labelling group is unpublishable without the picture its letters sit
+    on, and the picture is the one thing on the page a vision model cannot
+    hand back -- extract_image.py cuts it out and names it here. Split out of
+    the two callers below so the fresh-material path and the re-import path
+    read a picture the same way rather than two copies that could drift.
+    """
+    data = (SEED / "work" / section_id / picture["path"]).read_bytes()
+    sha = sha256_hex(data)
+    sized = read_image(data)
+    if sized is None:
+        raise SystemExit(
+            f"{section_id}: group {order_index}'s picture is not a PNG, "
+            "JPEG or WebP the server will take")
+    mime, width, height = sized
+    key = image_storage_key(sha, mime)
+    blob, created = await image_service.get_or_create_blob(
+        session, sha256=sha, storage_key=key, size_bytes=len(data),
+        mime_type=mime, width=width, height=height)
+    if created:
+        await get_storage().put(key, data, mime)
+    logger.info("group %d: picture %dx%d (%s)", order_index, width, height,
+                "new" if created else "dedup")
+    return blob.id
+
+
+def _question_columns(
+    question, offset_ms: int
+) -> tuple[int | None, int | None, dict | None]:
+    """The three columns a question's own presentation lands in --
+    ``replay_start_ms``, ``replay_end_ms``, ``config`` -- shifted by the trim
+    exactly as a fresh import always has. Pulled out so the re-import path
+    below computes them the same way rather than a second copy that could
+    disagree about it.
+    """
+    # Shifted with the transcript: a replay span is a moment in the same
+    # recording, and half of them moving is worse than none.
+    start = question.replay_start_ms
+    end = question.replay_end_ms
+    # A gap has nothing of its own; a choice question carries its stem and
+    # its options; a matching item carries its stem and answers from the
+    # group's box. Same division as the group's config, one level down -- see
+    # the Question model.
+    config = None
+    prompt = getattr(question, "prompt", None)
+    if prompt is not None:
+        config = {"prompt": prompt}
+        options = getattr(question, "options", None)
+        if options:
+            config["options"] = list(options)
+        # Shifted like every other timestamp: a choice question's moments
+        # live in the same recording the trim moved.
+        replay = getattr(question, "option_replay", None) or {}
+        if replay:
+            config["option_replay"] = {
+                letter: [max(0, at[0] - offset_ms), max(0, at[1] - offset_ms)]
+                for letter, at in replay.items()
+            }
+    return (
+        None if start is None else max(0, start - offset_ms),
+        None if end is None else max(0, end - offset_ms),
+        config,
+    )
+
+
 async def import_questions(session, part_id: uuid.UUID, section_id: str,
                            offset_ms: int = 0) -> int:
-    """Replace this part's question groups with what the seed built.
+    """Write this part's question groups from what the seed built.
 
-    Replace rather than merge: the groups have no natural key, and a re-run
-    after a corrected answer key must not leave the old one beside the new.
+    A first import creates them outright. A RE-import updates the existing
+    rows IN PLACE instead of replacing them -- matching an old group to a new
+    one by its position, and an old question to a new one by ``number`` --
+    because ``question_attempts.question_id`` is a plain FK with no ON DELETE
+    and Postgres refuses to drop a question anyone has answered. Matching
+    means a correction (a widened replay span, a fixed spelling in the key)
+    reaches a question that has already been sat: the row's id survives, so
+    does the attempt pointing at it, and that attempt is RE-GRADED against
+    the corrected row (see :func:`_regrade`) rather than frozen at whatever
+    the book said before the mistake was found -- the decision this
+    implements is in the ``voocab-reimport-regrade`` memory note and in
+    ``seed/README.md``'s "A marker's turn is not always its evidence".
+
+    Refuses, loudly, and leaves the existing questions untouched, only where
+    the shape has genuinely changed: a group added or removed, a group
+    retyped into a different KIND of question (:func:`same_question_kind`),
+    or a group's own question numbers no longer matching. Everything else
+    about the import -- title, transcript, audio -- still lands either way,
+    exactly as it did when the only fallback here was "leave the questions
+    alone".
     """
     path = SEED / "work" / section_id / "questions.json"
     if not path.exists():
         return 0
     payload = json.loads(path.read_text())
 
-    # Validated before anything is deleted, so a bad payload leaves the
-    # material exactly as it was rather than emptied. Through the discriminated
-    # union rather than one member of it: a section is as likely to be multiple
-    # choice or matching as a gap-fill, and validating everything as a
-    # completion group refused the first choice section outright.
+    # Validated before anything is written, so a bad payload leaves the
+    # material exactly as it was rather than half-rewritten. Through the
+    # discriminated union rather than one member of it: a section is as
+    # likely to be multiple choice or matching as a gap-fill, and validating
+    # everything as a completion group refused the first choice section
+    # outright.
     adapter = TypeAdapter(QuestionGroupIn)
     groups = [adapter.validate_python(g) for g in payload["groups"]]
 
-    # A question somebody has already answered cannot be deleted -- the
-    # foreign key from `question_attempts` is ON DELETE NO ACTION, and
-    # Postgres refuses. Asked BEFORE the delete rather than caught after it,
-    # for two reasons: an IntegrityError poisons the session, so everything
-    # else this import had to say -- the title, the transcript, the audio --
-    # would be rolled back with it, which is exactly what happened to
-    # `TR2 T1 P2`; and a question that has been answered is a fact about a
-    # learner, which is worth more than a re-run's tidiness.
-    #
-    # So the questions are left exactly as they are and everything else still
-    # lands. Said loudly, because the thing the re-run was probably FOR was a
-    # corrected answer key, and this is the one material it did not reach.
-    #
-    # The real answer is to rewrite the question in place and re-grade the
-    # attempts that point at it -- a corrected key should simply change the
-    # score. That needs matching old groups to new ones, which they have no
-    # key for; until then, this at least stops one learner's answer from
-    # costing the material its title.
-    if answered := await answered_in(session, part_id):
-        logger.warning(
-            "%s: questions NOT rewritten -- %d of them have been answered. "
-            "Everything else was updated.", section_id, answered)
-        return 0
+    existing_groups = (await session.exec(
+        select(QuestionGroup).where(QuestionGroup.part_id == part_id)
+        .order_by(QuestionGroup.order_index))).all()
 
-    existing = (await session.exec(
-        select(QuestionGroup).where(QuestionGroup.part_id == part_id))).all()
-    for group in existing:
-        for question in (await session.exec(
-                select(Question).where(Question.group_id == group.id))).all():
-            await session.delete(question)
-        await session.delete(group)
-    await session.flush()
+    if existing_groups:
+        return await _update_questions_in_place(
+            session, part_id, section_id, existing_groups, groups, payload,
+            offset_ms)
 
     written = 0
     for order_index, group in enumerate(groups):
-        # A labelling group is unpublishable without the picture its letters
-        # sit on, and the picture is the one thing on the page a vision model
-        # cannot hand back -- extract_image.py cuts it out and names it here.
         picture = payload["groups"][order_index].get("picture")
         if picture:
-            data = (SEED / "work" / section_id / picture["path"]).read_bytes()
-            sha = sha256_hex(data)
-            sized = read_image(data)
-            if sized is None:
-                raise SystemExit(
-                    f"{section_id}: group {order_index}'s picture is not a PNG, "
-                    "JPEG or WebP the server will take")
-            mime, width, height = sized
-            key = image_storage_key(sha, mime)
-            blob, created = await image_service.get_or_create_blob(
-                session, sha256=sha, storage_key=key, size_bytes=len(data),
-                mime_type=mime, width=width, height=height)
-            if created:
-                await get_storage().put(key, data, mime)
-            group.config.image = blob.id
-            logger.info("group %d: picture %dx%d (%s)", order_index, width, height,
-                        "new" if created else "dedup")
+            group.config.image = await _picture_blob_id(
+                session, section_id, order_index, picture)
 
         row = QuestionGroup(
             part_id=part_id, order_index=order_index, type=group.type,
@@ -360,38 +400,155 @@ async def import_questions(session, part_id: uuid.UUID, section_id: str,
         session.add(row)
         await session.flush()
         for question in group.questions:
-            # Shifted with the transcript: a replay span is a moment in the
-            # same recording, and half of them moving is worse than none.
-            start = question.replay_start_ms
-            end = question.replay_end_ms
-            # A gap has nothing of its own; a choice question carries its stem
-            # and its options; a matching item carries its stem and answers
-            # from the group's box. Same division as the group's config, one
-            # level down -- see the Question model.
-            config = None
-            prompt = getattr(question, "prompt", None)
-            if prompt is not None:
-                config = {"prompt": prompt}
-                options = getattr(question, "options", None)
-                if options:
-                    config["options"] = list(options)
-                # Shifted like every other timestamp: a choice question's
-                # moments live in the same recording the trim moved.
-                replay = getattr(question, "option_replay", None) or {}
-                if replay:
-                    config["option_replay"] = {
-                        letter: [max(0, at[0] - offset_ms), max(0, at[1] - offset_ms)]
-                        for letter, at in replay.items()
-                    }
+            start, end, config = _question_columns(question, offset_ms)
             session.add(Question(
                 group_id=row.id, number=question.number,
                 correct_answers=question.correct_answers,
-                config=config,
-                replay_start_ms=None if start is None else max(0, start - offset_ms),
-                replay_end_ms=None if end is None else max(0, end - offset_ms),
+                config=config, replay_start_ms=start, replay_end_ms=end,
             ))
             written += 1
     return written
+
+
+async def _update_questions_in_place(
+    session, part_id: uuid.UUID, section_id: str,
+    existing_groups: list[QuestionGroup], groups: list, payload: dict,
+    offset_ms: int,
+) -> int:
+    """The re-import half of :func:`import_questions`.
+
+    Every check below runs BEFORE any row is touched, so a refusal leaves the
+    part exactly as it was -- never half rewritten -- the same guarantee the
+    old delete-then-recreate path had by construction.
+    """
+    if len(existing_groups) != len(groups):
+        logger.warning(
+            "%s: questions NOT rewritten -- %d group(s) in this import, %d "
+            "already there. A group was added or removed, which is a shape "
+            "change this can't match through. Everything else was updated.",
+            section_id, len(groups), len(existing_groups))
+        return 0
+
+    plan: list[tuple[QuestionGroup, object, dict[int, Question]]] = []
+    for old_group, group in zip(existing_groups, groups):
+        if not same_question_kind(old_group.type, group.type):
+            logger.warning(
+                "%s: questions NOT rewritten -- group %d changed from %s to "
+                "%s, and that is not the same question wearing a new label. "
+                "Everything else was updated.",
+                section_id, old_group.order_index, old_group.type, group.type)
+            return 0
+        old_questions = {
+            q.number: q for q in (await session.exec(
+                select(Question).where(
+                    Question.group_id == old_group.id))).all()
+        }
+        new_numbers = {q.number for q in group.questions}
+        if set(old_questions) != new_numbers:
+            logger.warning(
+                "%s: questions NOT rewritten -- group %d's question numbers "
+                "changed (%s -> %s). Everything else was updated.",
+                section_id, old_group.order_index,
+                sorted(old_questions), sorted(new_numbers))
+            return 0
+        plan.append((old_group, group, old_questions))
+
+    written = 0
+    changed_ids: list[uuid.UUID] = []
+    for order_index, (old_group, group, old_questions) in enumerate(plan):
+        picture = payload["groups"][order_index].get("picture")
+        if picture:
+            group.config.image = await _picture_blob_id(
+                session, section_id, order_index, picture)
+
+        old_group.type = group.type
+        old_group.instructions = group.instructions
+        old_group.word_limit = group.word_limit
+        old_group.config = group.config.model_dump(mode="json", exclude_none=True)
+        session.add(old_group)
+
+        for question in group.questions:
+            start, end, config = _question_columns(question, offset_ms)
+            row = old_questions[question.number]
+            row.correct_answers = question.correct_answers
+            row.config = config
+            row.replay_start_ms = start
+            row.replay_end_ms = end
+            session.add(row)
+            changed_ids.append(row.id)
+            written += 1
+
+    await session.flush()
+    await _regrade(session, part_id, section_id, changed_ids)
+    return written
+
+
+async def _regrade(
+    session, part_id: uuid.UUID, section_id: str, question_ids: list[uuid.UUID]
+) -> None:
+    """Recompute ``is_correct`` for every attempt already made against these
+    questions, and the score of every attempt that owns one of them.
+
+    The ``voocab-reimport-regrade`` decision: an attempt survives a rewritten
+    question, and its score CHANGES rather than staying frozen at whatever
+    the uncorrected key said. Silent -- and cheap, one query that returns
+    nothing -- for every question nobody has ever answered, which is every
+    question in most re-imports; the real work only happens where a real
+    attempt exists.
+    """
+    if not question_ids:
+        return
+    rows = (await session.exec(
+        select(QuestionAttempt, Question, QuestionGroup)
+        .join(Question, Question.id == QuestionAttempt.question_id)  # type: ignore[arg-type]
+        .join(QuestionGroup, QuestionGroup.id == Question.group_id)  # type: ignore[arg-type]
+        .where(QuestionAttempt.question_id.in_(question_ids)))).all()  # type: ignore[attr-defined]
+    if not rows:
+        return
+
+    touched: set[uuid.UUID] = set()
+    for question_attempt, question, group in rows:
+        correct = grading_service.grade_question(
+            question, question_attempt.given_answer, group)
+        if correct != question_attempt.is_correct:
+            question_attempt.is_correct = correct
+            session.add(question_attempt)
+        touched.add(question_attempt.attempt_id)
+
+    for attempt_id in touched:
+        attempt = await session.get(Attempt, attempt_id)
+        if attempt is None:
+            continue
+        # The FULL set of this attempt's rows, not only the ones a changed
+        # question touched -- the score is a sum over the whole paper (or the
+        # whole drill), the same arithmetic `_grade_into` in grading.py runs
+        # at submit time.
+        all_rows = (await session.exec(
+            select(QuestionAttempt, QuestionGroup)
+            .join(Question, Question.id == QuestionAttempt.question_id)  # type: ignore[arg-type]
+            .join(QuestionGroup, QuestionGroup.id == Question.group_id)  # type: ignore[arg-type]
+            .where(QuestionAttempt.attempt_id == attempt_id))).all()  # type: ignore[attr-defined]
+        earned = total = 0
+        for row, row_group in all_rows:
+            marks = listening_service.question_marks(row_group)
+            total += marks
+            if row.is_correct:
+                earned += marks
+        attempt.score = float(earned)
+        attempt.total_questions = total
+        session.add(attempt)
+
+    await session.flush()
+    logger.info(
+        "%s: re-graded %d question-attempt row(s) across %d attempt(s)",
+        section_id, len(rows), len(touched))
+
+    part = await session.get(Part, part_id)
+    if part is not None:
+        # Scoped to the one material just touched, not the whole library --
+        # the same narrowed form `difficulty.recompute` keeps for a
+        # submit-time refresh of the one material just answered.
+        await difficulty_service.recompute(session, [part.material_id])
 
 
 async def import_section(section_id: str, owner_id: uuid.UUID) -> None:
@@ -549,7 +706,7 @@ async def import_section(section_id: str, owner_id: uuid.UUID) -> None:
     # happened and is the wrong thing to leave in a log that somebody scans
     # for failures.
     said = (f"{written} questions" if written
-            else "questions left alone, already answered")
+            else "no questions written (none extracted yet, or see the log above)")
     print(f"{section_id} -> material {material_id} "
           f"({len(segments)} transcript lines, {said}, private)")
 
