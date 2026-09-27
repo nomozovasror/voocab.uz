@@ -1168,7 +1168,11 @@ async def test_distractor_reads_the_candidates_sense_when_meaning_core_is_empty(
                 session, word_id=uuid.uuid4(),
                 right_text="a formal agreement between two or more countries",
                 right_definition="a formal agreement between two or more countries",
-                pos="n", cefr_level="B2", source_material_ids=frozenset(),
+                # The source material ranks first, so the three rows made
+                # here are the ones chosen even on a shared database that
+                # already holds other B2 nouns.
+                pos="n", cefr_level="B2",
+                source_material_ids=frozenset({material.id}),
                 family_keys=frozenset(), exclude_lemma="alliance",
                 option_field="definition", rng_seed=1,
             )
