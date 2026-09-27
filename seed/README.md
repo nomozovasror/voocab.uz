@@ -3054,3 +3054,125 @@ one `read_vocabulary` batch, of which there are four per passage. First run,
 C11 T1 P1: 12 of 13 questions placed, 0 quotes dropped, 0 fallbacks. The
 thirteenth was a NOT GIVEN the model would not invent a place for, which is
 the answer the prompt asks for.
+
+## A marker's turn is not always its evidence
+
+A learner reported three replay buttons on `cam21-t4-s1` (Cambridge 21 Test 4
+Section 1) that play the wrong moment. All three trace to the same file,
+`turns.json`, and none of them is a parsing bug — the raw page (this section
+was read by `read_html_test.py`, off `ieltstrainingonline.com`'s own
+transcript) really does print the underline and the `(Q7)` where the corpus
+says it does:
+
+* **Q1** asks for a surname, `Leigh`. The marker sits on "Martyn Leigh.
+  Martyn's with a Y." — the plain mention. The spelling that actually settles
+  how to write it, "It's L-E-I-G-H.", is two turns later, after the WOMAN's
+  own clarifying question sits between them.
+* **Q7** ("Thinks there are too many places selling ___", answer `coffee`)
+  and **Q10** ("Believes the ___ is unnecessary", answer `cinema`) are both
+  marked on the WOMAN's own question — "there are a lot of new coffee shops
+  now, are you enjoying them?" — because that is the one place the key's
+  exact word is said. The MAN's opinion of it, which is the actual answer,
+  is the very next turn and carries no marker of its own.
+
+Two different failures, and the reason neither shows up as "the answer isn't
+in the span" is that, read narrowly, it is: `coffee` and `cinema` are both
+spoken inside the turn the marker names. `build_questions.py`'s existing
+checks (`reaches`, `in_order`, `locate`'s override) all ask "does this span
+contain the answer's own words", and all three answered yes. What they never
+asked is WHO is talking, or whether a name that can be spelled two ways has
+actually been spelled.
+
+### Two general corrections, not three patched spans
+
+**A marker on the wrong speaker is widened onto the reply, once.** A
+two-speaker interview has a respondent — the section already says who,
+because its OTHER markers mostly agree — and a marker on the other speaker,
+with that respondent's own turn immediately after and unclaimed by another
+question, is widened to take the reply in. `dominant_speaker()` requires
+three markers and a two-to-one majority before it will name anybody: a thin
+margin is not a section with a wrong turn, it can be a section with two
+respondents (`cam10-t1-s1` interviews the caller for the first half of the
+call and has her ask the travel agent for prices in the second — six markers
+one way and four the other is that shape, not a bug, and the guard leaves it
+alone). Widened, never moved — the question is still where the topic is
+raised, and one turn is as far as this reaches; further than that is a
+placement to look at by hand. And bounded by `next_marker_start`, the same
+ceiling the spelling widen below is bounded by: a reply turn can run on long
+enough to carry the moment the NEXT question is answered from, marked or
+not, and the widen stops before it rather than handing that moment to the
+wrong question.
+
+**A name is widened onto where it is spelled, if it is spelled at all.**
+`spelling()` looks for a token the alignment already keeps whole because
+nobody pauses between its hyphens — `L-E-I-G-H`, the corpus's own worked
+example `M-A-U-G-H-A-N` — inside the stretch between this question and the
+next one's own marker. Where the letters match the answer, the span is
+widened to reach them; where nothing is spelled out, nothing changes. The
+ceiling is checked against the candidate word's END as well as its start —
+a spelled-out token that starts inside the window but runs past the next
+question's own marker still ends on that question's ground, and starting
+inside the line is not enough to take it.
+
+Both live in `build_questions.py`, applied to the marker→span map right
+after a section's own paper band is settled and before any of the existing
+per-question corrections run, so `locate`, `reaches` and `in_order` all see
+the corrected span rather than fighting it. Tests in
+`seed/test_build_questions.py` — run directly, the same way `answer_key.py`
+runs its own:
+
+    seed/.venv/bin/python seed/test_build_questions.py
+
+### Measured across the corpus
+
+`measure_evidence.py` asks three separate questions of every word-answer
+span in the corpus (never a lettered one — a matching option is a
+paraphrase, and a bare map letter is a different, existing bug in reading
+the picture, not this one):
+
+    seed/.venv/bin/python seed/measure_evidence.py
+    seed/.venv/bin/python seed/measure_evidence.py --questions-dir work-before
+
+| | before | after |
+|---|---|---|
+| flagged (any of the three) | 111, across 51 sections | 57, across 37 sections |
+| (a) span is entirely the questioner's turn | 75 | 28 |
+| (b) a spelling exists and the span misses it | 13 | **0** |
+| (c) span contains none of the accepted answers | 32 | 32 |
+
+(c) is unchanged on purpose — it is guarded by `reaches`/`in_order` already,
+and the 32 that remain are a different problem (mostly paraphrase-shaped
+answers a literal word search cannot see, the same limit `in_order`'s own
+docstring names for lettered questions). (b) goes to zero: every spelling the
+recording actually gives is now inside its span. (a) drops by nearly two
+thirds; the rest is either below the two-to-one guard (correctly left alone,
+see `cam10-t1-s1` below) or a reply more than one turn from its question (the
+guard `reaches` also uses, named in its own docstring as a placement to look
+at by hand rather than a rule to keep stretching).
+
+**(a) is a majority vote over one section, and it inherits that vote's
+weakness.** It is measured off markers `build_questions.py` never had to
+move away from their printed turn — a marker later overridden by an
+unambiguous word match is not a vote for the speaker it used to name, or
+`cam15-t4-s1` (which marks eight of its ten answers on the interviewer, by
+this book's own convention, with `locate` already having fixed most of them)
+would be flagged as broken a second time. Even so, a three-marker section can
+still tip on a coincidence — `cam15-t4-s1`'s own count is a case worth
+reading rather than trusting outright. The "worst sections" a run prints are
+a list to spot-check, the way `verify.py`'s alignment scores are, not a list
+to act on unread.
+
+### What is still a question, not a decision
+
+**What should a spelling answer's span cover?** This fix widens to include
+the letters, keeping the plain mention at the front — a learner hears
+"Martyn Leigh... It's L-E-I-G-H" as one clip. It does not decide whether the
+right shape is that whole stretch, the letters alone, or something else the
+review page would rather show. Flagged rather than decided.
+
+**Where two speakers legitimately share a section**, per `cam10-t1-s1` and
+`cam10-t4-s1` above, "the interviewer's turn" is not a coherent idea for the
+whole section — and no rule here tries to tell the two apart automatically.
+They are left alone, correctly, but a person reading the corpus for genuine
+mis-marked turns should expect a few of these in the worst-sections list and
+not code them as a bug.
