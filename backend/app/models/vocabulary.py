@@ -300,6 +300,42 @@ class MaterialVocabulary(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
 
+    #: This passage's word, pointed at the GLOBAL word it is one instance of
+    #: -- see `app.models.lexicon.Lexeme` for why that is a different table
+    #: rather than a second meaning stuffed into this one. Nullable in the
+    #: DDL because a migration cannot populate 24 000+ rows inside the same
+    #: transaction that adds the column without holding a lock on this table
+    #: for the length of the backfill; `backend/scripts/build_lexicon.py`
+    #: fills every row in P1, immediately after, and the verification that
+    #: closes that phase is exactly "is any row still null". Every FUTURE
+    #: write is find-or-create (`lexicon-spec.md` §8, wired up in P3) and
+    #: never leaves it null even for an instant.
+    lexeme_id: uuid.UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            SA_UUID(as_uuid=True),
+            ForeignKey("lexemes.id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    #: This row's `meaning_core_en`/`meaning_core_uz`, pointed at the ONE
+    #: `LexemeSense` they are a wording of. `meaning_core_*` itself is not
+    #: removed and not stopped being read by the pages that already read it
+    #: (`lexicon-spec.md`, P1 note under D2/§3 of the brief) -- only stopped
+    #: being WRITTEN to, from P1 onward, once this column exists: the sense
+    #: lives here now, and a row that kept writing its own copy beside it
+    #: would let the two drift apart with nothing to notice.
+    sense_id: uuid.UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            SA_UUID(as_uuid=True),
+            ForeignKey("lexeme_senses.id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+
 
 class SavedWord(SQLModel, table=True):
     """A word one learner is studying, whatever passage they met it in.

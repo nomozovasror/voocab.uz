@@ -21,6 +21,11 @@ class User(SQLModel, table=True):
     hashed_password: str | None = Field(default=None)
     display_name: str
     avatar_url: str | None = Field(default=None)
+    #: The whole of this project's admin story (`lexicon-spec.md` D7): one
+    #: flag, no role table. The lexicon brief needs exactly one gated screen
+    #: -- Studio's translation-review tab, P5 -- and a role system built for
+    #: a single boolean would be speculative scaffolding, not a feature.
+    is_admin: bool = Field(default=False)
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False),
