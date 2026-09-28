@@ -21,6 +21,11 @@ venv/
 # Local uploaded media (dev fallback when R2 isn't configured)
 backend/media/
 
+# scripts/seed_vocabulary.py's own record of which lemmas it wrote for which
+# learner, so --reset can find them again on a later run. Per-database, and
+# never something another checkout should inherit.
+backend/scripts/.seed_vocabulary_state.json
+
 # macOS
 .DS_Store
 
