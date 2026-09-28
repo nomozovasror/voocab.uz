@@ -262,6 +262,11 @@ export interface SavedWord {
    *  level while this is true, rather than a level that stopped meaning
    *  anything the moment nobody could be asked it. */
   active_paused: boolean;
+  /** Set the moment a Browse card showing this word was displayed
+   *  (`POST /vocabulary/words/{id}/browsed`) — `null` for a word never
+   *  browsed. Browse writes nothing else: no FSRS field on this row ever
+   *  moves from it, because browsing is reading, not practice. */
+  browsed_at: string | null;
 }
 
 export interface SavedWords {
@@ -371,8 +376,16 @@ export interface PracticeSentencePrompt {
   kind: "sentence";
   before: string;
   after: string;
+  /** The answer's first letter — empty when the sense's own
+   *  `needs_letter_hint` is false, in which case the gap shows no hint at
+   *  all rather than a stand-in character. See `GapField`'s callers. */
   cue: string;
-  definition: null;
+  /** The masked English definition, shown above the sentence as a dimmer
+   *  cue — a sentence prompt can carry one now, same as the `definition`
+   *  fallback below; `null` where masking left the definition unreadable
+   *  in a way even the `recognise` fallback couldn't absorb, or where the
+   *  sense has none. */
+  definition: string | null;
 }
 
 /** The fallback the spec describes: no usable context, so the gap stands

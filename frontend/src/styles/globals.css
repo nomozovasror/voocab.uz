@@ -1296,3 +1296,34 @@
 .cover-field-sub {
   border-bottom-width: 1px;
 }
+
+/* ── Vocabulary Browse: the card flip (§C) ────────────────────────────────
+   A 3D rotate rather than a cross-fade, because a flip says "the same card,
+   turned over" and a fade says "a different card arrived" — front and back
+   are one card, not two. `.browse-card-flip` holds the perspective (it must
+   sit on the STATIC parent, or the rotating child provides its own vanishing
+   point and the turn looks flat); `.browse-card-inner` is what actually
+   rotates, `.browse-card-face` is either side of it, hidden when it faces
+   away, and `.browse-card-face-back` is pre-rotated 180deg so it reads right
+   side up the instant the flip passes its own halfway point. */
+.browse-card-flip {
+  perspective: 1400px;
+}
+.browse-card-inner {
+  transform-style: preserve-3d;
+  transition: transform var(--duration-slow) var(--ease-out);
+}
+.browse-card-inner.is-flipped {
+  transform: rotateY(180deg);
+}
+.browse-card-face {
+  backface-visibility: hidden;
+}
+.browse-card-face-back {
+  transform: rotateY(180deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .browse-card-inner {
+    transition: none;
+  }
+}

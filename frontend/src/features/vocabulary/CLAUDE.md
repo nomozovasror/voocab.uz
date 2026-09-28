@@ -788,3 +788,73 @@ merely different.
   see `lapse_counts_for`'s own docstring in `practice.py` for why a reader
   looking at their own history has no reason to have that number reset out
   from under them the moment a leech is resolved.
+
+## Browse: reading the list, not practising it
+
+`/vocabulary/browse` (`VocabularyBrowsePage.tsx`) turns the saved list into
+cards — front the word, back its meaning, an example and the way back to
+where it was met — and it is worth being explicit about why this is not a
+fourth exercise beside recognise/recall/produce.
+
+- **Nothing here is graded, so nothing here can teach the ladder anything.**
+  A card shown proves someone LOOKED, not that they knew it; grading that
+  as an answer would let a learner walk `passive_level` up simply by paging
+  through their own list, which is a promotion the ladder's own evidence
+  (an actual recall, a chosen `recognise` option) never earned. So Browse
+  calls no FSRS function, writes no `vocabulary_review_logs` row, and moves
+  no card's due date — the one thing it writes anywhere is
+  `saved_words.browsed_at`, a timestamp with no opinion attached, set when
+  a card is shown (`POST /vocabulary/words/{id}/browsed`, fire-and-forget,
+  once per card a session actually displays — see the page's own comment
+  for why that is a `Set` keyed on id rather than a request per render).
+  It is also why Browse is not counted in the daily time budget
+  `practice.py`'s plan reads: that budget is spent on cards FSRS is
+  scheduling, and a page with no schedule of its own has nothing to spend
+  it on.
+- **No shuffle, and that is the same argument from the other direction.**
+  A practice queue is allowed to reorder (most-overdue-first, new words
+  budgeted last) because the ORDER is part of what FSRS is deciding. Browse
+  decides nothing, so the order is whichever the caller already chose: the
+  words list's own filtered order when opened from there, or a material's
+  saved-words panel's own (material-scoped) order when opened from a
+  review page. Reordering either would be Browse quietly making a judgement
+  call that belongs to a page with a spaced-repetition engine behind it.
+- **No end screen, no stats, no joke.** `jokes.ts` and the end screen's
+  new/reviewed tally exist because a PRACTICE session has something to
+  report on — what got answered, what came back wrong. A Browse pass has
+  no such thing to say about itself; reaching the last card simply stops
+  (`→` at the end is a no-op, not a dead end presented as one), and closing
+  it (Esc, or the header's own close button) returns to wherever it was
+  opened — never a page of its own with a "you're done" of its own to say.
+- **"Wherever it was opened" is a `from` query param, never
+  `navigate(-1)`.** Both entry points (the words list's Browse button, and
+  `ReviewVocabulary`'s Browse link from a material's saved-words panel) set
+  `from` to their OWN current path when they build the link; the page
+  reads it back on exit and falls back to `/vocabulary/words` when `from`
+  is missing or is not a same-app relative path (`isSafeInternalPath`,
+  rejecting a bare `//host/…` alongside a full URL, since an open redirect
+  is not a smaller bug for living behind a "close" button). History is not
+  the caller here: a bookmark, a link shared into a chat, or a tab whose
+  back-stack reaches further than the entry that opened Browse would all
+  send `-1` out of the app rather than back to the list or the material's
+  review page.
+- **The document keydown handler steps aside for a focused control.**
+  Space/←/→ are withheld whenever `document.activeElement` is a button,
+  link, or form field (`isInteractiveElement`) — otherwise Tab-ing to
+  "Close Browse" and pressing Space to activate it flips the card
+  underneath instead of closing anything. Esc is exempt and keeps firing
+  from anywhere, including from the close button itself, because nothing
+  reachable by Tab on this page answers to Esc on its own. The card's own
+  face stays a `role="button"` `<div>` rather than a real `<button>` for
+  exactly this reason — Space flipping it while IT is the focused element
+  is the documented behaviour ("Space flip", below), not the bug this
+  guards against.
+- **It shares the words list's OWN filters** (`wordsFilter.ts`'s
+  `filterWords`), not a second implementation of "which of my saved words
+  match" — the whole point of the "Browse" button next to a filtered list
+  is that the deck it opens is exactly what the list was just showing, and
+  two copies of that rule is how they end up disagreeing about one row the
+  first time either is touched. `savedWordMeaning.ts`'s `wordMeaning` is
+  the same story one level down: the list's row and Browse's card back read
+  the same fallback chain for a word's own headline meaning, rather than
+  each guessing at it separately.

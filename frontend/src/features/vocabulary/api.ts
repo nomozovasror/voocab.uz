@@ -142,6 +142,13 @@ export const vocabularyApi = {
       json: payload,
     }),
 
+  /** Browse (§C) marking one card shown — never a review log, never an
+   *  FSRS write. Fire-and-forget, once per card a Browse session shows;
+   *  the server treats it as idempotent, so a caller never has to check
+   *  whether it already sent this before sending it again. */
+  browsed: (wordId: string) =>
+    api.post<void>(`/api/vocabulary/words/${wordId}/browsed`),
+
   /** Resolving a leech — the three choices of the spec's §5, offered from
    *  the session's reveal, the word page and the words list alike. */
   leech: (wordId: string, choice: LeechChoice) =>

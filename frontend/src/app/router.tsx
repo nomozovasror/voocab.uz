@@ -89,6 +89,16 @@ export const router = createBrowserRouter([
             path: "vocabulary/practice",
             ...page(() => import("@/pages/vocabulary/VocabularyPracticePage")),
           },
+          // Browse (§C) — reading, never practice: no FSRS write, no review
+          // log, nothing counted in daily minutes. Above `vocabulary/words/
+          // :id` in this file only because route order does not matter here
+          // (no segment collision), but kept beside its two entry points'
+          // own routes for the same reason every other neighbourly pair in
+          // this file is kept together.
+          {
+            path: "vocabulary/browse",
+            ...page(() => import("@/pages/vocabulary/VocabularyBrowsePage")),
+          },
           {
             path: "vocabulary/settings",
             ...page(() => import("@/pages/vocabulary/VocabularySettingsPage")),

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, Plus, X } from "lucide-react";
+import { Check, GalleryHorizontal, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
@@ -165,7 +165,13 @@ export function ReviewVocabulary({
 }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const location = useLocation();
   const key = vocabularyKey(materialId);
+  // This review page's own path — Browse's exit button reads it back as
+  // `from`, so closing Browse returns HERE rather than wherever the
+  // browser's history happened to hold (a bookmark or a shared link has
+  // none to fall back on).
+  const browseFrom = `${location.pathname}${location.search}`;
 
   const save = useMutation({
     mutationFn: (lemmas: string[]) => vocabularyApi.save(materialId, lemmas),
@@ -279,13 +285,28 @@ export function ReviewVocabulary({
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
           {only === "saved" ? (
             <>
-              <h2 className="text-sm font-semibold text-foreground">
-                {/* "words" stays plural either way: the list being counted
-                    against is the learner's whole vocabulary, and "1 of
-                    your saved word" is a sentence about nothing. */}
-                {base.length === 1 ? "One" : base.length} of your saved words{" "}
-                {base.length === 1 ? "is" : "are"} in this passage
-              </h2>
+              <div className="flex min-w-0 flex-1 items-baseline justify-between gap-3">
+                <h2 className="text-sm font-semibold text-foreground">
+                  {/* "words" stays plural either way: the list being counted
+                      against is the learner's whole vocabulary, and "1 of
+                      your saved word" is a sentence about nothing. */}
+                  {base.length === 1 ? "One" : base.length} of your saved words{" "}
+                  {base.length === 1 ? "is" : "are"} in this passage
+                </h2>
+                {/* Scoped to THIS material, per the brief's §C entry point 2
+                 *  — never the whole saved list, which is what the words
+                 *  page's own Browse button already offers. Not practice:
+                 *  see `features/vocabulary/CLAUDE.md`. */}
+                {base.length > 0 && (
+                  <Link
+                    to={`/vocabulary/browse?material=${materialId}&from=${encodeURIComponent(browseFrom)}`}
+                    className="flex shrink-0 items-center gap-1.5 rounded-md bg-surface-hover px-2 py-1 text-xs font-medium text-foreground transition-colors duration-fast hover:bg-foreground/15 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                  >
+                    <GalleryHorizontal className="size-3.5" aria-hidden />
+                    Browse
+                  </Link>
+                )}
+              </div>
               {/* The argument for the layer, said once. Meeting a word again
                   in a new context is the single most effective thing that can
                   happen to it, and it is the one thing on this page the

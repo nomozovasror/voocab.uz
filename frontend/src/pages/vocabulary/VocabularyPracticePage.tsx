@@ -403,7 +403,10 @@ export default function VocabularyPracticePage() {
           before={prompt.before}
           after={prompt.after}
           cue={prompt.cue}
-          definition={prompt.kind === "definition" ? prompt.definition : null}
+          // Both `sentence` and `definition` prompts may carry one now
+          // (§B) — a masked cue above the gap, dimmer than the sentence
+          // itself, so `kind` no longer decides whether it is read.
+          definition={prompt.definition}
           value={given}
           onChange={setGiven}
           onSubmit={() => submit()}
@@ -569,8 +572,15 @@ function RecallPrompt({
             }
           }}
           disabled={disabled}
-          placeholder={cue}
-          aria-label={`Type the missing word. It starts with ${cue}.`}
+          // Only when `needs_letter_hint` (§B) put a real character in
+          // `cue` — an empty cue is the server's own "no hint earned",
+          // never a placeholder that happens to render as nothing.
+          placeholder={cue || undefined}
+          aria-label={
+            cue
+              ? `Type the missing word. It starts with ${cue}.`
+              : "Type the missing word."
+          }
           tone={tone}
           className="mx-1 w-40"
         />

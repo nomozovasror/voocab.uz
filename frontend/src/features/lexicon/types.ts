@@ -30,6 +30,24 @@ export interface ReviewRow {
   report_count: number;
   /** The non-empty notes those open reports carry. */
   report_notes: string[];
+  /** The plain sum of `exposure_parts` — how many people this sense has
+   *  actually reached, and the queue's own ordering within a reason bucket
+   *  (see `backend/app/services/CLAUDE.md`'s A1). Optional only so a client
+   *  built against a server that hasn't landed it yet doesn't have to
+   *  fabricate a number. */
+  exposure?: number;
+  exposure_parts?: {
+    /** Learners who submitted an attempt on a material carrying this
+     *  sense. */
+    attempters: number;
+    /** Lookup events that resolved to this sense. */
+    lookups: number;
+    /** Learners with this sense on their saved-words list. */
+    saves: number;
+  };
+  /** How many materials this sense appears in — the tie-break under equal
+   *  exposure. */
+  material_count?: number;
 }
 
 export interface ReviewQueue {

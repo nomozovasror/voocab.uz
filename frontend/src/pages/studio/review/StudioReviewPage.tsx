@@ -2,6 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronUp, Pencil, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useStudioCrumbs } from "@/components/studio/breadcrumbs";
 import { cn } from "@/lib/utils";
 import { getErrorMessage } from "@/lib/api";
@@ -181,6 +186,45 @@ function EditForm({
   );
 }
 
+/** Exposure — the queue's own ordering within a reason bucket (A1: sum of
+ *  three counts, tied by how many materials the sense appears in) — as one
+ *  number with its parts a hover or a tap away. Absent entirely rather than
+ *  a zero when the server hasn't sent it (`row.exposure == null`), which is
+ *  a different fact from a sense reaching nobody yet. */
+function ExposureTag({ row }: { row: ReviewRow }) {
+  if (row.exposure == null) return null;
+  const parts = row.exposure_parts;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          className="rounded border border-border px-1.5 py-px font-mono text-xs text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          {row.exposure}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="font-mono text-xs">
+        <div className="space-y-0.5">
+          {parts && (
+            <>
+              <p>{parts.attempters} attempters</p>
+              <p>{parts.lookups} lookups</p>
+              <p>{parts.saves} saves</p>
+            </>
+          )}
+          {row.material_count != null && (
+            <p className="text-muted-foreground">
+              in {row.material_count}{" "}
+              {row.material_count === 1 ? "material" : "materials"}
+            </p>
+          )}
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function ContextsPeek({ senseId }: { senseId: string }) {
   const { data, isLoading, isError } = useReviewContexts(senseId);
   return (
@@ -274,6 +318,7 @@ function Row({
                 {row.frequency_band}
               </span>
             )}
+            <ExposureTag row={row} />
             {row.approved_at && (
               <span className="rounded-full bg-success/10 px-1.5 py-0.5 text-xs text-success">
                 approved {timeAgo(row.approved_at)}

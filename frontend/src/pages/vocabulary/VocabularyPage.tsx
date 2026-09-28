@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, EllipsisVertical } from "lucide-react";
+import { BookOpen, Check, EllipsisVertical, GalleryHorizontal } from "lucide-react";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,14 +15,13 @@ import { getErrorMessage } from "@/lib/api";
 import { daysUntil, timeUntil } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import { CefrTag } from "@/features/vocabulary/components/CefrTag";
-import { CEFR_LEVELS, asLevel, type CefrLevel } from "@/features/vocabulary/cefr";
+import { CEFR_LEVELS, type CefrLevel } from "@/features/vocabulary/cefr";
 import { DeleteWordsDialog } from "@/features/vocabulary/components/DeleteWordsDialog";
 import { StatusChip } from "@/features/vocabulary/components/StatusChip";
 import {
   ACTION_LABEL,
   STATUS_CHIP_LABEL,
   type StatusChip as StatusChipValue,
-  statusChip,
 } from "@/features/vocabulary/status";
 import {
   scheduleDelete,
@@ -31,6 +30,8 @@ import {
   usePendingDeletes,
 } from "@/features/vocabulary/pendingDelete";
 import { vocabularyApi, vocabularyWordsKey } from "@/features/vocabulary/api";
+import { wordMeaning } from "@/features/vocabulary/savedWordMeaning";
+import { filterToParams, filterWords } from "@/features/vocabulary/wordsFilter";
 import type { BulkAction, SavedWord } from "@/features/vocabulary/types";
 
 /**
@@ -73,6 +74,7 @@ const STATUS_FILTERS: StatusFilter[] = [
 
 export default function VocabularyPage() {
   const qc = useQueryClient();
+  const location = useLocation();
   const [params, setParams] = useSearchParams();
   const status = (params.get("status") as StatusFilter | null) ?? "all";
   const [cefr, setCefr] = useState<"all" | CefrLevel>("all");
@@ -119,16 +121,18 @@ export default function VocabularyPage() {
 
   const filtered = useMemo(() => {
     if (!data) return [];
-    return data.words.filter((word) => {
-      if (status !== "all" && statusChip(word.status) !== status) return false;
-      if (cefr !== "all" && asLevel(word.cefr_level) !== cefr) return false;
-      if (material !== "all" && !word.contexts.some((c) => c.material_id === material))
-        return false;
-      if (direction === "passiveOnly" && word.active_level !== null) return false;
-      if (direction === "active" && word.active_level === null) return false;
-      return true;
-    });
+    return filterWords(data.words, { status, cefr, material, direction });
   }, [data, status, cefr, material, direction]);
+
+  // Exactly what "Browse" carries forward — the same four fields the deck
+  // is built from, so the button under the filters can never open a deck
+  // the list itself is hiding a word from. `from` is this page's own path,
+  // so Browse's exit button lands back here rather than wherever the
+  // browser's history happened to hold — a bookmark or a shared link has
+  // no history to fall back on.
+  const browseParams = filterToParams({ status, cefr, material, direction });
+  browseParams.set("from", `${location.pathname}${location.search}`);
+  const browseHref = `/vocabulary/browse?${browseParams.toString()}`;
 
   function toggleSelected(id: string) {
     setSelected((was) => {
@@ -218,13 +222,28 @@ export default function VocabularyPage() {
 
   return (
     <div className="mx-auto w-full max-w-2xl pb-24">
-      <header className="pt-2 pb-4">
-        <h1 className="text-2xl font-semibold text-foreground">Vocabulary</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {data.total > 0
-            ? `${data.total} ${data.total === 1 ? "word" : "words"} you kept.`
-            : "Words you keep from a passage collect here."}
-        </p>
+      <header className="flex items-start justify-between gap-3 pt-2 pb-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-foreground">Vocabulary</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {data.total > 0
+              ? `${data.total} ${data.total === 1 ? "word" : "words"} you kept.`
+              : "Words you keep from a passage collect here."}
+          </p>
+        </div>
+        {/* Not a practice session — see `features/vocabulary/CLAUDE.md`'s
+         *  "Browse is not practice": it carries the filters above exactly as
+         *  they stand, so the deck it opens is never a surprise next to the
+         *  list that opened it. */}
+        {data.total > 0 && (
+          <Link
+            to={browseHref}
+            className="mt-1 flex shrink-0 items-center gap-1.5 rounded-md bg-surface-hover px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors duration-fast hover:bg-foreground/15 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            <GalleryHorizontal className="size-3.5" aria-hidden />
+            Browse
+          </Link>
+        )}
       </header>
 
       {data.total > 0 && (
@@ -466,26 +485,6 @@ function BulkBar({
   );
 }
 
-/** The word's own meaning, said once — and, now that a saved word is one
- *  SENSE rather than one lemma, the thing that tells two `bank` rows apart.
- *  Prefers `definition_en`/`meaning_uz`, read live off the word's
- *  `LexemeSense` (an admin's fix shows up here with no migration); falls
- *  back to stage 1's frozen `meaning_core_en`/`meaning_core_uz`, then to a
- *  context that has one — a word kept before any of these fields existed
- *  has none, and prints nothing rather than guessing. */
-function wordMeaning(word: SavedWord): { en: string; uz: string } {
-  if (word.definition_en || word.meaning_uz) {
-    return { en: word.definition_en, uz: word.meaning_uz };
-  }
-  if (word.meaning_core_en || word.meaning_core_uz) {
-    return { en: word.meaning_core_en, uz: word.meaning_core_uz };
-  }
-  const core = word.contexts.find((c) => c.meaning_core_en) ?? word.contexts[0];
-  return {
-    en: core?.meaning_core_en || core?.meaning_en || "",
-    uz: core?.meaning_core_uz || core?.meaning_uz || "",
-  };
-}
 
 /** The earlier of the two directions' due dates — the date this row would
  *  next pull the learner back in, whichever card gets there first. */
