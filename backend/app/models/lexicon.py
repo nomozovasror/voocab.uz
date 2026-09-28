@@ -265,6 +265,20 @@ class LexemeSense(SQLModel, table=True):
     )
     provisional: bool = Field(default=True, index=True)
 
+    #: Whether the recall prompt's first-letter cue is worth showing --
+    #: computed, never hand-set (`app.services.lexicon_hints`). True when
+    #: ANOTHER lexeme's sense shares this one's `oewn_synset_id`, or carries
+    #: a (near-)identical `definition_en` after normalisation -- the two
+    #: cases a bare "starts with s" genuinely narrows down a guess between
+    #: (`shortage`/`scarcity`) rather than wasting a hint on a word nothing
+    #: else could be confused with. Computed ONCE by a full backfill
+    #: (`scripts/backfill_letter_hint.py`) for every sense, and again for a
+    #: single lexeme's senses whenever the worker's enrichment loop rewrites
+    #: them (`app.worker._lexicon_enrich_once`) -- both call the same
+    #: `app.services.lexicon_hints.recompute_*` functions, so a lexeme this
+    #: has never run against is simply `false`, never a guess.
+    needs_letter_hint: bool = Field(default=False, index=True)
+
     #: Who last cleared this sense in Studio's admin review tab (P5), and
     #: when -- null means "never approved", which is a different fact from
     #: `needs_review is False`: a P1 provisional sense with no reasons at all

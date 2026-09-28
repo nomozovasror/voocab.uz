@@ -2,32 +2,71 @@
 material sentences a sense's students actually met it in
 (`brief-lexicon.md` §6.2).
 
-## The queue is three buckets, not one list (P4 adds the first)
+## The queue is Reported first, then exposure, not flag type (A1)
 
-A sense with an OPEN `translation_reports` row sorts first, ahead of even a
-`pos_mismatch` `needs_review` row -- a learner who took the trouble to say
-"this is wrong" has already done the finding a reviewer would otherwise have
-to do themselves, so their report is the cheapest, highest-confidence signal
-this queue has and it is wasted sitting behind a backlog nobody asked about.
-`report_count`/`report_notes` ride on the row itself (one extra grouped
-join, the same shape as `material_example_count` below) so a reviewer reads
-the complaint without a second request.
+2,476 `needs_review` senses is twenty hours of one person's work -- a queue
+that never empties. What changes that is ordering the backlog by how many
+learners have actually MET the sense rather than by which flag it carries:
+a wrong meaning nobody has read yet costs nothing, and one one thousand
+students have already seen is the whole reason this tab exists.
 
-Behind reports, `needs_review` senses come next -- something already
-flagged a problem, and of those, a rank-1 sense flagged `pos_mismatch` sorts
-before every other reason (the enrichment run's own priority note: 151
-lexemes have one). Behind them sits the CORE bucket: a top-frequency
-lexeme's rank-1 sense that was never flagged AND has never been approved --
-the brief's "top ~2,000 lexemes by frequency, not yet approved", for a
-reviewer with limited time spending it on the words a learner meets
-constantly. `approved_at IS NULL` is what makes that bucket shrink as a
-reviewer works through it; `needs_review` alone never would have, because
-most of those senses were never wrong in the first place.
+A sense with an OPEN `translation_reports` row still sorts first, ahead of
+everything -- a learner who took the trouble to say "this is wrong" has
+already done the finding a reviewer would otherwise have to do themselves,
+which is a stronger signal than any exposure count. `report_count`/
+`report_notes` ride on the row itself (one extra grouped join, the same
+shape as `material_example_count` below) so a reviewer reads the complaint
+without a second request.
 
-`frequency_band IN ("core", "common")` stands in for "top ~2,000 by NGSL
-rank" -- see `scripts/build_lexicon.py`'s own tiering (rank <= 1000 is
-`core`, <= 2000 is `common`) -- because no numeric rank survives onto
-`Lexeme` itself; the band is the only trace of it a query can reach.
+Everything else -- `needs_review` senses AND the unapproved CORE bucket --
+is now ONE list, ordered by :func:`exposure` descending. `needs_review`
+sorts ahead of an unflagged core sense on an EQUAL exposure (a demonstrated
+problem outranks "nobody has checked yet" when nothing else distinguishes
+them), and `material_count` is the last tie-break, for the same reason it
+was already exposure's own fallback: a great many senses currently carry
+zero exposure of any kind (no attempts, no lookups, no saves have reached
+this deploy yet), and material count is the only signal left to rank them
+by until real usage exists. `reason=` still narrows the WHERE clause exactly
+as before; it changes what is in the list, never how the list still sorts.
+
+The core bucket itself is unchanged: a top-frequency lexeme's rank-1 sense
+that was never flagged AND has never been approved -- the brief's "top
+~2,000 lexemes by frequency, not yet approved". `frequency_band IN ("core",
+"common")` stands in for "top ~2,000 by NGSL rank" -- see
+`scripts/build_lexicon.py`'s own tiering (rank <= 1000 is `core`, <= 2000 is
+`common`) -- because no numeric rank survives onto `Lexeme` itself; the
+band is the only trace of it a query can reach.
+
+## Exposure: how many learners have actually met this sense (A1)
+
+A plain, unweighted sum of three counts, per sense:
+
+* **attempters** -- distinct users who SUBMITTED an attempt on a material
+  that glosses this sense (a join from `material_vocabulary.sense_id`
+  through `material_id` into `attempts`, `status = 'submitted'`).
+* **lookups** -- how many `lookup_events` resolved to this sense, mapped
+  the same way the event itself was resolved: `(material_id, lemma)` into
+  the material's own `material_vocabulary` row, then that row's
+  `sense_id`. A plain count, not distinct users -- a word looked up three
+  times by the same reader said something three times over, and the
+  budget that makes repeats meaningful lives in the browser, not here.
+* **saves** -- how many `saved_words` rows point at this sense. Already
+  one per learner (`uq_saved_user_lexeme_sense`), so a plain count IS a
+  count of distinct learners without a second `DISTINCT`.
+
+No weights: the brief is explicit that this is a plain sum, not a scored
+blend where one signal quietly outvotes the other two. `material_count`
+(distinct materials glossing the sense) is a fourth, SEPARATE column --
+never summed into exposure -- because "how many materials" and "how many
+people" are different questions and the second is what this ordering is
+actually for; the first is only the tie-break of last resort.
+
+Computed as a handful of grouped subqueries, joined once per page
+(`queue`) or once per sense (`exposure_for`, used by `approve`/`fix`'s own
+response) -- never once per row in a loop. `ix_attempts_material_id_status`
+(the migration alongside `needs_letter_hint`) is what keeps the attempters
+subquery's join+filter an index lookup rather than a sequential scan of
+every attempt on the platform.
 
 Approving or fixing a sense closes every OPEN report against it in the same
 transaction -- a reviewer who has just looked at the sense and signed off on
@@ -41,9 +80,10 @@ from sqlalchemy import and_, case, exists, func, or_
 from sqlmodel import select
 
 from app.core.database import AsyncSession
+from app.models.attempt import Attempt, AttemptStatus
 from app.models.lexicon import REVIEW_REASONS, Lexeme, LexemeSense, TranslationReport
 from app.models.material import Material
-from app.models.vocabulary import MaterialVocabulary
+from app.models.vocabulary import LookupEvent, MaterialVocabulary, SavedWord
 
 #: Independent of any other module's notion of a level -- a sense's `cefr`
 #: is a plain checked string, and this is the whole of what "Fix" may set
@@ -74,31 +114,13 @@ def _has_open_report():
 
 
 def _priority_case():
-    """0: an open translation report -- a learner already did the finding
-    (P4). 1: a rank-1 `pos_mismatch` sense (this run's own priority note).
-    2: any other `needs_review` sense. 3: the core bucket. Lower sorts
-    first."""
-    return case(
-        (_has_open_report(), 0),
-        (
-            and_(
-                LexemeSense.needs_review.is_(True),
-                LexemeSense.sense_rank == 1,
-                LexemeSense.review_reasons.any("pos_mismatch"),
-            ),
-            1,
-        ),
-        (LexemeSense.needs_review.is_(True), 2),
-        else_=3,
-    )
-
-
-def _band_rank():
-    return case(
-        (Lexeme.frequency_band == "core", 0),
-        (Lexeme.frequency_band == "common", 1),
-        else_=2,
-    )
+    """0: an open translation report -- a learner already did the finding,
+    and outranks everything else regardless of exposure (P4/A1). 1:
+    everything else -- `needs_review` senses and the unapproved core bucket,
+    now ONE group sorted by :func:`exposure` (see :func:`queue`'s own
+    ORDER BY, and the module docstring's "A1" section for why flag type no
+    longer decides the order within it). Lower sorts first."""
+    return case((_has_open_report(), 0), else_=1)
 
 
 def _core_bucket_where():
@@ -159,18 +181,89 @@ async def reported_count(session: AsyncSession) -> int:
     return (await session.exec(stmt)).one()
 
 
+def _attempter_counts_subquery():
+    """Per sense: distinct users who SUBMITTED an attempt on a material
+    that glosses it -- see the module docstring's exposure section."""
+    return (
+        select(
+            MaterialVocabulary.sense_id.label("sense_id"),
+            func.count(func.distinct(Attempt.user_id)).label("n"),
+        )
+        .join(Attempt, Attempt.material_id == MaterialVocabulary.material_id)
+        .where(
+            MaterialVocabulary.sense_id.is_not(None),
+            Attempt.status == AttemptStatus.SUBMITTED,
+        )
+        .group_by(MaterialVocabulary.sense_id)
+        .subquery()
+    )
+
+
+def _lookup_counts_subquery():
+    """Per sense: how many `lookup_events` resolved to it, mapped the same
+    way the event itself was -- `(material_id, lemma)` into that material's
+    own row, then the row's `sense_id`."""
+    return (
+        select(
+            MaterialVocabulary.sense_id.label("sense_id"),
+            func.count(LookupEvent.id).label("n"),
+        )
+        .join(
+            LookupEvent,
+            and_(
+                LookupEvent.material_id == MaterialVocabulary.material_id,
+                LookupEvent.lemma == MaterialVocabulary.lemma,
+            ),
+        )
+        .where(MaterialVocabulary.sense_id.is_not(None), LookupEvent.lemma != "")
+        .group_by(MaterialVocabulary.sense_id)
+        .subquery()
+    )
+
+
+def _save_counts_subquery():
+    """Per sense: how many `saved_words` rows point at it -- already one
+    per learner (`uq_saved_user_lexeme_sense`), so this IS the count of
+    distinct learners."""
+    return (
+        select(
+            SavedWord.lexeme_sense_id.label("sense_id"),
+            func.count(SavedWord.id).label("n"),
+        )
+        .group_by(SavedWord.lexeme_sense_id)
+        .subquery()
+    )
+
+
+def _material_counts_subquery():
+    """Per sense: how many DISTINCT materials gloss it -- the ordering's
+    last-resort tie-break, and a separate figure from `material_example_
+    count` above (a plain row count, which can exceed the material count
+    when two lemmas in one material share a sense)."""
+    return (
+        select(
+            MaterialVocabulary.sense_id.label("sense_id"),
+            func.count(func.distinct(MaterialVocabulary.material_id)).label("n"),
+        )
+        .where(MaterialVocabulary.sense_id.is_not(None))
+        .group_by(MaterialVocabulary.sense_id)
+        .subquery()
+    )
+
+
 async def queue(
     session: AsyncSession,
     *,
     reason: str | None,
     limit: int,
     offset: int,
-) -> tuple[int, list[tuple[LexemeSense, Lexeme, int, int, list[str]]]]:
+) -> tuple[int, list[tuple[LexemeSense, Lexeme, int, int, list[str], int, int, int, int]]]:
     """The queue, paginated. `total` is over the FILTERED set, so a reviewer
     working one reason chip sees how much of THAT is left rather than the
     whole backlog. Each row carries its own `material_example_count`,
-    `report_count` and `report_notes` from the same query (extra grouped
-    joins, not one query per row)."""
+    `report_count`, `report_notes`, exposure's three parts (attempters,
+    lookups, saves) and `material_count` from the same query -- extra
+    grouped joins, not one query per row, and not one per part either."""
     where = _queue_where(reason)
 
     total_stmt = (
@@ -202,6 +295,17 @@ async def queue(
         .subquery()
     )
 
+    attempter_counts = _attempter_counts_subquery()
+    lookup_counts = _lookup_counts_subquery()
+    save_counts = _save_counts_subquery()
+    material_counts = _material_counts_subquery()
+
+    attempters_n = func.coalesce(attempter_counts.c.n, 0)
+    lookups_n = func.coalesce(lookup_counts.c.n, 0)
+    saves_n = func.coalesce(save_counts.c.n, 0)
+    material_count_n = func.coalesce(material_counts.c.n, 0)
+    exposure_expr = attempters_n + lookups_n + saves_n
+
     stmt = (
         select(
             LexemeSense,
@@ -209,24 +313,87 @@ async def queue(
             func.coalesce(example_counts.c.n, 0),
             func.coalesce(report_counts.c.n, 0),
             report_counts.c.notes,
+            attempters_n,
+            lookups_n,
+            saves_n,
+            material_count_n,
         )
         .join(Lexeme, LexemeSense.lexeme_id == Lexeme.id)
         .outerjoin(
             example_counts, example_counts.c.sense_id == LexemeSense.id
         )
         .outerjoin(report_counts, report_counts.c.sense_id == LexemeSense.id)
+        .outerjoin(attempter_counts, attempter_counts.c.sense_id == LexemeSense.id)
+        .outerjoin(lookup_counts, lookup_counts.c.sense_id == LexemeSense.id)
+        .outerjoin(save_counts, save_counts.c.sense_id == LexemeSense.id)
+        .outerjoin(material_counts, material_counts.c.sense_id == LexemeSense.id)
         .where(where)
         .order_by(
-            _priority_case(), _band_rank(), Lexeme.lemma, LexemeSense.sense_rank
+            _priority_case(),
+            exposure_expr.desc(),
+            LexemeSense.needs_review.desc(),
+            material_count_n.desc(),
+            Lexeme.lemma,
+            LexemeSense.sense_rank,
         )
         .limit(limit)
         .offset(offset)
     )
     rows = (await session.exec(stmt)).all()
     return total, [
-        (sense, lexeme, examples, reports, notes or [])
-        for sense, lexeme, examples, reports, notes in rows
+        (sense, lexeme, examples, reports, notes or [], attempters, lookups, saves, material_count)
+        for sense, lexeme, examples, reports, notes, attempters, lookups, saves, material_count
+        in rows
     ]
+
+
+async def exposure_for(session: AsyncSession, sense_id: uuid.UUID) -> tuple[int, int, int, int]:
+    """One sense's exposure, computed the identical way :func:`queue` does
+    for a whole page -- used by `approve`/`fix`'s own response, which has
+    exactly one row to answer for and would rather not rebuild the whole
+    queue's four subqueries for it. Returns
+    ``(attempters, lookups, saves, material_count)``.
+    """
+    attempters = (
+        await session.exec(
+            select(func.count(func.distinct(Attempt.user_id)))
+            .select_from(MaterialVocabulary)
+            .join(Attempt, Attempt.material_id == MaterialVocabulary.material_id)
+            .where(
+                MaterialVocabulary.sense_id == sense_id,
+                Attempt.status == AttemptStatus.SUBMITTED,
+            )
+        )
+    ).one()
+    lookups = (
+        await session.exec(
+            select(func.count(LookupEvent.id))
+            .select_from(MaterialVocabulary)
+            .join(
+                LookupEvent,
+                and_(
+                    LookupEvent.material_id == MaterialVocabulary.material_id,
+                    LookupEvent.lemma == MaterialVocabulary.lemma,
+                ),
+            )
+            .where(MaterialVocabulary.sense_id == sense_id, LookupEvent.lemma != "")
+        )
+    ).one()
+    saves = (
+        await session.exec(
+            select(func.count(SavedWord.id)).where(
+                SavedWord.lexeme_sense_id == sense_id
+            )
+        )
+    ).one()
+    material_count = (
+        await session.exec(
+            select(func.count(func.distinct(MaterialVocabulary.material_id))).where(
+                MaterialVocabulary.sense_id == sense_id
+            )
+        )
+    ).one()
+    return attempters, lookups, saves, material_count
 
 
 async def contexts(

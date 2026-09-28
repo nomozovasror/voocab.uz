@@ -10,6 +10,18 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
+class ExposurePartsOut(BaseModel):
+    """Exposure's three summed parts (A1) -- shown on hover/peek beside the
+    row's own `exposure` total, so a reviewer can tell "a thousand lookups"
+    apart from "a thousand saves" without a second request. See
+    `app.services.lexicon_review`'s own docstring for exactly what each
+    counts."""
+
+    attempters: int
+    lookups: int
+    saves: int
+
+
 class ReviewRowOut(BaseModel):
     """One `LexemeSense`, in the shape the review table draws a row from."""
 
@@ -44,6 +56,18 @@ class ReviewRowOut(BaseModel):
     #: The non-empty notes those open reports carry, so a reviewer reads
     #: what a learner actually said without a second request.
     report_notes: list[str] = []
+    #: How many learners have actually met this sense (A1) -- the new
+    #: ordering's own key: an unweighted sum of `exposure_parts`'s three
+    #: numbers. What decides the queue's order now, ahead of flag type.
+    exposure: int = 0
+    #: The three counts `exposure` sums -- see `ExposurePartsOut` and
+    #: `app.services.lexicon_review`'s module docstring for what each one
+    #: counts.
+    exposure_parts: ExposurePartsOut
+    #: How many DISTINCT materials gloss this sense -- exposure's own
+    #: tie-break, and the one signal left to rank by while exposure is
+    #: commonly zero across the board.
+    material_count: int = 0
 
 
 class ReviewQueueOut(BaseModel):

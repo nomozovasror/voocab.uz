@@ -107,13 +107,22 @@ def _context(**overrides) -> SavedWordContext:
     return SavedWordContext(**defaults)
 
 
+def _sense(**overrides) -> LexemeSense:
+    defaults = dict(id=uuid.uuid4(), lexeme_id=uuid.uuid4())
+    defaults.update(overrides)
+    return LexemeSense(**defaults)
+
+
 def test_gap_uses_the_inflected_surface_from_the_sentence():
     word = SavedWord(user_id=uuid.uuid4(), lemma="undertake")
     context = _context(
         surface="Undertaken",
         example="Undertaken carefully, the scheme accommodates two hectares.",
     )
-    gap = practice_service.resolve_gap(word, context)
+    # A cue only earns its place when something else could plausibly be
+    # confused for this word -- see the on/off tests below.
+    sense = _sense(needs_letter_hint=True)
+    gap = practice_service.resolve_gap(word, context, sense)
     assert gap.kind == "sentence"
     assert gap.answer == "Undertaken"
     assert gap.before == ""
@@ -142,7 +151,8 @@ def test_gap_fallback_definition_when_the_word_is_nowhere_in_the_sentence():
     word = SavedWord(user_id=uuid.uuid4(), lemma="undertake",
                      meaning_core_en="to begin a piece of work")
     context = _context(surface="xyz", example="A sentence about something else.")
-    gap = practice_service.resolve_gap(word, context)
+    sense = _sense(needs_letter_hint=True)
+    gap = practice_service.resolve_gap(word, context, sense)
     assert gap.kind == "definition"
     assert gap.answer == "undertake"
     assert gap.before == gap.after == ""
@@ -170,6 +180,202 @@ def test_gap_with_no_context_at_all_is_the_definition_fallback():
     gap = practice_service.resolve_gap(word, None)
     assert gap.kind == "definition"
     assert gap.answer == "undertake"
+
+
+# --- The definition cue: masking, the readability guard, and the letter cue --
+
+
+def test_sentence_gap_carries_a_masked_definition_cue_above_it():
+    """§B: the recall prompt shows the definition ABOVE the sentence, even
+    when there IS a sentence -- the cue used to be `None` on this kind."""
+    word = SavedWord(user_id=uuid.uuid4(), lemma="undertake",
+                     meaning_core_en="to begin a serious piece of work")
+    context = _context(
+        surface="Undertaken",
+        example="Undertaken carefully, the scheme accommodates two hectares.",
+    )
+    gap = practice_service.resolve_gap(word, context, _sense())
+    assert gap.kind == "sentence"
+    assert gap.definition is not None
+    assert "undertake" not in gap.definition.lower()
+
+
+def test_definition_kind_gap_is_masked_too():
+    """HIGH finding: the no-sentence fallback's definition can genuinely
+    contain the headword it defines -- a dictionary gloss for `undertake`
+    saying "to undertake..." is exactly this case. Leaving it unmasked
+    writes the lemma out beside the gap that is asking for it, so it now
+    goes through :func:`_mask_definition` the same as a sentence-kind
+    gap's cue does."""
+    word = SavedWord(user_id=uuid.uuid4(), lemma="undertake",
+                     meaning_core_en="to undertake a serious piece of work")
+    gap = practice_service.resolve_gap(word, None, _sense())
+    assert gap.kind == "definition"
+    assert gap.definition is not None
+    assert "undertake" not in gap.definition.lower()
+    assert practice_service.MASK_TOKEN in gap.definition
+
+
+def test_definition_kind_gap_readability_fields_feed_the_guard_too():
+    """`mask_count`/`remaining_words` used to be no-ops on this kind -- now
+    that it is masked, the SAME guard :func:`_passive_recall_or_
+    readability_fallback` reads for a sentence-kind gap must be able to
+    trip for a definition-kind one too."""
+    word = SavedWord(user_id=uuid.uuid4(), lemma="shortage",
+                     meaning_core_en="a shortage of shortages")
+    gap = practice_service.resolve_gap(word, None, _sense())
+    assert gap.kind == "definition"
+    assert practice_service._needs_readability_fallback(
+        gap.mask_count, gap.remaining_words
+    )
+
+
+def test_cue_is_shown_only_when_the_sense_needs_a_letter_hint():
+    word = SavedWord(user_id=uuid.uuid4(), lemma="undertake")
+    context = _context(
+        surface="Undertaken",
+        example="Undertaken carefully, the scheme accommodates two hectares.",
+    )
+    on = practice_service.resolve_gap(word, context, _sense(needs_letter_hint=True))
+    off = practice_service.resolve_gap(word, context, _sense(needs_letter_hint=False))
+    no_sense = practice_service.resolve_gap(word, context, None)
+    assert on.cue == "U"
+    assert off.cue == ""
+    # No sense loaded at all reads as "unknown, so no hint" -- the safer
+    # default rather than assuming one is deserved.
+    assert no_sense.cue == ""
+
+
+def test_cue_gating_also_applies_to_the_definition_fallback():
+    word = SavedWord(user_id=uuid.uuid4(), lemma="undertake",
+                     meaning_core_en="to begin a piece of work")
+    on = practice_service.resolve_gap(word, None, _sense(needs_letter_hint=True))
+    off = practice_service.resolve_gap(word, None, _sense(needs_letter_hint=False))
+    assert on.cue == "u"
+    assert off.cue == ""
+
+
+def test_masking_hides_the_lemma_and_its_inflected_forms():
+    masked, count, _remaining = practice_service._mask_definition(
+        "A shortage is a situation in which there is not enough of something.",
+        "shortage", "shortage",
+    )
+    assert "shortage" not in masked.lower()
+    assert count == 1
+    assert practice_service.MASK_TOKEN in masked
+
+
+def test_masking_hides_the_surface_form_from_the_sentence():
+    """`went` is not `go`'s prefix family at all -- it is masked only
+    because it is the SURFACE the sentence actually used."""
+    masked, count, _remaining = practice_service._mask_definition(
+        "The train had already went before anyone could board it.", "go", "went",
+    )
+    assert "went" not in masked.lower()
+    assert count == 1
+
+
+def test_masking_over_masks_a_five_character_family_prefix_on_purpose():
+    """`state`/`statement` share their first five characters -- the brief
+    accepts this over-masking rather than under-masking a real giveaway."""
+    masked, count, _remaining = practice_service._mask_definition(
+        "A formal statement issued by the state.", "state", "state",
+    )
+    assert "state" not in masked.lower()
+    assert "statement" not in masked.lower()
+    assert count == 2
+
+
+def test_matches_lemma_family_handles_y_to_ies_ied_inflections():
+    """`cry` -> `cries`/`cried`: the `y` is dropped, not kept, so neither
+    the plain `lemma + suffix` check nor the doubled-letter stem check
+    already in the loop would have caught it without this fix."""
+    assert practice_service._matches_lemma_family("cries", "cry") is True
+    assert practice_service._matches_lemma_family("cried", "cry") is True
+    assert practice_service._matches_lemma_family("crying", "cry") is True
+    # A vowel before the `y` keeps it -- the plain suffix rule already
+    # handles this, unaffected by the new check.
+    assert practice_service._matches_lemma_family("plays", "play") is True
+    assert practice_service._matches_lemma_family("played", "play") is True
+    # Still no false positive on an unrelated word merely starting the
+    # same way.
+    assert practice_service._matches_lemma_family("cryptic", "cry") is False
+
+
+def test_masking_a_short_lemma_is_exact_or_inflectional_only():
+    """`run` is under the five-character family prefix, so the brief's
+    narrower rule applies: `runs`/`running` are masked, `rune`/`rung` --
+    which merely start the same way -- are not."""
+    masked, count, _remaining = practice_service._mask_definition(
+        "To run, as one runs and keeps running, is not a rune or a rung.",
+        "run", "run",
+    )
+    assert count == 3  # run, runs, running
+    assert "rune" in masked.lower()
+    assert "rung" in masked.lower()
+
+
+def test_masking_a_phrasal_lemma_hides_the_whole_phrase_and_its_own_words():
+    """`give rise to` is masked as a run of blanks where it is named whole,
+    AND each of its own component words is masked wherever else it turns
+    up on its own -- a phrasal lemma is not one token :func:`_matches_
+    lemma_family` has ever known how to compare."""
+    masked, count, _remaining = practice_service._mask_definition(
+        "To give rise to something is to cause it to give a result.",
+        "give rise to", "give rise to",
+    )
+    assert "give rise to" not in masked.lower()
+    assert "rise" not in masked.lower()
+    assert practice_service.MASK_TOKEN in masked
+    assert count >= 3
+
+
+def test_masking_a_hyphenated_lemma_masks_its_own_component_words():
+    """`tip-of-the-tongue` has no space in it at all, but the same
+    component-splitting rule (whitespace OR hyphen) still finds `tongue`
+    wherever it appears alone."""
+    masked, _count, _remaining = practice_service._mask_definition(
+        "A tip-of-the-tongue moment is when a word almost surfaces, "
+        "the tongue unable to find it.",
+        "tip-of-the-tongue", "tip-of-the-tongue",
+    )
+    assert "tip-of-the-tongue" not in masked.lower()
+    assert "tongue" not in masked.lower()
+
+
+def test_masking_a_phrasal_surface_is_also_masked_whole():
+    """The SURFACE half of the pair (the sentence's own inflected form) is
+    treated identically -- `gave rise to` named whole in the definition is
+    masked as a phrase, not left for the per-word pass to miss."""
+    masked, _count, _remaining = practice_service._mask_definition(
+        "This gave rise to a new understanding of the problem.",
+        "give rise to", "gave rise to",
+    )
+    assert "gave rise to" not in masked.lower()
+
+
+def test_readability_guard_trips_past_two_masked_words():
+    assert practice_service._needs_readability_fallback(3, 10) is True
+    assert practice_service._needs_readability_fallback(2, 10) is False
+
+
+def test_readability_guard_trips_under_four_remaining_words():
+    assert practice_service._needs_readability_fallback(1, 3) is True
+    assert practice_service._needs_readability_fallback(1, 4) is False
+
+
+def test_sentence_gap_readability_fields_feed_the_guard():
+    """A definition that is almost entirely the word's own family leaves
+    too little standing -- exactly what the readability guard reads off
+    the `Gap` itself, before `_build_item` ever decides to substitute a
+    `recognise` fallback for it."""
+    word = SavedWord(user_id=uuid.uuid4(), lemma="shortage",
+                     meaning_core_en="a shortage of shortages")
+    context = _context(surface="shortage", example="There was a shortage.")
+    gap = practice_service.resolve_gap(word, context, _sense())
+    assert practice_service._needs_readability_fallback(
+        gap.mask_count, gap.remaining_words
+    )
 
 
 def test_context_rotation_is_least_recently_used_ties_broken_by_newest():
@@ -1226,6 +1432,143 @@ async def test_distractor_fallback_on_too_few_candidates():
 
 
 @pytest.mark.asyncio
+async def test_readability_guard_serves_recognise_when_masking_leaves_too_little(caplog):
+    """§B: masking the definition cue can leave passive `recall`'s sentence
+    unreadable. When that happens and the catalogue has enough distractors,
+    this encounter is served as `recognise` instead -- the ladder's OWN
+    plan stays `recall`, which is exactly what makes the substitution
+    measurable (`planned_exercise != exercise_type`) and what
+    `record_answer` must accept."""
+    email = f"readability-guard-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Readability guard: recognise")
+    part = await _make_part(material.id)
+    for lemma, meaning in [
+        ("colleague", "somebody you work with"),
+        ("outcome", "the result of an action or event"),
+        ("rival", "somebody competing for the same prize"),
+    ]:
+        await _make_vocab_entry(
+            material.id, part.id, lemma=lemma, pos="n", cefr_level="B1",
+            meaning_en=meaning,
+        )
+    now = datetime.now(timezone.utc)
+    # A due REVIEW card already at the ladder's top rung -- a brand-new
+    # word would be forced back to `recognise` by `_gather_candidates`
+    # regardless of `passive_level`, so this has to be a due review to
+    # actually exercise the `recall` dispatch branch.
+    word = await _make_saved_word(
+        user.id, "shortage-guard", pos="n", status="review",
+        passive_level="recall", passive_state=int(fsrs.State.Review),
+        passive_stability=25.0, passive_difficulty=5.0,
+        passive_due=now - timedelta(minutes=1),
+        # Almost entirely the word's own family once masked: `shortage` and
+        # `shortages` both mask out, leaving 2 words of 4 -- under the
+        # guard's own 4-word floor.
+        meaning_core_en="a shortage of shortages",
+    )
+    context = await _make_context(
+        word.id, material.id, surface="shortage-guard", pos="n", cefr_level="B1",
+        example="There was a severe shortage-guard across the region.",
+    )
+    try:
+        async with async_session_factory() as session:
+            await practice_service.set_daily_minutes(session, user.id, 10)
+        with caplog.at_level(logging.INFO, logger="app.services.practice"):
+            async with async_session_factory() as session:
+                items = await practice_service.build_session(session, user, tz=None)
+        assert len(items) == 1
+        item = items[0]
+        assert item["planned_exercise"] == "recall"
+        assert item["exercise_type"] == "recognise"
+        assert item["prompt"]["kind"] == "choice"
+        reasons = {
+            getattr(record, "reason", None) for record in caplog.records
+            if record.message == "vocabulary distractor fallback"
+        }
+        assert reasons == {"definition_unreadable"}
+
+        right_id = next(
+            option["id"] for option in item["prompt"]["options"]
+            if option["text"] == "a shortage of shortages"
+        )
+
+        async with async_session_factory() as session:
+            result = await practice_service.record_answer(
+                session, user, word_id=word.id, context_id=context.id,
+                direction="passive", exercise_type="recognise",
+                planned_exercise="recall", given=right_id, elapsed_ms=1200,
+            )
+        assert result is not None
+        assert result["verdict"] == "correct"
+
+        async with async_session_factory() as session:
+            log = (
+                await session.exec(
+                    select(VocabularyReviewLog).where(
+                        VocabularyReviewLog.saved_word_id == word.id
+                    )
+                )
+            ).one()
+            # Measurable exactly the way an ordinary distractor-pipeline
+            # fallback already is: served harder/easier than planned, and
+            # the PLAN -- not what was served -- is what the ladder reads.
+            assert log.exercise_type == "recognise"
+            assert log.planned_exercise == "recall"
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+@pytest.mark.asyncio
+async def test_readability_guard_serves_recall_anyway_with_too_few_distractors(caplog):
+    """The brief's own second half: if `recognise` can't be built EITHER
+    (too few surviving candidates), this is served as `recall` after all,
+    with the masked definition -- a fallback is a substitution forward
+    when one is available, never a reason to refuse the encounter."""
+    email = f"readability-guard-none-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+    # A part of speech nothing in the catalogue uses -- the same trick
+    # `test_distractor_fallback_on_too_few_candidates` uses, so the
+    # distractor pipeline is guaranteed to find nothing regardless of what
+    # other tests have left in this shared database.
+    no_candidates_pos = "zzznopos"
+    word = await _make_saved_word(
+        user.id, "zzzshortageguard", pos=no_candidates_pos, status="review",
+        passive_level="recall", passive_state=int(fsrs.State.Review),
+        passive_stability=25.0, passive_difficulty=5.0,
+        passive_due=now - timedelta(minutes=1),
+        meaning_core_en="a zzzshortageguard of zzzshortageguards",
+    )
+    material = await _make_material(user.id, "Readability guard: recall anyway")
+    context = await _make_context(
+        word.id, material.id, surface="zzzshortageguard", pos=no_candidates_pos,
+        example="There was a severe zzzshortageguard across the region.",
+    )
+    try:
+        async with async_session_factory() as session:
+            await practice_service.set_daily_minutes(session, user.id, 10)
+        with caplog.at_level(logging.INFO, logger="app.services.practice"):
+            async with async_session_factory() as session:
+                items = await practice_service.build_session(session, user, tz=None)
+        assert len(items) == 1
+        item = items[0]
+        # No catalogue candidates at all -- the recognise substitution
+        # itself fails, so this is served as recall anyway.
+        assert item["planned_exercise"] == "recall"
+        assert item["exercise_type"] == "recall"
+        assert item["prompt"]["kind"] == "sentence"
+        assert item["prompt"]["definition"] is not None
+        reasons = {
+            getattr(record, "reason", None) for record in caplog.records
+            if record.message == "vocabulary distractor fallback"
+        }
+        assert reasons == {"definition_unreadable"}
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+@pytest.mark.asyncio
 async def test_recognise_fallback_in_session_is_measurable_and_logged(caplog):
     email = f"fallback-session-{uuid.uuid4()}@test.local"
     user = await _make_user(email)
@@ -1256,6 +1599,138 @@ async def test_recognise_fallback_in_session_is_measurable_and_logged(caplog):
             if record.message == "vocabulary distractor fallback"
         }
         assert reasons == {"too_few_candidates"}
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+@pytest.mark.asyncio
+async def test_readability_fallback_claim_is_reverified_not_trusted():
+    """HIGH finding: the readability fallback's own claim (`exercise_type
+    == "recognise"` when the ladder's plan is passive `recall`) used to be
+    accepted on the wire once the SHAPE matched -- with nothing checking
+    whether masking THIS word's own definition, right now, would actually
+    have tripped the guard. A client could otherwise serve itself
+    `recognise` -- strictly easier -- any time the ladder asks for
+    `recall`."""
+    # Letters only: `_DEFINITION_WORD_RE` tokenises on `[A-Za-z']+`, so a
+    # digit in the lemma (an ordinary UUID hex slice) would silently split
+    # it into several tokens and throw off the word counts this test
+    # depends on.
+    tag = "".join(c for c in uuid.uuid4().hex if c.isalpha())[:8]
+    email = f"readability-forged-{tag}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+
+    # A definition the guard genuinely would NOT trip for: masking finds
+    # nothing of the lemma's own family in it, and plenty of words survive.
+    readable_word = await _make_saved_word(
+        user.id, f"committeeguard{tag}", pos="n", status="review",
+        passive_level="recall", passive_state=int(fsrs.State.Review),
+        passive_stability=25.0, passive_difficulty=5.0,
+        passive_due=now - timedelta(minutes=1),
+        meaning_core_en="a plan made and carried out by a group of people",
+    )
+    # A definition the guard genuinely DOES trip for -- the same shape
+    # `test_readability_guard_serves_recognise_when_masking_leaves_too_little`
+    # already exercises end to end; this checks the claim itself is honoured
+    # once it is genuine.
+    unreadable_word = await _make_saved_word(
+        user.id, f"shortageguard{tag}", pos="n", status="review",
+        passive_level="recall", passive_state=int(fsrs.State.Review),
+        passive_stability=25.0, passive_difficulty=5.0,
+        passive_due=now - timedelta(minutes=1),
+        meaning_core_en=f"a shortageguard{tag} of shortageguard{tag}s",
+    )
+    try:
+        async with async_session_factory() as session:
+            with pytest.raises(HTTPException) as exc:
+                await practice_service.record_answer(
+                    session, user, word_id=readable_word.id, context_id=None,
+                    direction="passive", exercise_type="recognise",
+                    given="anything", elapsed_ms=1200,
+                )
+        assert exc.value.status_code == 422
+
+        # The genuine `recall` answer, at the ladder's own plan, is
+        # unaffected -- it never enters the new check at all.
+        async with async_session_factory() as session:
+            plain = await practice_service.record_answer(
+                session, user, word_id=readable_word.id, context_id=None,
+                direction="passive", exercise_type="recall",
+                given=f"committeeguard{tag}", elapsed_ms=1200,
+            )
+        assert plain is not None
+        assert plain["verdict"] == "correct"
+
+        # A GENUINE readability fallback -- the guard really would have
+        # substituted `recognise` for this word -- is accepted.
+        async with async_session_factory() as session:
+            genuine = await practice_service.record_answer(
+                session, user, word_id=unreadable_word.id, context_id=None,
+                direction="passive", exercise_type="recognise",
+                given="whatever-option-id", elapsed_ms=1200,
+            )
+        assert genuine is not None
+    finally:
+        await _cleanup(user_ids=[user.id])
+
+
+@pytest.mark.asyncio
+async def test_recognise_fallback_to_recall_still_logs_an_unreadable_definition(caplog):
+    """MEDIUM finding: when the distractor pipeline can't build `recognise`
+    at all, `_build_item` used to fall back to passive `recall` WITHOUT
+    ever checking whether that `recall` prompt's own masked definition
+    would itself be unreadable. There is nowhere further to fall back to
+    (recognise already failed), but the guard's own reason is still logged,
+    the same shape a readability fallback that COULD substitute already
+    is."""
+    # Letters only -- see the sibling test above for why a digit in the
+    # lemma would throw off `_DEFINITION_WORD_RE`'s word counts.
+    tag = "".join(c for c in uuid.uuid4().hex if c.isalpha())[:8]
+    email = f"recognise-fallback-guard-{tag}@test.local"
+    user = await _make_user(email)
+    now = datetime.now(timezone.utc)
+    # A part of speech nothing else in the catalogue uses, so the
+    # distractor pipeline is guaranteed to find nothing (the same trick
+    # `test_distractor_fallback_on_too_few_candidates` uses) -- this word
+    # is queued at `recognise`, not `recall`, so the fallback taken is the
+    # HARDER one `FALLBACK_EXERCISE` names, not the readability guard's own.
+    # `pos` is `varchar(8)` on `lexemes`, so this has to fit in eight
+    # characters exactly, unique or not.
+    no_candidates_pos = "zzznopos"
+    word = await _make_saved_word(
+        user.id, f"zzzguardlemma{tag}", pos=no_candidates_pos, status="learning",
+        passive_level="recognise", passive_state=int(fsrs.State.Learning),
+        passive_due=now - timedelta(minutes=1),
+        meaning_core_en=f"a zzzguardlemma{tag} of zzzguardlemma{tag}s",
+    )
+    material = await _make_material(user.id, "Recognise fallback: guard logged")
+    context = await _make_context(
+        word.id, material.id, surface=f"zzzguardlemma{tag}", pos=no_candidates_pos,
+        example=f"There was a severe zzzguardlemma{tag} across the region.",
+    )
+    try:
+        async with async_session_factory() as session:
+            await practice_service.set_daily_minutes(session, user.id, 10)
+        with caplog.at_level(logging.INFO, logger="app.services.practice"):
+            async with async_session_factory() as session:
+                items = await practice_service.build_session(session, user, tz=None)
+        assert len(items) == 1
+        item = items[0]
+        # The ladder's own plan stays `recognise`; served as `recall`
+        # because the distractor pipeline found nothing to build a choice
+        # from -- the pre-existing FALLBACK_EXERCISE substitution.
+        assert item["planned_exercise"] == "recognise"
+        assert item["exercise_type"] == "recall"
+        reasons = [
+            getattr(record, "reason", None) for record in caplog.records
+            if record.message == "vocabulary distractor fallback"
+        ]
+        # `too_few_candidates` (the recognise attempt itself) AND
+        # `definition_unreadable` (this recall prompt's own masked
+        # definition, checked even though nothing more forward is left).
+        assert "too_few_candidates" in reasons
+        assert "definition_unreadable" in reasons
     finally:
         await _cleanup(user_ids=[user.id], material_ids=[material.id])
 
@@ -1297,6 +1772,35 @@ async def test_produce_accepts_the_lemma_and_every_context_surface():
 
 
 # --- "I know this" -----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_known_check_item_shows_the_definition_cue_too():
+    """§B: "I know this" is a recall attempt like any other, and now shows
+    the same definition cue an ordinary recall item would -- it is always
+    served at recall, so it always gets the cue, never a fallback."""
+    email = f"known-check-definition-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Known-check: definition cue")
+    word = await _make_saved_word(
+        user.id, "vogue-kc", meaning_core_en="the fashion of the moment",
+    )
+    await _make_context(
+        word.id, material.id, surface="vogue-kc",
+        example="It is in vogue-kc again this year.",
+    )
+    try:
+        async with async_session_factory() as session:
+            item = await practice_service.build_known_check_item(
+                session, user, word.id
+            )
+        assert item is not None
+        assert item["exercise_type"] == "recall"
+        assert item["prompt"]["kind"] == "sentence"
+        assert item["prompt"]["definition"] is not None
+        assert "vogue" not in item["prompt"]["definition"].lower()
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,7 @@ from app.api.deps import AdminUser
 from app.core.database import AsyncSession, get_session
 from app.models.lexicon import REVIEW_REASONS, Lexeme, LexemeSense
 from app.schemas.lexicon import (
+    ExposurePartsOut,
     LicencesOut,
     LicenceSourceOut,
     ReviewContextOut,
@@ -43,6 +44,11 @@ def _row_out(
     example_count: int,
     report_count: int = 0,
     report_notes: list[str] | None = None,
+    *,
+    attempters: int = 0,
+    lookups: int = 0,
+    saves: int = 0,
+    material_count: int = 0,
 ) -> ReviewRowOut:
     return ReviewRowOut(
         sense_id=sense.id,
@@ -65,6 +71,11 @@ def _row_out(
         material_example_count=example_count,
         report_count=report_count,
         report_notes=report_notes or [],
+        exposure=attempters + lookups + saves,
+        exposure_parts=ExposurePartsOut(
+            attempters=attempters, lookups=lookups, saves=saves
+        ),
+        material_count=material_count,
     )
 
 
@@ -88,12 +99,13 @@ async def get_review_queue(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> ReviewQueueOut:
-    """Reported first (P4), then `needs_review` (a rank-1 `pos_mismatch`
-    sense ahead of every other reason), then the core bucket -- see
-    `app.services.lexicon_review`'s own docstring for the three-bucket
-    ordering. `reason_counts`/`core_pending`/`reported_pending` are always
-    over the WHOLE backlog, regardless of the current filter, so the chips
-    never blank out as a reviewer narrows the list."""
+    """Reported first (P4), then everything else -- `needs_review` senses
+    and the unapproved core bucket, ONE list ordered by exposure descending
+    (A1) -- see `app.services.lexicon_review`'s own docstring for the
+    ordering and what exposure counts. `reason_counts`/`core_pending`/
+    `reported_pending` are always over the WHOLE backlog, regardless of the
+    current filter, so the chips never blank out as a reviewer narrows the
+    list."""
     if reason is not None and reason not in _VALID_REASONS:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Unknown reason")
 
@@ -109,8 +121,13 @@ async def get_review_queue(
         core_pending=core_pending,
         reported_pending=reported_pending,
         rows=[
-            _row_out(sense, lexeme, n, reports, notes)
-            for sense, lexeme, n, reports, notes in rows
+            _row_out(
+                sense, lexeme, n, reports, notes,
+                attempters=attempters, lookups=lookups, saves=saves,
+                material_count=material_count,
+            )
+            for sense, lexeme, n, reports, notes, attempters, lookups, saves, material_count
+            in rows
         ],
     )
 
@@ -146,7 +163,14 @@ async def approve_review_row(
     sense, lexeme = await _load_sense_and_lexeme(session, sense_id)
     sense = await lexicon_review.approve(session, sense, admin_id=user.id)
     example_count = len(await lexicon_review.contexts(session, sense_id, limit=10_000))
-    return _row_out(sense, lexeme, example_count)
+    attempters, lookups, saves, material_count = await lexicon_review.exposure_for(
+        session, sense_id
+    )
+    return _row_out(
+        sense, lexeme, example_count,
+        attempters=attempters, lookups=lookups, saves=saves,
+        material_count=material_count,
+    )
 
 
 @router.post(
@@ -174,7 +198,14 @@ async def fix_review_row(
     # `cefr` (rank-1 sense) -- reload so the response reflects it.
     lexeme = await session.get(Lexeme, lexeme.id) or lexeme
     example_count = len(await lexicon_review.contexts(session, sense_id, limit=10_000))
-    return _row_out(sense, lexeme, example_count)
+    attempters, lookups, saves, material_count = await lexicon_review.exposure_for(
+        session, sense_id
+    )
+    return _row_out(
+        sense, lexeme, example_count,
+        attempters=attempters, lookups=lookups, saves=saves,
+        material_count=material_count,
+    )
 
 
 @router.get("/licences", response_model=LicencesOut)

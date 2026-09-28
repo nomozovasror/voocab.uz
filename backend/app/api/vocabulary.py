@@ -289,6 +289,22 @@ async def forget_word(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not on your list")
 
 
+@router.post(
+    "/vocabulary/words/{word_id}/browsed", status_code=status.HTTP_204_NO_CONTENT
+)
+async def mark_word_browsed(
+    word_id: uuid.UUID, user: CurrentUser, session: SessionDep
+) -> None:
+    """Browse (§C) showed this card. Writes ``browsed_at`` and NOTHING
+    else -- no review log, no FSRS card, no due change, not counted in
+    daily minutes (see `app.services.vocabulary.mark_browsed`). Owner-only,
+    404 for a word id that is not this learner's, the same shape as every
+    other by-id word route.
+    """
+    if not await vocabulary_service.mark_browsed(session, user.id, word_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not on your list")
+
+
 @router.get("/vocabulary/words/{word_id}", response_model=SavedWordDetailOut)
 async def get_saved_word(
     word_id: uuid.UUID, user: CurrentUser, session: SessionDep
@@ -489,6 +505,7 @@ def _saved_word_out(
         reps=word.reps,
         suspended_until=word.suspended_until,
         active_paused=word.active_state is not None and direction == "passive",
+        browsed_at=word.browsed_at,
     )
 
 

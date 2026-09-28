@@ -19,11 +19,12 @@ from sqlmodel import select
 from app.core.database import async_session_factory
 from app.core.security import create_access_token
 from app.main import app
+from app.models.attempt import Attempt, AttemptStatus
 from app.models.lexicon import Lexeme, LexemeSense, TranslationReport
 from app.models.material import Material
 from app.models.part import Part
 from app.models.user import User
-from app.models.vocabulary import MaterialVocabulary
+from app.models.vocabulary import LookupEvent, MaterialVocabulary, SavedWord
 
 
 def _client() -> httpx.AsyncClient:
@@ -486,6 +487,246 @@ async def test_a_reported_sense_leads_the_queue_and_carries_its_notes() -> None:
             lexeme_ids=(lex_reported.id, lex_flagged.id),
             user_ids=(admin.id, reporter.id),
         )
+
+
+# --- A1: exposure orders the non-reported bucket -----------------------------
+
+
+async def _make_material_entry(
+    author_id: uuid.UUID, *, lemma: str, sense_id: uuid.UUID, lexeme_id: uuid.UUID,
+) -> tuple[Material, MaterialVocabulary]:
+    async with async_session_factory() as session:
+        material = Material(
+            author_id=author_id, type="reading",
+            title=f"exposure fixture {uuid.uuid4()}", visibility="public",
+        )
+        session.add(material)
+        await session.flush()
+        part = Part(
+            material_id=material.id, order_index=0, title="P",
+            passage={"paragraphs": []}, first_number=1,
+        )
+        session.add(part)
+        await session.flush()
+        entry = MaterialVocabulary(
+            material_id=material.id, part_id=part.id, lemma=lemma, surface=lemma,
+            pos="n", meaning_en="m", meaning_uz="uz", example="", cefr_level="B1",
+            lexeme_id=lexeme_id, sense_id=sense_id,
+        )
+        session.add(entry)
+        await session.commit()
+        await session.refresh(material)
+        return material, entry
+
+
+async def _make_attempt(user_id: uuid.UUID, material_id: uuid.UUID) -> None:
+    async with async_session_factory() as session:
+        session.add(Attempt(
+            user_id=user_id, material_id=material_id,
+            status=AttemptStatus.SUBMITTED, score=0, total_questions=0,
+        ))
+        await session.commit()
+
+
+async def _make_lookup(user_id: uuid.UUID, material_id: uuid.UUID, lemma: str) -> None:
+    async with async_session_factory() as session:
+        session.add(LookupEvent(
+            user_id=user_id, material_id=material_id, asked=lemma, lemma=lemma,
+            source="cache", found=True,
+        ))
+        await session.commit()
+
+
+async def _make_save(user_id: uuid.UUID, sense_id: uuid.UUID, lemma: str) -> None:
+    async with async_session_factory() as session:
+        session.add(SavedWord(user_id=user_id, lemma=lemma, lexeme_sense_id=sense_id))
+        await session.commit()
+
+
+async def _cleanup_exposure_fixtures(
+    *, material_ids: tuple[uuid.UUID, ...], sense_ids: tuple[uuid.UUID, ...],
+    user_ids: tuple[uuid.UUID, ...],
+) -> None:
+    async with async_session_factory() as session:
+        for sense_id in sense_ids:
+            for row in (
+                await session.exec(
+                    select(SavedWord).where(SavedWord.lexeme_sense_id == sense_id)
+                )
+            ).all():
+                await session.delete(row)
+        await session.flush()
+        for material_id in material_ids:
+            for row in (
+                await session.exec(
+                    select(LookupEvent).where(LookupEvent.material_id == material_id)
+                )
+            ).all():
+                await session.delete(row)
+            for row in (
+                await session.exec(
+                    select(Attempt).where(Attempt.material_id == material_id)
+                )
+            ).all():
+                await session.delete(row)
+        await session.commit()
+    await _cleanup(material_ids=material_ids, user_ids=user_ids)
+
+
+@pytest.mark.asyncio
+async def test_exposure_orders_the_non_reported_bucket_and_ties_break_correctly() -> None:
+    """Reported still leads; everything else is ONE list by exposure desc,
+    a needs_review sense breaking a tie ahead of an unflagged core sense,
+    material_count breaking anything left."""
+    admin = await _make_user(admin=True)
+    reader1 = await _make_user(admin=False)
+    reader2 = await _make_user(admin=False)
+    reader3 = await _make_user(admin=False)
+    token = create_access_token(str(admin.id))
+    tag = uuid.uuid4().hex[:8]
+
+    # High exposure, needs_review -- three attempters.
+    lex_high = await _make_lexeme(f"high{tag}", frequency_band="wider")
+    sense_high = await _make_sense(
+        lex_high.id, sense_rank=1, definition_en="d", meaning_uz="u",
+        needs_review=True, review_reasons=["judge_unsure"],
+    )
+    material_high, _ = await _make_material_entry(
+        admin.id, lemma=f"high{tag}", sense_id=sense_high.id, lexeme_id=lex_high.id,
+    )
+    for reader in (reader1, reader2, reader3):
+        await _make_attempt(reader.id, material_high.id)
+
+    # Equal (lower) exposure -- one attempter each -- but one is
+    # needs_review and the other is an unflagged CORE sense: the flagged
+    # one must sort first on the tie.
+    lex_flagged = await _make_lexeme(f"tie-flag{tag}", frequency_band="wider")
+    sense_flagged = await _make_sense(
+        lex_flagged.id, sense_rank=1, definition_en="d", meaning_uz="u",
+        needs_review=True, review_reasons=["judge_unsure"],
+    )
+    material_flagged, _ = await _make_material_entry(
+        admin.id, lemma=f"tieflag{tag}", sense_id=sense_flagged.id,
+        lexeme_id=lex_flagged.id,
+    )
+    await _make_attempt(reader1.id, material_flagged.id)
+
+    lex_core = await _make_lexeme(f"tie-core{tag}", frequency_band="core")
+    sense_core = await _make_sense(
+        lex_core.id, sense_rank=1, definition_en="d", meaning_uz="u",
+        needs_review=False,
+    )
+    material_core, _ = await _make_material_entry(
+        admin.id, lemma=f"tiecore{tag}", sense_id=sense_core.id, lexeme_id=lex_core.id,
+    )
+    await _make_attempt(reader1.id, material_core.id)
+
+    # Lowest exposure of the lot -- zero of everything.
+    lex_low = await _make_lexeme(f"low{tag}", frequency_band="wider")
+    sense_low = await _make_sense(
+        lex_low.id, sense_rank=1, definition_en="d", meaning_uz="u",
+        needs_review=True, review_reasons=["judge_unsure"],
+    )
+
+    material_ids = (material_high.id, material_flagged.id, material_core.id)
+    sense_ids = (sense_high.id, sense_flagged.id, sense_core.id, sense_low.id)
+    lexeme_ids = (lex_high.id, lex_flagged.id, lex_core.id, lex_low.id)
+    user_ids = (admin.id, reader1.id, reader2.id, reader3.id)
+    try:
+        async with _client() as client:
+            r = await client.get(
+                "/api/admin/lexicon/review", params={"limit": 200},
+                cookies={"access_token": token},
+            )
+            assert r.status_code == 200, r.text
+            rows = {row["sense_id"]: row for row in r.json()["rows"]}
+
+            assert rows[str(sense_high.id)]["exposure"] == 3
+            assert rows[str(sense_high.id)]["exposure_parts"] == {
+                "attempters": 3, "lookups": 0, "saves": 0,
+            }
+            assert rows[str(sense_flagged.id)]["exposure"] == 1
+            assert rows[str(sense_core.id)]["exposure"] == 1
+            assert rows[str(sense_low.id)]["exposure"] == 0
+
+            ids = [row["sense_id"] for row in r.json()["rows"]]
+            i_high = ids.index(str(sense_high.id))
+            i_flagged = ids.index(str(sense_flagged.id))
+            i_core = ids.index(str(sense_core.id))
+            i_low = ids.index(str(sense_low.id))
+
+            # Exposure descending, above everything else.
+            assert i_high < i_flagged
+            assert i_high < i_core
+            # Equal exposure (1): needs_review sorts before the unflagged
+            # core sense.
+            assert i_flagged < i_core
+            # Zero exposure, and not needs_review's own tie-break winner --
+            # last of the four.
+            assert i_low > i_flagged and i_low > i_core
+    finally:
+        await _cleanup_exposure_fixtures(
+            material_ids=material_ids, sense_ids=sense_ids, user_ids=user_ids,
+        )
+        await _cleanup(lexeme_ids=lexeme_ids)
+
+
+@pytest.mark.asyncio
+async def test_exposure_sums_attempters_lookups_and_saves_with_no_weighting() -> None:
+    admin = await _make_user(admin=True)
+    reader1 = await _make_user(admin=False)
+    reader2 = await _make_user(admin=False)
+    token = create_access_token(str(admin.id))
+    tag = uuid.uuid4().hex[:8]
+
+    lexeme = await _make_lexeme(f"sum{tag}", frequency_band="wider")
+    sense = await _make_sense(
+        lexeme.id, sense_rank=1, definition_en="d", meaning_uz="u",
+        needs_review=True, review_reasons=["judge_unsure"],
+    )
+    material, _ = await _make_material_entry(
+        admin.id, lemma=f"sum{tag}", sense_id=sense.id, lexeme_id=lexeme.id,
+    )
+    await _make_attempt(reader1.id, material.id)
+    await _make_attempt(reader2.id, material.id)
+    await _make_lookup(reader1.id, material.id, f"sum{tag}")
+    await _make_lookup(reader1.id, material.id, f"sum{tag}")
+    await _make_lookup(reader2.id, material.id, f"sum{tag}")
+    await _make_save(reader1.id, sense.id, f"sum{tag}")
+
+    try:
+        async with _client() as client:
+            r = await client.get(
+                "/api/admin/lexicon/review", params={"limit": 200},
+                cookies={"access_token": token},
+            )
+            assert r.status_code == 200, r.text
+            row = next(
+                row for row in r.json()["rows"] if row["sense_id"] == str(sense.id)
+            )
+            # 2 attempters + 3 lookups + 1 save = 6, a plain sum, no weights.
+            assert row["exposure"] == 6
+            assert row["exposure_parts"] == {
+                "attempters": 2, "lookups": 3, "saves": 1,
+            }
+            assert row["material_count"] == 1
+
+            # `approve`'s own response carries the identical figures.
+            approved = await client.post(
+                f"/api/admin/lexicon/review/{sense.id}/approve",
+                cookies={"access_token": token},
+            )
+            assert approved.status_code == 200
+            assert approved.json()["exposure"] == 6
+            assert approved.json()["exposure_parts"] == {
+                "attempters": 2, "lookups": 3, "saves": 1,
+            }
+    finally:
+        await _cleanup_exposure_fixtures(
+            material_ids=(material.id,), sense_ids=(sense.id,),
+            user_ids=(admin.id, reader1.id, reader2.id),
+        )
+        await _cleanup(lexeme_ids=(lexeme.id,))
 
 
 @pytest.mark.asyncio

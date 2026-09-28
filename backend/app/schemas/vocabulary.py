@@ -277,6 +277,11 @@ class SavedWordOut(BaseModel):
     #: ``direction`` goes back to ``both``. See
     #: ``practice._gather_candidates``'s pause rule.
     active_paused: bool = False
+    #: When a Browse card for this word was last shown (§C) -- the ONLY
+    #: thing Browse ever writes (`POST /vocabulary/words/{id}/browsed`).
+    #: Null for a word never browsed. Not practice: no bearing on FSRS, the
+    #: ladder, or anything else on this row.
+    browsed_at: datetime | None = None
 
 
 class SavedWordsOut(BaseModel):
@@ -381,9 +386,11 @@ class PracticeSessionIn(BaseModel):
 
 
 class PracticePromptOut(BaseModel):
-    """A gap exercise's prompt (`recall`). ``definition`` is only set when
-    ``kind`` is ``definition`` -- the fallback with no sentence to show at
-    all (see ``app.services.practice.resolve_gap``)."""
+    """A gap exercise's prompt (`recall`). ``definition`` is the word's
+    usual English meaning, shown as a cue above the sentence -- present
+    (and masked) on BOTH ``kind``s now, not only the ``definition`` one
+    that has no sentence at all (see ``app.services.practice
+    .resolve_gap``/``_mask_definition``)."""
 
     kind: Literal["sentence", "definition"]
     before: str

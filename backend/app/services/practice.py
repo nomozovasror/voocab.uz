@@ -178,6 +178,19 @@ PROMOTE_STREAK = 2
 #: ``exercise_type`` claiming one is rejected outright.
 FALLBACK_EXERCISE: dict[Direction, str] = {"passive": "recall", "active": "produce"}
 
+#: The OTHER direction a fallback may substitute a planned level for --
+#: passive `recall`'s own masked-definition cue can make the SENTENCE
+#: unreadable (see :func:`_mask_definition`/:data:`READABILITY_MIN_
+#: REMAINING_WORDS` below), in which case this encounter is served easier
+#: instead: a `recognise` choice, built exactly like an ordinary recognise
+#: item. The mirror image of :data:`FALLBACK_EXERCISE` (which only ever
+#: substitutes something HARDER for a struggling `recognise` item) -- kept
+#: as its own table rather than folded into that one, because the two read
+#: in opposite directions and a single dict serving both would have to be
+#: read differently depending on which level it was keyed by. Active has no
+#: entry: `produce`'s prompt is a bare Uzbek meaning with nothing to mask.
+READABILITY_FALLBACK_EXERCISE: dict[Direction, str] = {"passive": "recognise"}
+
 #: How long a client's claim that this answer is a same-session REQUEUE (see
 #: :func:`record_answer`'s ``requeued`` handling) may be validated against --
 #: generous enough for a genuinely long sitting, tight enough that a stale
@@ -348,6 +361,27 @@ class Gap:
     build the prompt (dropping the ``answer`` field) and again, identically,
     when the submitted answer comes back -- no session state is kept
     between the two requests.
+
+    ``definition`` is the English definition cue shown ABOVE the sentence,
+    smaller and dimmer -- a cue, not the question (`brief-vocabulary
+    -tuzatish-browse.md` §B). Present on BOTH kinds, and MASKED on both
+    (see :func:`_mask_definition`): on ``sentence`` the answer is the
+    sentence's own surface form, and on ``definition`` the answer is the
+    bare lemma -- either way the gloss can genuinely contain the word it is
+    defining (a dictionary gloss for a headword often does), and showing it
+    unmasked there would write the answer out beside the gap asking for it
+    just as surely as an unmasked sentence-kind cue would.
+
+    ``cue`` is the answer's first character, or ``""`` when the word's own
+    ``LexemeSense.needs_letter_hint`` is false -- a hint is only worth
+    giving when something else in the catalogue could plausibly be
+    confused for this word (see `app.services.lexicon_hints`); otherwise
+    the letter narrows nothing and only leaks the answer.
+
+    ``mask_count``/``remaining_words`` are not sent to the client -- they
+    exist to let :func:`_passive_recall_or_readability_fallback` decide
+    whether THIS encounter needs the readability fallback, on EITHER kind
+    now that both are masked.
     """
 
     before: str
@@ -356,6 +390,8 @@ class Gap:
     kind: Literal["sentence", "definition"]
     definition: str | None
     answer: str
+    mask_count: int = 0
+    remaining_words: int = 0
 
 
 @dataclass(frozen=True)
@@ -386,6 +422,160 @@ def _find_surface(text: str, surface: str) -> tuple[int, int] | None:
     return (match.start(), match.end()) if match else None
 
 
+#: Masking's own family-prefix rule shares :data:`app.services.distractors
+#: .FAMILY_PREFIX_LEN` (5) -- the same "over-masking is accepted" bargain
+#: the brief makes explicitly (``state``/``statement``): a lemma of at
+#: least this many characters masks any word in the definition sharing its
+#: first :data:`_FAMILY_PREFIX_LEN` characters, which is deliberately wider
+#: than "the exact word" and catches most derivational relatives for free.
+_FAMILY_PREFIX_LEN = distractors.FAMILY_PREFIX_LEN
+
+#: Suffixes tried both ways for a SHORT lemma (under :data:`_FAMILY_PREFIX_
+#: LEN` characters), where the brief asks for "exact/inflectional match
+#: only" rather than the prefix rule -- ``run`` must not mask ``rung`` or
+#: ``rune``, but it must still mask ``runs``/``running``.
+_SHORT_LEMMA_SUFFIXES: tuple[str, ...] = ("s", "es", "ed", "ing", "ies", "ier", "iest")
+
+#: The literal token a masked word in the definition becomes -- the brief's
+#: own "_____", the same gap marker the sentence itself would use.
+MASK_TOKEN = "_____"
+
+_DEFINITION_WORD_RE = re.compile(r"[A-Za-z']+")
+
+#: The readability guard's two thresholds (`brief-vocabulary-tuzatish
+#: -browse.md` §B) -- named constants because the brief itself calls out
+#: "fewer than 4 words remain" and "more than 2 words masked" as numbers
+#: worth being able to move without a search-and-replace.
+READABILITY_MIN_REMAINING_WORDS = 4
+READABILITY_MAX_MASKED_WORDS = 2
+
+#: The fallback-logging reason for a masking-driven substitution -- read
+#: back out by whatever counts fallback reasons in the log, exactly the way
+#: ``short_definition``/``too_few_candidates`` already are (see
+#: ``app.services.distractors.Built.fallback_reason``, which this is a
+#: THIRD reason for, logged the identical way rather than through a second
+#: mechanism).
+DEFINITION_UNREADABLE_REASON = "definition_unreadable"
+
+
+def _matches_lemma_family(word: str, lemma: str) -> bool:
+    """Whether ``word`` (a token found INSIDE a definition) is close enough
+    to ``lemma`` that showing it beside a blanked answer would give the
+    answer away -- the brief's four cases: the lemma itself, an inflected
+    form of it, and (for a lemma of at least :data:`_FAMILY_PREFIX_LEN`
+    characters) anything sharing its first five characters, deliberately
+    wide enough to over-mask a derivational relative (``state``/
+    ``statement``) rather than under-mask a real giveaway.
+    """
+    word_l, lemma_l = word.lower(), lemma.lower()
+    if word_l == lemma_l:
+        return True
+    if len(lemma_l) >= _FAMILY_PREFIX_LEN:
+        return len(word_l) >= _FAMILY_PREFIX_LEN and word_l[:_FAMILY_PREFIX_LEN] == lemma_l[:_FAMILY_PREFIX_LEN]
+    # `cry` -> `cries`/`cried`: the trailing `y` is DROPPED before `-ies`/
+    # `-ied`, so the result is neither `lemma + suffix` nor a stem that
+    # reduces back to the lemma by stripping a doubled letter -- the two
+    # cases the loop below already covers. Only a consonant-before-`y`
+    # lemma needs this: a vowel-before-`y` one (`play` -> `plays`/`played`)
+    # keeps its `y` and the plain `s`/`ed` suffix rule already matches it.
+    if len(lemma_l) > 1 and lemma_l[-1] == "y" and lemma_l[-2] not in "aeiou":
+        stem = lemma_l[:-1]
+        if word_l == stem + "ies" or word_l == stem + "ied":
+            return True
+    # A short lemma: exact match only got tried above, so what is left is
+    # a plain inflectional ending either way round -- ``lemma_l + suffix``
+    # (`run` -> `runs`) or ``word_l`` reducing back TO ``lemma_l`` once a
+    # suffix (and, for the doubled-consonant case, its extra letter) is
+    # stripped (`run` -> `running`).
+    for suffix in _SHORT_LEMMA_SUFFIXES:
+        if word_l == lemma_l + suffix:
+            return True
+        if word_l.endswith(suffix):
+            stem = word_l[: -len(suffix)]
+            # `stem` reducing straight back to the lemma (`skies` -> `sky`'s
+            # own suffix table would land on `sk`, not this path -- this is
+            # the doubled-final-consonant case: `running` strips to `runn`,
+            # which is the lemma (`run`) plus one more copy of its own last
+            # letter, not the lemma itself.
+            if stem == lemma_l or stem == lemma_l + lemma_l[-1:]:
+                return True
+    return False
+
+
+#: A phrasal (``give rise to``) or hyphenated (``tip-of-the-tongue``) lemma
+#: or surface split on either separator into its own component words -- so
+#: masking can be asked of ONE word at a time, the only thing
+#: :func:`_matches_lemma_family` has ever known how to judge. A plain
+#: single-word lemma/surface splits to a list of exactly itself, which is
+#: why every existing single-word caller sees no change in behaviour.
+def _phrase_components(phrase: str) -> list[str]:
+    return [part for part in re.split(r"[\s-]+", phrase.strip()) if part]
+
+
+def _mask_definition(
+    definition: str, lemma: str, surface: str
+) -> tuple[str, int, int]:
+    """The definition, with every word matching :func:`_matches_lemma_
+    family` against the lemma OR the surface (or one of either's own
+    :func:`_phrase_components`, for a multi-word answer) replaced by
+    :data:`MASK_TOKEN`. Returns ``(masked_text, mask_count, remaining_
+    words)`` -- the latter two are what :func:`_needs_readability_fallback`
+    reads, not sent to the client on their own.
+
+    A multi-word lemma or surface named WHOLE in the definition (`give rise
+    to`) is masked as a run of blanks, one per word of the phrase, in a
+    pass over the RAW text before the single-word pass below ever runs --
+    otherwise a phrase would only be caught piecemeal, wherever one of its
+    own words happened to also pass the family check standing alone, and a
+    reader would be left free to read the other two off whole. Each of
+    those masked words still counts towards ``mask_count`` (over-masking a
+    phrasal answer is accepted, same as any other family match, and is
+    exactly what pushes the readability guard to fall back on a long one).
+    """
+    text = definition or ""
+    phrase_mask_count = 0
+    for phrase in (lemma, surface):
+        components = _phrase_components(phrase) if phrase else []
+        if len(components) < 2:
+            continue
+        replacement = " ".join([MASK_TOKEN] * len(components))
+        match = _find_surface(text, phrase)
+        while match is not None:
+            start, end = match
+            text = text[:start] + replacement + text[end:]
+            phrase_mask_count += len(components)
+            match = _find_surface(text, phrase)
+
+    lemma_components = _phrase_components(lemma) if lemma else []
+    surface_components = _phrase_components(surface) if surface else []
+    word_mask_count = 0
+    total = 0
+
+    def _replace(match: re.Match[str]) -> str:
+        nonlocal word_mask_count, total
+        total += 1
+        word = match.group(0)
+        if any(_matches_lemma_family(word, part) for part in lemma_components) or any(
+            word.lower() == part.lower() for part in surface_components
+        ):
+            word_mask_count += 1
+            return MASK_TOKEN
+        return word
+
+    masked = _DEFINITION_WORD_RE.sub(_replace, text)
+    return masked, phrase_mask_count + word_mask_count, total - word_mask_count
+
+
+def _needs_readability_fallback(mask_count: int, remaining_words: int) -> bool:
+    """The brief's guard, named: too little of the definition survives
+    masking to be worth reading, either because too few words are left at
+    all or because too many were blanked out of it."""
+    return (
+        remaining_words < READABILITY_MIN_REMAINING_WORDS
+        or mask_count > READABILITY_MAX_MASKED_WORDS
+    )
+
+
 def resolve_gap(
     word: SavedWord, context: SavedWordContext | None, sense: LexemeSense | None = None
 ) -> Gap:
@@ -403,9 +593,24 @@ def resolve_gap(
     the word's own usual meaning first and the context's contextual one
     only if that is empty, per the brief. The answer there is the lemma.
 
-    The cue is always just the answer's first character: the reveal after
-    submitting is where the meanings do the teaching, not the cue.
+    Every gap now also carries the word's usual English definition as a
+    CUE above the sentence (`brief-vocabulary-tuzatish-browse.md` §B),
+    MASKED (:func:`_mask_definition`) on EITHER kind: on ``sentence`` the
+    answer is the sentence's surface form, and on ``definition`` the
+    answer is the bare lemma -- a dictionary gloss can genuinely contain
+    the headword it defines, and leaving THAT branch unmasked would write
+    the answer out beside the gap asking for it just as surely as an
+    unmasked sentence-kind cue would.
+
+    The cue is the answer's first character -- or ``""`` when the sense's
+    own ``needs_letter_hint`` is false, because a hint only earns its place
+    when something else in the catalogue could plausibly be confused for
+    this word (see `app.services.lexicon_hints`); ``sense=None`` (a caller
+    with no sense loaded) reads as "unknown, so no hint" -- the safer
+    default when a caller has not fetched the fact that would justify one.
     """
+    needs_hint = sense is not None and sense.needs_letter_hint
+
     if context is not None and context.example:
         match = _find_surface(context.example, context.surface or word.lemma)
         if match is None and context.surface and context.surface != word.lemma:
@@ -413,23 +618,34 @@ def resolve_gap(
         if match is not None:
             start, end = match
             answer = context.example[start:end]
+            raw_definition = _passive_definition(word, context, sense)
+            masked, mask_count, remaining = _mask_definition(
+                raw_definition, word.lemma, context.surface or answer
+            )
             return Gap(
                 before=context.example[:start],
                 after=context.example[end:],
-                cue=answer[:1],
+                cue=answer[:1] if needs_hint else "",
                 kind="sentence",
-                definition=None,
+                definition=masked or None,
                 answer=answer,
+                mask_count=mask_count,
+                remaining_words=remaining,
             )
 
-    definition = _passive_definition(word, context, sense)
+    raw_definition = _passive_definition(word, context, sense)
+    masked, mask_count, remaining = _mask_definition(
+        raw_definition, word.lemma, word.lemma
+    )
     return Gap(
         before="",
         after="",
-        cue=word.lemma[:1],
+        cue=(word.lemma[:1] if needs_hint else ""),
         kind="definition",
-        definition=definition or None,
+        definition=masked or None,
         answer=word.lemma,
+        mask_count=mask_count,
+        remaining_words=remaining,
     )
 
 
@@ -1466,10 +1682,11 @@ def _choice_item(
     is_new: bool,
     options: list[distractors.Option],
     shown_meaning_uz: str | None,
+    planned_exercise: str = "recognise",
 ) -> dict:
     item = _base_item(
         word, context, direction=direction, exercise_type="recognise",
-        planned_exercise="recognise", is_new=is_new,
+        planned_exercise=planned_exercise, is_new=is_new,
     )
     # Neither direction shows a sentence here -- passive `recognise` is the
     # English word alone (the brief's "ingliz so'zi, ostida 4 ta ta'rif"),
@@ -1498,6 +1715,83 @@ def _rng_seed(word_id: uuid.UUID, context: SavedWordContext | None) -> int:
     return (word_id.int ^ (context.id.int if context else 0)) & 0xFFFFFFFF
 
 
+async def _passive_recall_or_readability_fallback(
+    session: AsyncSession,
+    word: SavedWord,
+    context: SavedWordContext | None,
+    *,
+    is_new: bool,
+    source_material_ids: frozenset[uuid.UUID],
+    family_keys: frozenset[str],
+    sense: LexemeSense | None = None,
+) -> dict:
+    """Passive `recall`'s own item -- the ladder's top rung -- with the
+    readability guard applied (`brief-vocabulary-tuzatish-browse.md` §B).
+
+    Built by hand rather than through :func:`_recall_item`, because the
+    guard needs the :class:`Gap` itself (``mask_count``/``remaining_words``),
+    not the plain dict that function turns it into.
+
+    The guard runs on EITHER kind now -- a ``definition``-kind gap has no
+    sentence, but its own masked cue can be just as unreadable as a
+    sentence-kind one's (the answer there is the bare lemma, and a gloss
+    that leans on its own headword can lose most of itself to masking too).
+    A gap with no definition at all (``gap.definition is None``) has
+    nothing to guard, and never trips it. When the guard DOES trip, this is
+    served as `recognise` instead -- the ladder's OWN plan stays ``recall``
+    (see :data:`READABILITY_FALLBACK_EXERCISE`, and :func:`record_answer`'s
+    authority check, which accepts exactly this substitution) -- built
+    exactly like an ordinary recognise item. If the distractor pipeline
+    can't build one either (too few candidates), this falls all the way
+    back to serving `recall` with the masked definition anyway, per the
+    brief: a fallback is a substitution forward when one is available,
+    never a reason to refuse the encounter outright.
+    """
+    gap = resolve_gap(word, context, sense)
+    recall_item = _base_item(
+        word, context, direction="passive", exercise_type="recall",
+        planned_exercise="recall", is_new=is_new,
+    )
+    recall_item["prompt"] = {
+        "kind": gap.kind, "before": gap.before, "after": gap.after,
+        "cue": gap.cue, "definition": gap.definition,
+    }
+    if gap.definition is None:
+        return recall_item
+    if not _needs_readability_fallback(gap.mask_count, gap.remaining_words):
+        return recall_item
+
+    logger.info(
+        "vocabulary distractor fallback",
+        extra={
+            "lemma": word.lemma,
+            "direction": "passive",
+            "reason": DEFINITION_UNREADABLE_REASON,
+        },
+    )
+    right_text = _recognise_right_text(word, context, "passive", sense)
+    definition = _passive_definition(word, context, sense)
+    built = await distractors.build(
+        session,
+        word_id=word.id,
+        right_text=right_text,
+        right_definition=definition,
+        pos=word.pos or (context.pos if context else ""),
+        cefr_level=context.cefr_level if context else "",
+        source_material_ids=source_material_ids,
+        family_keys=family_keys,
+        exclude_lemma=word.lemma,
+        option_field="definition",
+        rng_seed=_rng_seed(word.id, context),
+    )
+    if built.options is None:
+        return recall_item
+    return _choice_item(
+        word, context, direction="passive", is_new=is_new, options=built.options,
+        shown_meaning_uz=None, planned_exercise="recall",
+    )
+
+
 async def _build_item(
     session: AsyncSession,
     word: SavedWord,
@@ -1522,9 +1816,10 @@ async def _build_item(
     .meaning_core_*`` columns.
     """
     if direction == "passive" and level == "recall":
-        return _recall_item(
-            word, context, direction="passive", planned_exercise="recall",
-            is_new=is_new, sense=sense,
+        return await _passive_recall_or_readability_fallback(
+            session, word, context, is_new=is_new,
+            source_material_ids=source_material_ids, family_keys=family_keys,
+            sense=sense,
         )
     if direction == "active" and level == "produce":
         return _produce_item(
@@ -1557,6 +1852,27 @@ async def _build_item(
             },
         )
         if direction == "passive":
+            # This IS the readability guard's own path, not a second
+            # informal one beside it: the distractor pipeline already came
+            # back empty, so there is no `recognise` left to fall back TO
+            # (unlike :func:`_passive_recall_or_readability_fallback`'s own
+            # substitution), but a `recall` served here can be exactly as
+            # unreadable after masking, and the brief's guard is a thing to
+            # LOG regardless of whether there is anywhere further to fall
+            # to -- see that function's own docstring for the identical
+            # check and the identical reason constant.
+            gap = resolve_gap(word, context, sense)
+            if gap.definition is not None and _needs_readability_fallback(
+                gap.mask_count, gap.remaining_words
+            ):
+                logger.info(
+                    "vocabulary distractor fallback",
+                    extra={
+                        "lemma": word.lemma,
+                        "direction": "passive",
+                        "reason": DEFINITION_UNREADABLE_REASON,
+                    },
+                )
             return _recall_item(
                 word, context, direction="passive", planned_exercise="recognise",
                 is_new=is_new, sense=sense,
@@ -1753,10 +2069,28 @@ async def record_answer(
     the only exercise a caller may serve is the level itself, or -- when the
     level is the ladder's floor (``recognise``) -- the one harder exercise a
     distractor-pipeline fallback is allowed to substitute
-    (:data:`FALLBACK_EXERCISE`). Anything else is a 422: a client asking for
-    ``produce`` on a word still at passive ``recognise``, say, is not a
-    fallback the pipeline would ever choose and not a level the ladder ever
-    served.
+    (:data:`FALLBACK_EXERCISE`), or -- when the level is passive ``recall``,
+    the ladder's TOP rung -- the one EASIER exercise the readability guard
+    is allowed to substitute when masking the definition cue leaves it
+    unreadable (:data:`READABILITY_FALLBACK_EXERCISE`, built by
+    :func:`_passive_recall_or_readability_fallback`). Anything else is a
+    422: a client asking for ``produce`` on a word still at passive
+    ``recognise``, say, is not a fallback the pipeline would ever choose
+    and not a level the ladder ever served.
+
+    The readability fallback is not accepted on the claim alone, unlike the
+    distractor pipeline's harder one: that one only ever makes THIS
+    encounter harder, which nothing is gained by forging, but the
+    readability fallback moves to an EASIER exercise, and a client that
+    could claim it freely could serve itself `recognise` any time the
+    ladder asks for `recall`. So whenever ``planned_exercise == "recall"``
+    and the caller's ``exercise_type`` is the fallback rather than the
+    plan itself, the guard is RE-RUN here -- :func:`resolve_gap` for this
+    word and context, then :func:`_needs_readability_fallback` on the gap
+    it returns -- and a 422 follows if masking this word's own definition,
+    right now, would not actually have tripped it. The same shape as the
+    ``requeued`` check below: recomputed from the word's own state, never
+    trusted off the wire.
 
     ``direction="active"`` is refused unless the active card has already
     started (:func:`_current_level` returning something is not enough on its
@@ -1906,15 +2240,47 @@ async def record_answer(
             skip_ladder = True
         else:
             planned_exercise = _current_level(word, direction)
-            fallback = (
-                FALLBACK_EXERCISE.get(direction) if planned_exercise == "recognise" else None
-            )
+            if planned_exercise == "recognise":
+                fallback = FALLBACK_EXERCISE.get(direction)
+            elif planned_exercise == "recall":
+                # The readability guard's own substitution -- masking the
+                # definition made the sentence unreadable, so this
+                # encounter was served as `recognise` instead, though the
+                # ladder's own plan stayed `recall` (see
+                # `_passive_recall_or_readability_fallback`).
+                fallback = READABILITY_FALLBACK_EXERCISE.get(direction)
+            else:
+                fallback = None
             if exercise_type != planned_exercise and exercise_type != fallback:
                 raise HTTPException(
                     status.HTTP_422_UNPROCESSABLE_ENTITY,
                     "exercise_type does not match the ladder's planned level "
                     "for this word",
                 )
+            if (
+                planned_exercise == "recall"
+                and fallback is not None
+                and exercise_type == fallback
+            ):
+                # The readability fallback is accepted on the wire above
+                # exactly like the distractor pipeline's own harder one --
+                # but unlike that one, this substitution moves to an
+                # EASIER exercise, and trusting the claim with no further
+                # check would let a client serve itself `recognise` any
+                # time the ladder actually asks for `recall`, whether or
+                # not masking this word's OWN definition, in this context,
+                # would really have tripped the guard. Re-verified here,
+                # the same shape ``requeued`` is above: recomputed from
+                # the word's own gap, never trusted off the wire.
+                verify_gap = resolve_gap(word, context, sense)
+                if verify_gap.definition is None or not _needs_readability_fallback(
+                    verify_gap.mask_count, verify_gap.remaining_words
+                ):
+                    raise HTTPException(
+                        status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        "the readability fallback does not apply to this "
+                        "word's current definition cue",
+                    )
 
     if exercise_type == "recognise":
         right_text = _recognise_right_text(word, context, direction, sense)

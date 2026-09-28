@@ -538,6 +538,16 @@ class SavedWord(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
 
+    #: When a Browse card for this word was last shown (`POST /vocabulary/
+    #: words/{id}/browsed`) -- the ONLY thing Browse ever writes. Browse is
+    #: explicitly not practice (§C of the brief): no `VocabularyReviewLog`
+    #: row, no FSRS card touched, no `due` moved, nothing counted in daily
+    #: minutes. Null for a word never browsed, which is every word before
+    #: this column existed and most words after.
+    browsed_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+
 
 class SavedWordContext(SQLModel, table=True):
     """One place a saved word was met, with the sense it had there.

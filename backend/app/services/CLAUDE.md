@@ -708,6 +708,156 @@ watched.
   the same shape as the word page's 404: neither confirms that a word
   exists for anyone but its owner.
 
+## The admin review queue orders by exposure, not by flag type (A1)
+
+2,476 `needs_review` senses is twenty hours of one person's work -- a queue
+that never empties. `app.services.lexicon_review` orders it by how many
+learners have actually MET a sense rather than by which flag it carries: a
+wrong meaning nobody has read is free; one a thousand students have already
+seen is the whole reason the tab exists.
+
+- **Reported still leads, unconditionally.** A learner who filed "this is
+  wrong" has already done the finding a reviewer would otherwise have to
+  do, which outranks any exposure count.
+- **Everything else is ONE list**, `needs_review` senses and the unapproved
+  core bucket together, ordered by `exposure` descending; a `needs_review`
+  sense breaks a tie ahead of an unflagged one, and `material_count` breaks
+  anything still tied after that. `reason=` still narrows which rows are IN
+  the list; it no longer changes how the list sorts.
+- **`exposure` is a plain, unweighted sum of three counts** -- distinct
+  users who submitted an attempt on a material glossing the sense, how
+  many `lookup_events` resolved to it (a plain count, not distinct users:
+  repeats say something too), and how many `saved_words` point at it
+  (already one per learner). No weights: the three are added, not scored
+  against each other. `material_count` (distinct materials glossing the
+  sense) is a SEPARATE column, never folded into `exposure` -- "how many
+  materials" and "how many people" are different questions, and the second
+  is what the ordering is for.
+- Computed as grouped subqueries joined once per page (`lexicon_review
+  .queue`) or once per sense (`exposure_for`, used by `approve`/`fix`'s own
+  response) -- never once per row. `ix_attempts_material_id_status` keeps
+  the attempters subquery's join+filter an index lookup, and
+  `ix_lookup_events_material_id_lemma` does the identical job for the
+  lookups subquery's own join on `(material_id, lemma)` -- both alongside
+  `needs_letter_hint` in the same migration.
+
+## Recall's definition cue: masked, sometimes a fallback, sometimes hinted (B)
+
+`practice.resolve_gap`'s `Gap` now always carries an English definition
+cue, shown above the sentence, smaller and dimmer than it -- a cue, not the
+question. Grading, the ladder and the direction are all unchanged; only
+what the PROMPT shows moved.
+
+- **The cue is masked on BOTH kinds** (`practice._mask_definition`)
+  wherever it would otherwise write the answer out: the lemma, the
+  sentence's own inflected surface, and (`practice._matches_lemma_family`)
+  any word sharing a 5-character-or-more lemma's first five characters --
+  deliberately wide enough to over-mask a derivational relative
+  (`state`/`statement`) rather than under-mask a real giveaway. A lemma
+  UNDER five characters uses the narrower "exact or plain inflectional
+  ending" rule instead, so `run` masks `runs`/`running` but not
+  `rune`/`rung`, which merely start the same way (including the `y` ->
+  `ies`/`ied` case the plain suffix table misses on its own: `cry` masks
+  `cries`/`cried`, not only `cries`/`crying`). A `definition`-kind gap (no
+  sentence at all -- the definition IS the whole prompt) is masked too, the
+  answer there being the bare lemma -- a dictionary gloss commonly contains
+  the very headword it defines ("to undertake..." defining `undertake`),
+  and leaving that ONE kind unmasked would write the answer out beside the
+  gap asking for it exactly as surely as an unmasked sentence-kind cue
+  would. A PHRASAL or hyphenated lemma/surface (`give rise to`,
+  `tip-of-the-tongue`) is masked twice over: as a whole phrase, wherever it
+  is named that way in the definition, AND word by word
+  (`practice._phrase_components`, split on whitespace or a hyphen) against
+  every OTHER family match in the text -- `_matches_lemma_family` has only
+  ever known how to judge one word at a time, so a phrase is nothing more
+  than asking it that question once per word it is made of, on top of the
+  whole-phrase pass.
+- **The readability guard is a fallback, not a refusal, and runs on EITHER
+  kind now.** Masking a passive `recall` item's definition down to fewer
+  than `READABILITY_MIN_REMAINING_WORDS` words, or past
+  `READABILITY_MAX_MASKED_WORDS` masked, serves this ONE encounter as
+  `recognise` instead (`practice._passive_recall_or_readability_fallback`)
+  -- the ladder's own plan stays `recall`, which is what makes the
+  substitution measurable the identical way a distractor-pipeline fallback
+  already is (`planned_exercise != exercise_type`), and what
+  `record_answer`'s authority check accepts it as
+  (`READABILITY_FALLBACK_EXERCISE`, the mirror image of `FALLBACK_EXERCISE`
+  -- that one only ever substitutes something HARDER, this one only ever
+  substitutes something EASIER). If the distractor pipeline can't build a
+  `recognise` item either (too few candidates), this falls all the way back
+  to serving `recall` with the masked definition anyway -- a fallback is a
+  substitution forward when one is available, never a reason to refuse the
+  encounter. The SAME thing happens in the other direction: when a
+  `recognise`-level item's OWN distractor pipeline comes back empty and
+  `_build_item` falls back to passive `recall` (`FALLBACK_EXERCISE`, the
+  harder substitution), the guard is still checked against that `recall`
+  prompt's masked definition and logged if it would have tripped -- there
+  is nowhere further forward to fall to (recognise already failed), but the
+  reason is worth counting all the same. Logged through the identical
+  mechanism a distractor-pipeline fallback already uses (`logger.info(
+  "vocabulary distractor fallback", ... reason=...)`), with its own reason,
+  `definition_unreadable`, so all four fallback shapes are counted the same
+  way.
+  **`record_answer` re-verifies this ONE fallback, unlike the harder one.**
+  A `recognise` claim against a word planned at `recall` is accepted on the
+  wire only after the server recomputes `resolve_gap` for this word and
+  context and checks `_needs_readability_fallback` on it again, 422ing if
+  the guard would not actually have fired -- the harder distractor-pipeline
+  fallback needs no such re-check (forging it buys a client nothing, since
+  it only ever asks for something harder), but this one moves to an EASIER
+  exercise, and trusting the claim alone would let a client serve itself
+  `recognise` any time the ladder asks for `recall`. Same shape as the
+  `requeued` re-verification below it.
+- **The first-letter cue is conditional on `LexemeSense.needs_letter_hint`**
+  (`app.services.lexicon_hints`) -- true when another LEXEME's sense shares
+  this one's `oewn_synset_id`, or carries a near-identical `definition_en`
+  (token-set Jaccard >= `lexicon_hints.NEAR_IDENTICAL_DEFINITION_JACCARD`,
+  a named constant on purpose). A hint only narrows a genuine guess; a word
+  with nothing else in the catalogue to be confused with has no guess to
+  narrow, and showing the letter anyway only leaks the answer.
+  `sense=None` (a caller with no sense loaded) reads as "unknown, so no
+  hint" -- the safer default. Computed by a full backfill
+  (`scripts/backfill_letter_hint.py`, `lexicon_hints.recompute_all`) and,
+  incrementally, by the worker's own enrichment loop
+  (`app.worker._lexicon_enrich_once`, `lexicon_hints.recompute_for_lexemes`)
+  for whichever lexemes it just re-enriched. The incremental call does NOT
+  load the whole catalogue to judge a handful of lexemes: it loads their
+  own senses (the seed rows) and then only OTHER senses that could
+  possibly match one of them (`lexicon_hints._load_candidate_rows`) --
+  sharing one of the seeds' own OEWN synsets, or containing one of their
+  definitions' own (stemmed) content words as a substring, run as a query
+  rather than the in-memory inverted index `_compute_flags` builds for a
+  full backfill. Nothing outside that candidate set could have flipped
+  either check for a seed row (a Jaccard match cannot exist without a
+  shared content word, and a stem -- `app.services.distractors._stem`
+  only ever strips a suffix -- is always a literal prefix of the surface
+  form it came from), so the touched senses' own flags come out identical
+  to what a full backfill would give them. It still only WRITES the senses
+  it was asked about, the same documented gap `app.services.lexicon
+  .link_row` already accepts for its own one-row-at-a-time merge rule: the
+  OTHER side of a newly-formed match is caught by the next full backfill,
+  not this call.
+- **"I know this" still always shows the definition too** -- it is an
+  ordinary `recall` item under the bypass (`practice
+  .build_known_check_item` calls the same `resolve_gap`), never routed
+  through the readability guard, because its one follow-up must always
+  BE `recall` (`record_answer` refuses anything else for a `claim_known`
+  answer) -- there is no easier exercise for it to fall back to.
+
+## Browse is not practice, and writes exactly one column (C)
+
+Browse (`POST /vocabulary/words/{id}/browsed`, `app.services.vocabulary
+.mark_browsed`) is flipping through saved words with nothing to grade --
+the stage-1 decision against self-graded FSRS ratings holds, and a
+flashcard mode that fed one back in would be exactly the "I know it / I
+don't" the brief already refused. It writes `SavedWord.browsed_at` and
+NOTHING else: no `VocabularyReviewLog` row, no FSRS card touched, no `due`
+moved, nothing counted in daily minutes. Owner-only, 404 for a word id that
+is not the caller's -- the same shape as every other by-id word route.
+Filtering, ordering and the card UI all live in the frontend, over the
+saved-words list this module already serves; the backend's only new
+surface for Browse is this one column and this one endpoint.
+
 ## Two difficulty measures, and they do not merge
 
 `cefr_level` is the model's, sees the context, and is the better figure for

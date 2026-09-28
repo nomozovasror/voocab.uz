@@ -1046,6 +1046,33 @@ async def bulk_action(
     return len(words)
 
 
+async def mark_browsed(
+    session: AsyncSession, user_id: uuid.UUID, word_id: uuid.UUID
+) -> bool:
+    """Record that a Browse card for this word was just shown. Returns
+    whether there was one to mark (owner-only, same 404-shaped "not theirs"
+    as every other by-id route in this module).
+
+    THE ONLY thing this writes is ``browsed_at``. Browse
+    (`brief-vocabulary-tuzatish-browse.md` §C) is explicitly not practice:
+    no ``VocabularyReviewLog`` row, no FSRS card touched, no ``due`` moved,
+    nothing counted in daily minutes -- writing any of those here would be
+    exactly the "self-graded flashcard" the stage-1 brief already refused
+    (see `app/services/CLAUDE.md`'s "the rating is computed, never asked").
+    Debounced/idempotent by the caller (repeated flips of the same card
+    within a sitting keep posting this); this function does not itself
+    check for a recent call, because setting the same timestamp again a
+    second later is indistinguishable from setting it once.
+    """
+    word = await session.get(SavedWord, word_id)
+    if word is None or word.user_id != user_id:
+        return False
+    word.browsed_at = datetime.now(timezone.utc)
+    session.add(word)
+    await session.commit()
+    return True
+
+
 async def forget(
     session: AsyncSession, user_id: uuid.UUID, word_id: uuid.UUID
 ) -> bool:

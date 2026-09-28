@@ -46,6 +46,7 @@ from app.models.vocabulary import (
     MaterialVocabulary,
     SavedWord,
     SavedWordContext,
+    VocabularyReviewLog,
 )
 from app.services import dictionary as dictionary_service
 from app.services import vocabulary as vocabulary_service
@@ -1745,3 +1746,114 @@ async def test_translation_report_is_one_open_row_per_user_and_sense() -> None:
             if found is not None:
                 await session.delete(found)
                 await session.commit()
+
+
+# --- Browse (§C): `browsed_at` and nothing else -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_browsed_endpoint_sets_browsed_at_and_writes_nothing_else() -> None:
+    """Browse is explicitly not practice: the one endpoint it has may only
+    ever touch `browsed_at` -- no review log, no FSRS card, no due change,
+    nothing counted in daily minutes."""
+    email = f"vocab-browsed-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    lexeme, finance, _river = await _make_two_senses("browse-word")
+    material, _entry = await _make_material_with_linked_entry(
+        user.id, lemma="browse-word", sense_id=finance.id, lexeme_id=lexeme.id,
+        meaning_en="a financial institution", meaning_uz="bank",
+    )
+    try:
+        async with _client() as client:
+            saved = await client.post(
+                "/api/vocabulary/words",
+                json={"material_id": str(material.id), "lemmas": ["browse-word"]},
+                headers=_headers(user),
+            )
+            assert saved.status_code == 201
+            word_id = saved.json()["words"][0]["id"]
+            assert saved.json()["words"][0]["browsed_at"] is None
+
+        async with async_session_factory() as session:
+            before = await session.get(SavedWord, uuid.UUID(word_id))
+            assert before is not None
+            passive_due_before = before.passive_due
+            passive_state_before = before.passive_state
+            reps_before = before.reps
+
+        async with _client() as client:
+            r = await client.post(
+                f"/api/vocabulary/words/{word_id}/browsed", headers=_headers(user)
+            )
+            assert r.status_code == 204
+            assert r.content == b""
+
+            listed = await client.get(
+                "/api/vocabulary/words", headers=_headers(user)
+            )
+            row = next(w for w in listed.json()["words"] if w["id"] == word_id)
+            assert row["browsed_at"] is not None
+
+            detail = await client.get(
+                f"/api/vocabulary/words/{word_id}", headers=_headers(user)
+            )
+            assert detail.json()["word"]["browsed_at"] is not None
+
+        async with async_session_factory() as session:
+            after = await session.get(SavedWord, uuid.UUID(word_id))
+            assert after is not None
+            # Nothing about the FSRS card or the word's own practice
+            # bookkeeping moved.
+            assert after.passive_due == passive_due_before
+            assert after.passive_state == passive_state_before
+            assert after.reps == reps_before
+            # No review log at all -- Browse is not practice.
+            logs = (
+                await session.exec(
+                    select(VocabularyReviewLog).where(
+                        VocabularyReviewLog.saved_word_id == after.id
+                    )
+                )
+            ).all()
+            assert logs == []
+    finally:
+        await _cleanup(material.id, email)
+        await _cleanup_lexeme(lexeme.id)
+
+
+@pytest.mark.asyncio
+async def test_browsed_endpoint_is_owner_only() -> None:
+    email_a = f"vocab-browsed-a-{uuid.uuid4()}@test.local"
+    email_b = f"vocab-browsed-b-{uuid.uuid4()}@test.local"
+    owner = await _make_user(email_a)
+    stranger = await _make_user(email_b)
+    lexeme, finance, _river = await _make_two_senses("browse-owner-word")
+    material, _entry = await _make_material_with_linked_entry(
+        owner.id, lemma="browse-owner-word", sense_id=finance.id, lexeme_id=lexeme.id,
+        meaning_en="a financial institution", meaning_uz="bank",
+    )
+    try:
+        async with _client() as client:
+            saved = await client.post(
+                "/api/vocabulary/words",
+                json={"material_id": str(material.id), "lemmas": ["browse-owner-word"]},
+                headers=_headers(owner),
+            )
+            word_id = saved.json()["words"][0]["id"]
+
+            # A stranger's own id (a word they never saved) is a 404 -- the
+            # same shape as every other by-id word route, not a 403 that
+            # would confirm somebody else's word exists at all.
+            r = await client.post(
+                f"/api/vocabulary/words/{word_id}/browsed", headers=_headers(stranger)
+            )
+            assert r.status_code == 404
+
+            still = await client.get(
+                "/api/vocabulary/words", headers=_headers(owner)
+            )
+            row = next(w for w in still.json()["words"] if w["id"] == word_id)
+            assert row["browsed_at"] is None
+    finally:
+        await _cleanup(material.id, email_a, email_b)
+        await _cleanup_lexeme(lexeme.id)

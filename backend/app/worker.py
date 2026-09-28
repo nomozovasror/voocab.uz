@@ -60,6 +60,7 @@ from app.models.audio_blob import AudioBlob, TranscriptStatus
 from app.models.lexicon import Lexeme
 from app.services import difficulty as difficulty_service
 from app.services import lexicon_enrich as lexicon_enrich_service
+from app.services import lexicon_hints as lexicon_hints_service
 from app.services.asr import ASRProvider, GroqASR, TranscriptResult
 from app.services.audio import persist_transcript_result
 from app.services.storage import get_storage
@@ -375,6 +376,20 @@ async def _lexicon_enrich_once(
             len(ids),
         )
         return 0
+    # `enrich` just gave these lexemes' senses fresh `definition_en`/
+    # `oewn_synset_id` values, which may change whether recall's
+    # first-letter cue is worth showing on them (`app.services
+    # .lexicon_hints`) -- a small, separate function, not a rewrite of
+    # `lexicon_enrich` itself. Guarded and swallowed the same way the
+    # difficulty refresh is: a stale cue flag is a smaller failure than
+    # taking the enrichment loop down over it.
+    try:
+        async with async_session_factory() as session:
+            await lexicon_hints_service.recompute_for_lexemes(session, ids)
+    except Exception:  # noqa: BLE001 - logged; the next enrichment pass retries
+        logger.exception(
+            "needs_letter_hint recompute failed for %d lexeme(s)", len(ids)
+        )
     return len(ids)
 
 
