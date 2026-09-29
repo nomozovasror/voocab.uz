@@ -135,7 +135,8 @@ MB. Re-running the script against the same tagged release reproduces this
 file byte for byte; that reproducibility, not the presence of the raw file
 in git, is what "vendored" means here.
 
-    python3 seed/wordlists/extract_oewn.py /path/to/english-wordnet-2025.xml
+    python3 seed/wordlists/extract_oewn.py /path/to/english-wordnet-2025.xml \
+        /path/to/wn3.1/dict/cntlist.rev
 
 **Why the order is kept.** OEWN inherits Princeton WordNet's own sense
 numbering — sense 1 first, the commonest — rather than deriving a frequency
@@ -149,6 +150,27 @@ that (lemma, pos), no frequency computation of this project's own required.
      "senses": [{"synset": "oewn-09236472-n", "rank": 1,
                  "definition": "sloping land (especially the slope beside a body of water)"},
                 ...]}
+
+Two optional fields (added 2026-09-28): `"form"` on a record whose OEWN
+written form is capitalised (`"Song"`, `"Monday"`, `"DNA"`) -- the loader
+keeps those apart from the lower-case word; and `"count"` on a sense SemCor
+ever tagged -- its tag count from **Princeton WordNet 3.1's `cntlist.rev`**
+(https://wordnetcode.princeton.edu/wn3.1.dict.tar.gz; WordNet 3.1
+Copyright 2011 Princeton University, WordNet licence -- use and
+redistribution permitted with the copyright notice), matched through the
+Princeton sense key every OEWN sense id is built from. OEWN ships no counts;
+they are the only frequency that compares senses ACROSS parts of speech
+(a list-only lexeme's pos is chosen by it). Copy the regenerated file to
+`backend/app/data/wordlists/` as before.
+
+**Where the rank actually lands, downstream.** This file's own `rank` is
+what P2 orders a lexeme's senses BY (`sense_rank`); `LexemeSense.oewn_rank`
+persists which rank an `oewn`-sourced sense actually got, so the public
+licences page (`app.services.lexicon_licences`) can show Princeton WordNet
+3.1 because the data actually used it -- not a permanent hand-written row --
+and say plainly that the counts order senses and are never stored as a
+definition. See `backend/app/services/CLAUDE.md`'s lexicon section for the
+column and the page both.
 
 `pos` is OEWN's own five codes (`n`, `v`, `a`, `s`, `r`) mapped onto this
 project's own vocabulary — `a` and `s` ("adjective satellite", WordNet's term

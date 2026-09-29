@@ -65,7 +65,40 @@ POS_MAP: dict[str, str] = {
 OUTPUT_NAME = "oewn_senses.jsonl.gz"
 
 
-def extract(xml_path: Path) -> list[dict]:
+#: OEWN's own escapes inside a sense id's lemma part (``oewn-can-ap-t__...``),
+#: undone to rebuild the Princeton sense key the tag counts are filed under.
+_ID_ESCAPES = (("-ap-", "'"), ("-sl-", "/"), ("-ex-", "!"), ("-cm-", ","),
+               ("-cl-", ":"), ("-lb-", "("), ("-rb-", ")"), ("-pl-", "+"),
+               ("-sp-", " "))
+
+
+def sense_key(sense_id: str) -> str:
+    """``oewn-friend__1.18.01..`` -> ``friend%1:18:01::``, the Princeton
+    sense key OEWN's ids are built from (lower-cased, as `cntlist.rev` has
+    it)."""
+    body = sense_id[len("oewn-"):]
+    lemma, _, rest = body.partition("__")
+    for escaped, plain in _ID_ESCAPES:
+        lemma = lemma.replace(escaped, plain)
+    return f"{lemma.lower()}%{rest.replace('.', ':')}"
+
+
+def read_counts(cntlist: Path | None) -> dict[str, int]:
+    """Princeton WordNet 3.1's `cntlist.rev` (``sense_key sense_number
+    tag_count``): how often each sense was tagged in SemCor. OEWN ships no
+    counts of its own, and they are the only frequency that compares senses
+    ACROSS parts of speech (the rank inside one pos is already their order)."""
+    counts: dict[str, int] = {}
+    if cntlist is None:
+        return counts
+    for line in cntlist.read_text(encoding="utf-8").splitlines():
+        parts = line.split()
+        if len(parts) == 3:
+            counts[parts[0]] = int(parts[2])
+    return counts
+
+
+def extract(xml_path: Path, counts: dict[str, int] | None = None) -> list[dict]:
     """One record per ``LexicalEntry``, its senses in file order.
 
     ``iterparse`` rather than a full ``parse``, because building a DOM for an
@@ -106,13 +139,19 @@ def extract(xml_path: Path) -> list[dict]:
         senses = []
         for rank, sense_elem in enumerate(elem.findall("Sense"), start=1):
             synset_id = sense_elem.get("synset", "")
-            senses.append({
+            sense = {
                 "synset": synset_id,
                 "rank": rank,
                 "definition": definitions.get(synset_id, ""),
-            })
+            }
+            # Only where SemCor tagged it at all: most senses were never
+            # tagged, and an absent count reads as 0.
+            count = (counts or {}).get(sense_key(sense_elem.get("id", "")), 0)
+            if count:
+                sense["count"] = count
+            senses.append(sense)
         if senses:
-            records.append({
+            record = {
                 "lemma": written_form.lower(),
                 "pos": pos,
                 # A written form containing a space is OEWN's own multi-word
@@ -120,17 +159,26 @@ def extract(xml_path: Path) -> list[dict]:
                 # signal `is_phrase` uses on this project's own lemmas.
                 "is_phrase": " " in written_form,
                 "senses": senses,
-            })
+            }
+            if written_form != written_form.lower():
+                # `Song` (the dynasty) is not `song`, `He` (helium) is not
+                # `he`: the loader keeps a capitalised entry's senses apart
+                # from the lower-case word's (app.services.lexicon_enrich
+                # .load_oewn). Only written when it differs.
+                record["form"] = written_form
+            records.append(record)
         elem.clear()
     return records
 
 
 def main() -> None:
-    if len(sys.argv) != 2:
-        print(f"usage: {sys.argv[0]} /path/to/english-wordnet-2025.xml", file=sys.stderr)
+    if len(sys.argv) not in (2, 3):
+        print(f"usage: {sys.argv[0]} /path/to/english-wordnet-2025.xml "
+              "[/path/to/wn3.1/dict/cntlist.rev]", file=sys.stderr)
         raise SystemExit(2)
     xml_path = Path(sys.argv[1])
-    records = extract(xml_path)
+    counts = read_counts(Path(sys.argv[2]) if len(sys.argv) == 3 else None)
+    records = extract(xml_path, counts)
     out_path = Path(__file__).resolve().parent / OUTPUT_NAME
     with gzip.open(out_path, "wt", encoding="utf-8") as fh:
         for record in records:

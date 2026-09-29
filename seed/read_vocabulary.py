@@ -240,6 +240,13 @@ If the word stands inside a fixed multi-word term -- "machine learning",
 term. The term is asked about separately, and a word carrying a term's
 meaning is a word the learner will then use wrongly everywhere else.
 
+A name is not vocabulary. If a word in the list is a proper noun -- a
+person, a place, a company, a brand, an organisation, an event (Alan,
+Google, Toronto, Harvard) -- give its entry with "lemma": "" and nothing
+else, and it is dropped. The candidate filter only catches a name it has
+seen capitalised MID-sentence; one that only ever opens a sentence reaches
+this list. Days, months, languages and nationalities are words, not names.
+
 Answer for every word in the list and for no other word.
 
 Reply with JSON only, and nothing else:
@@ -265,6 +272,10 @@ The second kind matters as much as the first. A compound term left out is a
 term whose meaning gets written onto one of its words instead -- "learn"
 glossed as a computer finding patterns in data -- and that is worse than no
 entry at all, because the learner then carries it into every other sentence.
+
+Never a name: a multi-word proper noun -- a place, a person, an
+organisation, a book or an era ("New Zealand", "West Indies", "Old
+Testament", "Inca empire") -- is not an expression to learn.
 
 Only expressions that are actually in the passage. Between {low} and {high}
 words each. At most {most} of them -- the strongest ones. If the passage has

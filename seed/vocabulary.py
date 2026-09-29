@@ -406,6 +406,13 @@ def is_name(places: list[Occurrence]) -> bool:
     mid-sentence -- together with never appearing in lower case anywhere in
     the passage. A word that is sometimes `Spring` and sometimes `spring` is
     a word; one that is always `Brazil` is a name.
+
+    What this cannot see: a name that only ever OPENS a sentence ("Alan
+    Macfarlane, professor of...", "Google and a number of other...") --
+    about a hundred of them reached the lexicon that way. They are left to
+    the gloss prompt (`read_vocabulary.WORDS_PROMPT` answers a name with an
+    empty lemma, which drops it) rather than widened here, because a real
+    word that only opens a sentence looks exactly the same to this test.
     """
     return (all(place.capitalised for place in places)
             and any(not place.sentence_start for place in places))
