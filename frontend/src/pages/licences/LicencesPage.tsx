@@ -59,6 +59,11 @@ function SourceCard({ source }: { source: LicenceSource }) {
         </span>
       </div>
       <p className="mt-1 text-xs text-muted-foreground">{source.authors}</p>
+      {source.usage_note ? (
+        <p className="mt-1 text-xs italic text-muted-foreground/80">
+          {source.usage_note}
+        </p>
+      ) : null}
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
         <a
           href={source.licence_url}

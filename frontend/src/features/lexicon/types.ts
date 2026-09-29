@@ -86,6 +86,9 @@ export interface LicenceSource {
   licence_url: string;
   source_url: string;
   count: number;
+  /** Shown under the licence badge where non-empty — e.g. Princeton
+   *  WordNet's "sense ordering only, not stored as definitions". */
+  usage_note: string;
 }
 
 export interface Licences {

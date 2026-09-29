@@ -310,9 +310,13 @@ function Row({
                 phrase
               </span>
             )}
-            <span className="rounded border border-border px-1.5 py-px font-mono text-xs text-muted-foreground">
-              {row.cefr ?? "—"}
-            </span>
+            {/* No level, no chip -- a proper noun's CEFR is NULL on purpose,
+                and a grey "—" chip reads as a level of its own. */}
+            {row.cefr && (
+              <span className="rounded border border-border px-1.5 py-px font-mono text-xs text-muted-foreground">
+                {row.cefr}
+              </span>
+            )}
             {row.frequency_band && (
               <span className="font-mono text-xs text-muted-foreground">
                 {row.frequency_band}
