@@ -90,7 +90,7 @@ from app.models.vocabulary import (
 )
 from app.services import dictionary as dictionary_service
 from app.services import practice as practice_service
-from app.services.lexicon import link_row
+from app.services.lexicon import is_excluded_word, link_row
 
 logger = logging.getLogger("app.services.vocabulary")
 
@@ -264,7 +264,16 @@ async def look_up(
     gets WRITTEN DOWN, on the event and on any entry generated to answer.
     """
     started = time.monotonic()
-    found = await entries(session, material.id)
+    # `hidden=True`: this search must still find a row hidden for being a
+    # proper noun (`app.services.lexicon.link_row`), or every later tap on
+    # the SAME name would fail to match it here, fall through to `_generate`,
+    # find nothing there either (`known` would exclude it the same way), and
+    # collide on the row that already exists -- turning "someone looked this
+    # up" into "nobody can look this up again". The whole-list REVIEW page
+    # (`entries()`'s other caller, `material_vocabulary`) is what actually
+    # keeps a hidden row out of what a learner is shown; this is a private
+    # search for "does an answer already exist", not a list being served.
+    found = await entries(session, material.id, hidden=True)
     asked = normalise(word)
 
     phrase = None
@@ -459,6 +468,14 @@ async def _generate(
     is told about in the panel's own voice rather than as a fact about a
     list they cannot see.
     """
+    # A function word or a single letter is refused before any of this
+    # runs -- not marked and hidden like a proper noun (`link_row` does
+    # that), REFUSED: there is no meaning of "the" worth a model call, a
+    # row, or an entry in the passage's word list, for anybody. See
+    # `app.services.lexicon.is_excluded_word`.
+    if is_excluded_word(word):
+        return None
+
     # `prose` rather than `context`, which is what this held until the
     # lookup grew a context of its own. Two meanings on one name in one
     # function is how `source=` silently became "the paragraph text is not
@@ -479,6 +496,11 @@ async def _generate(
         logger.exception("dictionary lookup of %r failed", word)
         return None
     if gloss is None:
+        return None
+    # The dictionary answers about the WORD, which is not always the exact
+    # string tapped -- a plural, a possessive, an inflected form -- so the
+    # same refusal is checked again on what it actually came back with.
+    if is_excluded_word(gloss.lemma):
         return None
 
     # A word that turned out to be part of a term is stored as the TERM.
@@ -1154,7 +1176,13 @@ async def replace_extracted(
     seen = set(kept)
     for row in rows:
         lemma = normalise(row.get("lemma") or "")
-        if not lemma or lemma in seen:
+        # The candidate filter (`seed/vocabulary.py`'s `ASK_RANK`/`SHORTEST`)
+        # already keeps almost every one of these out; refused again here so
+        # nothing upstream of this function -- a hand-edited extraction file,
+        # a future loosened filter -- can put a function word or a single
+        # letter into a material's word list. See
+        # `app.services.lexicon.is_excluded_word`.
+        if not lemma or lemma in seen or is_excluded_word(lemma):
             continue
         seen.add(lemma)
         entry = MaterialVocabulary(

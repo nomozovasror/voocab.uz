@@ -125,10 +125,12 @@ from sqlmodel import select as sm_select
 from app.core.database import async_session_factory
 from app.models.lexicon import Lexeme, LexemeSense
 from app.models.vocabulary import MaterialVocabulary, SavedWord, SavedWordContext, LookupEvent
+from app.services import lexicon_enrich as le
 from app.services.lexicon import (
     FrequencyLists,
     WORDLISTS,
     build_merge_map,
+    is_excluded_word,
     lexeme_is_phrase as _lexeme_is_phrase,
     merge_candidate as _merge_candidate,
     normalise_meaning as _normalise_meaning,
@@ -356,7 +358,15 @@ async def build(session, allow_wipe: bool = False) -> dict:
 
     print("Selecting list-only lemmas (on a frequency list, absent from every material)...")
     material_lemmas = {lemma for lemma, _ in material_keys}
-    list_only_lemmas = sorted(lists.all_lemmas() - material_lemmas)
+    # A function word or a single-letter token never becomes a NEW list-only
+    # lexeme -- see `app.services.lexicon.is_excluded_word`. An existing one
+    # (from before this filter existed) is left exactly as
+    # `scripts/lexicon_cleanup.py function-words` leaves it: not re-added
+    # here, not touched here either.
+    list_only_lemmas = sorted(
+        lemma for lemma in lists.all_lemmas() - material_lemmas
+        if not is_excluded_word(lemma)
+    )
     print(f"  {len(list_only_lemmas)} list-only lemmas")
 
     # --- Upsert Lexemes -------------------------------------------------
@@ -388,8 +398,16 @@ async def build(session, allow_wipe: bool = False) -> dict:
         rows_here = material_rows_by_key[(lemma, pos)]
         is_phrase = any(_lexeme_is_phrase(r["lemma"], r["pos"]) for r in rows_here)
         upsert_lexeme(lemma, pos, is_phrase)
+    # A list-only lemma's pos is the pos of its most frequent OEWN sense
+    # across every part of speech (SemCor tag counts) -- chosen together
+    # with that sense, never guessed first. Where the counts cannot decide,
+    # the tie order stands here (P1 makes no model call) and
+    # `scripts/lexicon_cleanup.py list-only` asks a model to choose.
+    oewn_senses = le.load_oewn()
+    oewn_pos = le.pos_index(oewn_senses)
     for lemma in list_only_lemmas:
-        pos = oewn.guess_pos(lemma)
+        top = le.top_sense_any_pos(oewn_senses, oewn_pos, lemma)
+        pos = top[0] if top else ""
         upsert_lexeme(lemma, pos, " " in lemma)
     await session.flush()
     print(f"  {len(lexeme_by_key)} lexemes total")
@@ -434,9 +452,7 @@ async def build(session, allow_wipe: bool = False) -> dict:
             cefr = cluster["cefr"]
             if merged:
                 reasons.append("lemma_merge")
-            if cefr in ("C1", "C2") and lexeme.frequency_band == "core":
-                reasons.append("ngsl_conflict")
-            if cefr in ("A1", "A2") and lexeme.frequency_band == "off-list":
+            if rank == 1 and cefr in ("C1", "C2") and lexeme.frequency_band == "core":
                 reasons.append("ngsl_conflict")
             sense = LexemeSense(
                 lexeme_id=lexeme.id,

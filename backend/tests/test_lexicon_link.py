@@ -530,7 +530,7 @@ class _ScriptedWorkerGemini:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    async def ask(self, model, prompt, *, step, max_tokens=0, repair_flat=False):
+    async def ask(self, model, prompt, *, step, max_tokens=0, repair_flat=False, parse=None):
         self.calls.append(step)
         keys = __import__("re").findall(r"^(k\d+):", prompt, __import__("re").M)
         if step == "match":
@@ -545,3 +545,200 @@ class _ScriptedWorkerGemini:
 
     async def aclose(self) -> None:
         pass
+
+
+def test_looks_like_name_is_narrow() -> None:
+    ln = lexicon_service.looks_like_name
+    # Mid-sentence capital, off every list: a name.
+    assert ln("zorbia", "n", "Zorbia", "They moved to Zorbia last year.")
+    assert ln("zorb isles", "phr", "Zorb Isles", "a trip to the Zorb Isles in May")
+    # Opening a sentence proves nothing.
+    assert not ln("zorbia", "n", "Zorbia", "Zorbia is far away.")
+    assert not ln("zorbia", "n", "Zorbia", "It rained. Zorbia flooded.")
+    # Lower case, an acronym, an adjective, a list word: not names.
+    assert not ln("zorbia", "n", "zorbia", "they moved to zorbia")
+    assert not ln("nasa", "n", "NASA", "a grant from NASA today")
+    assert not ln("german", "adj", "German", "the German beet fields")
+    assert not ln("bath", "n", "Bath", "a weekend in Bath with friends")
+
+
+@pytest.mark.asyncio
+async def test_link_row_marks_a_new_proper_noun_with_no_level() -> None:
+    tag = uuid.uuid4().hex[:8]
+    lemma = f"zorbia{tag}"
+    try:
+        async with async_session_factory() as session:
+            row = _row(lemma=lemma, surface=f"Zorbia{tag}", pos="n", cefr_level="B1",
+                       example=f"They moved to Zorbia{tag} last year.",
+                       meaning_en="a country", meaning_uz="mamlakat")
+            await lexicon_service.link_row(session, row)
+            await session.commit()
+            lexeme = await session.get(Lexeme, row.lexeme_id)
+            sense = await session.get(LexemeSense, row.sense_id)
+            assert lexeme.is_proper_noun is True
+            assert lexeme.cefr is None and sense.cefr is None
+            assert "ngsl_conflict" not in sense.review_reasons
+            # (A) The rule is BY KIND: a proper noun's material row is
+            # hidden the moment it is linked, so a learner's own live
+            # lookup never adds a gloss to the passage for everyone else.
+            assert row.hidden is True
+    finally:
+        await _delete_lexemes(lemma)
+
+
+def test_is_excluded_word_covers_single_letters_and_the_curated_list() -> None:
+    """(C2) A single letter, or one of `FUNCTION_WORDS` -- case- and
+    whitespace-insensitive -- and nothing else: an ordinary content word,
+    however frequent, is left in (`one`, `now`, `well` -- see the constant's
+    own docstring for why)."""
+    ie = lexicon_service.is_excluded_word
+    assert ie("a") and ie("A") and ie(" the ") and ie("Z")
+    assert ie("about") and ie("which") and ie("not")
+    assert not ie("appropriate")
+    assert not ie("one") and not ie("now") and not ie("well")
+    assert not ie("")
+
+
+@pytest.mark.asyncio
+async def test_link_row_hides_and_marks_a_function_word() -> None:
+    """(C2) A function word is REFUSED by `app.services.vocabulary`'s two
+    writers before `link_row` is ever called with one (tested against those
+    writers below); this is `link_row`'s own backstop, the same shape as
+    the proper-noun test above."""
+    lemma = "about"  # a member of FUNCTION_WORDS, not a real content word
+    try:
+        async with async_session_factory() as session:
+            row = _row(lemma=lemma, pos="prep", meaning_en="concerning",
+                       meaning_uz="haqida")
+            await lexicon_service.link_row(session, row)
+            await session.commit()
+            lexeme = await session.get(Lexeme, row.lexeme_id)
+            assert lexeme.is_function_word is True
+            assert row.hidden is True
+    finally:
+        await _delete_lexemes(lemma)
+
+
+@pytest.mark.asyncio
+async def test_link_row_marks_a_single_letter_lexeme_as_a_function_word() -> None:
+    lemma = "zzztestletter"[:1]  # "z" -- a single character, off every list
+    try:
+        async with async_session_factory() as session:
+            row = _row(lemma=lemma, pos="n", meaning_en="the letter z",
+                       meaning_uz="z harfi")
+            await lexicon_service.link_row(session, row)
+            await session.commit()
+            lexeme = await session.get(Lexeme, row.lexeme_id)
+            assert lexeme.is_function_word is True
+            assert row.hidden is True
+    finally:
+        await _delete_lexemes(lemma)
+
+
+@pytest.mark.asyncio
+async def test_generate_refuses_a_function_word_before_any_row_is_written() -> None:
+    """(C2) The live-lookup writer refuses a function word outright -- no
+    row, no lexeme, nothing for `link_row` to ever see. `dictionary.look_up`
+    is never reached either: `_generate` returns before the first `_place`
+    call for a word `is_excluded_word` already refuses."""
+    user = await _make_user(f"fw-gen-{uuid.uuid4()}@test.local")
+    async with async_session_factory() as session:
+        material = Material(author_id=user.id, type="reading",
+                            title=f"function word gen test {uuid.uuid4()}",
+                            visibility="private")
+        session.add(material)
+        await session.flush()
+        part = Part(material_id=material.id, order_index=0, title="Part 1",
+                    passage={"paragraphs": [{"text": "Tell me about your day."}]})
+        session.add(part)
+        await session.commit()
+        await session.refresh(material)
+    try:
+        async with async_session_factory() as session:
+            made = await vocabulary_service._generate(
+                session, material, "about", known=[], paragraph_index=0)
+            assert made is None
+            rows = (await session.exec(
+                select(MaterialVocabulary).where(MaterialVocabulary.material_id == material.id)
+            )).all()
+            assert rows == []
+    finally:
+        await _cleanup(material.id, user.id)
+
+
+@pytest.mark.asyncio
+async def test_replace_extracted_refuses_a_function_word_row() -> None:
+    """(C2) The seed import writer drops an excluded lemma from a fresh
+    extraction before it is ever built into a `MaterialVocabulary` row --
+    the same refusal as `_generate`, for the other writer."""
+    tag = uuid.uuid4().hex[:8]
+    user = await _make_user(f"fw-import-{uuid.uuid4()}@test.local")
+    async with async_session_factory() as session:
+        material = Material(author_id=user.id, type="reading",
+                            title=f"function word import test {uuid.uuid4()}",
+                            visibility="private")
+        session.add(material)
+        await session.flush()
+        part = Part(material_id=material.id, order_index=0, title="Part 1", passage={})
+        session.add(part)
+        await session.commit()
+        await session.refresh(material)
+        await session.refresh(part)
+    try:
+        async with async_session_factory() as session:
+            written, kept = await vocabulary_service.replace_extracted(
+                session, material_id=material.id, part_id=part.id,
+                rows=[
+                    {"lemma": "which", "surface": "which", "pos": "n",
+                     "meaning_en": "x", "meaning_uz": "y"},
+                    {"lemma": f"realword{tag}", "surface": f"realword{tag}", "pos": "n",
+                     "meaning_en": "a fictional test word", "meaning_uz": "sinov"},
+                ],
+            )
+            await session.commit()
+            assert written == 1  # "which" refused, the real word kept
+            rows = (await session.exec(
+                select(MaterialVocabulary).where(MaterialVocabulary.material_id == material.id)
+            )).all()
+            assert {r.lemma for r in rows} == {f"realword{tag}"}
+    finally:
+        await _cleanup(material.id, user.id)
+        await _delete_lexemes(f"realword{tag}")
+
+
+@pytest.mark.asyncio
+async def test_apply_work_persists_the_oewn_semcor_rank() -> None:
+    """(B) `LexemeSense.oewn_rank` -- Princeton WordNet 3.1's SemCor
+    tag-count rank a sense was chosen/ordered by -- is written by
+    `apply_work`, not left as an in-memory fact of one enrichment run. This
+    is what lets `app.services.lexicon_licences.sources` show Princeton
+    WordNet on the licences page because the data actually used it."""
+    tag = uuid.uuid4().hex[:8]
+    lemma = f"rankword{tag}"
+    try:
+        async with async_session_factory() as session:
+            lexeme = Lexeme(lemma=lemma, pos="n", frequency_band="off-list")
+            session.add(lexeme)
+            await session.commit()
+            await session.refresh(lexeme)
+
+            planned = lexicon_enrich_service.Sense(
+                id=None, definition_en="a test sense", meaning_uz="sinov",
+                oewn_synset_id="oewn-test-1-n", oewn_rank=3, source_id="oewn",
+                licence=lexicon_enrich_service.OEWN_LICENCE, sense_rank=1,
+            )
+            work = lexicon_enrich_service.LexemeWork(
+                id=lexeme.id, lemma=lemma, pos="n", is_phrase=False,
+                frequency_band="off-list", oewn=[], senses=[], rows=[],
+                plan=[planned],
+            )
+            await lexicon_enrich_service.apply_work(session, work)
+            await session.commit()
+
+            sense = (await session.exec(
+                select(LexemeSense).where(LexemeSense.lexeme_id == lexeme.id)
+            )).one()
+            assert sense.oewn_synset_id == "oewn-test-1-n"
+            assert sense.oewn_rank == 3
+    finally:
+        await _delete_lexemes(lemma)

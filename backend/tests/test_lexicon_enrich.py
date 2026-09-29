@@ -170,6 +170,113 @@ def test_a_flat_reply_with_a_dropped_quote_is_repaired() -> None:
     assert le.parse_json_object('[{"verdicts": {"k1": "same"}}]') == {"verdicts": {"k1": "same"}}
 
 
+# --- The judge ---------------------------------------------------------------
+
+
+def test_the_judge_reply_parser_takes_every_shape_the_judge_sends() -> None:
+    want = {"verdicts": {"k1": {"verdict": "same"}, "k2": {"verdict": "unsure"}}}
+    for text in (
+        '{"verdicts": {"k1": {"verdict": "same"}, "k2": {"verdict": "unsure"}}}',
+        '{"k1": {"verdict": "same"}, "k2": {"verdict": "unsure"}}',
+        '[{"k1": {"verdict": "same"}}, {"k2": {"verdict": "unsure"}}]',
+        '[{"verdicts": {"k1": {"verdict": "same"}, "k2": {"verdict": "unsure"}}}]',
+        '[{"id": "k1", "verdict": "same"}, {"id": "k2", "verdict": "unsure"}]',
+        '```json\n{"verdicts": [{"k1": {"verdict": "same"}}, {"k2": {"verdict": "unsure"}}]}\n```',
+    ):
+        got = le.parse_judge_reply(text)
+        assert {k: v["verdict"] for k, v in got["verdicts"].items()} == {
+            k: v["verdict"] for k, v in want["verdicts"].items()}, text
+    # Unkeyed, in item order: only with the keys, and only when the counts match.
+    bare = '[{"verdict": "same"}, {"verdict": "unsure"}]'
+    assert le.parse_judge_reply(bare) is None
+    assert le.parse_judge_reply(bare, ["k1", "k2", "k3"]) is None
+    assert le.parse_judge_reply(bare, ["k1", "k2"])["verdicts"]["k2"]["verdict"] == "unsure"
+    assert le.parse_judge_reply("no") is None
+    assert le.parse_judge_reply('{"other": 1}') is None
+
+
+def test_two_judge_runs_flag_only_when_neither_says_same() -> None:
+    cv = le.combine_verdicts
+    assert cv(("different", "b"), ("different", "b")) == ("different", "b")
+    assert cv(("different", "b"), ("unsure", "b"))[0] == "unsure"
+    assert cv(("unsure", "a"), ("unsure", "a")) == ("unsure", "a")
+    assert cv(("same", "b"), ("different", "b"))[0] == "same"
+    assert cv(("unsure", "b"), ("same", "b"))[0] == "same"
+    # Half the evidence never flags.
+    assert cv(("different", "b"), None)[0] is None
+    assert cv(None, None)[0] is None
+    assert cv(None, ("same", "b"))[0] == "same"
+    # The A/B swap needs every answering run to prefer A.
+    assert cv(("same", "a"), ("same", "b"))[1] == "b"
+
+
+class GarbledJudge:
+    """Translators answer; the judge only ever sends garbage."""
+
+    def __init__(self) -> None:
+        self.judge_calls = 0
+
+    async def ask(self, model, prompt, *, step, max_tokens=0, repair_flat=False, parse=None):
+        keys = re.findall(r"^(k\d+):", prompt, re.M)
+        if step == "translate":
+            return {"uz": {k: ("a" if model == le.MODEL_ALT else "b") for k in keys}}
+        self.judge_calls += 1
+        return parse("not json at all") if parse else None
+
+
+async def test_a_judge_that_never_parses_leaves_no_verdict_not_unsure() -> None:
+    sense = le.Sense(id=None, definition_en="a test sense", translate=True)
+    work = _work([], [])
+    work.plan = [sense]
+    gemini = GarbledJudge()
+    await le.step_translate(gemini, [work])
+    assert sense.judge is None and "judge:no-answer" in work.note
+    assert gemini.judge_calls == 4  # two runs, each asked once more for what it skipped
+    le.finalise(work)
+    assert not set(sense.review_reasons) & le.JUDGE_REASONS
+
+
+# --- OEWN: capitalised entries and the cross-pos top sense ---------------------
+
+
+def test_capitalised_oewn_entries_do_not_take_the_lower_case_word(tmp_path, monkeypatch) -> None:
+    import gzip, json as _json
+    path = tmp_path / "oewn.jsonl.gz"
+    records = [
+        {"lemma": "song", "pos": "n", "form": "Song", "senses": [
+            {"synset": "dyn", "rank": 1, "definition": "a Chinese dynasty"}]},
+        {"lemma": "song", "pos": "n", "senses": [
+            {"synset": "tune", "rank": 1, "definition": "a short musical composition",
+             "count": 20}]},
+        {"lemma": "march", "pos": "n", "form": "March", "senses": [
+            {"synset": "month", "rank": 1, "definition": "the third month", "count": 9}]},
+        {"lemma": "march", "pos": "n", "senses": [
+            {"synset": "walk", "rank": 1, "definition": "a steady walk", "count": 3}]},
+        {"lemma": "monday", "pos": "n", "form": "Monday", "senses": [
+            {"synset": "mon", "rank": 1, "definition": "the second day of the week"}]},
+        {"lemma": "present", "pos": "adj", "senses": [
+            {"synset": "now", "rank": 1, "definition": "temporal sense", "count": 60}]},
+        {"lemma": "present", "pos": "v", "senses": [
+            {"synset": "show", "rank": 1, "definition": "give an exhibition", "count": 40}]},
+        {"lemma": "tie", "pos": "n", "senses": [{"synset": "t-n", "rank": 1, "definition": "x"}]},
+        {"lemma": "tie", "pos": "v", "senses": [{"synset": "t-v", "rank": 1, "definition": "y"}]},
+    ]
+    with gzip.open(path, "wt") as fh:
+        for record in records:
+            fh.write(_json.dumps(record) + "\n")
+    monkeypatch.setattr(le, "OEWN_PATH", path)
+    oewn = le.load_oewn()
+    assert [s["synset"] for s in oewn[("song", "n")]] == ["tune"]  # the name dropped
+    assert [s["synset"] for s in oewn[("march", "n")]] == ["walk", "month"]  # tagged: kept, after
+    assert [s["synset"] for s in oewn[("monday", "n")]] == ["mon"]  # no lower-case entry
+    index = le.pos_index(oewn)
+    pos, sense, decided = le.top_sense_any_pos(oewn, index, "present")
+    assert (pos, sense["synset"], decided) == ("adj", "now", True)
+    pos, sense, decided = le.top_sense_any_pos(oewn, index, "tie")
+    assert (pos, decided) == ("n", False)  # no counts: the caller asks a model
+    assert le.top_sense_any_pos(oewn, index, "zzz") is None
+
+
 # --- rank_senses --------------------------------------------------------------
 
 
@@ -206,8 +313,8 @@ def test_review_reasons() -> None:
     assert rr(cefr="C1", frequency_band="core", material_levels=[], carried=[], judge=None) == [
         "ngsl_conflict"]
     assert rr(cefr="B2", frequency_band="core", material_levels=[], carried=[], judge=None) == []
-    assert rr(cefr="A2", frequency_band="off-list", material_levels=[], carried=[], judge=None) == [
-        "ngsl_conflict"]
+    # An easy off-list word is not a conflict (the rule's old second half).
+    assert rr(cefr="A2", frequency_band="off-list", material_levels=[], carried=[], judge=None) == []
     assert rr(cefr="A2", frequency_band="common", material_levels=[], carried=[], judge=None) == []
     # >= 2 bands from the majority material level (ties toward the lower).
     assert rr(cefr="C2", frequency_band="wider", material_levels=["B1", "B1", "C1"],
@@ -282,7 +389,7 @@ class StyleGemini:
     def __init__(self, short, verdict):
         self.short, self.verdict, self.calls = short, verdict, []
 
-    async def ask(self, model, prompt, *, step, max_tokens=0, repair_flat=False):
+    async def ask(self, model, prompt, *, step, max_tokens=0, repair_flat=False, parse=None):
         self.calls.append((step, model))
         keys = re.findall(r"^(k\d+):", prompt, re.M)
         if step == "style":
@@ -318,7 +425,7 @@ class ScriptedGemini:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    async def ask(self, model, prompt, *, step, max_tokens=0, repair_flat=False):
+    async def ask(self, model, prompt, *, step, max_tokens=0, repair_flat=False, parse=None):
         self.calls.append(step)
         if step == "match":
             uses, senses = {}, {}

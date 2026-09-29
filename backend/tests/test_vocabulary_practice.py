@@ -2951,3 +2951,80 @@ async def test_leech_see_context_choice_keeps_the_level_and_resets_lapses():
         assert lapses == []  # reset, same as the other two choices
     finally:
         await _cleanup(user_ids=[user.id])
+
+
+@pytest.mark.asyncio
+async def test_a_proper_noun_is_out_of_every_queue_count_and_distractor_pool():
+    """`Lexeme.is_proper_noun`: saved, it stays on the list but is never
+    queued or counted; in the catalogue it is never an option."""
+    email = f"practice-proper-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Proper nouns")
+    part = await _make_part(material.id)
+    tag = uuid.uuid4().hex[:6]
+    try:
+        name = await _make_saved_word(user.id, f"alanx{tag}", pos="n")
+        await _make_saved_word(user.id, f"wordx{tag}", pos="n")
+        entry = await _make_vocab_entry(material.id, part.id, lemma=f"alanx{tag}", pos="n",
+                                        cefr_level="B2", meaning_en="a male given name")
+        async with async_session_factory() as session:
+            sense = await session.get(LexemeSense, name.lexeme_sense_id)
+            lexeme = await session.get(Lexeme, sense.lexeme_id)
+            lexeme.is_proper_noun = True
+            session.add(lexeme)
+            row = await session.get(MaterialVocabulary, entry.id)
+            row.lexeme_id = lexeme.id
+            session.add(row)
+            await session.commit()
+
+        async with async_session_factory() as session:
+            plan = await practice_service.summary(session, user, tz=None)
+            items = await practice_service.build_session(session, user, tz=None)
+            found = await distractors._candidates(
+                session, pos="n", cefr_level="B2", exclude_lemma="other",
+                family_keys=frozenset())
+        assert plan["new_available"] == 1
+        assert plan["totals"]["total"] == 1
+        assert [item["lemma"] for item in items] == [f"wordx{tag}"]
+        assert f"alanx{tag}" not in {c.lemma for c in found}
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])
+
+
+@pytest.mark.asyncio
+async def test_a_function_word_is_out_of_every_queue_count_and_distractor_pool():
+    """`Lexeme.is_function_word` (C2): the same exclusion as a proper noun,
+    for a different reason -- neither has a level or a meaning worth
+    recalling or confusing somebody with."""
+    email = f"practice-fw-{uuid.uuid4()}@test.local"
+    user = await _make_user(email)
+    material = await _make_material(user.id, "Function words")
+    part = await _make_part(material.id)
+    tag = uuid.uuid4().hex[:6]
+    try:
+        fw_word = await _make_saved_word(user.id, f"aboutx{tag}", pos="prep")
+        await _make_saved_word(user.id, f"wordy{tag}", pos="n")
+        entry = await _make_vocab_entry(material.id, part.id, lemma=f"aboutx{tag}", pos="prep",
+                                        cefr_level="B2", meaning_en="concerning")
+        async with async_session_factory() as session:
+            sense = await session.get(LexemeSense, fw_word.lexeme_sense_id)
+            lexeme = await session.get(Lexeme, sense.lexeme_id)
+            lexeme.is_function_word = True
+            session.add(lexeme)
+            row = await session.get(MaterialVocabulary, entry.id)
+            row.lexeme_id = lexeme.id
+            session.add(row)
+            await session.commit()
+
+        async with async_session_factory() as session:
+            plan = await practice_service.summary(session, user, tz=None)
+            items = await practice_service.build_session(session, user, tz=None)
+            found = await distractors._candidates(
+                session, pos="prep", cefr_level="B2", exclude_lemma="other",
+                family_keys=frozenset())
+        assert plan["new_available"] == 1
+        assert plan["totals"]["total"] == 1
+        assert [item["lemma"] for item in items] == [f"wordy{tag}"]
+        assert f"aboutx{tag}" not in {c.lemma for c in found}
+    finally:
+        await _cleanup(user_ids=[user.id], material_ids=[material.id])

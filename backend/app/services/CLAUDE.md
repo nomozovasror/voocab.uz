@@ -401,6 +401,110 @@ on every row they create, before it is committed:
   until a later phase moves them onto `LexemeSense` — a known, accepted gap,
   not a bug to chase inside this phase.
 
+## The lexicon: what goes in, and how it is flagged
+
+- **Proper nouns are not vocabulary.** Three gates keep them out: the seed
+  candidate filter (`seed/vocabulary.is_name`: capitalised mid-sentence),
+  the extraction prompts (`seed/read_vocabulary.WORDS_PROMPT` answers a name
+  with an empty lemma; `PHRASES_PROMPT` never offers one) -- the filter
+  cannot see a name that only ever opens a sentence, and ~100 got in that
+  way -- and the OEWN loader (below). The live-lookup prompt already
+  refused names. A name that still arrives is MARKED, not refused:
+  `Lexeme.is_proper_noun`, set by `lexicon.link_row` for a new lexeme
+  (`looks_like_name`: capitalised, mid-sentence in its own example, noun or
+  phrase, not an acronym, on no frequency list -- deliberately narrow) or
+  when the lemma is already a known name. A proper noun's CEFR is NULL on
+  the lexeme and every sense -- a real state, never "not graded yet";
+  enrichment never grades one -- and it is out of practice: every queue and
+  count in `practice.py` (`_practisable_clause`) and the distractor pool.
+  The API sends `cefr_level: ""` for a finished sense with NULL CEFR
+  (`api/vocabulary._no_level`), so the material row's own seed level never
+  stands in for it; the UI draws no chip for an empty level (`CefrTag`).
+  Days, months, languages and nationalities are words, not names.
+- **The rule is by KIND, not by row.** `lexicon.link_row` sets
+  `MaterialVocabulary.hidden = True` on ANY row whose lexeme turns out to be
+  a proper noun (or a function word, below) -- not just at classification
+  time. `scripts/lexicon_cleanup.py hide-proper-nouns` is the one-off
+  backfill for the material rows written before this rule existed,
+  including the ~100 the seed's own filter missed and the handful a
+  learner's live lookup generated on the spot: a lookup still ANSWERS the
+  learner (the definition, no level, not practisable) and the
+  `lookup_events` row is kept -- "someone looked this up" is not "this is
+  glossed in this text", and one learner's curiosity must not add a gloss
+  to the passage for everybody else. `vocabulary.look_up`'s own search for
+  an existing answer therefore reads `entries(..., hidden=True)` -- the
+  ONE place a hidden row is looked at again -- so a second tap on the same
+  name finds the row already there rather than colliding with it on a
+  fresh insert; the whole-list review endpoint keeps filtering it out as
+  before.
+- **Single-letter tokens and NGSL's own closed-class top ~100 are not
+  vocabulary either** (`lexicon.FUNCTION_WORDS`/`is_excluded_word` --
+  articles, pronouns, prepositions, conjunctions, auxiliaries/modals,
+  "not", and the quantifier-determiners and focus particles that behave
+  the same way; content words just as frequent, `say`/`go`/`know`/`one`/
+  `now`, are deliberately left in). Unlike a proper noun this is REFUSED,
+  not marked: `vocabulary._generate` and `.replace_extracted` (`link_row`'s
+  two writers) never build a `MaterialVocabulary` row for one at all, and
+  `build_lexicon.py`'s list-only lemma selection never mints one either.
+  `link_row`/`_find_or_create_lexeme` still mark `Lexeme.is_function_word`
+  as a backstop if one somehow arrives regardless, exactly mirroring
+  `is_proper_noun` (no CEFR is not part of the treatment here -- these
+  never had one worth grading). The 65 that had already gotten into the
+  lexicon before this rule (all of NGSL's top ~100, list-only-loaded like
+  every other lemma on a frequency list) were found and fixed by
+  `scripts/lexicon_cleanup.py function-words --apply`: the 59 nothing
+  pointed at were deleted outright, and the 6 with a material row (`do`,
+  `be`, `can`, `that`, `have`, `should` -- all from a learner's live
+  lookup, since the seed candidate filter's `ASK_RANK` already keeps every
+  one of these off the extraction) were kept, marked, and had their
+  material rows hidden the same way a proper noun's are.
+- **A capitalised OEWN entry is not the lower-case word**
+  (`lexicon_enrich.load_oewn`). The extract lower-cases lemmas, and `Song`
+  (a dynasty), `Town` (an architect), `He` (helium) sorted first and became
+  rank 1. The lower-case entry's senses lead; a capitalised entry's follow
+  only where SemCor tagged them (`March` the month) or where OEWN has no
+  lower-case entry at all (`Monday`, `DNA`).
+- **A list-only lexeme's pos and definition are chosen together**
+  (`lexicon_enrich.top_sense_any_pos`): the lemma's most-tagged OEWN sense
+  across every pos (Princeton WN 3.1 SemCor counts, carried in the extract).
+  No counts to decide between two or more pos: a model picks among each
+  pos's top sense. Not in OEWN: one model request gives pos + definition.
+  Moot for a function word or a single letter now -- excluded before this
+  step ever sees the lemma (above).
+- **`ngsl_conflict` is one test**: rank-1 sense graded C1/C2 on an NGSL top
+  1 000 word. "A1/A2 while off-list" was dropped -- off-list only means "on
+  none of five lists", and almost every hit was a plain word.
+- **The judge runs twice; a pair is flagged only if neither run says
+  `same`** (`combine_verdicts`). One run alone moves ~13% of pairs between
+  `same` and `unsure`. A reply in any shape the judge actually sends (bare
+  k-map, arrays) is parsed (`parse_judge_reply`); an unparseable one is
+  retried once and then is NO verdict -- it never becomes `judge_unsure`.
+- **A re-translation never overwrites before it is proven.** The old pair
+  is stashed in `meaning_uz_prev`/`meaning_uz_alt_prev`, old and new are
+  judged twice in the same run, and the new pair is kept only if the
+  `different` share falls by >= 30% relative
+  (`scripts/lexicon_cleanup.py retranslate`). Those `_prev` columns are
+  cleared to `""` the moment `--decide` runs, whichever way it decided --
+  they hold the OLD pair only until the decision, not for ever -- so the
+  trial's own 94 (sense, old pair, new pair, both verdicts) rows are copied
+  into the repo as their durable way back,
+  `app/data/lexicon_trials/retranslate-2026-09-29.json` (see that
+  directory's README), and `scripts/lexicon_cleanup.py
+  restore-retranslation` re-reads it to put a sense's OLD pair back, for
+  all 94 or a listed few.
+- **Princeton WordNet 3.1's SemCor tag counts are not a definitions
+  source, and the licences page has to say so from data, not from a
+  hand-written row.** `LexemeSense.oewn_rank` persists the ACTUAL rank a
+  sense was chosen/ordered by (`apply_work`, backfilled once for senses
+  written before the column existed by `scripts/lexicon_cleanup.py
+  wordnet-provenance`); `lexicon_licences.sources` shows the
+  "Princeton WordNet 3.1" entry only because `oewn_rank IS NOT NULL` on
+  senses this deployment actually has, carrying its own `usage_note`
+  ("sense ordering only, not stored as definitions") so the card cannot be
+  mistaken for a second source of Uzbek text. The WordNet 3.1 licence's own
+  "no advertising" clause is noted in the registry's docstring, the one
+  place in the codebase that decides how Princeton is credited.
+
 ## Vocabulary practice (stage 1) — `practice.py` is the only module that imports `fsrs`
 
 `saved_words` carries two independent FSRS cards (`passive_*`, `active_*`,

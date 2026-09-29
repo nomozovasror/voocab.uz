@@ -153,8 +153,33 @@ class Lexeme(SQLModel, table=True):
     #: lexemes in `build_lexicon.py`.
     pos: str = Field(default="", max_length=8)
     is_phrase: bool = Field(default=False)
+    #: A name (`alan`, `google`), not vocabulary. The lexicon does not take
+    #: names in (the seed filter, the extraction prompt and the OEWN loader
+    #: all drop them); this marks the few kept only because a learner already
+    #: met one in a material or saved it. A proper noun has no CEFR (its
+    #: senses' ``cefr`` is NULL -- a real state, not "not graded yet") and is
+    #: left out of practice: the session queues, the summary counts and the
+    #: distractor pool (`app.services.practice`, `app.services.distractors`).
+    #: Set by `app.services.lexicon.link_row` for a new lexeme too.
+    is_proper_noun: bool = Field(default=False, index=True)
+    #: A grammatical function word (article, pronoun, preposition,
+    #: conjunction, auxiliary/modal, "not") or a single-letter token (`a`,
+    #: `i`) -- not vocabulary, the same judgement `is_proper_noun` makes
+    #: about a name, for a different reason. See
+    #: `app.services.lexicon.FUNCTION_WORDS`/`is_excluded_word` for the exact
+    #: set and why. Kept, not deleted, only where a material row or a saved
+    #: word already references it (`scripts/lexicon_cleanup.py
+    #: function-words`, the one-off data step that found and marked the
+    #: existing ones); excluded from practice and the distractor pool the
+    #: same way a proper noun is (`app.services.practice._practisable_clause`,
+    #: `app.services.distractors._candidates`). `app.services.lexicon
+    #: .link_row`'s two writers refuse to create a NEW row for one at all, so
+    #: nothing sets this going forward except that same cleanup script,
+    #: re-run against whatever a future frequency-list update adds.
+    is_function_word: bool = Field(default=False, index=True)
 
     #: Denormalised from the rank-1 sense -- see the class docstring.
+    #: NULL for a proper noun, and until the lexeme has a sense.
     cefr: str | None = Field(default=None, max_length=4, index=True)
     frequency_band: str | None = Field(default=None, max_length=16, index=True)
     frequency_source: str | None = Field(default=None, max_length=8)
@@ -246,15 +271,33 @@ class LexemeSense(SQLModel, table=True):
     #: own column rather than `meaning_uz_alt`, which means "the other
     #: translator's candidate" and would then mean two things.
     meaning_uz_material: str = Field(default="", max_length=400)
+    #: The pair (`meaning_uz`, `meaning_uz_alt`) a re-translation trial
+    #: replaced, kept until the trial is decided -- see
+    #: `scripts/retranslate_different.py`. Empty: no trial on this sense.
+    meaning_uz_prev: str = Field(default="", max_length=400)
+    meaning_uz_alt_prev: str = Field(default="", max_length=400)
     #: Null until something has graded this sense -- see the class docstring.
     #: Distinct from `""`: a P1 provisional sense built from rows that ALL
     #: have an empty `cefr_level` (never graded by the extraction pipeline)
     #: gets null here too, and both cases mean the same thing, "nobody has
     #: rated this yet", which `needs_review`'s NGSL-conflict check must be
-    #: able to tell apart from an actual rating.
+    #: able to tell apart from an actual rating. Null is also FINAL for a
+    #: proper noun's sense (`Lexeme.is_proper_noun`): a name has no level,
+    #: and the UI shows no chip at all for a null level.
     cefr: str | None = Field(default=None, max_length=4, index=True)
 
     oewn_synset_id: str | None = Field(default=None, max_length=32, index=True)
+    #: This sense's Princeton WordNet 3.1 SemCor tag-count rank among its
+    #: lemma's synsets (1 = commonest) -- what `sense_rank` for an `oewn`
+    #: sense is actually ORDERED BY (`lexicon_enrich`'s `oewn_rank` field on
+    #: its in-memory `Sense`, persisted here since P2 originally only kept it
+    #: for the length of one enrichment run). Null for a `model` sense: there
+    #: is no Princeton rank for a definition OEWN never had. This is the data
+    #: `app.services.lexicon_licences.sources` reads to decide whether
+    #: Princeton WordNet 3.1's SemCor counts belong on the licences page --
+    #: see that module for why the page is generated from a fact about the
+    #: data rather than a permanent hand-written row.
+    oewn_rank: int | None = Field(default=None)
     source_id: str = Field(default="model", max_length=16)
     licence: str = Field(default="proprietary", max_length=16)
 

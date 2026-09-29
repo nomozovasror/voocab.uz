@@ -89,6 +89,16 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 _REPORT_SOURCE = {"word_page": "word_page", "practice": "practice_reveal"}
 
 
+
+def _no_level(sense: LexemeSense | None) -> bool:
+    """The lexicon says this word has NO level -- a finished sense whose
+    CEFR is NULL, which is a proper noun's (`Lexeme.is_proper_noun`) and
+    nothing else's. The material row's own `cefr_level` (the seed graded
+    `Alan` B1) must not stand in for it: the UI shows no chip for "".
+    A provisional sense's NULL means "not graded yet", and the row's level
+    is still the best thing to show."""
+    return sense is not None and sense.cefr is None and not sense.provisional
+
 def _entry(
     entry: MaterialVocabulary,
     material: Material,
@@ -120,7 +130,7 @@ def _entry(
         meaning_uz=entry.meaning_uz,
         sense_differs=entry.sense_differs,
         example=entry.example,
-        cefr_level=entry.cefr_level,
+        cefr_level="" if _no_level(sense) else entry.cefr_level,
         is_phrase=entry.is_phrase,
         part_id=entry.part_id,
         paragraph_index=entry.paragraph_index,
@@ -454,7 +464,7 @@ def _saved_word_out(
     last thing left to show rather than an empty line.
     """
     lapse_counts = lapse_counts or {"passive": 0, "active": 0}
-    newest_cefr = contexts[-1].cefr_level if contexts else ""
+    newest_cefr = contexts[-1].cefr_level if contexts and not _no_level(sense) else ""
     definition_en = sense.definition_en if sense is not None else word.meaning_core_en
     meaning_uz = sense.meaning_uz if sense is not None else word.meaning_core_uz
     sense_cefr = (sense.cefr or "") if sense is not None else ""

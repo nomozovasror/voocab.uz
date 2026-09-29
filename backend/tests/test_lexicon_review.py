@@ -360,7 +360,7 @@ async def test_licences_page_is_generated_and_public() -> None:
     lex_offlist = await _make_lexeme(f"lic-off{tag}", frequency_source="off-list")
     sense = await _make_sense(
         lex_ngsl.id, sense_rank=1, definition_en="def", meaning_uz="uz",
-        source_id="oewn", licence="cc-by-4.0",
+        source_id="oewn", licence="cc-by-4.0", oewn_synset_id="oewn-test-1-n", oewn_rank=1,
     )
 
     try:
@@ -376,6 +376,7 @@ async def test_licences_page_is_generated_and_public() -> None:
             assert by_key["ngsl"]["licence_name"] == "CC BY-SA 4.0"
             assert by_key["ngsl"]["licence_url"].startswith("https://creativecommons.org/licenses/by-sa/")
             assert by_key["ngsl"]["count"] >= 1
+            assert by_key["ngsl"]["usage_note"] == ""
 
             assert "oewn" in by_key
             assert by_key["oewn"]["authors"] == "Open English WordNet Team"
@@ -385,6 +386,18 @@ async def test_licences_page_is_generated_and_public() -> None:
             # off-list and model are not third-party sources -- never listed.
             assert "off-list" not in by_key
             assert "model" not in by_key
+
+            # (B) Princeton WordNet 3.1's SemCor counts appear ONLY because a
+            # sense's `oewn_rank` is actually non-null in this deployment's
+            # data -- generated, not a permanent hand-written row.
+            assert "wordnet-semcor" in by_key
+            wn = by_key["wordnet-semcor"]
+            assert wn["title"] == "Princeton WordNet 3.1 — SemCor sense frequencies"
+            assert wn["authors"] == "Princeton University"
+            assert wn["licence_name"] == "WordNet 3.1 licence"
+            assert wn["licence_url"] == "https://wordnet.princeton.edu/license-and-commercial-use"
+            assert wn["usage_note"] == "Sense ordering only, not stored as definitions."
+            assert wn["count"] >= 1
     finally:
         await _cleanup(lexeme_ids=(lex_ngsl.id, lex_offlist.id))
 

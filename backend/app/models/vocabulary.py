@@ -294,6 +294,14 @@ class MaterialVocabulary(SQLModel, table=True):
     #: Kept out of the way without being deleted. An author who judges an
     #: entry unhelpful should not have to choose between leaving it and
     #: losing the record that the pipeline produced it.
+    #:
+    #: Also set AUTOMATICALLY, by kind rather than by row: `lexicon.link_row`
+    #: sets this whenever the row's lexeme turns out to be a proper noun
+    #: (`Lexeme.is_proper_noun`) or a function word/single letter
+    #: (`Lexeme.is_function_word`) -- neither is ever glossed in a material,
+    #: however it was found or created, including a row a learner's own live
+    #: lookup generated. The lookup itself still answers the learner; this
+    #: only keeps the gloss out of the passage's own word list.
     hidden: bool = Field(default=False)
     generated_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),

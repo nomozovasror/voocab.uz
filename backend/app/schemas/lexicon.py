@@ -115,6 +115,11 @@ class LicenceSourceOut(BaseModel):
     licence_url: str
     source_url: str
     count: int
+    #: Shown under the licence badge where non-empty -- today only Princeton
+    #: WordNet's SemCor counts ("sense ordering only, not stored as
+    #: definitions"), which read like a source of definitions if the card
+    #: said nothing more (`app.services.lexicon_licences.REGISTRY`).
+    usage_note: str = ""
 
 
 class LicencesOut(BaseModel):

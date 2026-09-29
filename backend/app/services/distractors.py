@@ -70,12 +70,12 @@ import uuid
 from dataclasses import dataclass
 from typing import Literal
 
-from sqlalchemy import case
+from sqlalchemy import case, exists
 from sqlmodel import select
 
 from app.core.config import settings
 from app.core.database import AsyncSession
-from app.models.lexicon import LexemeSense
+from app.models.lexicon import Lexeme, LexemeSense
 from app.models.material import Material
 from app.models.vocabulary import MaterialVocabulary, SavedWord
 
@@ -278,6 +278,12 @@ async def _candidates(
             Material.visibility == "public",
             MaterialVocabulary.lemma != exclude_lemma,
             cefr_clause,
+            # A name, or a function word/single-letter token, is never an
+            # option: neither has a meaning to confuse.
+            ~exists(select(Lexeme.id).where(
+                Lexeme.id == MaterialVocabulary.lexeme_id,
+                (Lexeme.is_proper_noun.is_(True)) | (Lexeme.is_function_word.is_(True)),
+            )),
         )
         .order_by(*order_by)
         .limit(CANDIDATE_FETCH_LIMIT)

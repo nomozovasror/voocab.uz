@@ -29,6 +29,10 @@ class _Entry:
     licence_name: str
     licence_url: str
     source_url: str
+    #: Shown on the card beneath the licence badge, empty for every entry but
+    #: Princeton WordNet's -- see that entry's own comment for why it alone
+    #: needs one.
+    usage_note: str = ""
 
 
 _CC_BY_SA_4 = "https://creativecommons.org/licenses/by-sa/4.0/"
@@ -68,6 +72,29 @@ REGISTRY: dict[str, _Entry] = {
         "CC BY 4.0", _CC_BY_4,
         "https://github.com/globalwordnet/english-wordnet",
     ),
+    # Keyed by `LexemeSense.oewn_rank IS NOT NULL` (`sources` below), not by
+    # `frequency_source` or `source_id` like every other row -- Princeton's
+    # SemCor tag counts are not a source of DEFINITIONS (those are OEWN's,
+    # above, under OEWN's own CC BY licence) or of a frequency BAND (that's
+    # the NGSL family). They are used for exactly one thing: choosing which
+    # of a lemma's OEWN senses is "the commonest" (`sense_rank`), and a
+    # list-only lexeme's part of speech when OEWN's own counts have to decide
+    # between two (`lexicon_enrich.top_sense_any_pos`). This entry appears on
+    # the page only because `oewn_rank` is actually non-null on senses in
+    # this deployment's database -- see `sources()`.
+    #
+    # The WordNet 3.1 licence permits use and redistribution with the
+    # copyright notice, but explicitly forbids using Princeton University's
+    # name in advertising or publicity relating to distribution of the
+    # software without prior written permission -- worth stating here,
+    # rather than only on the licence's own page, since this registry is the
+    # one place in the codebase that decides how Princeton is credited.
+    "wordnet-semcor": _Entry(
+        "Princeton WordNet 3.1 — SemCor sense frequencies", "Princeton University",
+        "WordNet 3.1 licence", "https://wordnet.princeton.edu/license-and-commercial-use",
+        "https://wordnetcode.princeton.edu/wn3.1.dict.tar.gz",
+        usage_note="Sense ordering only, not stored as definitions.",
+    ),
 }
 
 
@@ -104,8 +131,21 @@ async def sources(session: AsyncSession) -> list[dict]:
             continue
         rows.append({"key": key, "count": count, **entry.__dict__})
 
-    # Registry order (NGSL family, then OEWN), not whatever order SQL's
-    # GROUP BY happened to return.
+    # `oewn_rank` counts how many senses were actually ORDERED using
+    # Princeton's SemCor tag counts (`LexemeSense.oewn_rank`'s own
+    # docstring) -- present only once `scripts/lexicon_cleanup.py
+    # wordnet-provenance` (or ordinary enrichment) has written at least one,
+    # which is what keeps this entry off the page on a deployment whose
+    # senses predate that column.
+    wordnet_count = (await session.exec(
+        select(func.count(LexemeSense.id)).where(LexemeSense.oewn_rank.is_not(None))
+    )).one()
+    if wordnet_count:
+        entry = REGISTRY["wordnet-semcor"]
+        rows.append({"key": "wordnet-semcor", "count": wordnet_count, **entry.__dict__})
+
+    # Registry order (NGSL family, then OEWN, then Princeton), not whatever
+    # order SQL's GROUP BY happened to return.
     order = {key: i for i, key in enumerate(REGISTRY)}
     rows.sort(key=lambda r: order.get(r["key"], len(order)))
     return rows

@@ -81,7 +81,7 @@ from sqlalchemy import exists, func
 from sqlmodel import select
 
 from app.core.database import AsyncSession
-from app.models.lexicon import LexemeSense
+from app.models.lexicon import Lexeme, LexemeSense
 from app.models.user import User
 from app.models.vocabulary import (
     ACTIVE_LADDER,
@@ -1145,6 +1145,24 @@ async def _reap_suspensions(session: AsyncSession, user_id: uuid.UUID) -> None:
 # --- Queues: due, new, active unlock, and the material filter ----------------
 
 
+def _practisable_clause():
+    """A saved word whose sense belongs to a proper noun
+    (`Lexeme.is_proper_noun`) or a function word/single-letter token
+    (`Lexeme.is_function_word` -- see `app.services.lexicon.is_excluded_word`)
+    is never practised: neither has a level or a meaning worth recalling.
+    Kept on the list -- the learner saved it -- but out of every queue and
+    every count this module reports. An EXISTS, so a word with no sense row
+    at all is not excluded by accident."""
+    return ~exists(
+        select(LexemeSense.id)
+        .join(Lexeme, Lexeme.id == LexemeSense.lexeme_id)
+        .where(
+            LexemeSense.id == SavedWord.lexeme_sense_id,
+            (Lexeme.is_proper_noun.is_(True)) | (Lexeme.is_function_word.is_(True)),
+        )
+    )
+
+
 def _has_material_clause(material_id: uuid.UUID):
     """An EXISTS rather than a JOIN, so a word met in three materials is one
     row in the queue and not three."""
@@ -1164,6 +1182,7 @@ async def _due_words(
     which is the same thing but cheaper to sort by."""
     query = select(SavedWord).where(
         SavedWord.user_id == user_id,
+        _practisable_clause(),
         SavedWord.status.not_in(EXCLUDED_STATUSES),
         SavedWord.passive_state.is_not(None),
         SavedWord.passive_due <= datetime.now(timezone.utc),
@@ -1187,6 +1206,7 @@ async def _active_due_words(
     rule this enables."""
     query = select(SavedWord).where(
         SavedWord.user_id == user_id,
+        _practisable_clause(),
         SavedWord.status.not_in(EXCLUDED_STATUSES),
         SavedWord.active_state.is_not(None),
         SavedWord.active_due <= datetime.now(timezone.utc),
@@ -1204,6 +1224,7 @@ async def _new_words(
     FIFO, so a word does not wait behind one saved a minute later than it."""
     query = select(SavedWord).where(
         SavedWord.user_id == user_id,
+        _practisable_clause(),
         SavedWord.status.not_in(EXCLUDED_STATUSES),
         SavedWord.passive_state.is_(None),
     )
@@ -1224,6 +1245,7 @@ async def _active_unlock_candidates(
     else."""
     query = select(SavedWord).where(
         SavedWord.user_id == user_id,
+        _practisable_clause(),
         SavedWord.status.not_in(EXCLUDED_STATUSES),
         SavedWord.active_state.is_(None),
         SavedWord.passive_stability.is_not(None),
@@ -1247,6 +1269,7 @@ async def _next_due_at(
     passive_row = await session.exec(
         select(func.min(SavedWord.passive_due)).where(
             SavedWord.user_id == user_id,
+            _practisable_clause(),
             SavedWord.status.not_in(EXCLUDED_STATUSES),
             SavedWord.passive_state.is_not(None),
         )
@@ -1256,6 +1279,7 @@ async def _next_due_at(
         active_row = await session.exec(
             select(func.min(SavedWord.active_due)).where(
                 SavedWord.user_id == user_id,
+                _practisable_clause(),
                 SavedWord.status.not_in(EXCLUDED_STATUSES),
                 SavedWord.active_state.is_not(None),
             )
@@ -1281,6 +1305,7 @@ async def active_in_progress_count(session: AsyncSession, user_id: uuid.UUID) ->
     row = await session.exec(
         select(func.count()).where(
             SavedWord.user_id == user_id,
+            _practisable_clause(),
             SavedWord.active_state.is_not(None),
             SavedWord.status.not_in(("known", "suspended")),
         )
@@ -1523,7 +1548,7 @@ async def _totals(session: AsyncSession, user_id: uuid.UUID) -> dict[str, int]:
     """
     rows = await session.exec(
         select(SavedWord.status, SavedWord.passive_stability).where(
-            SavedWord.user_id == user_id
+            SavedWord.user_id == user_id, _practisable_clause()
         )
     )
     total = mastered = suspended = 0
@@ -1547,7 +1572,7 @@ async def _set_aside_count(session: AsyncSession, user_id: uuid.UUID) -> int:
     set aside" line, so a 30-day return is never a silent surprise."""
     row = await session.exec(
         select(func.count()).where(
-            SavedWord.user_id == user_id, SavedWord.status == "suspended"
+            SavedWord.user_id == user_id, SavedWord.status == "suspended", _practisable_clause()
         )
     )
     return row.one()

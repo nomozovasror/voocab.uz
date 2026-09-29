@@ -176,6 +176,10 @@ class FrequencyLists:
         return (self.ngsl_rank.keys() | self.nawl | self.supplementary
                 | self.bsl | self.tsl | self.moel)
 
+    def on_any_list(self, lemma: str) -> bool:
+        return (lemma in self.ngsl_rank or lemma in self.nawl or lemma in self.supplementary
+                or lemma in self.bsl or lemma in self.tsl or lemma in self.moel)
+
 
 _frequency_lists_cache: FrequencyLists | None = None
 
@@ -328,6 +332,94 @@ def lexeme_is_phrase(lemma: str, pos: str) -> bool:
     return (" " in lemma) or (pos == "phr")
 
 
+# --- Proper nouns ------------------------------------------------------------
+
+#: The same "a sentence has just ended" test the seed's candidate filter uses
+#: (`seed/vocabulary.SENTENCE_END`): a capital straight after it says nothing.
+_SENTENCE_END = re.compile(r"[.!?][\"'’”)\]]*\s+$")
+
+
+def looks_like_name(lemma: str, pos: str, surface: str, example: str) -> bool:
+    """Whether a NEW row is a proper noun, from the row alone -- no model
+    call is allowed here. True only when every one of these holds:
+
+    * the word as written starts with a capital and is not an acronym
+      (`DNA`, `NASA` -- undecidable, so left alone);
+    * it is a noun or a phrase (a capitalised adjective mid-sentence is
+      `German`, which is a word);
+    * it stands MID-sentence in its own example -- a capital after a full
+      stop proves nothing, the seed filter's own rule;
+    * the lemma is on none of the frequency lists (`Bath` the city is also
+      `bath`, and the list word wins).
+
+    Deliberately narrow: a name it misses is caught by the extraction prompt
+    (names answered with an empty lemma) or marked by hand; a real word it
+    wrongly marked would silently leave practice."""
+    surface = " ".join((surface or "").split())
+    if not surface or not surface[0].isupper():
+        return False
+    if any(len(word) > 1 and word.replace("-", "").isupper() for word in surface.split()):
+        return False
+    if pos not in ("n", "phr", ""):
+        return False
+    at = (example or "").find(surface)
+    if at < 0:
+        return False
+    before = example[:at]
+    if not before.strip() or _SENTENCE_END.search(before):
+        return False
+    return not frequency_lists().on_any_list(lemma)
+
+
+# --- Function words and single-letter tokens -------------------------------
+
+#: The closed-class words among NGSL's own top 100 ranks
+#: (`NGSL_12_stats.csv`, `SFI Rank <= 100`): articles/determiners, personal/
+#: demonstrative/relative/interrogative pronouns and existential "there",
+#: prepositions and particles, coordinating/subordinating conjunctions,
+#: auxiliary and modal verbs, negation ("not"), and the handful of
+#: quantifier-determiners (`some`/`any`/`no`/`other`/`all`/`much`/`many`/
+#: `more`/`most`/`such`) and degree/focus particles (`very`/`just`/`only`/
+#: `even`) that behave the same grammatical way -- a closed, fixed set,
+#: never a word a learner is taught on its own. Deliberately narrow:
+#: open-class content words just as frequent at this rank (`say`, `go`,
+#: `know`, `get`, `think`, `make`, `time`, `see`, `come`, `work`, `use`,
+#: `look`, `want`, `give`, `way`, `find`, `thing`, `need`, `mean`) and
+#: adverbs/numerals with no obvious closed-class shelf of their own (`one`,
+#: `first`, `now`, `then`, `also`, `here`, `well`, `right`, `back`) are left
+#: IN -- a learner can be taught these; nobody is taught "of". Hand-derived
+#: from the ranked list rather than a POS tagger (none is a dependency of
+#: this project), and a snapshot of the CURRENT lists -- it does not
+#: recompute itself if a future NGSL release reranks a word into or out of
+#: the top 100.
+FUNCTION_WORDS: frozenset[str] = frozenset({
+    "the", "be", "and", "of", "to", "a", "in", "have", "it", "you", "he",
+    "for", "they", "not", "that", "we", "on", "with", "this", "i", "do",
+    "as", "at", "she", "but", "from", "by", "will", "or", "so", "all", "if",
+    "would", "about", "can", "which", "there", "more", "who", "when",
+    "what", "up", "some", "other", "out", "no", "because", "very", "just",
+    "could", "than", "into", "only", "over", "any", "after", "where",
+    "most", "should", "much", "how", "even", "may", "many", "such",
+})
+
+
+def is_excluded_word(lemma: str) -> bool:
+    """A single-letter token, or one of :data:`FUNCTION_WORDS` -- neither is
+    vocabulary, the same "not a word worth teaching" judgement
+    :func:`looks_like_name` makes about a name, made about grammar instead.
+
+    Checked by `app.services.vocabulary`'s two writers of
+    `material_vocabulary` (`_generate`, `replace_extracted`), which refuse to
+    write a NEW row for one at all -- so `link_row` below is never called
+    with one from this point on -- and by the list-only lemma selection in
+    `scripts/build_lexicon.py`, so neither ever manufactures what
+    `scripts/lexicon_cleanup.py function-words` would then have to clean up
+    again on its next run.
+    """
+    lemma = (lemma or "").strip().lower()
+    return len(lemma) == 1 or lemma in FUNCTION_WORDS
+
+
 # --- Find-or-create -------------------------------------------------------
 
 
@@ -348,15 +440,27 @@ async def link_row(session: AsyncSession, row: MaterialVocabulary) -> None:
     pos = row.pos or ""
     is_phrase = row.is_phrase or lexeme_is_phrase(lemma, pos)
 
-    lexeme = await _find_or_create_lexeme(session, lemma, pos, is_phrase)
+    lexeme = await _find_or_create_lexeme(session, lemma, pos, is_phrase, row)
     row.lexeme_id = lexeme.id
 
     sense = await _find_or_create_sense(session, lexeme, row)
     row.sense_id = sense.id
 
+    # RULE BY KIND, not by row: a proper noun or a function word/single-
+    # letter token is never glossed in a material, however it got linked --
+    # including a lexeme that already existed under one of those flags from
+    # an earlier row. `app.services.vocabulary`'s two writers additionally
+    # refuse to create a function-word row at all (`is_excluded_word`), so
+    # this is the backstop that also covers a proper noun (which is never
+    # refused, only marked -- see `looks_like_name`) and anything that
+    # reaches here despite that refusal.
+    if lexeme.is_proper_noun or lexeme.is_function_word:
+        row.hidden = True
+
 
 async def _find_or_create_lexeme(
-    session: AsyncSession, lemma: str, pos: str, is_phrase: bool
+    session: AsyncSession, lemma: str, pos: str, is_phrase: bool,
+    row: MaterialVocabulary | None = None,
 ) -> Lexeme:
     found = (
         await session.exec(select(Lexeme).where(Lexeme.lemma == lemma, Lexeme.pos == pos))
@@ -379,10 +483,26 @@ async def _find_or_create_lexeme(
                 return target
 
     lists = frequency_lists()
+    # A proper noun is marked the moment it is created: the same lemma is
+    # already a known name, or the row itself reads as one
+    # (:func:`looks_like_name`). Marked, it gets no CEFR and stays out of
+    # practice -- see `Lexeme.is_proper_noun`.
+    proper = (await session.exec(select(Lexeme.id).where(
+        Lexeme.lemma == lemma, Lexeme.is_proper_noun.is_(True)))).first() is not None
+    if not proper and row is not None:
+        proper = looks_like_name(lemma, pos, row.surface, row.example)
     lexeme = Lexeme(
         lemma=lemma, pos=pos, is_phrase=is_phrase,
         frequency_band=lists.band(lemma), frequency_source=lists.source(lemma),
-        domain_tags=lists.domain_tags(lemma),
+        domain_tags=lists.domain_tags(lemma), is_proper_noun=proper,
+        # Marked the same way, for the same reason -- see
+        # `Lexeme.is_function_word`. The two writers that reach this
+        # function already refuse to do so for one of these lemmas
+        # (`is_excluded_word`, checked before a `MaterialVocabulary` row is
+        # even built), so this only ever fires for the merge-target lookup
+        # above finding nothing and a genuinely new lexeme being minted --
+        # never left unmarked simply because nobody asked first.
+        is_function_word=is_excluded_word(lemma),
     )
     session.add(lexeme)
     try:
@@ -419,11 +539,12 @@ async def _find_or_create_sense(
             if normalise_meaning(sense.definition_en) == normalised:
                 return sense
 
-    cefr = row.cefr_level or None
+    # A proper noun has no level: NULL here is final, not "not graded yet".
+    cefr = None if lexeme.is_proper_noun else (row.cefr_level or None)
     reasons: list[str] = []
     if cefr in ("C1", "C2") and lexeme.frequency_band == "core":
-        reasons.append("ngsl_conflict")
-    if cefr in ("A1", "A2") and lexeme.frequency_band == "off-list":
+        # The same test as `lexicon_enrich.ngsl_conflict` (not imported:
+        # that module imports this one).
         reasons.append("ngsl_conflict")
 
     sense = LexemeSense(

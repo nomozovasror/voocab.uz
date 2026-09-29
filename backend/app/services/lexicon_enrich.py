@@ -51,9 +51,14 @@ work that fixes that, one lexeme at a time.
    is dropped. Mechanical tidying that cannot change a meaning (final full
    stop, capital first letter) is applied to every copy without a model.
    The verbatim copy is kept in ``meaning_uz_material`` either way.
-8. **Uzbek by two models + judge**, for every sense that did not get a
-   material's Uzbek in step 3. ``meaning_uz`` takes the translation the judge
-   prefers (the stronger model's on a tie), ``meaning_uz_alt`` the other.
+8. **Uzbek by two models + judge (twice)**, for every sense that did not
+   get a material's Uzbek in step 3. Both translators get one prompt, which
+   says every listed synonym must fit THIS definition, and a rare defined
+   sense is translated as that sense, not the everyday one. The judge runs
+   TWICE per pair (:func:`judge_twice`, :func:`combine_verdicts`): flagged
+   only when both runs are non-``same``. ``meaning_uz`` takes the
+   translation both runs prefer (the stronger model's otherwise),
+   ``meaning_uz_alt`` the other.
 9. **Rank, review reasons, `Lexeme.cefr`** (:func:`rank_senses`,
    :func:`review_reasons`), written in one transaction with
    ``Lexeme.enriched_at`` set last.
@@ -69,16 +74,20 @@ model sense.
 ## Review reasons (D3/D5)
 
 * ``ngsl_conflict`` -- rank-1 sense only: C1/C2 while the lexeme is
-  NGSL-core (top 1 000), or A1/A2 while off-list. A deeper sense of a core
-  word legitimately grades C1, so checking every sense was mostly noise.
+  NGSL-core (top 1 000) (:func:`ngsl_conflict`). A deeper sense of a core
+  word legitimately grades C1, so checking every sense was mostly noise;
+  "A1/A2 while off-list" was dropped too -- see that function.
 * ``material_level_gap`` -- the sense's grade is >= 2 bands from the
   majority level of the material rows linked to it, and the grade is B1 or
   above: the seed only ever assigned B1-C1, so an A1/A2 sense ("spring" the
   season) is two bands from B2 by construction, not by error.
 * ``pos_mismatch`` -- set by the matcher (step 1), never recomputed here; a
   re-run's matcher answer replaces it.
-* ``judge_different`` / ``judge_unsure`` -- the two translations were judged
-  not to mean the same thing.
+* ``judge_different`` / ``judge_unsure`` -- neither of two judge runs said
+  ``same``: both ``different`` -> judge_different, else judge_unsure. A
+  judge reply that does not parse (after one retry, and after asking again
+  for skipped items) is NO verdict -- the reasons are left as they were --
+  never ``unsure``.
 * ``lemma_merge`` -- carried over from P1, never set here.
 """
 
@@ -165,8 +174,22 @@ OEWN_PATH = WORDLISTS / "oewn_senses.jsonl.gz"
 
 def load_oewn() -> dict[tuple[str, str], list[dict]]:
     """(lemma, pos) -> senses in OEWN order, for :func:`load_works` and
-    :func:`enrich` below. Two entries for one key (`adj` folds WordNet's `a`
-    and `s`) are concatenated and re-ranked.
+    :func:`enrich` below. Every sense is ``{"synset", "rank", "definition",
+    "count"}`` -- ``count`` is Princeton WordNet 3.1's SemCor tag count (0
+    where never tagged), the one frequency that compares senses across parts
+    of speech (:func:`top_sense_any_pos`).
+
+    **A capitalised OEWN entry is not the lower-case word.** The extract
+    lower-cases every lemma, so `Song` (a Chinese dynasty), `Town` (an
+    architect), `He` (helium) and `Friend` (a Quaker) used to be filed under
+    `song`, `town`, `he`, `friend` -- and, sorting before the lower-case
+    entry, took rank 1: the OEWN top sense a lexeme is always given. Now the
+    lower-case entry's senses come first, and a capitalised entry's senses
+    follow only where SemCor ever tagged them (`March` the month, `Mass`)
+    -- the names it never did (the dynasty, the architect, a state's
+    nickname for its people) are dropped. Where OEWN has NO lower-case entry
+    for that (lemma, pos), the capitalised one is the word (`Monday`,
+    `English`, `DNA`) and is kept whole.
 
     Moved here from `scripts/enrich_lexicon.py` (which now calls
     ``le.load_oewn()``) so `app.worker`'s lexicon loop -- which needs exactly
@@ -176,22 +199,72 @@ def load_oewn() -> dict[tuple[str, str], list[dict]]:
     WORDLISTS`) rather than `seed/wordlists/`, for the reason that module's
     own docstring gives: only `backend/` reaches into the Docker worker.
     """
-    index: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    exact: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    cased: dict[tuple[str, str], list[dict]] = defaultdict(list)
     with gzip.open(OEWN_PATH, "rt", encoding="utf-8") as fh:
         for line in fh:
             record = json.loads(line)
-            index[(record["lemma"], record["pos"])].extend(record["senses"])
+            key = (record["lemma"], record["pos"])
+            (cased if record.get("form") else exact)[key].extend(record["senses"])
     out = {}
-    for key, senses in index.items():
+    for key in exact.keys() | cased.keys():
+        if key in exact:
+            senses = exact[key] + [s for s in cased.get(key, []) if s.get("count")]
+        else:
+            senses = cased[key]
         seen, ranked = set(), []
         for sense in senses:
             if sense["synset"] in seen:
                 continue
             seen.add(sense["synset"])
             ranked.append({"synset": sense["synset"], "rank": len(ranked) + 1,
-                           "definition": sense["definition"]})
-        out[key] = ranked
+                           "definition": sense["definition"],
+                           "count": int(sense.get("count") or 0)})
+        if ranked:
+            out[key] = ranked
     return out
+
+
+#: Tie order between parts of speech when SemCor counts cannot separate
+#: them (both 0) -- see :func:`top_sense_any_pos`.
+POS_PRIORITY: tuple[str, ...] = ("n", "v", "adj", "adv")
+
+
+def pos_index(oewn: dict[tuple[str, str], list[dict]]) -> dict[str, list[str]]:
+    """lemma -> every pos OEWN has it under."""
+    index: dict[str, list[str]] = defaultdict(list)
+    for lemma, pos in oewn:
+        index[lemma].append(pos)
+    return index
+
+
+def top_sense_any_pos(oewn: dict[tuple[str, str], list[dict]],
+                      index: dict[str, list[str]], lemma: str) -> tuple[str, dict, bool] | None:
+    """The lemma's most frequent OEWN sense across EVERY part of speech:
+    ``(pos, sense, decided)``, or ``None`` when OEWN does not know the lemma.
+
+    For a list-only lexeme -- on a frequency list, in no material -- there is
+    no evidence of which part of speech is meant, and guessing one first
+    and then taking that pos's top sense is how `present` came out as
+    "temporal sense" while its commonest use went unasked. The pos and the
+    definition are chosen TOGETHER: the synset with the highest SemCor tag
+    count wins. Within one pos the rank-1 sense is already the most tagged,
+    so only each pos's rank-1 competes.
+
+    ``decided`` is False when that did not settle it -- two or more parts of
+    speech and no tag count above 0 among their top senses. The caller asks
+    a model to choose between them rather than this function guessing
+    (`scripts/relex_list_only.py`); ``sense`` is then the tie order's first
+    (:data:`POS_PRIORITY`), for a caller with no model.
+    """
+    tops = [(pos, oewn[(lemma, pos)][0]) for pos in index.get(lemma, [])]
+    if not tops:
+        return None
+    tops.sort(key=lambda t: (-t[1]["count"], POS_PRIORITY.index(t[0])
+                             if t[0] in POS_PRIORITY else 99))
+    pos, sense = tops[0]
+    decided = len(tops) == 1 or sense["count"] > tops[1][1]["count"]
+    return pos, sense, decided
 
 
 # --- Usage / cost -------------------------------------------------------------
@@ -253,7 +326,12 @@ class Gemini:
         await self._client.aclose()
 
     async def ask(self, model: str, prompt: str, *, step: str,
-                  max_tokens: int = 8192, repair_flat: bool = False) -> dict | None:
+                  max_tokens: int = 8192, repair_flat: bool = False,
+                  parse=None) -> dict | None:
+        """``parse`` replaces :func:`parse_json_object` for a step whose reply
+        comes in more than one shape (the judge: :func:`parse_judge_reply`);
+        it returns a dict or ``None``, and ``None`` is retried once like any
+        unparseable reply."""
         if not self._key:
             raise RuntimeError("GEMINI_API_KEY is not configured")
         body = {
@@ -293,7 +371,7 @@ class Gemini:
             output_tokens = max(total - prompt_tokens, int(usage.get("completion_tokens") or 0))
             self.usage.add(model, step, prompt_tokens, output_tokens)
             content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-            parsed = parse_json_object(content)
+            parsed = parse(content) if parse is not None else parse_json_object(content)
             if parsed is None and repair_flat:
                 parsed = repair_flat_map(content)
             if parsed is not None:
@@ -349,6 +427,75 @@ def repair_flat_map(text: str) -> dict | None:
         if match and match.group(2).strip():
             pairs[match.group(1)] = match.group(2).strip()
     return {top.group(1): pairs} if pairs else None
+
+
+_K_KEY = re.compile(r"^k\d+$")
+
+
+def _json_value(text: str):
+    """Any JSON value in a reply (object or array), fences stripped."""
+    text = _FENCE.sub("", text.strip())
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    for open_, close in (("{", "}"), ("[", "]")):
+        start, end = text.find(open_), text.rfind(close)
+        if start >= 0 and end > start:
+            try:
+                return json.loads(text[start:end + 1])
+            except json.JSONDecodeError:
+                continue
+    return None
+
+
+def parse_judge_reply(text: str, keys: list[str] | None = None) -> dict | None:
+    """The judge's verdicts as ``{"verdicts": {"k1": {...}, ...}}``, from
+    any of the shapes 3.5 Flash-Lite actually sends in JSON mode (measured
+    in 7 of ~140 requests): the asked-for wrapper; a top-level k-map with
+    no wrapper; an array -- of the wrapper, of one-key ``{"k1": {...}}``
+    objects, or of items carrying their key as ``id``/``key``/``k``; and
+    ``"verdicts"`` itself given as such an array; and a bare array of
+    verdict objects with no keys at all, read in item order ONLY when
+    ``keys`` is given and the lengths match. ``None`` when no k-key is
+    found at all -- a parse failure, retried by the caller and NEVER read as
+    a verdict (it used to come out as ``unsure`` for all 50 items)."""
+    value = _json_value(text)
+
+    def from_list(items) -> dict:
+        out = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            key = next((str(item[f]) for f in ("id", "key", "k") if f in item), None)
+            if key is not None and _K_KEY.match(key):
+                out[key] = item
+                continue
+            if "verdicts" in item:
+                inner = item["verdicts"]
+                out.update(from_list(inner) if isinstance(inner, list)
+                           else {k: v for k, v in inner.items() if _K_KEY.match(k)}
+                           if isinstance(inner, dict) else {})
+                continue
+            out.update({k: v for k, v in item.items() if _K_KEY.match(str(k))})
+        return out
+
+    if isinstance(value, list):
+        verdicts = from_list(value)
+        if (not verdicts and keys and len(value) == len(keys)
+                and all(isinstance(v, dict) and "verdict" in v for v in value)):
+            verdicts = dict(zip(keys, value))
+    elif isinstance(value, dict):
+        inner = value.get("verdicts")
+        if isinstance(inner, dict):
+            verdicts = {k: v for k, v in inner.items() if _K_KEY.match(str(k))}
+        elif isinstance(inner, list):
+            verdicts = from_list(inner)
+        else:
+            verdicts = {k: v for k, v in value.items() if _K_KEY.match(str(k))}
+    else:
+        return None
+    return {"verdicts": verdicts} if verdicts else None
 
 
 # --- Working state ------------------------------------------------------------
@@ -425,6 +572,9 @@ class LexemeWork:
     oewn: list[dict]
     senses: list[Sense]
     rows: list[Row]
+    #: A name (`Lexeme.is_proper_noun`): never graded, its senses' CEFR
+    #: stays NULL.
+    is_proper_noun: bool = False
     #: outputs
     plan: list[Sense] = field(default_factory=list)
     deleted: dict[uuid.UUID, uuid.UUID | None] = field(default_factory=dict)
@@ -810,6 +960,18 @@ def majority_level(levels: list[str]) -> str | None:
     return min((lvl for lvl, n in counts.items() if n == top), key=CEFR_ORDER.index)
 
 
+def ngsl_conflict(cefr: str | None, frequency_band: str | None) -> bool:
+    """C1/C2 on a word in NGSL's top 1 000 (band ``core``).
+
+    The other half this check used to have -- A1/A2 while off-list -- is
+    gone: off-list only means "on none of the five lists", and 695 of 778
+    flags were plain words the lists do not carry (`butterfly`,
+    `wristwatch`, `metre`), contractions and hyphenated compounds. A rare
+    word graded easy is not a contradiction; a top-1 000 word graded C1 is
+    (usually a rare OEWN sense sitting at rank 1)."""
+    return cefr in ("C1", "C2") and frequency_band == "core"
+
+
 def review_reasons(*, cefr: str | None, frequency_band: str | None,
                    material_levels: list[str], carried: list[str],
                    judge: str | None, rank: int = 1) -> list[str]:
@@ -820,11 +982,8 @@ def review_reasons(*, cefr: str | None, frequency_band: str | None,
         reasons.append("judge_different")
     elif judge != "same":
         reasons.append("judge_unsure")
-    if rank == 1:
-        if cefr in ("C1", "C2") and frequency_band == "core":
-            reasons.append("ngsl_conflict")
-        if cefr in ("A1", "A2") and frequency_band == "off-list":
-            reasons.append("ngsl_conflict")
+    if rank == 1 and ngsl_conflict(cefr, frequency_band):
+        reasons.append("ngsl_conflict")
     majority = majority_level(material_levels)
     if cefr in CEFR_ORDER and majority is not None \
             and CEFR_ORDER.index(cefr) >= CEFR_ORDER.index("B1"):
@@ -942,24 +1101,43 @@ the -moq form. Do not transliterate the English word unless Uzbek really uses
 that loanword. Where one Uzbek word is ambiguous, add a second synonym after
 a comma; at most about eight words.
 
+Every synonym you list must fit THIS definition. If the defined sense is not
+the word's everyday meaning, translate the defined sense, not the everyday
+one.
+
 {items}
 
 Reply with JSON only: {{"uz": {{"k1": "...", ...}}}}"""
 
 JUDGE_PROMPT = """Two translators rendered English word senses into Uzbek.
-For each item decide whether translation A and translation B give the SAME
-meaning of the English word as defined:
-- "same": they name the same meaning (synonyms, different suffixes or word
-  order still count as same);
-- "different": they name different meanings, or at least one is wrong for
-  this definition or is not Uzbek;
-- "unsure": you cannot tell.
-Also say which fits the definition better: "a", "b", or "both".
+For each item compare translation A and translation B against the English
+word IN THE SENSE DEFINED. Decide in this order and stop at the first that
+applies:
+1. "different": at least one is wrong for this definition -- it, or any
+   one of the synonyms it lists, names another sense of the English word or
+   a different thing -- or is not Uzbek, or is an English transliteration
+   Uzbek does not use.
+2. "same": a learner would take away the same meaning from either. This is
+   the normal case. Synonyms, different suffixes or word order, one side
+   listing more correct synonyms than the other, or adding a note in
+   brackets, are all "same".
+3. "unsure": both fit the definition and still are not interchangeable,
+   for one of these named reasons (give it as "why"):
+   - "scope": one is clearly narrower or broader than the other (a specific
+     kind vs the general word, or covers only part of the sense);
+   - "register": one is bookish, dated, dialect or a Russian loanword where
+     the other is the everyday modern Uzbek word;
+   - "vague": the definition is too short or vague to tell whether each
+     rendering fits this sense.
+   If none of these reasons clearly applies, the answer is "same".
+Separately say which fits the definition better: "a", "b", or "both".
+Preferring one side does not by itself make the pair "unsure".
 
 {items}
 
 Reply with JSON only:
-{{"verdicts": {{"k1": {{"verdict": "same", "better": "both"}}, ...}}}}"""
+{{"verdicts": {{"k1": {{"verdict": "same", "better": "both"}},
+  "k2": {{"verdict": "unsure", "why": "scope", "better": "a"}}, ...}}}}"""
 
 
 STYLE_PROMPT = """Below are Uzbek meanings of English words, copied from
@@ -1081,7 +1259,11 @@ def _label(work: LexemeWork) -> str:
 
 
 async def step_cefr(gemini: Gemini, works: list[LexemeWork]) -> None:
-    items = [(w, s) for w in works for s in w.plan]
+    for work in works:
+        if work.is_proper_noun:
+            for sense in work.plan:
+                sense.cefr = None  # a name has no level
+    items = [(w, s) for w in works if not w.is_proper_noun for s in w.plan]
     for batch in _chunks(items, 60):
         text = "\n".join(f"k{i}: {_label(w)} -- {s.definition_en}"
                          for i, (w, s) in enumerate(batch, 1))
@@ -1194,20 +1376,100 @@ async def step_translate(gemini: Gemini, works: list[LexemeWork]) -> None:
                 work.note += "translate:no-answer "
         if not judged:
             continue
-        text = "\n".join(
-            f"k{i}: {_label(w)} -- {s.definition_en}\n    A: {a}\n    B: {b}"
-            for i, (w, s, a, b) in enumerate(judged, 1)
-        )
-        reply = await gemini.ask(MODEL_JUDGE, JUDGE_PROMPT.format(items=text), step="judge",
-                                 max_tokens=3000)
-        verdicts = reply.get("verdicts") if reply and isinstance(reply.get("verdicts"), dict) else {}
-        for i, (work, sense, a, b) in enumerate(judged, 1):
-            v = verdicts.get(f"k{i}")
-            v = v if isinstance(v, dict) else {}
-            verdict = str(v.get("verdict") or "").lower()
-            sense.judge = verdict if verdict in ("same", "different", "unsure") else "unsure"
-            if str(v.get("better") or "").lower() == "a":
+        results = await judge_twice(gemini, [
+            JudgeItem(label=_label(w), definition=s.definition_en, a=a, b=b)
+            for w, s, a, b in judged
+        ])
+        for (work, sense, a, b), (verdict, better) in zip(judged, results):
+            if verdict is None:
+                # No usable answer from the judge: no verdict, not "unsure".
+                work.note += "judge:no-answer "
+                continue
+            sense.judge = verdict
+            if better == "a":
                 sense.meaning_uz, sense.meaning_uz_alt = a, b
+
+
+# --- The judge ----------------------------------------------------------------
+
+JUDGE_BATCH = 50
+JUDGE_VERDICTS = ("same", "different", "unsure")
+
+
+@dataclass
+class JudgeItem:
+    label: str
+    definition: str
+    a: str
+    b: str
+
+
+def _judge_text(items: list[JudgeItem], keys: list[int]) -> str:
+    return "\n".join(
+        f"k{k}: {items[k - 1].label} -- {items[k - 1].definition}\n"
+        f"    A: {items[k - 1].a}\n    B: {items[k - 1].b}"
+        for k in keys
+    )
+
+
+async def judge_once(gemini: Gemini, items: list[JudgeItem]) -> list[tuple[str, str] | None]:
+    """One judge pass over ``items``: ``(verdict, better)`` per item, or
+    ``None`` where the judge gave nothing usable. Items a reply skipped are
+    asked once more on their own request; a parse failure is retried inside
+    :meth:`Gemini.ask`. Nothing here ever invents a verdict."""
+    out: list[tuple[str, str] | None] = [None] * len(items)
+
+    async def ask(keys: list[int]) -> None:
+        reply = await gemini.ask(MODEL_JUDGE, JUDGE_PROMPT.format(items=_judge_text(items, keys)),
+                                 step="judge", max_tokens=3000,
+                                 parse=lambda text: parse_judge_reply(
+                                     text, [f"k{k}" for k in keys]))
+        verdicts = reply.get("verdicts") if reply else None
+        if not isinstance(verdicts, dict):
+            return
+        for k in keys:
+            v = verdicts.get(f"k{k}")
+            if isinstance(v, str):
+                v = {"verdict": v}
+            if not isinstance(v, dict):
+                continue
+            verdict = str(v.get("verdict") or "").strip().lower()
+            if verdict in JUDGE_VERDICTS:
+                out[k - 1] = (verdict, str(v.get("better") or "").strip().lower())
+
+    for chunk in _chunks(list(range(1, len(items) + 1)), JUDGE_BATCH):
+        await ask(chunk)
+        missing = [k for k in chunk if out[k - 1] is None]
+        if missing:
+            await ask(missing)
+    return out
+
+
+def combine_verdicts(first: tuple[str, str] | None,
+                     second: tuple[str, str] | None) -> tuple[str | None, str]:
+    """Two judge runs -> one verdict. A pair is flagged only when BOTH runs
+    answered and neither said ``same``: both ``different`` ->
+    ``different``, any other non-same pair -> ``unsure``. A ``same`` in
+    either run is ``same`` (measured: one run alone flips about 13% of
+    pairs between same and unsure). One run missing and the other not
+    ``same`` -> ``None``, "no verdict" -- never a flag on half the
+    evidence. ``better`` swaps the translations only when every run that
+    answered says ``a``."""
+    runs = [r for r in (first, second) if r is not None]
+    verdicts = [r[0] for r in runs]
+    better = "a" if runs and all(r[1] == "a" for r in runs) else "b"
+    if "same" in verdicts:
+        return "same", better
+    if len(runs) < 2:
+        return None, better
+    return ("different" if verdicts == ["different", "different"] else "unsure"), better
+
+
+async def judge_twice(gemini: Gemini, items: list[JudgeItem]) -> list[tuple[str | None, str]]:
+    """Two independent :func:`judge_once` passes, combined by
+    :func:`combine_verdicts`."""
+    first, second = await asyncio.gather(judge_once(gemini, items), judge_once(gemini, items))
+    return [combine_verdicts(a, b) for a, b in zip(first, second)]
 
 
 def finalise(work: LexemeWork) -> None:
@@ -1252,6 +1514,7 @@ async def load_works(session, lexeme_ids: list[uuid.UUID],
         works.append(LexemeWork(
             id=lx.id, lemma=lx.lemma, pos=lx.pos, is_phrase=lx.is_phrase,
             frequency_band=lx.frequency_band, oewn=entries,
+            is_proper_noun=lx.is_proper_noun,
             senses=[Sense(
                 id=s.id, definition_en=s.definition_en, meaning_uz=s.meaning_uz,
                 meaning_uz_alt=s.meaning_uz_alt, meaning_uz_material=s.meaning_uz_material,
@@ -1409,6 +1672,7 @@ async def apply_work(session, work: LexemeWork) -> None:
         row.meaning_uz_material = planned.meaning_uz_material[:UZ_MAX]
         row.cefr = planned.cefr
         row.oewn_synset_id = planned.oewn_synset_id
+        row.oewn_rank = planned.oewn_rank
         row.source_id = planned.source_id
         row.licence = planned.licence
         row.provisional = False
