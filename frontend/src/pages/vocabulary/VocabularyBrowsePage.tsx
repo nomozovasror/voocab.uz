@@ -213,7 +213,7 @@ export default function VocabularyBrowsePage() {
   }
 
   function onPointerUp(e: React.PointerEvent) {
-    // A press on the source-material link (either face) must only navigate
+    // A press on the source-material link (back face) must only navigate
     // — flipping or paging on the same press would fire alongside it.
     if ((e.target as HTMLElement).closest("a")) {
       pointerStart.current = null;
@@ -313,10 +313,12 @@ export default function VocabularyBrowsePage() {
           )}
         >
           <BrowseFace className="browse-card-face">
+            {/* The word and nothing else: anything beside it — even the
+                passage's title — is a hint at the meaning before the
+                learner has tried to recall it. */}
             <p className="text-3xl font-semibold text-foreground">
               {current.lemma}
             </p>
-            <SourceLink context={context} />
           </BrowseFace>
 
           <BrowseFace className="browse-card-face browse-card-face-back">
@@ -383,9 +385,9 @@ function BrowseFace({
   );
 }
 
-/** The one link both faces carry, per the spec — the source material a
- *  learner met this word in, whichever context is on screen. Absent rather
- *  than disabled when a word has no context at all (a rare, pre-P4 row). */
+/** The back face's link to the source material a learner met this word in,
+ *  whichever context is on screen. Absent rather than disabled when a word
+ *  has no context at all (a rare, pre-P4 row). */
 function SourceLink({ context }: { context: SavedContext | null }) {
   if (!context?.material_title) return null;
   return (

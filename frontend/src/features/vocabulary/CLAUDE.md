@@ -792,9 +792,10 @@ merely different.
 ## Browse: reading the list, not practising it
 
 `/vocabulary/browse` (`VocabularyBrowsePage.tsx`) turns the saved list into
-cards — front the word, back its meaning, an example and the way back to
-where it was met — and it is worth being explicit about why this is not a
-fourth exercise beside recognise/recall/produce.
+cards — front the word and nothing else (even the passage's title is a hint
+before the learner has tried to recall it), back its meaning, an example
+and the way back to where it was met — and it is worth being explicit about
+why this is not a fourth exercise beside recognise/recall/produce.
 
 - **Nothing here is graded, so nothing here can teach the ladder anything.**
   A card shown proves someone LOOKED, not that they knew it; grading that
