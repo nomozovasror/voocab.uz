@@ -15,7 +15,12 @@ diffed against what its publisher actually shipped.
 (`NGSL_12_stats.csv`, `NAWL_12_lemmatized_for_research.csv`,
 `SUP_lemmatized.csv`, `BSL_120_lemmatized_for_research.csv`,
 `TSL_12_lemmatized_for_research.csv`, `MOEL_terms.csv`) are also vendored,
-byte for byte, at `backend/app/data/wordlists/`. This directory stays the
+byte for byte, at `backend/app/data/wordlists/` -- and so are the three
+ranked stats files the word-lists build (`app.services.word_lists_build`)
+reads for its teaching order: `BSL_120_stats.csv`, `TSL_12_stats.csv`,
+`NAWL_12_stats.csv`, and `NGSL_SFI_31K.csv` (extracted from the 31K
+workbook, below -- which, like the raw OEWN release, is not vendored at
+all). This directory stays the
 canonical one — provenance, licence and how each file was produced are
 documented here and only here, and `extract_oewn.py`/`extract_moel.py`
 still write their output here — but `docker-compose.yml` bind-mounts only
@@ -44,6 +49,7 @@ spreadsheet on 2026-09-27, for the lexicon build (`brief-lexicon.md`).
 | `NGSL_12_stats.csv` | 2 809 | `Lemma, SFI Rank, SFI, Adjusted Frequency per Million` |
 | `NGSL_12_lemmatized_for_research.csv` | 2 809 | `lemma, form, form, …` after six comment lines |
 | `NAWL_12_lemmatized_for_research.csv` | 959 | `lemma, form, form, …` |
+| `NAWL_12_stats.csv` | 957 | `Word, Rank, Band, SFI, U` (academic, ranked) -- see below |
 | `SUP_lemmatized.csv` | 52 | `lemma, form` — weekdays, months, numbers |
 | `BSL_120_stats.csv` | 1 744 | `Word, BSL Rank, Band, SFI, U, …` (business) |
 | `BSL_120_lemmatized_for_research.csv` | 1 744 | `lemma, form, form, …` |
@@ -51,6 +57,7 @@ spreadsheet on 2026-09-27, for the lexicon build (`brief-lexicon.md`).
 | `TSL_12_lemmatized_for_research.csv` | 1 250 | `lemma, form, form, …` |
 | `MOEL_Oral-English-Medical-Corpus.xlsx` | 657 | one column, terms and short phrases (medical) |
 | `MOEL_terms.csv` | 657 | the same 657, extracted — see below |
+| `NGSL_SFI_31K.csv` | 31 240 | `lemma, sfi, raw_freq_rank, wordlist`, extracted from the project's 31K workbook (not vendored) -- see below |
 
 BSL and TSL ship in exactly the NGSL/NAWL shape (a ranked stats file plus a
 "lemmatized for research" file of every inflected form) and are read by the
@@ -91,6 +98,77 @@ read by `extract_moel.py` with the standard library's own `zipfile` +
 once — into `MOEL_terms.csv`, lower-cased with the workbook's trailing
 non-breaking spaces stripped. `seed/lexicon.py` reads the CSV, never the
 spreadsheet.
+
+MOEL was checked for any frequency or rank column before the word-lists
+build ordered it (2026-10-03): the workbook has one sheet, one populated
+column (`A1:A657`, 1 863 rows formatted, the rest empty), the terms in
+alphabetical order and nothing else -- no rank, band or count anywhere, and
+`appetite` listed twice (656 distinct terms). The build therefore orders
+Medical English by its chain (SemCor count, then NGSL rank, then the chosen
+sense's CEFR -- never alphabetically); see `app.services.word_lists_build`.
+
+## `NAWL_12_stats.csv` -- the NAWL's own frequency ranks
+
+Downloaded 2026-10-03 from
+`https://www.newgeneralservicelist.com/s/NAWL_12_stats.csv` (the site's
+`/s/` link, which redirects to the Squarespace asset
+`static1.squarespace.com/static/64336926d7c6bb38965fdf3b/t/644e0cc3e22fd95fbef5d060/1682836675261/NAWL_1.2_stats.csv`),
+verbatim: UTF-8 with a BOM, CRLF, a `Word, Rank, Band, SFI, U` header and
+957 rows, ranks 1-957. SHA-256
+`4c99a9512730496fb19b7fbdd69831a1333ac3dd5f10cafb71487dd03c8f41f0`.
+
+The NAWL page itself says "NAWL frequency data is included only in the
+'NAWL 1.2 with basic statistics file'" and links that title to a glossary
+page on `linguaeruditio.com` (which refuses non-browser requests); the CSV
+above is the same project's own stats file under the naming its siblings
+use (`NGSL_12_stats.csv`, `BSL_120_stats.csv`), served from the same site.
+Its 957 words are the NAWL 1.2 as published ("a 957 word list"); the
+lemmatised file above has 959 because it also carries `criteria`, `founds`
+and `headquarter` as headwords where the stats file has `headquarters` --
+the word-lists build takes the stats file as the list. Same authors, same
+CC BY-SA 4.0 licence as the rest of the family (below).
+
+## `NGSLwithSFI-31K.xlsx` -- frequency for an unranked list
+
+MOEL has no rank (above), so the word-lists build orders Medical English by
+the NGSL project's own frequency table for its whole corpus, "NGSL with SFI
+(31K)". Retrieved 2026-10-03 from
+`https://www.newgeneralservicelist.com/s/NGSLwithSFI-31K.xlsx` (the link on
+the NGSL page, which redirects to the Squarespace asset
+`static1.squarespace.com/static/64336926d7c6bb38965fdf3b/t/643bd96d6b7b75042fe0f43b/1681643894991/NGSL%2Bwith%2BSFI+%2831K%29.xlsx`),
+3.6 MB, SHA-256
+`6d0da411fb88ee5577d11e72a368c717b9bce088590f6ae34e2d8d148afe6bf3`.
+
+**Why not vendor the workbook itself.** The same rule as the raw OEWN
+release (below): a large, third-party, exactly-reproducible file does not
+belong in git. What is committed is `extract_sfi31k.py` and its output; to
+reproduce it, download the workbook, check the SHA-256 above, and run
+
+    curl -L -o /tmp/NGSLwithSFI-31K.xlsx \
+        https://www.newgeneralservicelist.com/s/NGSLwithSFI-31K.xlsx
+    shasum -a 256 /tmp/NGSLwithSFI-31K.xlsx
+    python3 seed/wordlists/extract_sfi31k.py /tmp/NGSLwithSFI-31K.xlsx
+
+One sheet, `SFI adj`, 31 240 data rows (the rest of `A1:J80830` is
+formatted but empty): `Lemma, Wordlist` (`1 - NGSL`, `2 - Sup`, `3 - NAWL`,
+or empty for a lemma on none of them), `WL_SFI_Rank` (rank within that
+list), `SFI, U, D, F` (the Standard Frequency Index the family's ranks are
+made of, and its inputs), `RawFreq_Rank`, `Coverage, Cumulative Coverage`;
+rows in raw-frequency order. Single lemmas only -- no phrases -- and one
+lemma twice (`criteria`).
+
+`extract_sfi31k.py` (standard library only, like `extract_moel.py`) writes
+`NGSL_SFI_31K.csv` -- `lemma` lower-cased, `sfi`, `raw_freq_rank` and
+`wordlist` copied as stored, every row in the workbook's order -- and that
+CSV, not the workbook, is copied to `backend/app/data/wordlists/`.
+Re-running the script on this workbook reproduces it byte for byte
+(SHA-256 `ad9a1403e45e4a85c7c82e3a736ac18f3f1184444f0d63429169b0f5dd138609`).
+The build reads one SFI per lemma (the higher, for `criteria`) and orders a
+MOEL term found there by SFI, highest first (`rank_source = sfi31k`): 460 of
+MOEL's 656 terms on the 2026-10-03 run. The other 196 -- 139 phrases, and
+single words the table holds only in another form (`antibodies`,
+`bleeding`, `vitamins`) -- follow, by the SemCor -> NGSL -> CEFR chain.
+Same authors, same CC BY-SA 4.0 licence as the rest of the family (below).
 
 ## Licence — all five NGSL-family lists
 
