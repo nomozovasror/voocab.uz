@@ -62,6 +62,13 @@ the same way:
 What a reader gets instead is the plain truth: this word is not in the
 passage's list. Say so, and the page is still working.
 
+The one fallback that IS built is not a dictionary but our own lexicon
+(`vocabulary._from_lexicon`): when every provider failed or sent something
+unusable, a word the lexicon already holds is answered from its most-used
+sense, with Uzbek, graded, and logged as ``source="lexicon"`` so it can be
+counted. It does not exist for the word whose answer was "no meaning" --
+that is an answer, not a failure.
+
 ## What happens when it is down
 
 The extracted rows are on disk and depend on nobody's API, so an outage
@@ -92,10 +99,16 @@ GEMINI_CHAT_URL = (
 )
 GEMINI_MODEL = "gemini-3.1-flash-lite"
 
-#: The same three the seed stage is allowed to answer, and for the same
-#: reason: a word below B1 would not have been asked about, and no two
-#: sources agree on what C2 means.
-LEVELS = ("B1", "B2", "C1")
+#: The whole scale. The seed stage only meets B1-C1 because it filters by
+#: frequency first, but a LIVE lookup is whatever the reader tapped, and an
+#: honest answer for `play` is A1. Accepting only B1-C1 made the parser
+#: refuse the correct reply for every easy word -- and the chain, which took
+#: a refusal for an answer, never asked the second provider (the bug this
+#: scale fixes). Whether an easy word joins the passage's shared list is
+#: decided by the caller (`EASY`), not by what the parser will accept.
+LEVELS = ("A1", "A2", "B1", "B2", "C1", "C2")
+#: Levels a learner at this band does not need flagged for everybody.
+EASY = ("A1", "A2")
 PARTS = ("n", "v", "adj", "adv", "prep", "conj", "phr")
 
 #: How long a gloss may be. The panel shows it in a narrow column, and a
@@ -203,20 +216,35 @@ class Gloss:
     term: str = ""
 
 
+class UnusableReply(Exception):
+    """A provider answered, but not with anything that can be used:
+    unparseable, a field missing, a value outside the scale. That is a
+    FAILURE of the provider, like a timeout, and the chain moves on. It is
+    not "there is no meaning" -- only ``{"lemma": ""}`` says that."""
+
+
+class Unanswered(Exception):
+    """Every provider failed, was unusable, or none is configured. The
+    system does not know, which is a different fact from "the word has no
+    meaning" (``look_up`` returning ``None``) and must never be shown as it."""
+
+
 class DictionaryProvider(Protocol):
     """One interface every source of a meaning implements.
 
-    ``None`` rather than an exception for "no meaning": a word nobody can
-    gloss is an ordinary outcome here (a name, a typo, a word in another
-    language) and not a fault. Faults are raised, and the caller decides
-    whether one is worth failing a request over -- it is not.
+    ``None`` rather than an exception for "no meaning": the model replied
+    that the word is a name, a number or not English. Faults -- including a
+    reply that cannot be used (:class:`UnusableReply`) -- are raised, and
+    the chain moves on.
     """
 
     async def look_up(self, word: str, context: str) -> Gloss | None: ...
 
 
 def parse(reply: str) -> Gloss | None:
-    """A model's reply as a :class:`Gloss`, or nothing where it is unusable.
+    """A model's reply as a :class:`Gloss`; ``None`` where the model said
+    there is no meaning (``{"lemma": ""}``); :class:`UnusableReply` where
+    the reply cannot be used.
 
     Refused rather than repaired, the same rule the seed stage applies. A
     missing Uzbek translation is the gloss's reason for existing and a level
@@ -227,10 +255,16 @@ def parse(reply: str) -> Gloss | None:
     text = FENCE.sub("", THINK.sub("", reply).strip()).strip()
     start, end = text.find("{"), text.rfind("}")
     if start < 0 or end <= start:
-        return None
+        raise UnusableReply("no JSON object in the reply")
     try:
         said = json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as error:
+        raise UnusableReply("the reply is not valid JSON") from error
+    if not isinstance(said, dict):
+        raise UnusableReply("the reply is not a JSON object")
+    # The one reply that means "there is no meaning": the lemma is present
+    # and empty, as the prompt asks for a name, a number or a non-word.
+    if isinstance(said.get("lemma"), str) and not said["lemma"].strip():
         return None
 
     def line(key: str, limit: int = MEANING) -> str:
@@ -242,8 +276,10 @@ def parse(reply: str) -> Gloss | None:
     core_en, core_uz = line("meaning_core_en"), line("meaning_core_uz")
     level = str(said.get("cefr") or "").strip().upper()
     part = str(said.get("pos") or "").strip().lower().rstrip(".")
-    if not (lemma and meaning_en and meaning_uz) or level not in LEVELS:
-        return None
+    if not (lemma and meaning_en and meaning_uz):
+        raise UnusableReply("lemma, meaning_en or meaning_uz missing or too long")
+    if level not in LEVELS:
+        raise UnusableReply(f"cefr {level!r} is outside the scale")
     # Both halves of the usual meaning or neither: one English line with no
     # Uzbek beside it is a heading promising a meaning the reader cannot
     # read, which is the same half-entry this function refuses everywhere
@@ -301,7 +337,7 @@ class ChatDictionary:
 
     async def look_up(self, word: str, context: str) -> Gloss | None:
         if not self._api_key:
-            return None
+            raise RuntimeError(f"{self.name} has no API key")
         prompt = PROMPT.format(
             word=word, context=context, parts=", ".join(PARTS),
             levels=", ".join(LEVELS), meaning=MEANING,
@@ -359,19 +395,19 @@ def providers() -> list[DictionaryProvider]:
 
 
 async def look_up(word: str, context: str) -> Gloss | None:
-    """Ask each provider in turn until one answers.
+    """Ask each provider in turn until one gives a usable answer.
 
-    A provider that RAISES is out of action -- no key, no quota, no network
-    -- and the next one is tried. A provider that returns ``None`` has
-    answered: it read the paragraph and there is no meaning to give, which
-    is the ordinary outcome for a name or a number, and asking a second
-    model the same question about the same name would spend a request to be
-    told the same thing.
+    Three outcomes, and keeping them apart is the whole design:
 
-    That distinction is the whole design. It is also why this loop cannot
-    become "try everything until something non-empty comes back": the point
-    of a chain is to survive an outage, not to shop around for an answer
-    somebody wants to hear.
+    * a :class:`Gloss` -- answered;
+    * ``None`` -- a provider read the paragraph and replied that there is no
+      meaning (a name, a number, not English). That is an answer and ends
+      the chain: asking a second model about the same name spends a request
+      to be told the same thing;
+    * :class:`Unanswered` raised -- every provider raised or sent a reply
+      that could not be used (logged). The system does not know. The caller
+      may fall back to the lexicon, and if it cannot, must not present this
+      as the learner's word having no meaning.
     """
     for source in providers():
         try:
@@ -381,4 +417,4 @@ async def look_up(word: str, context: str) -> Gloss | None:
                 "dictionary provider %s could not answer %r",
                 getattr(source, "name", "?"), word, exc_info=True,
             )
-    return None
+    raise Unanswered(word)

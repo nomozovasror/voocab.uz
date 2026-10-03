@@ -346,6 +346,21 @@ longer name one row on its own.
   the tap, because a model asked a leading question finds one. A term the
   material already has is not written again: the caller is already showing
   it as the phrase.
+- **A live lookup has three outcomes, and they are not interchangeable.**
+  `dictionary.look_up` returns a `Gloss`; returns `None` only when a model
+  replied `{"lemma": ""}` ("no meaning" -- ends the chain); and RAISES
+  `Unanswered` when every provider raised or sent an `UnusableReply`
+  (logged, chain moves on). The scale is A1-C2 (`dictionary.LEVELS`); on
+  `Unanswered`, `_generate` falls back to `_from_lexicon`: lemma or the
+  tapped form reduced as `_by_string` does, never a proper noun/function
+  word, the most-used sense (`oewn_count`, any POS) with both meanings and a
+  level, written through the same path (`link_row`, then pinned to THAT
+  sense) and logged `source="lexicon"`. `_generate` returns
+  `(entry, source)`. Rows at A1/A2 (`dictionary.EASY`) are written
+  `hidden`; `entries_for_reader` adds back, for the tapper only, hidden
+  A1/A2 rows of lemmas in their `lookup_events` for the material (not
+  proper nouns/function words). `meaning_core_*` stays unwritten (P3):
+  they are set only to feed `link_row` and cleared before the add.
 - **`enrich_saved_contexts` is the one thing allowed near a saved gloss, and
   it only fills.** The copy rule stands — a re-glossed material must not
   change somebody's saved word underneath them — but a field that did not

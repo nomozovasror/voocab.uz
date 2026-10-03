@@ -742,8 +742,11 @@ async def test_one_provider_being_down_does_not_repeal_the_rule() -> None:
 
         # Every one down is the only case the reader ever sees, and it is
         # reported as ours rather than as a fact about a list.
+        # raised as `Unanswered`, never returned as `None`: "we do not know"
+        # must not be mistakable for "there is no meaning".
         patch.setattr(dictionary_service, "providers", lambda: [_Down(), _Down()])
-        assert await dictionary_service.look_up("scheme", "the scheme here") is None
+        with pytest.raises(dictionary_service.Unanswered):
+            await dictionary_service.look_up("scheme", "the scheme here")
 
 
 @pytest.mark.asyncio

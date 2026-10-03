@@ -482,9 +482,27 @@ cannot rest on one API, and that is not hypothetical — the seed run hit
 Groq's spend limit at the 174th passage and every live look-up in the app
 began returning nothing for ordinary words, to readers with no way to know
 why. Gemini stands behind Groq on a separate account with a separate quota.
-A provider that RAISES is out of action and the next is tried; a provider
-that returns nothing has ANSWERED, and asking the next model about the same
-name would spend a request to be told the same thing.
+A provider that RAISES, or sends a reply that cannot be used (unparseable,
+a field missing, a level outside A1-C2), is out of action and the next is
+tried. Only a reply of `{"lemma": ""}` -- a name, a number, not English --
+has ANSWERED "no meaning", and asking the next model about the same name
+would spend a request to be told the same thing.
+
+**The system's own ignorance is never handed to the learner as theirs.** A
+parser that accepted only B1-C1 once refused the correct A1 answer for
+`play`, `important`, `way`, and the chain took the refusal for "no meaning":
+the learner was told an everyday word had none. The scale is the full A1-C2
+now. When every provider fails or is unusable, the lexicon answers if it
+holds the word (most-used sense, `lookup_events.source = 'lexicon'`); the
+"no meaning" panel is only for a word the model said has none, or one nobody
+holds.
+
+**Easy words are answered but not shared.** A live (or lexicon) row at A1 or
+A2 is written `hidden`: the tapper gets the full answer, any later tap finds
+the row, but it does not join the passage's list or marks for everybody. The
+tapper's OWN review still lists it (`entries_for_reader`: the shared list
+plus hidden A1/A2 rows whose lemma is in this user's lookup events for the
+material), so a word they spent a lookup on is never missing from it.
 
 ## Every look-up is logged
 

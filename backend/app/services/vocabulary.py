@@ -71,13 +71,13 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from app.core.database import AsyncSession
 from app.models.attempt import Attempt, AttemptStatus
-from app.models.lexicon import LexemeSense
+from app.models.lexicon import Lexeme, LexemeSense
 from app.models.material import Material
 from app.models.part import Part
 from app.models.vocabulary import (
@@ -160,6 +160,44 @@ async def entries(
             MaterialVocabulary.paragraph_index,
             MaterialVocabulary.offset_start,
         )
+    )
+    return list(rows.all())
+
+
+async def entries_for_reader(
+    session: AsyncSession, material_id: uuid.UUID, user_id: uuid.UUID
+) -> list[MaterialVocabulary]:
+    """The passage's list as ONE learner sees it: the shared list, plus the
+    easy (A1/A2) words THEY looked up.
+
+    A live-generated easy word is written ``hidden`` so it does not mark the
+    passage for everybody (`_generate`), but the learner who tapped it must
+    still find it in their review, flagged ``looked up`` -- or the review
+    would silently drop a word they spent a lookup on. Only easy rows
+    qualify: a hidden proper noun or function word stays hidden for
+    everyone, and so does somebody else's lookup.
+    """
+    asked = select(LookupEvent.lemma).where(
+        LookupEvent.user_id == user_id,
+        LookupEvent.material_id == material_id,
+        LookupEvent.found.is_(True),
+    )
+    rows = await session.exec(
+        select(MaterialVocabulary)
+        .outerjoin(Lexeme, Lexeme.id == MaterialVocabulary.lexeme_id)
+        .where(
+            MaterialVocabulary.material_id == material_id,
+            or_(
+                MaterialVocabulary.hidden.is_(False),
+                and_(
+                    MaterialVocabulary.cefr_level.in_(dictionary_service.EASY),
+                    MaterialVocabulary.lemma.in_(asked),
+                    func.coalesce(Lexeme.is_proper_noun, False).is_(False),
+                    func.coalesce(Lexeme.is_function_word, False).is_(False),
+                ),
+            ),
+        )
+        .order_by(MaterialVocabulary.paragraph_index, MaterialVocabulary.offset_start)
     )
     return list(rows.all())
 
@@ -296,14 +334,16 @@ async def look_up(
     # Nothing extracted for this one. It is a word the frequency filter did
     # not think was hard, and this reader does -- which is worth an answer
     # and worth keeping, so the next reader who taps it gets it for free.
-    made = await _generate(session, material, asked, known=found,
-                           paragraph_index=paragraph_index, context=context)
+    made, how = await _generate(session, material, asked, known=found,
+                                paragraph_index=paragraph_index,
+                                context=context)
     return await _answered(
         session, material, user_id, asked, started,
         # `cache` where the phrase answered and the word did not: nothing was
         # generated, and calling it live would inflate the one number this
-        # table exists to report.
-        "live" if made is not None or phrase is None else "cache",
+        # table exists to report. `lexicon` is the answer that came from our
+        # own lexicon because every provider failed -- counted apart.
+        how if made is not None or phrase is None else "cache",
         {"word": made, "phrase": phrase}, paragraph_index, offset, context)
 
 
@@ -445,8 +485,11 @@ async def _generate(
     known: list[MaterialVocabulary],
     paragraph_index: int | None,
     context: str = "take",
-) -> MaterialVocabulary | None:
+) -> tuple[MaterialVocabulary | None, str]:
     """Gloss a word the extraction missed, and keep what comes back.
+
+    Returns ``(entry, source)``; ``source`` is ``live`` or ``lexicon`` (see
+    :func:`_from_lexicon`), and is only meaningful when ``entry`` is set.
 
     Kept, because it is the same process run later for a word the frequency
     filter did not flag. The list therefore grows towards what readers
@@ -474,7 +517,7 @@ async def _generate(
     # row, or an entry in the passage's word list, for anybody. See
     # `app.services.lexicon.is_excluded_word`.
     if is_excluded_word(word):
-        return None
+        return None, "live"
 
     # `prose` rather than `context`, which is what this held until the
     # lookup grew a context of its own. Two meanings on one name in one
@@ -483,25 +526,34 @@ async def _generate(
     part, index, start, end, prose = await _place(session, material, word,
                                                   paragraph_index)
     if part is None or not prose:
-        return None
+        return None, "live"
     # The form as the PASSAGE writes it, not as the query arrived. The search
     # is case-insensitive, so a reader who tapped `Vertical` at the start of
     # a sentence would otherwise have stored a surface that does not match
     # the text its own offsets point at -- and the surface is the one field
     # that makes those offsets checkable.
     surface = prose[start:end]
+    sense: LexemeSense | None = None
+    source = "live"
     try:
         gloss = await dictionary_service.look_up(word, prose)
     except Exception:  # noqa: BLE001 - one word is not worth a 500
-        logger.exception("dictionary lookup of %r failed", word)
-        return None
+        # Every provider failed or sent something unusable (or something
+        # unexpected broke): the SYSTEM does not know, which is not the same
+        # as the word having no meaning. Answer from the lexicon where it
+        # holds the word; only if it does not is the reader told "no meaning".
+        logger.warning("dictionary lookup of %r failed", word, exc_info=True)
+        gloss, sense = await _from_lexicon(session, word)
+        source = "lexicon"
+    # `None` here is either the model's own "there is no meaning" or the
+    # lexicon holding nothing for the word.
     if gloss is None:
-        return None
+        return None, "live"
     # The dictionary answers about the WORD, which is not always the exact
     # string tapped -- a plural, a possessive, an inflected form -- so the
     # same refusal is checked again on what it actually came back with.
     if is_excluded_word(gloss.lemma):
-        return None
+        return None, "live"
 
     # A word that turned out to be part of a term is stored as the TERM.
     # See `dictionary.Gloss.term`: the answer is about something wider than
@@ -523,7 +575,7 @@ async def _generate(
         # rule on the way in, and showing it as "the word on its own" under
         # the phrase would print the same gloss twice.
         if _covering(known, index, span[0]) is not None:
-            return None
+            return None, "live"
         start, end = span
         surface = prose[start:end]
 
@@ -541,7 +593,7 @@ async def _generate(
     # that one" about a word the model had glossed perfectly well.
     already = _by_string(known, gloss.lemma)
     if already is not None:
-        return already
+        return already, source
 
     entry = MaterialVocabulary(
         material_id=material.id,
@@ -580,6 +632,16 @@ async def _generate(
     entry.meaning_core_en = gloss.meaning_core_en
     entry.meaning_core_uz = gloss.meaning_core_uz
     await link_row(session, entry)
+    if sense is not None:
+        # The lexicon answer is ABOUT this sense; `link_row` matches senses
+        # by wording and must not be left to pick a neighbour.
+        entry.lexeme_id, entry.sense_id = sense.lexeme_id, sense.id
+    # An easy word does not join the passage's shared list: marking `play`
+    # for every reader is noise. The tapper still gets the full answer now,
+    # any later tap finds the row (`look_up` searches hidden rows), and the
+    # tapper's own review lists it (`entries_for_reader`).
+    if gloss.cefr_level in dictionary_service.EASY:
+        entry.hidden = True
     entry.meaning_core_en = entry.meaning_core_uz = ""
     session.add(entry)
     try:
@@ -601,9 +663,54 @@ async def _generate(
         # the trade; the ordinary collision -- a term the material already
         # has -- never reaches here at all, because it is checked above.
         await session.rollback()
-        return _by_string(known, gloss.lemma)
+        return _by_string(known, gloss.lemma), source
     await session.refresh(entry)
-    return entry
+    return entry, source
+
+
+async def _from_lexicon(
+    session: AsyncSession, word: str
+) -> tuple[dictionary_service.Gloss | None, LexemeSense | None]:
+    """The lexicon's answer for a word every provider failed on, or nothing.
+
+    The lemma itself, else the tapped form reduced the way :func:`_by_string`
+    does. Never a proper noun or a function word. Of the lexeme's senses
+    (any part of speech) the most-used one wins -- highest SemCor count
+    (``oewn_count``), then ``sense_rank`` -- among those with both meanings,
+    a level, and a length the row's columns hold. The gloss is that sense's
+    usual meaning, so ``sense_differs`` is false: the lexicon cannot know
+    what the passage means, and does not pretend to.
+    """
+    for candidate in [word, *reductions(word)]:
+        if is_excluded_word(candidate):
+            continue
+        found = (await session.exec(
+            select(LexemeSense, Lexeme)
+            .join(Lexeme, Lexeme.id == LexemeSense.lexeme_id)
+            .where(
+                Lexeme.lemma == candidate,
+                Lexeme.is_proper_noun.is_(False),
+                Lexeme.is_function_word.is_(False),
+                LexemeSense.cefr.in_(dictionary_service.LEVELS),  # type: ignore[union-attr]
+                func.length(LexemeSense.definition_en).between(1, 200),
+                func.length(LexemeSense.meaning_uz).between(1, 200),
+            )
+            .order_by(
+                LexemeSense.oewn_count.desc().nulls_last(),  # type: ignore[union-attr]
+                LexemeSense.sense_rank,
+            )
+            .limit(1)
+        )).first()
+        if found is None:
+            continue
+        sense, lexeme = found
+        return dictionary_service.Gloss(
+            lemma=lexeme.lemma, pos=lexeme.pos if lexeme.pos in dictionary_service.PARTS else "",
+            meaning_en=sense.definition_en, meaning_uz=sense.meaning_uz,
+            meaning_core_en=sense.definition_en, meaning_core_uz=sense.meaning_uz,
+            sense_differs=False, cefr_level=sense.cefr or "",
+        ), sense
+    return None, None
 
 
 async def _place(

@@ -241,7 +241,10 @@ async def material_vocabulary(
             status.HTTP_403_FORBIDDEN,
             "The vocabulary of a passage opens when you have finished it.",
         )
-    entries = await vocabulary_service.entries(session, material_id)
+    # The shared list plus this learner's own easy lookups (hidden for
+    # everybody else): see `entries_for_reader`.
+    entries = await vocabulary_service.entries_for_reader(
+        session, material_id, user.id)
     saved_state = await vocabulary_service.saved_state_for(session, user.id, entries)
     senses = await vocabulary_service.usual_meanings_for(session, entries)
     all_senses = dict(zip(

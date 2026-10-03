@@ -655,7 +655,7 @@ async def test_generate_refuses_a_function_word_before_any_row_is_written() -> N
         await session.refresh(material)
     try:
         async with async_session_factory() as session:
-            made = await vocabulary_service._generate(
+            made, _ = await vocabulary_service._generate(
                 session, material, "about", known=[], paragraph_index=0)
             assert made is None
             rows = (await session.exec(
