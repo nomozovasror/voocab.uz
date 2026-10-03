@@ -23,7 +23,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 #: Rebuilt on almost every request by the practice endpoints, so named once
 #: rather than repeated as a bare ``Literal`` in five schemas that would
@@ -328,7 +328,17 @@ class WordBulkActionOut(BaseModel):
 
 
 class KnownCheckIn(BaseModel):
-    word_id: uuid.UUID
+    """Exactly one of ``word_id`` (a saved word) / ``list_entry_id`` (a word-list
+    item that has no word yet)."""
+
+    word_id: uuid.UUID | None = None
+    list_entry_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def _one_of(self) -> "KnownCheckIn":
+        if (self.word_id is None) == (self.list_entry_id is None):
+            raise ValueError("send exactly one of word_id and list_entry_id")
+        return self
 
 
 class WordLeechChoiceIn(BaseModel):
@@ -385,6 +395,15 @@ class PracticeSessionIn(BaseModel):
     mode: Mode = "auto"
 
 
+class ExampleSourceOut(BaseModel):
+    """Where a CORPUS example sentence came from. Set only when the sentence
+    is not the learner's own meeting of the word -- the client says "Example
+    from <title>", never "You saw this in"."""
+
+    material_id: uuid.UUID
+    material_title: str
+
+
 class PracticePromptOut(BaseModel):
     """A gap exercise's prompt (`recall`). ``definition`` is the word's
     usual English meaning, shown as a cue above the sentence -- present
@@ -400,6 +419,8 @@ class PracticePromptOut(BaseModel):
     #: otherwise carries nothing the learner could read the answer off of.
     cue: str
     definition: str | None = None
+    #: Set when the sentence is a corpus example (see :class:`ExampleSourceOut`).
+    example_source: ExampleSourceOut | None = None
 
 
 class PracticeChoiceOptionOut(BaseModel):
@@ -451,7 +472,10 @@ class PracticeItemOut(BaseModel):
     measurable on the wire as well as in the log.
     """
 
-    word_id: uuid.UUID
+    #: Exactly one of ``word_id`` / ``list_entry_id`` is set: a word-list item
+    #: has no word until its first answer creates it.
+    word_id: uuid.UUID | None
+    list_entry_id: uuid.UUID | None = None
     context_id: uuid.UUID | None
     lemma: str
     pos: str
@@ -490,7 +514,11 @@ class PracticeAnswerIn(BaseModel):
     not a silent no-op.
     """
 
-    word_id: uuid.UUID
+    #: Exactly one of the two. ``list_entry_id`` for the first answer to a
+    #: word-list item; every later answer (requeue, leech) uses the
+    #: ``word.word_id`` that answer returned.
+    word_id: uuid.UUID | None = None
+    list_entry_id: uuid.UUID | None = None
     context_id: uuid.UUID | None = None
     direction: Direction
     exercise_type: ExerciseType
@@ -502,6 +530,12 @@ class PracticeAnswerIn(BaseModel):
     elapsed_ms: int = Field(ge=0)
     claim_known: bool = False
     requeued: bool = False
+
+    @model_validator(mode="after")
+    def _one_of(self) -> "PracticeAnswerIn":
+        if (self.word_id is None) == (self.list_entry_id is None):
+            raise ValueError("send exactly one of word_id and list_entry_id")
+        return self
 
 
 class PracticeAnswerWordOut(BaseModel):
@@ -516,6 +550,9 @@ class PracticeAnswerWordOut(BaseModel):
     allows that link, the word page being the other.
     """
 
+    #: The saved word -- for a word-list item, the one this answer just
+    #: created. What every later request about it names.
+    word_id: uuid.UUID
     sense_id: uuid.UUID
     lemma: str
     pos: str
@@ -638,3 +675,47 @@ class TranslationReportOut(BaseModel):
     id: uuid.UUID
     sense_id: uuid.UUID
     status: str
+
+
+# --- Word lists --------------------------------------------------------------
+
+
+class WordListOut(BaseModel):
+    key: str
+    title: str
+    description: str
+    word_count: int
+    #: Entries whose sense the learner has as a saved word, by any route.
+    owned: int
+    active: bool
+    #: A ``user_word_lists`` row exists (active or stopped).
+    started: bool
+
+
+class WordListSampleOut(BaseModel):
+    lemma: str
+    pos: str
+    #: ``None`` for an unrated sense -- no chip.
+    cefr: str | None
+    definition_en: str
+    meaning_uz: str
+
+
+class WordListDetailOut(WordListOut):
+    cefr: dict[str, int]
+    samples: list[WordListSampleOut]
+    attribution: str
+    source_title: str
+    licence_name: str
+    licence_url: str
+    #: Saved words never practised yet -- they come before this list's words.
+    pending_saved: int
+
+
+class WordListStartOut(BaseModel):
+    active: Literal[True] = True
+    pending_saved: int
+
+
+class WordListStopOut(BaseModel):
+    active: Literal[False] = False

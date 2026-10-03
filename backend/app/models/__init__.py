@@ -32,6 +32,7 @@ from app.models.vocabulary import (
     VocabularyReviewLog,
     VocabularySettings,
 )
+from app.models.word_list import UserWordList, WordList, WordListEntry
 
 __all__ = [
     "User",
@@ -62,4 +63,7 @@ __all__ = [
     "Lexeme",
     "LexemeSense",
     "TranslationReport",
+    "WordList",
+    "WordListEntry",
+    "UserWordList",
 ]

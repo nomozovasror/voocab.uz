@@ -609,7 +609,9 @@ async def practice_known_check(
     .build_known_check_item``. The client posts the single answer that
     follows to ``/practice/answers`` with ``claim_known: true``.
     """
-    item = await practice_service.build_known_check_item(session, user, data.word_id)
+    item = await practice_service.build_known_check_item(
+        session, user, data.word_id, data.list_entry_id
+    )
     if item is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not on your list")
     return PracticeItemOut(**item)
@@ -623,6 +625,7 @@ async def practice_answer(
         session,
         user,
         word_id=data.word_id,
+        list_entry_id=data.list_entry_id,
         context_id=data.context_id,
         direction=data.direction,
         exercise_type=data.exercise_type,

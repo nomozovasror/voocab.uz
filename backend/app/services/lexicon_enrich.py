@@ -111,6 +111,7 @@ from sqlmodel import select
 from app.core.config import settings
 from app.models.lexicon import Lexeme, LexemeSense, TranslationReport
 from app.models.vocabulary import MaterialVocabulary, SavedWord, SavedWordContext
+from app.models.word_list import WordListEntry
 from app.services.dictionary import GEMINI_CHAT_URL
 from app.services.lexicon import WORDLISTS
 
@@ -575,6 +576,9 @@ class LexemeWork:
     #: A name (`Lexeme.is_proper_noun`): never graded, its senses' CEFR
     #: stays NULL.
     is_proper_noun: bool = False
+    #: Sense ids a word-list entry or a learner's saved word points at: never
+    #: deleted by a re-run (see `plan_senses`, step 4).
+    referenced: set = field(default_factory=set)
     #: outputs
     plan: list[Sense] = field(default_factory=list)
     deleted: dict[uuid.UUID, uuid.UUID | None] = field(default_factory=dict)
@@ -837,7 +841,11 @@ def plan_senses(work: LexemeWork, uses: list[Use], answer: dict | None) -> None:
     #    it, and a non-OEWN sense that never had rows (a gap definition).
     #    Deleted: a deeper OEWN sense no material uses (an earlier run's
     #    "top 2", or rows a re-run moved away) -- anything pointing at it is
-    #    redirected to the lexeme's rank-1 sense in `apply_work`. Anything
+    #    redirected to the lexeme's rank-1 sense in `apply_work` -- unless a
+    #    word list or a saved word points at it (`work.referenced`), which
+    #    keeps it like a top sense (deleting it would fail the FK and stall
+    #    the worker, or silently move a learner's word to another sense).
+    #    Anything
     #    else lost its rows to another sense and is absorbed into whichever
     #    planned sense took most of them.
     kept_untouched: list[Sense] = []
@@ -847,7 +855,8 @@ def plan_senses(work: LexemeWork, uses: list[Use], answer: dict | None) -> None:
         if sense.id in claimed:
             continue
         old_rows = rows_of_sense.get(sense.id, set())
-        if not old_rows and sense.oewn_synset_id and sense.oewn_synset_id not in top_synsets:
+        if not old_rows and sense.oewn_synset_id and sense.oewn_synset_id not in top_synsets \
+                and sense.id not in work.referenced:
             work.deleted[sense.id] = None
             continue
         if sense.oewn_synset_id in top_synsets or not old_rows:
@@ -1507,6 +1516,19 @@ async def load_works(session, lexeme_ids: list[uuid.UUID],
     rows_by: dict = defaultdict(list)
     for r in rows:
         rows_by[r.lexeme_id].append(r)
+    sense_ids = [s.id for s in senses]
+    referenced: set = set()
+    if sense_ids:
+        referenced.update((await session.exec(
+            select(WordListEntry.sense_id).where(WordListEntry.sense_id.in_(sense_ids))
+        )).all())
+        referenced.update((await session.exec(
+            select(SavedWord.lexeme_sense_id).where(SavedWord.lexeme_sense_id.in_(sense_ids))
+        )).all())
+    referenced_by: dict = defaultdict(set)
+    for s in senses:
+        if s.id in referenced:
+            referenced_by[s.lexeme_id].add(s.id)
     works = []
     for lx in lexemes:
         entries = oewn.get((lx.lemma, lx.pos), [])
@@ -1514,7 +1536,7 @@ async def load_works(session, lexeme_ids: list[uuid.UUID],
         works.append(LexemeWork(
             id=lx.id, lemma=lx.lemma, pos=lx.pos, is_phrase=lx.is_phrase,
             frequency_band=lx.frequency_band, oewn=entries,
-            is_proper_noun=lx.is_proper_noun,
+            is_proper_noun=lx.is_proper_noun, referenced=referenced_by[lx.id],
             senses=[Sense(
                 id=s.id, definition_en=s.definition_en, meaning_uz=s.meaning_uz,
                 meaning_uz_alt=s.meaning_uz_alt, meaning_uz_material=s.meaning_uz_material,
@@ -1590,6 +1612,38 @@ async def _repoint_saved_words(
                 session.add(context)
         await session.flush()
         await session.delete(word)
+    await session.flush()
+
+
+async def _repoint_word_list_entries(
+    session, old_sense_id: uuid.UUID, new_sense_id: uuid.UUID | None
+) -> None:
+    """A sense absorbed into another must not leave a word-list entry
+    (`word_list_entries.sense_id`, no ON DELETE) pointing at the deleted row:
+    it moves to the survivor, and so does its lexeme. `(list_id, lemma)` is
+    unique and a repoint changes neither, so a collision is not expected; if
+    one ever appears the entry is dropped rather than failing the worker.
+    """
+    if new_sense_id is None:
+        return
+    survivor = await session.get(LexemeSense, new_sense_id)
+    entries = (await session.exec(
+        select(WordListEntry).where(WordListEntry.sense_id == old_sense_id)
+    )).all()
+    for entry in entries:
+        clash = (await session.exec(select(WordListEntry.id).where(
+            WordListEntry.list_id == entry.list_id,
+            WordListEntry.lemma == entry.lemma,
+            WordListEntry.id != entry.id,
+            WordListEntry.sense_id == new_sense_id,
+        ))).first()
+        if clash is not None:
+            await session.delete(entry)
+            continue
+        entry.sense_id = new_sense_id
+        if survivor is not None:
+            entry.lexeme_id = survivor.lexeme_id
+        session.add(entry)
     await session.flush()
 
 
@@ -1709,6 +1763,8 @@ async def apply_work(session, work: LexemeWork) -> None:
         # obligation the update above already meets for material rows and
         # the repoint just above meets for reports.
         await _repoint_saved_words(session, old_id, new_id)
+        # Word-list entries point at a sense the same way (no ON DELETE).
+        await _repoint_word_list_entries(session, old_id, new_id)
         if old_id in existing:
             await session.delete(existing[old_id])
     await session.flush()

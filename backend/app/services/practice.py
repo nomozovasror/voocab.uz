@@ -78,14 +78,17 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import fsrs
 from fastapi import HTTPException, status
 from sqlalchemy import exists, func
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from app.core.database import AsyncSession
 from app.models.lexicon import Lexeme, LexemeSense
+from app.models.material import Material
 from app.models.user import User
 from app.models.vocabulary import (
     ACTIVE_LADDER,
     PASSIVE_LADDER,
+    MaterialVocabulary,
     SavedWord,
     SavedWordContext,
     VocabularyReviewLog,
@@ -94,6 +97,7 @@ from app.models.vocabulary import (
 from app.services import distractors
 from app.services import materials as materials_service
 from app.services import mistakes
+from app.services import word_lists
 from app.services.answers import normalize_answer
 
 logger = logging.getLogger("app.services.practice")
@@ -1350,6 +1354,9 @@ class _Candidate:
     is_new: bool
     due_at: datetime | None
     level: str
+    #: Set for a new word that is a WORD-LIST entry, not yet a saved word:
+    #: ``word`` is then a transient, never-persisted ``SavedWord``.
+    entry: word_lists.ListCandidate | None = None
 
 
 _FAR_FUTURE = datetime.max.replace(tzinfo=timezone.utc)
@@ -1362,6 +1369,7 @@ async def _gather_candidates(
     *,
     mode: str,
     material_id: uuid.UUID | None,
+    list_limit: int = 0,
 ) -> tuple[list[_Candidate], list[_Candidate]]:
     """Everything :func:`summary` and :func:`build_session` need, computed
     identically for both so the number one promises is the number the
@@ -1450,7 +1458,128 @@ async def _gather_candidates(
         key=lambda c: c.due_at or _FAR_FUTURE,
     )
     new_list = [c for c in new_candidates if _matches_mode(c)]
+
+    # Word-list entries come AFTER every new word the learner saved
+    # themselves, and only fill what is left of ``list_limit`` -- the most new
+    # items today's time could buy at all, so a 1,700-word list never turns
+    # into 1,700 "available" words. Not tied to a material, and always served
+    # at the ladder's floor, so they sit out a narrowed session or a mode
+    # that is not `recognise`.
+    if (
+        material_id is None
+        and list_limit > len(new_list)
+        and effective_mode in ("auto", "recognise")
+    ):
+        for found in await word_lists.next_candidates(
+            session, user.id, list_limit - len(new_list)
+        ):
+            new_list.append(
+                _Candidate(
+                    word=word_lists.transient_word(user.id, found),
+                    direction="passive", is_new=True, due_at=None,
+                    level="recognise", entry=found,
+                )
+            )
     return due_list, new_list
+
+
+def _list_limit(budget_seconds: float, avg_seconds: float) -> int:
+    """The most new items the time left could possibly buy (no reviews)."""
+    if avg_seconds <= 0:
+        return 0
+    return math.floor(budget_seconds / (NEW_WORD_COST_FACTOR * avg_seconds))
+
+
+async def count_new_saved(session: AsyncSession, user_id: uuid.UUID) -> int:
+    """Saved words the learner has never practised and that are still in
+    play -- the "N saved words still to learn" a list activation reports."""
+    row = await session.exec(
+        select(func.count()).where(
+            SavedWord.user_id == user_id,
+            _practisable_clause(),
+            SavedWord.status.not_in(EXCLUDED_STATUSES),
+            SavedWord.passive_state.is_(None),
+        )
+    )
+    return row.one()
+
+
+# --- A sentence for a word with none of its own ---------------------------------
+
+
+@dataclass
+class _Fallback:
+    """A context-less word's stand-in context: a transient
+    ``SavedWordContext`` that is NEVER added to a session (the learner did not
+    meet the word there), and the material its sentence was taken from."""
+
+    context: SavedWordContext
+    material_id: uuid.UUID | None
+
+
+async def _corpus_example(
+    session: AsyncSession, word: SavedWord, sense: LexemeSense
+) -> MaterialVocabulary | None:
+    """A sentence for this sense from a non-hidden row of a public material,
+    one whose sentence actually contains the word, of moderate length.
+    Deterministic, so the answer re-derives the very sentence the prompt
+    showed."""
+    rows = await session.exec(
+        select(MaterialVocabulary)
+        .join(Material, Material.id == MaterialVocabulary.material_id)
+        .where(
+            MaterialVocabulary.sense_id == sense.id,
+            MaterialVocabulary.hidden.is_(False),
+            MaterialVocabulary.example != "",
+            Material.visibility == "public",
+        )
+        .order_by(MaterialVocabulary.id)
+        .limit(25)
+    )
+    usable = [
+        row for row in rows.all()
+        if _find_surface(row.example, row.surface or word.lemma)
+        or _find_surface(row.example, word.lemma)
+    ]
+    if not usable:
+        return None
+    return min(usable, key=lambda row: abs(len(row.example) - 80))
+
+
+async def _fallback_contexts(
+    session: AsyncSession,
+    words: list[SavedWord],
+    senses: dict[uuid.UUID, LexemeSense],
+) -> dict[uuid.UUID, _Fallback]:
+    """For words with no context of their own: a corpus example if the sense
+    has one (decision 7), and, for a word that came from a list, at least the
+    sense's own level so its distractors are drawn from the right band.
+    Words that need neither get no entry -- they behave exactly as before."""
+    found: dict[uuid.UUID, _Fallback] = {}
+    for word in words:
+        sense = senses.get(word.lexeme_sense_id)
+        if sense is None:
+            continue
+        row = await _corpus_example(session, word, sense)
+        if row is None and word.origin_list_id is None:
+            continue
+        found[word.id] = _Fallback(
+            context=SavedWordContext(
+                id=uuid.uuid5(word.id, "example"),
+                saved_word_id=word.id,
+                material_id=row.material_id if row else uuid.UUID(int=0),
+                surface=(row.surface if row else "") or word.lemma,
+                pos=word.pos,
+                meaning_core_en=sense.definition_en,
+                meaning_core_uz=sense.meaning_uz,
+                meaning_en=sense.definition_en,
+                meaning_uz=sense.meaning_uz,
+                example=row.example if row else "",
+                cefr_level=sense.cefr or "",
+            ),
+            material_id=row.material_id if row else None,
+        )
+    return found
 
 
 # --- The daily time budget ----------------------------------------------------
@@ -1643,6 +1772,7 @@ def _base_item(
 ) -> dict:
     return {
         "word_id": word.id,
+        "list_entry_id": None,
         "context_id": context.id if context else None,
         "lemma": word.lemma,
         "pos": word.pos or (context.pos if context else ""),
@@ -1933,7 +2063,8 @@ async def summary(session: AsyncSession, user: User, *, tz: str | None, mode: st
     budget = max(0.0, settings.daily_minutes * 60 - spent)
 
     due_list, new_list = await _gather_candidates(
-        session, user, settings, mode=mode, material_id=None
+        session, user, settings, mode=mode, material_id=None,
+        list_limit=_list_limit(budget, avg),
     )
     planned_reviews, planned_new = _plan_counts(
         budget, avg, len(due_list), len(new_list)
@@ -1982,7 +2113,8 @@ async def build_session(
     budget = max(0.0, settings.daily_minutes * 60 - spent)
 
     due_list, new_list = await _gather_candidates(
-        session, user, settings, mode=mode, material_id=material_id
+        session, user, settings, mode=mode, material_id=material_id,
+        list_limit=_list_limit(budget, avg),
     )
     review_count, new_count = _plan_counts(
         budget, avg, len(due_list), len(new_list)
@@ -1992,7 +2124,9 @@ async def build_session(
     if not queue:
         return []
 
-    word_ids = [candidate.word.id for candidate in queue]
+    word_ids = [
+        candidate.word.id for candidate in queue if candidate.entry is None
+    ]
     contexts_by_word = await _contexts_by_word(session, word_ids)
     all_context_ids = [
         context.id
@@ -2002,42 +2136,95 @@ async def build_session(
     last_used = await _last_used_map(session, all_context_ids)
     family_keys = await distractors.learning_family_keys(session, user.id)
     senses = await _senses_for(session, [candidate.word for candidate in queue])
+    fallbacks = await _fallback_contexts(
+        session,
+        [c.word for c in queue if not contexts_by_word.get(c.word.id)],
+        senses,
+    )
+    example_titles = await materials_service.titles_for(
+        session, [f.material_id for f in fallbacks.values() if f.material_id]
+    )
 
     items = []
     for candidate in queue:
         contexts = contexts_by_word.get(candidate.word.id, [])
         context = _pick_context(contexts, last_used)
         source_material_ids = frozenset(context.material_id for context in contexts)
+        fallback = fallbacks.get(candidate.word.id) if context is None else None
         item = await _build_item(
-            session, candidate.word, candidate.direction, candidate.level, context,
+            session, candidate.word, candidate.direction, candidate.level,
+            context if fallback is None else fallback.context,
             is_new=candidate.is_new, source_material_ids=source_material_ids,
             family_keys=family_keys,
             sense=senses.get(candidate.word.lexeme_sense_id),
         )
+        _finish_item(item, candidate.entry, fallback, example_titles)
         items.append(item)
     return items
 
 
+def _finish_item(
+    item: dict,
+    entry: word_lists.ListCandidate | None,
+    fallback: _Fallback | None,
+    titles: dict[uuid.UUID, str],
+) -> None:
+    """What only the session knows about an item: that its context is a
+    stand-in (never a real context id), where its sentence came from, and
+    that a list entry has no word yet."""
+    if fallback is not None:
+        item["context_id"] = None
+        if fallback.material_id is not None and item["prompt"].get("kind") == "sentence":
+            item["prompt"]["example_source"] = {
+                "material_id": fallback.material_id,
+                "material_title": titles.get(fallback.material_id, ""),
+            }
+    if entry is not None:
+        item["word_id"] = None
+        item["list_entry_id"] = entry.entry.id
+
+
 async def build_known_check_item(
-    session: AsyncSession, user: User, word_id: uuid.UUID
+    session: AsyncSession,
+    user: User,
+    word_id: uuid.UUID | None = None,
+    list_entry_id: uuid.UUID | None = None,
 ) -> dict | None:
     """The one-attempt recall prompt behind "I know this" -- always
     `recall`, never the ladder's own current level, because this is a
     bypass of the ladder and not a step on it (see the brief: offered only
     on a word's first appearance, before the ladder has asked anything).
     """
-    word = await session.get(SavedWord, word_id)
-    if word is None or word.user_id != user.id:
-        return None
-    contexts_by_word = await _contexts_by_word(session, [word.id])
-    contexts = contexts_by_word.get(word.id, [])
+    entry: word_lists.ListCandidate | None = None
+    if list_entry_id is not None:
+        entry = await word_lists.entry_for_answer(session, user.id, list_entry_id)
+        word = word_lists.transient_word(user.id, entry)
+        sense: LexemeSense | None = entry.sense
+        contexts: list[SavedWordContext] = []
+    else:
+        assert word_id is not None
+        found = await session.get(SavedWord, word_id)
+        if found is None or found.user_id != user.id:
+            return None
+        word = found
+        contexts = (await _contexts_by_word(session, [word.id])).get(word.id, [])
+        sense = await session.get(LexemeSense, word.lexeme_sense_id)
     last_used = await _last_used_map(session, [context.id for context in contexts])
     context = _pick_context(contexts, last_used)
-    sense = await session.get(LexemeSense, word.lexeme_sense_id)
-    return _recall_item(
-        word, context, direction="passive", planned_exercise="recall", is_new=True,
-        sense=sense,
+    fallback: _Fallback | None = None
+    if context is None and sense is not None:
+        fallback = (await _fallback_contexts(session, [word], {sense.id: sense})).get(
+            word.id
+        )
+    item = _recall_item(
+        word, context if fallback is None else fallback.context,
+        direction="passive", planned_exercise="recall", is_new=True, sense=sense,
     )
+    titles = await materials_service.titles_for(
+        session, [fallback.material_id] if fallback and fallback.material_id else []
+    )
+    _finish_item(item, entry, fallback, titles)
+    return item
 
 
 # --- Recording an answer --------------------------------------------------------
@@ -2065,7 +2252,8 @@ async def record_answer(
     session: AsyncSession,
     user: User,
     *,
-    word_id: uuid.UUID,
+    word_id: uuid.UUID | None = None,
+    list_entry_id: uuid.UUID | None = None,
     context_id: uuid.UUID | None,
     direction: Direction,
     exercise_type: ExerciseType,
@@ -2170,19 +2358,72 @@ async def record_answer(
     belongs to this word; a mismatched or unknown id is treated as no
     context at all, because the one thing that must never happen is a
     learner's answer failing to record over a client-side bookkeeping slip.
+
+    ## Word-list items
+
+    Exactly one of ``word_id`` / ``list_entry_id``. An item from a word list
+    has no word until its FIRST answer: ``list_entry_id`` is validated
+    (:func:`app.services.word_lists.entry_for_answer` -- entry in an ACTIVE
+    list of this learner, sense not already owned), the ``SavedWord`` is
+    created here with ``origin_list_id`` and the id the item's options were
+    hashed with, and the answer then records as for any word (a failed
+    known-check, or any other answer, leaves it in rotation; a passed one
+    makes it ``known``). The row is only flushed, never committed before the
+    answer is accepted: a refused answer (a 422 below) creates nothing. Every
+    later answer -- the requeue, the leech call -- names the word by
+    ``word_id`` (returned in ``word.word_id``).
     """
-    word = await session.get(SavedWord, word_id)
-    if word is None or word.user_id != user.id:
-        return None
-    # Read once, up front -- every branch below that would otherwise read
-    # `word.meaning_core_*` (dead since P4) reads this instead.
-    sense = await session.get(LexemeSense, word.lexeme_sense_id)
+    if (word_id is None) == (list_entry_id is None):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "send exactly one of word_id and list_entry_id",
+        )
+    if list_entry_id is not None:
+        found = await word_lists.entry_for_answer(session, user.id, list_entry_id)
+        word = word_lists.transient_word(user.id, found)
+        session.add(word)
+        try:
+            async with session.begin_nested():
+                await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "You already have this word on your list"
+            )
+        sense: LexemeSense | None = found.sense
+    else:
+        assert word_id is not None
+        loaded = await session.get(SavedWord, word_id)
+        if loaded is None or loaded.user_id != user.id:
+            return None
+        word = loaded
+        # Read once, up front -- every branch below that would otherwise read
+        # `word.meaning_core_*` (dead since P4) reads this instead.
+        sense = await session.get(LexemeSense, word.lexeme_sense_id)
 
     context: SavedWordContext | None = None
     if context_id is not None:
         candidate = await session.get(SavedWordContext, context_id)
         if candidate is not None and candidate.saved_word_id == word.id:
             context = candidate
+    # The sentence/level stand-in for a word with no context of its own. Used
+    # to grade and to build the gap; NEVER logged or shown as where the word
+    # was met (`context` stays None).
+    gap_context = context
+    if context is None and sense is not None:
+        has_real = (
+            await session.exec(
+                select(SavedWordContext.id).where(
+                    SavedWordContext.saved_word_id == word.id
+                ).limit(1)
+            )
+        ).first()
+        if has_real is None:
+            stand_in = (
+                await _fallback_contexts(session, [word], {sense.id: sense})
+            ).get(word.id)
+            if stand_in is not None:
+                gap_context = stand_in.context
 
     now = datetime.now(timezone.utc)
     skip_ladder = False
@@ -2297,7 +2538,7 @@ async def record_answer(
                 # would really have tripped the guard. Re-verified here,
                 # the same shape ``requeued`` is above: recomputed from
                 # the word's own gap, never trusted off the wire.
-                verify_gap = resolve_gap(word, context, sense)
+                verify_gap = resolve_gap(word, gap_context, sense)
                 if verify_gap.definition is None or not _needs_readability_fallback(
                     verify_gap.mask_count, verify_gap.remaining_words
                 ):
@@ -2308,7 +2549,7 @@ async def record_answer(
                     )
 
     if exercise_type == "recognise":
-        right_text = _recognise_right_text(word, context, direction, sense)
+        right_text = _recognise_right_text(word, gap_context, direction, sense)
         verdict = grade_choice(given, word.id, right_text)
         answer_text = right_text
     elif exercise_type == "produce":
@@ -2316,7 +2557,7 @@ async def record_answer(
         verdict = _kindest([verdict_for(given, form) for form in forms])
         answer_text = word.lemma
     else:  # "recall" -- including every fallback that lands here
-        gap = resolve_gap(word, context, sense)
+        gap = resolve_gap(word, gap_context, sense)
         verdict = verdict_for(given, gap.answer)
         answer_text = gap.answer
 
@@ -2440,10 +2681,11 @@ async def record_answer(
         "status": word.status,
         "level": getattr(word, f"{direction}_level") or "recognise",
         "word": {
+            "word_id": word.id,
             "sense_id": word.lexeme_sense_id,
             "lemma": word.lemma,
             "pos": word.pos or (context.pos if context else ""),
-            "cefr_level": context.cefr_level if context else "",
+            "cefr_level": gap_context.cefr_level if gap_context else "",
             "meaning_core_en": definition_en
             or (context.meaning_core_en if context else ""),
             "meaning_core_uz": meaning_uz

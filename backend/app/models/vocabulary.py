@@ -556,6 +556,19 @@ class SavedWord(SQLModel, table=True):
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
 
+    #: Which word list presented this word when the learner first answered
+    #: it -- analytics only. Nothing reads it to decide anything: a word is
+    #: the learner's whatever its origin, and owning it through a material
+    #: or another list counts toward every list's progress alike.
+    origin_list_id: uuid.UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            SA_UUID(as_uuid=True),
+            ForeignKey("word_lists.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+    )
+
 
 class SavedWordContext(SQLModel, table=True):
     """One place a saved word was met, with the sense it had there.

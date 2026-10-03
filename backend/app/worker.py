@@ -50,6 +50,7 @@ against the real DB with a fake/mock ``ASRProvider`` in tests — see
 import asyncio
 import logging
 import signal
+import time
 
 import httpx
 from sqlmodel import select
@@ -343,46 +344,81 @@ async def _difficulty_loop() -> None:
         await _sleep_or_stop(interval)
 
 
+#: lexeme id -> (consecutive failures, monotonic time before which it is not
+#: retried). A lexeme that keeps failing is backed off so it cannot be the
+#: oldest pending row of every batch forever.
+_enrich_failures: dict = {}
+ENRICH_BACKOFF_BASE_S = 3600.0
+ENRICH_BACKOFF_MAX_S = 86400.0
+
+
+def _enrich_blocked(now: float) -> list:
+    return [lid for lid, (_n, until) in _enrich_failures.items() if until > now]
+
+
+def _enrich_fail(lexeme_id: object, now: float) -> None:
+    count = _enrich_failures.get(lexeme_id, (0, 0.0))[0] + 1
+    delay = min(ENRICH_BACKOFF_BASE_S * 2 ** (count - 1), ENRICH_BACKOFF_MAX_S)
+    _enrich_failures[lexeme_id] = (count, now + delay)
+    logger.error(
+        "lexicon enrichment of lexeme %s failed %d time(s); backing off %.0fs",
+        lexeme_id, count, delay,
+    )
+
+
 async def _lexicon_enrich_once(
     gemini: lexicon_enrich_service.Gemini, oewn: dict[tuple[str, str], list[dict]]
 ) -> int:
     """One pass: enrich up to ``lexicon_enrich_batch_size`` lexemes still
     ``enriched_at IS NULL`` -- a brand-new find-or-create ``Lexeme``
     (:func:`app.services.lexicon.link_row`), or one an earlier pass left
-    exactly as it found it. Returns how many were attempted; 0 means either
-    the queue is empty or the whole batch failed together (never raises --
-    see below).
+    exactly as it found it. Returns how many were enriched; 0 means the queue
+    is empty or everything failed (never raises).
+
+    ``enrich`` writes nothing unless the whole batch succeeds, so a failed
+    batch is retried lexeme by lexeme to find the one that fails; each
+    failing lexeme is backed off (1h, 2h, ... capped at 24h) and skipped by
+    the selection, so one poison lexeme cannot stall the queue.
     """
+    now = time.monotonic()
+    blocked = _enrich_blocked(now)
     async with async_session_factory() as session:
+        query = select(Lexeme.id).where(Lexeme.enriched_at.is_(None))
+        if blocked:
+            query = query.where(Lexeme.id.not_in(blocked))
         ids = list((await session.exec(
-            select(Lexeme.id)
-            .where(Lexeme.enriched_at.is_(None))
-            .order_by(Lexeme.created_at)
-            .limit(settings.lexicon_enrich_batch_size)
+            query.order_by(Lexeme.created_at).limit(settings.lexicon_enrich_batch_size)
         )).all())
     if not ids:
         return 0
+    done_ids: list = []
     try:
         await lexicon_enrich_service.enrich(async_session_factory, gemini, ids, oewn)
-    except Exception:  # noqa: BLE001 - logged; the same ids are retried next pass
-        # `enrich` writes nothing until every model step for every lexeme in
-        # the batch has answered (one transaction, `enriched_at` set last),
-        # so a failure here has changed nothing: the same ids are still
-        # `enriched_at IS NULL` and are picked up again next pass, the same
-        # "swallow, log, retry next interval" shape as the difficulty
-        # refresh above.
-        logger.exception(
-            "lexicon enrichment failed for %d lexeme(s); retried next interval",
-            len(ids),
-        )
+        done_ids = ids
+    except Exception:  # noqa: BLE001 - logged; isolated below
+        logger.exception("lexicon enrichment failed for a batch of %d lexeme(s)", len(ids))
+        if len(ids) == 1:
+            _enrich_fail(ids[0], now)
+        else:
+            for lexeme_id in ids:
+                try:
+                    await lexicon_enrich_service.enrich(
+                        async_session_factory, gemini, [lexeme_id], oewn
+                    )
+                    done_ids.append(lexeme_id)
+                except Exception:  # noqa: BLE001
+                    logger.exception("lexicon enrichment of lexeme %s failed", lexeme_id)
+                    _enrich_fail(lexeme_id, now)
+    for lexeme_id in done_ids:
+        _enrich_failures.pop(lexeme_id, None)
+    if not done_ids:
         return 0
+    ids = done_ids
     # `enrich` just gave these lexemes' senses fresh `definition_en`/
     # `oewn_synset_id` values, which may change whether recall's
     # first-letter cue is worth showing on them (`app.services
-    # .lexicon_hints`) -- a small, separate function, not a rewrite of
-    # `lexicon_enrich` itself. Guarded and swallowed the same way the
-    # difficulty refresh is: a stale cue flag is a smaller failure than
-    # taking the enrichment loop down over it.
+    # .lexicon_hints`). Guarded and swallowed: a stale cue flag is a smaller
+    # failure than taking the enrichment loop down over it.
     try:
         async with async_session_factory() as session:
             await lexicon_hints_service.recompute_for_lexemes(session, ids)

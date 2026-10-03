@@ -471,6 +471,18 @@ on every row they create, before it is committed:
   pos's top sense. Not in OEWN: one model request gives pos + definition.
   Moot for a function word or a single letter now -- excluded before this
   step ever sees the lemma (above).
+- **A referenced sense is never deleted by a re-run.** `load_works` fills
+  `LexemeWork.referenced` with the sense ids a `word_list_entries` row or a
+  `saved_words` row points at; `plan_senses` keeps one like OEWN's top
+  sense instead of deleting it as an unused deep OEWN sense (the FK has no
+  ON DELETE: the delete failed, and the worker re-ran the same batch for
+  ever). When a sense IS merged into another, `apply_work` repoints
+  `word_list_entries.sense_id`/`lexeme_id` (`_repoint_word_list_entries`)
+  along with material rows, translation reports and saved words.
+- **One failing lexeme never stalls the queue.** `worker._lexicon_enrich_once`
+  retries a failed batch lexeme by lexeme, and backs a failing lexeme off
+  (1h doubling to 24h, in-memory `_enrich_failures`, logged at ERROR); the
+  selection skips backed-off ids.
 - **`ngsl_conflict` is one test**: rank-1 sense graded C1/C2 on an NGSL top
   1 000 word. "A1/A2 while off-list" was dropped -- off-list only means "on
   none of five lists", and almost every hit was a plain word.
@@ -994,3 +1006,64 @@ passage importer, and `recompute` reads it and never writes it. Listing it in
 that upsert's `set_` would blank it on the worker's next pass. Below
 `MIN_ANSWERS` it gives a band instead of `New`; at twenty answers the
 measured proportion correct takes over and the estimate is gone.
+
+## Word lists: a source, not a store
+
+Five curated lists (`word_lists`: core, business, academic, medical, toeic),
+their cards (`word_list_entries`) and who started which (`user_word_lists`).
+`services/word_lists.py` reads and feeds them; `practice.py` consumes them.
+A list is NOT a `Deck` (a deck is the learner's own grouping of words they
+already hold).
+
+- **Subscribing is not adding.** `start` writes one `user_word_lists` row and
+  nothing else. A 1,700-word list as 1,700 `SavedWord`s would put every
+  never-practised word in the queue, make the time-budget's new-word maths
+  meaningless (the thing it exists to prevent) and leave the learner feeling
+  they cannot go back. A `SavedWord` is created only when the learner first
+  ANSWERS a list item (`record_answer(list_entry_id=...)`): any answer, with
+  "I know this" passed = created `known`, failed = created in rotation. A card
+  that is merely shown creates nothing. `stop` (`active=false`) is safe: owned
+  words stay, unpresented entries stop coming.
+- **The session** (`_gather_candidates`): the learner's own saved-never-
+  practised words take the new slots first; the rest go round-robin over
+  ACTIVE lists (earliest started first), each in `rank` order; an exhausted
+  list's turns go to the others; a sense the learner already owns (any route)
+  or another list already took in this batch is skipped. Candidates are
+  capped at what today's time could buy (`_list_limit`), so `new_available`
+  never reads "1,700". Not offered in a material-narrowed session or in a
+  mode other than `recognise`/`auto`. A list entry's `SavedWord` is
+  TRANSIENT until answered; its id is `list_word_id(user, sense)` (uuid5) so
+  option ids hashed before the word exists grade correctly after. Later
+  answers (requeue, leech) name the word by `word.word_id`.
+- **Why the sense is per list.** `discharge` is the end of someone's
+  employment to Business, the release of a patient from hospital to Medical,
+  and "pour forth or release" to Academic; `equity` is shareholders'
+  ownership to Business and `proxy` their voting document, where the
+  lemma's usual first sense is a property's value and a person acting for
+  another. (The domain lists leave out NGSL words by design, so `security`,
+  `interest` or `culture` are Core-only, with Core's one sense.)
+  `word_list_entries.sense_id` is the sense THIS list means; Core takes the
+  lemma's most SemCor-tagged synset across parts of speech (`lexicon_enrich
+  .top_sense_any_pos`; a model picks the pos when the counts tie -- among
+  each pos's top sense, else over every sense as the domain lists do -- and
+  the rank-1 sense of the primary lexeme stands only where OEWN lacks the lemma),
+  domain lists choose by a model request (the build job,
+  `word_lists_build`; every decision is in `app/data/word_lists/decisions.jsonl`).
+  Progress `owned / total` therefore counts entries whose SENSE the learner
+  holds by any route (a material save, another list, this one).
+- **An example is not a meeting.** A word with no `SavedWordContext` of its
+  own (every list word, and any context-less saved word) may be practised on
+  a sentence from a non-hidden `material_vocabulary` row of a PUBLIC material
+  (`_corpus_example`). It is built as a transient context
+  (`_fallback_contexts`), never added to a session: never a
+  `SavedWordContext`, never `vocabulary_review_logs.context_id`, never
+  `word.material_id` on the reveal (that is "You saw this in"). The prompt
+  carries `example_source` ("Example from <title>") instead. The choice is
+  deterministic so the answer re-derives the very sentence the prompt showed.
+  No sentence anywhere = the existing masked-definition path.
+- `origin_list_id` is analytics only; nothing reads it to decide anything
+  except that a list-origin word with no sentence still gets its sense's CEFR
+  for distractor selection.
+- Refusals (`entry_for_answer`): 404 unknown entry, 403 list not active for
+  this learner, 409 sense already owned; a refused answer (e.g. 422) creates
+  no word, because the row is flushed but committed only with the answer.

@@ -15,6 +15,7 @@ from app.api.materials import MATERIAL_VERSION_HEADER, MATERIAL_VISIBILITY_HEADE
 from app.api.materials import router as materials_router
 from app.api.studio import router as studio_router
 from app.api.vocabulary import router as vocabulary_router
+from app.api.word_lists import router as word_lists_router
 from app.core.config import settings
 
 app = FastAPI(title="voocab.uz API")
@@ -48,6 +49,7 @@ for _skill in PAPER_TYPES:
 app.include_router(collections_router)
 app.include_router(studio_router)
 app.include_router(vocabulary_router)
+app.include_router(word_lists_router)
 app.include_router(lexicon_router)
 
 # In dev (no R2), serve uploaded media off local disk. In prod the R2 public
