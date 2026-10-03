@@ -321,6 +321,10 @@ into one `⋯`; the two it holds are the two reached for least often.
   a line highlighted green while reading would come back as a verdict nobody
   made.
 
+  The pen is `--pen` when a theme sets one, else `--primary` (dracula's pen
+  is its own yellow, `#f1fa8c`, because its violet accent is the B2 wash).
+  Text inside a pen mark is `text-mark-ink`, as inside every CEFR wash.
+
   It was three HUES — amber, `#5b9bd5`, a violet — until the CEFR scale
   needed colours of its own, and `#5b9bd5` is exactly B1. Blue meaning
   "where the answer was" on one review layer and "this word is B1" on the

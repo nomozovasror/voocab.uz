@@ -12,12 +12,18 @@
  * shows at a glance whether this text is pitched above the reader or below
  * them, before a single entry is read.
  *
- * ## Blue → violet → orange
+ * ## Sky → blue → violet → orange, and empty → tinted → solid
  *
  * Cool to warm, which is the one ordering people read as a scale without
- * being told. Three hues rather than three shades of one, because three
- * shades of blue is a thing to compare rather than a thing to recognise,
- * and the level has to be legible from one chip with nothing beside it.
+ * being told. Six levels, four hues: A1 and A2 share a sky blue, B1, B2 and
+ * C1 keep their own, and C2 shares C1's orange. There is no room on the
+ * wheel for a sixth hue — past C1 every warm colour already means wrong,
+ * the pen or a warning — so the two ends are told apart by how FULL the
+ * chip is: A1 is an empty outline, A2 to C1 are tints, C2 is solid.
+ *
+ * Hues rather than shades of one, because shades of blue are a thing to
+ * compare rather than a thing to recognise, and the level has to be legible
+ * from one chip with nothing beside it.
  *
  * **Never green and never red.** They are the verdict on the review page —
  * right and wrong — and the vocabulary list sits on that same page, three
@@ -46,7 +52,7 @@
  *  Named rather than taken from `Object.keys` of the counts, which would
  *  print whatever order the JSON arrived in — and `B1 · C1 · B2` reads as
  *  a bug. */
-export const CEFR_LEVELS = ["B1", "B2", "C1"] as const;
+export const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"] as const;
 
 export type CefrLevel = (typeof CEFR_LEVELS)[number];
 
@@ -55,7 +61,7 @@ export type CefrLevel = (typeof CEFR_LEVELS)[number];
  *
  * Null is an ordinary answer, not a failure: the seed pipeline leaves the
  * level empty where the model would not commit to one, and the wire type
- * is a plain string because a future scale (A2, C2) must not crash a page
+ * is a plain string because a level the scale does not know must not crash a page
  * built before it. Everything that draws a level has to handle the null —
  * an UNRATED word is not an easy one, and painting it B1 would be the page
  * making a claim it has no basis for.
@@ -95,12 +101,27 @@ export function levelRank(raw: string | null | undefined): number {
  *   stronger wash of the same hue reads as a harder word, and pointing at
  *   a row must not appear to change what the level is.
  * - `ink` — the level's name as text with nothing behind it, for the one
- *   line that prints all three.
+ *   line that prints a level.
  */
 export const CEFR_TONE: Record<
   CefrLevel,
   { chip: string; wash: string; line: string; lit: string; ink: string }
 > = {
+  // A1: an outline with no ground — the empty end of the scale.
+  A1: {
+    chip: "border border-cefr-a1-edge text-cefr-a1-ink",
+    wash: "bg-cefr-a1-wash",
+    line: "decoration-cefr-a1",
+    lit: "ring-2 ring-cefr-a1",
+    ink: "text-cefr-a1-ink",
+  },
+  A2: {
+    chip: "bg-cefr-a2-wash text-cefr-a2-ink",
+    wash: "bg-cefr-a2-wash",
+    line: "decoration-cefr-a2",
+    lit: "ring-2 ring-cefr-a2",
+    ink: "text-cefr-a2-ink",
+  },
   B1: {
     chip: "bg-cefr-b1-wash text-cefr-b1-ink",
     wash: "bg-cefr-b1-wash",
@@ -121,6 +142,15 @@ export const CEFR_TONE: Record<
     line: "decoration-cefr-c1",
     lit: "ring-2 ring-cefr-c1",
     ink: "text-cefr-c1-ink",
+  },
+  // C2: C1's orange as a SOLID chip — the full end of the scale. Its wash
+  // over the passage is C1's (four marks on a page, not six).
+  C2: {
+    chip: "bg-cefr-c2 text-cefr-c2-on",
+    wash: "bg-cefr-c2-wash",
+    line: "decoration-cefr-c2",
+    lit: "ring-2 ring-cefr-c2",
+    ink: "text-cefr-c2-ink",
   },
 };
 
