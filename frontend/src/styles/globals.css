@@ -75,18 +75,32 @@
      their own marking again as a verdict they never made. */
   --color-mark-key: var(--mark-key);
 
-  /* The CEFR scale (§3). Three levels, three roles each: the hue itself
-     (a rule, a ring), the ink it is legible as, and the wash it lays over
-     a word in the passage. */
+  /* The CEFR scale (§3). Six levels, four hues, and per level the roles it
+     plays: the hue itself (a rule, a ring), the ink its letters are legible
+     in, and the wash it lays over a word in the passage. A1 also has an
+     edge (its chip is an outline) and C2 an `on` colour (its chip is
+     solid). --color-mark-ink is the text colour INSIDE any passage mark. */
+  --color-cefr-a1: var(--cefr-a1);
+  --color-cefr-a1-ink: var(--cefr-a1-ink);
+  --color-cefr-a1-wash: var(--cefr-a1-wash);
+  --color-cefr-a2: var(--cefr-a2);
+  --color-cefr-a2-ink: var(--cefr-a2-ink);
+  --color-cefr-a2-wash: var(--cefr-a2-wash);
   --color-cefr-b1: var(--cefr-b1);
-  --color-cefr-b2: var(--cefr-b2);
-  --color-cefr-c1: var(--cefr-c1);
   --color-cefr-b1-ink: var(--cefr-b1-ink);
-  --color-cefr-b2-ink: var(--cefr-b2-ink);
-  --color-cefr-c1-ink: var(--cefr-c1-ink);
   --color-cefr-b1-wash: var(--cefr-b1-wash);
+  --color-cefr-b2: var(--cefr-b2);
+  --color-cefr-b2-ink: var(--cefr-b2-ink);
   --color-cefr-b2-wash: var(--cefr-b2-wash);
+  --color-cefr-c1: var(--cefr-c1);
+  --color-cefr-c1-ink: var(--cefr-c1-ink);
   --color-cefr-c1-wash: var(--cefr-c1-wash);
+  --color-cefr-c2: var(--cefr-c2);
+  --color-cefr-c2-ink: var(--cefr-c2-ink);
+  --color-cefr-c2-wash: var(--cefr-c2-wash);
+  --color-cefr-a1-edge: var(--cefr-a1-edge);
+  --color-cefr-c2-on: var(--cefr-c2-on);
+  --color-mark-ink: var(--mark-ink);
   --color-wave: var(--wave);
   --color-wave-progress: var(--wave-progress);
   --color-region: var(--region);
@@ -186,6 +200,14 @@
   --border: #44475a;
   --input: #44475a;
   --ring: #bd93f9;
+  /* An optional escape hatch (default: --primary): dracula's violet accent
+     is the B2 wash's own family, so its pen is a yellow instead. */
+  --pen: #f1fa8c;
+  /* Optional (default 40%): how strongly the pen's fill is laid on the
+     ground. Dracula's yellow is light enough that at 40% the passage text
+     on it is 4.19:1. 37% is the window: text 4.56:1, and the fill stays 8+ dE
+     from the C1/C2 wash (below ~36% they merge). Pen vs ground 3.32 -> 3.05. */
+  --pen-strength: 37%;
 }
 
 /* ── Derived roles ────────────────────────────────────────────────────────
@@ -243,80 +265,85 @@
      them. They were always the same gesture (this matters, here); the
      third — "I am not sure about this" — is the one that was never like
      the others, and it is the one that kept a channel of its own. */
-  --mark-key: var(--primary);
+  --mark-key: var(--pen, var(--primary));
 
   /* CEFR (§3). The one place on the platform where colour carries a SCALE
-     rather than a category, which is why it runs blue → violet → orange:
-     cool to warm reads as easy to hard without a legend, and none of the
-     three is green or red. Those two mean "right" and "wrong" on the
-     review page, and a learner shown their C1 words in red would read the
-     hardest words in the passage as forty mistakes.
+     rather than a category, so it runs cool to warm: sky, blue, violet,
+     orange. Six levels, FOUR hues. There is room on the wheel for one new
+     hue (the sky, below B1); past C1's orange every warm colour already
+     means wrong, the pen or a warning. So the ends are told apart by how
+     full the chip is: A1 an outline with no ground, A2..C1 tints, C2 a
+     solid orange. A1/A2 share the sky, C1/C2 share the orange.
 
-     Never on its own, anywhere. Every use of these is accompanied by the
-     letters — `C1` beside the colour — because about one man in twelve
-     cannot tell the violet from the orange, and a scale he cannot read is
-     worse than no scale at all. The wash below carries a second, ordered
-     channel for the same reason: see the strength ramp.
+     Never green or red (the review's verdict), and never on its own: every
+     use prints the letters. About one man in twelve is colour-blind, and
+     the measured pair that collapses for protan/deutan is B1/B2 (ΔE ≈ 3-4),
+     not violet/orange (≈ 7) — which is why the washes also carry strength.
 
-     The ink is mixed TOWARDS the theme's own foreground rather than
-     declared per theme: the hue is the identity and has to survive, but
-     #d98a4a as small text is a pale smudge on serika-light and too hot on
-     serika-dark, and the mix lands it legible on both from one
-     declaration. A fourth theme gets it free. */
+     EVERYTHING below is derived from the theme's base tokens, so a new
+     theme that sets only --background, --foreground, --card, --primary,
+     --success and --destructive (plus an `appearance`) gets a working
+     scale with no CEFR line of its own. scripts/check-cefr-contrast.mjs
+     (part of `npm run lint`) parses this file, resolves these formulas per
+     theme and fails with the token to override. The escape hatches, both
+     OPTIONAL and set only in a theme block: --pen (the pen colour, default
+     --primary), --pen-strength (the pen fill's strength, default 40%) and --cefr-ink-base (the ink base, default below).
+
+     INK. Chip letters are 15% hue on an ink base: --foreground on light
+     themes, --foreground mixed 60% toward white on dark ones (the .dark
+     rule below; the class is set by the inline script in index.html before
+     first paint, then kept by ThemeProvider).
+     Hue-coloured small text was 2.8-3.6:1; this is >= 4.66:1 everywhere.
+     --mark-ink is the same base, and is the text colour INSIDE any passage
+     mark — the CEFR washes and the pen — because a 40% wash lifts a dark
+     ground enough that plain foreground falls under AA.
+
+     WASH. The tint is mixed toward --foreground first, which is mixing AWAY
+     from the background, so every wash steps off its own ground (lighter
+     on dark, darker on light) whatever colour the ground is. Strength is
+     the second ordered channel: A1/A2 12%, B1 24%, B2 34%, C1/C2 40% — four
+     marks on the passage, not six. C1's 40% is the pen's own weight:
+     nothing the page says about a passage shouts louder than the reader.
+
+     Measured wash contrast against the ground (pen fill in brackets):
+
+       serika-dark   1.28  1.50  1.76  2.02   (pen 2.28)
+       dracula       1.30  1.58  1.92  2.22   (pen 3.05, its own yellow at --pen-strength 37%)
+       serika-light  1.09  1.27  1.42  1.48   (pen 1.18)
+
+     Chip letters on chip ground, worst level (C1): serika-dark 4.66,
+     dracula 5.46, serika-light 5.11. C2 is dark letters on solid orange
+     (5.82). The A1 edge is the sky mixed 50% with --foreground (>= 3.27).
+     Three shortfalls in the approved design are listed in the check's
+     EXCEPTIONS rather than hidden. */
+  --cefr-a: #55c3f2;
+  --cefr-a1: var(--cefr-a);
+  --cefr-a2: var(--cefr-a);
   --cefr-b1: #5b9bd5;
   --cefr-b2: #9b87d0;
   --cefr-c1: #d98a4a;
-  --cefr-b1-ink: color-mix(in srgb, var(--cefr-b1) 62%, var(--foreground));
-  --cefr-b2-ink: color-mix(in srgb, var(--cefr-b2) 62%, var(--foreground));
-  --cefr-c1-ink: color-mix(in srgb, var(--cefr-c1) 62%, var(--foreground));
+  --cefr-c2: var(--cefr-c1);
 
-  /* And the wash each one lays over the passage — which is the part that
-     had to be rebuilt, because a scale carried by hue ALONE does not
-     survive contact with a coloured background.
+  --cefr-ink-base-auto: var(--foreground);
+  --mark-ink: var(--cefr-ink-base, var(--cefr-ink-base-auto));
 
-     It was 20/22/24% of the raw hue, and it measured 1.34–1.45:1 against
-     serika-dark, 1.37–1.48 against dracula and 1.17–1.19 against
-     serika-light. Two things were wrong with that. The first is that
-     those numbers are all the SAME number: three levels drawn at one
-     strength is a scale with no magnitude, so the only thing separating
-     B1 from B2 was fifty degrees of hue at a fifth of its strength — and
-     fifty degrees is not much when the hues are a blue and a violet. The
-     second is dracula, which is where it showed: its background is itself
-     a dark blue-violet, so the blue wash and the violet wash both sank
-     into the ground they were laid on and the hue channel carried nothing
-     at all.
+  --cefr-a1-ink: color-mix(in srgb, var(--cefr-a1) 15%, var(--mark-ink));
+  --cefr-a2-ink: color-mix(in srgb, var(--cefr-a2) 15%, var(--mark-ink));
+  --cefr-b1-ink: color-mix(in srgb, var(--cefr-b1) 15%, var(--mark-ink));
+  --cefr-b2-ink: color-mix(in srgb, var(--cefr-b2) 15%, var(--mark-ink));
+  --cefr-c1-ink: color-mix(in srgb, var(--cefr-c1) 15%, var(--mark-ink));
+  --cefr-c2-ink: color-mix(in srgb, var(--cefr-c2) 15%, var(--mark-ink));
 
-     So the wash now varies in STRENGTH as well as hue, and the strength
-     is the scale: 24 / 34 / 42%, faint to firm, easy to hard. Two
-     ordered channels instead of one. Somebody who cannot separate the
-     violet from the orange can still see which mark is louder, and on a
-     background that eats one of the hues the ramp is still there.
-
-     The top of the ramp is pinned to the reader's OWN highlighter, which
-     is --mark-key at 40% and measures 2.13–2.28:1 depending on the theme.
-     Nothing the page says about a passage should shout louder than what
-     the reader said about it, so 40% is where C1 stops — level with the
-     pen on the dark themes rather than above it.
-
-     The tint is mixed towards --foreground first, like the ink and for a
-     sharper version of the same reason: mixing toward the foreground is
-     mixing AWAY from the background, so every wash is guaranteed to step
-     off its own ground — lighter on a dark theme, darker on a light one —
-     whatever colour that ground happens to be. That is what makes this
-     survive the next theme rather than just the three that exist.
-
-     What it measures now, ground by ground:
-
-       serika-dark   1.50  1.76  2.02   (the pen: 2.28)
-       dracula       1.58  1.92  2.22   (the pen: 2.13)
-       serika-light  1.27  1.42  1.48   (the pen: 1.18)
-
-     serika-light is still the weakest and that is inherent: a tint laid
-     on a near-white ground has less room to move than one laid on black.
-     It is ordered there too, which is the part that had to be true — and
-     it is the theme where the reader's own amber is weakest as well, so
-     the whole page is quiet there rather than this one thing being lost
-     in it. */
+  --cefr-a1-wash: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--cefr-a1) 78%, var(--foreground)) 12%,
+    transparent
+  );
+  --cefr-a2-wash: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--cefr-a2) 78%, var(--foreground)) 12%,
+    transparent
+  );
   --cefr-b1-wash: color-mix(
     in srgb,
     color-mix(in srgb, var(--cefr-b1) 78%, var(--foreground)) 24%,
@@ -332,6 +359,13 @@
     color-mix(in srgb, var(--cefr-c1) 78%, var(--foreground)) 40%,
     transparent
   );
+  --cefr-c2-wash: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--cefr-c2) 78%, var(--foreground)) 40%,
+    transparent
+  );
+  --cefr-a1-edge: color-mix(in srgb, var(--cefr-a1) 50%, var(--foreground));
+  --cefr-c2-on: color-mix(in srgb, var(--cefr-c2) 22%, black);
 
   /* What a drag of the mouse looks like before it becomes anything.
      Left to the browser it is the platform blue, which is the one colour on
@@ -350,6 +384,10 @@
   --wave-progress: var(--primary);
   --region: color-mix(in srgb, var(--primary) 18%, transparent);
   --audio-marker: color-mix(in srgb, var(--foreground) 25%, transparent);
+}
+
+.dark {
+  --cefr-ink-base-auto: color-mix(in srgb, white 60%, var(--foreground));
 }
 
 /* Motion and stacking (§4.1, §4.3). Not in @theme because neither

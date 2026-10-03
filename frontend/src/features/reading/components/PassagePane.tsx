@@ -109,7 +109,9 @@ interface PassagePaneProps {
  *  should always have looked like: an underline is what somebody draws
  *  when they are not sure, and a block is what they draw when they are. */
 const WASH: Record<MarkStyle, string> = {
-  fill: "bg-mark-key/40",
+  // Strength is the theme's --pen-strength (default 40%), so a theme whose
+  // pen is too light for the text on it can quieten the fill (see dracula).
+  fill: "bg-[color-mix(in_srgb,var(--mark-key)_var(--pen-strength,40%),transparent)]",
   // `bg-transparent` is load-bearing, and the same trap the `got` overlay
   // fell into: a <mark> with no background of its own falls back to the
   // BROWSER's, which is a block of highlighter yellow — so the line mark
@@ -412,7 +414,7 @@ export function PassagePane({
                         }
                         onMouseLeave={onPoint ? () => onPoint(null) : undefined}
                         className={cn(
-                          "text-foreground transition-colors duration-fast",
+                          "text-mark-ink transition-colors duration-fast",
                           STROKE,
                           // A glossed word is coloured by its LEVEL and
                           // not by its layer, so it is the one tone whose
@@ -540,7 +542,7 @@ export function PassagePane({
                         }
                         onMouseLeave={onPoint ? () => onPoint(null) : undefined}
                         className={cn(
-                          "text-foreground",
+                          "text-mark-ink",
                           STROKE,
                           WASH[run.mark.style ?? "fill"],
                           // A note is a mark that says something, and it has to

@@ -4,6 +4,30 @@ Feature-specific rules live nearer the code:
 `src/features/listening/`, `src/pages/listening/`, `src/pages/studio/`,
 `src/components/layout/` each carry their own `CLAUDE.md`.
 
+## Adding a theme
+
+Add a `[data-theme="id"]` block in `src/styles/globals.css` (base tokens
+only) and an entry in `src/theme/themes.ts` with its `appearance`. Nothing
+CEFR-specific is needed: the scale, the chips and the passage washes are
+derived from the base tokens. `npm run lint` runs
+`scripts/check-cefr-contrast.mjs`, which measures the new theme and fails
+naming the token to override (`--pen`, `--pen-strength`, `--cefr-ink-base`,
+or a base colour). The theme's dark/light id also goes in the inline
+first-paint script below.
+See "A new theme gets the scale for free" in
+`src/features/vocabulary/CLAUDE.md`.
+
+## First paint: the inline theme script
+
+`index.html` carries a tiny classic `<script>` (no imports) before the module
+script. It reads `localStorage["voocab-theme"]` and, as ThemeProvider would,
+sets `data-theme`, the `dark` class and `color-scheme` on `<html>` (stored
+theme, else the OS preference, else dark). The dark ink base and every derived
+CEFR colour hang on that class, so without it the first frames paint with the
+light ink and flash. It keeps its own list of dark and light theme ids, so
+**adding a theme means adding its id there too**; `check-cefr-contrast.mjs`
+fails if the list and `themes.ts` disagree.
+
 ## Preferences default to off
 
 `src/lib/preferences.ts` holds the reader's small on/off choices, in

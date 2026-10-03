@@ -290,14 +290,19 @@ exists and stays on the server, where the arithmetic is.
 
 ## The level is a colour, and the colour is a system
 
-`features/vocabulary/cefr.ts` is the one place it is decided: B1 blue, B2
-violet, C1 orange, cool to warm, which is the ordering people read as a
-scale without being told. Every screen that shows a level reads that table —
-the lookup popover mid-paper, the review's list, the saved-words page, the
-passage header's spread — because the whole value of a colour system is that
-the orange in the popover and the orange in the review an hour later are the
-same claim. Four private implementations of a badge is four things that
-drift on the first afternoon somebody adjusts one.
+`features/vocabulary/cefr.ts` is the one place it is decided. Six levels,
+four hues: A1 and A2 share a sky blue (`#55c3f2`), B1 blue, B2 violet and C1
+orange are unchanged, and C2 shares C1's orange. Cool to warm is the
+ordering people read as a scale without being told. There is room on the
+wheel for exactly one new hue; past C1 every warm colour already means wrong,
+the pen or a warning. So the two ends are told apart by how FULL the chip is:
+**A1 is an empty outline, A2 to C1 are tints, C2 is a solid orange chip**
+(dark letters on the orange). Every screen that shows a level reads that
+table — the lookup popover mid-paper, the review's list and level bar, the
+saved-words page, the passage header's spread — because the whole value of a
+colour system is that the orange in the popover and the orange in the review
+an hour later are the same claim. Four private implementations of a badge is
+four things that drift on the first afternoon somebody adjusts one.
 
 - **Never green and never red.** They are the verdict on the review page —
   right and wrong — and the vocabulary list sits on that same page, inches
@@ -305,8 +310,15 @@ drift on the first afternoon somebody adjusts one.
   reads the hardest words in the text as forty mistakes.
 - **The colour never travels alone.** Every use prints the letters beside
   it, which is what `CefrTag` exists to make unforgettable. About one man in
-  twelve cannot separate the violet from the orange, and a scale he cannot
-  read is worse than none: it is a page that looks organised and is not.
+  twelve is colour-blind, and a scale he cannot read is worse than none: it
+  is a page that looks organised and is not. Measured, the pair that
+  collapses under protan/deutan simulation is B1/B2 (blue and violet, ΔE
+  about 3), not violet/orange (about 7) — which is why the washes also
+  carry an ordered strength.
+- **Chip letters are near-neutral, not the hue.** 15% hue on an ink base,
+  which is what makes them pass AA (4.5:1) on every ground: `--foreground`
+  on light themes, `--foreground` mixed 60% toward white on dark themes.
+  Hue-coloured small text measured 2.8-3.6:1.
 - **An unrated word gets no chip, not a grey one.** A grey chip in a row of
   coloured ones reads as a fourth, easiest level; what it actually means is
   that nobody said.
@@ -319,7 +331,9 @@ drift on the first afternoon somebody adjusts one.
 ## The passage's marking says the level, and only the level
 
 The wash over a glossed word is its CEFR colour **and its CEFR strength** —
-24 / 34 / 40%, faint to firm, easy to hard.
+A1/A2 12%, B1 24%, B2 34%, C1/C2 40%, faint to firm, easy to hard. Four
+marks on the passage, not six: the shared levels share a wash, and C2 is
+told from C1 on the chip and in the list, where there is room to.
 
 The strength is not decoration. Hue alone was 20/22/24% and measured
 1.34–1.48:1 on every theme: three levels drawn at one weight, so the whole
@@ -328,7 +342,11 @@ of its strength. It failed first on dracula, whose background is itself a
 dark blue-violet — both washes sank into the ground they were laid on and
 the hue channel carried nothing at all. Two ordered channels instead of one
 is what makes it survive a coloured ground, and a reader who cannot separate
-the violet from the orange can still see which mark is louder.
+the hues can still see which mark is louder.
+
+**On dark themes the text inside any mark — the CEFR washes and the pen —
+is the ink base, not `--foreground`** (`text-mark-ink`): a 40% wash lifts the
+ground enough that plain foreground text falls under AA there.
 
 C1 stops at the weight of the reader's OWN highlighter, because nothing the
 page says about a passage should shout louder than what the reader said
@@ -346,6 +364,34 @@ The wash used to say "saved" in blue for a word already on the list, which
 meant a saved C1 word and an unsaved B1 word came out the same colour — the
 one thing the wash was for stopped being true the moment the reader did any
 work. Saved-ness is what the Saved LAYER filters by. It is not a hue.
+
+## A new theme gets the scale for free, and a check says whether it holds
+
+Every CEFR colour is DERIVED in `globals.css` from the theme's base tokens
+(`--background`, `--foreground`, `--card`, `--success`, `--destructive`, the
+pen, and whether the theme is dark) with `color-mix`. A theme that defines
+only its base tokens gets chips, washes, the A1 edge and the C2 on-colour
+with no CEFR line of its own. Three escape hatches, all optional tokens a
+theme block may set: `--pen` (the pen colour, default `--primary`; dracula
+sets it because its violet accent sits on the B2 wash), `--pen-strength`
+(how strongly PassagePane lays the pen fill, default 40%; dracula sets 37%
+because its light yellow at 40% held text at only 4.19:1, and below ~36% the
+fill merges with the C1/C2 wash; pen vs ground 3.32 -> 3.05) and
+`--cefr-ink-base` (the ink the letters and in-mark text are mixed from).
+
+`scripts/check-cefr-contrast.mjs` runs in `npm run lint`. It parses every
+theme block in `globals.css`, resolves the derived colours the way the
+browser would, and fails naming the theme and the token to override: chip
+letters 4.5:1, text in a mark 4.5:1, A1 edge 3:1, neighbouring washes
+ΔE ≥ 3.5, CEFR hues against correct/wrong ΔE ≥ 15, every wash against the pen
+ΔE ≥ 8 (OKLab ΔE ×100; the colour-blind figure is printed, not gated).
+Shortfalls in the approved design are listed as `EXCEPTIONS` in the script,
+as floors, so a new theme gets none. Two are accepted, by decision:
+serika-dark `washVsPen` (6.1 vs 8: the pen is the theme's own brand yellow,
+and the two marks differ in style — the pen fills at full strength, CEFR is a
+tint) and dracula `hueVsVerdict:C/wrong` (12.4 vs 15: dracula's own red, and
+only one layer, CEFR or the verdict, shows at a time). `scripts/cefr-design/` is the
+provenance: the proposal and the designer's Python measurements.
 
 ## The review: the words, not the number
 
@@ -945,6 +991,5 @@ Screens: the home's "Word lists" section, `/vocabulary/lists`,
   (`example_source`). The learner did not meet the word there, so the line
   must not claim they did, and the sentence is never stored as their context.
   The line is quiet and links to the material.
-- **CEFR bar**: `CefrSpread` reuses the colour system for B1/B2/C1 and the
-  neutral outline for levels it has no tone for (A1, A2, C2); letters always
+- **CEFR bar**: `CefrSpread` draws all six levels in their tones; letters always
   printed. Unrated is said in words, never a segment or chip.

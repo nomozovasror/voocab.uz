@@ -1,0 +1,557 @@
+{
+ "serika-dark": {
+  "rows": [
+   {
+    "lv": "A1",
+    "chipBg": "#323437",
+    "chipInk": "#d6e6e9",
+    "chipCR": 9.72,
+    "wash": "#39464c",
+    "washCR": 1.28,
+    "washVis": 6.2,
+    "textOnWash": 6.31
+   },
+   {
+    "lv": "A2",
+    "chipBg": "#39464c",
+    "chipInk": "#d6e6e9",
+    "chipCR": 7.62,
+    "wash": "#39464c",
+    "washCR": 1.28,
+    "washVis": 6.2,
+    "textOnWash": 6.31
+   },
+   {
+    "lv": "B1",
+    "chipBg": "#42505c",
+    "chipInk": "#d7e0e5",
+    "chipCR": 6.22,
+    "wash": "#42505c",
+    "washCR": 1.5,
+    "washVis": 10.1,
+    "textOnWash": 5.37
+   },
+   {
+    "lv": "B2",
+    "chipBg": "#5a566a",
+    "chipInk": "#e0dde4",
+    "chipCR": 5.28,
+    "wash": "#5a566a",
+    "washCR": 1.76,
+    "washVis": 14.2,
+    "textOnWash": 4.57
+   },
+   {
+    "lv": "C1",
+    "chipBg": "#745d49",
+    "chipInk": "#eaddd0",
+    "chipCR": 4.66,
+    "wash": "#745d49",
+    "washCR": 2.02,
+    "washVis": 17.8,
+    "textOnWash": 3.99
+   },
+   {
+    "lv": "C2",
+    "chipBg": "#d98a4a",
+    "chipInk": "#301e10",
+    "chipCR": 5.82,
+    "wash": "#745d49",
+    "washCR": 2.02,
+    "washVis": 17.8,
+    "textOnWash": 3.99
+   }
+  ],
+  "adj": [
+   {
+    "pair": "A1\u2192A2",
+    "chipN": 6.2,
+    "chipCVD": 6.0,
+    "washN": 0.0,
+    "washCVD": 0.0
+   },
+   {
+    "pair": "A2\u2192B1",
+    "chipN": 4.0,
+    "chipCVD": 3.9,
+    "washN": 4.0,
+    "washCVD": 3.9
+   },
+   {
+    "pair": "B1\u2192B2",
+    "chipN": 4.8,
+    "chipCVD": 3.4,
+    "washN": 4.8,
+    "washCVD": 3.4
+   },
+   {
+    "pair": "B2\u2192C1",
+    "chipN": 7.5,
+    "chipCVD": 6.8,
+    "washN": 7.5,
+    "washCVD": 6.8
+   },
+   {
+    "pair": "C1\u2192C2",
+    "chipN": 22.4,
+    "chipCVD": 18.8,
+    "washN": 0.0,
+    "washCVD": 0.0
+   }
+  ],
+  "coll": {
+   "A2": {
+    "correct/18": [
+     3.0,
+     2.7
+    ],
+    "incorrect/20": [
+     5.3,
+     2.6
+    ],
+    "pen/40": [
+     16.9,
+     15.6
+    ]
+   },
+   "B1": {
+    "correct/18": [
+     4.4,
+     3.9
+    ],
+    "incorrect/20": [
+     7.6,
+     5.9
+    ],
+    "pen/40": [
+     14.7,
+     13.7
+    ]
+   },
+   "B2": {
+    "correct/18": [
+     8.6,
+     7.1
+    ],
+    "incorrect/20": [
+     10.2,
+     9.7
+    ],
+    "pen/40": [
+     13.0,
+     12.9
+    ]
+   },
+   "C1": {
+    "correct/18": [
+     11.2,
+     7.9
+    ],
+    "incorrect/20": [
+     13.1,
+     13.1
+    ],
+    "pen/40": [
+     6.1,
+     5.3
+    ]
+   }
+  },
+  "cur": [
+   {
+    "lv": "B1",
+    "chipBg": "#42505c",
+    "chipInk": "#88afcf",
+    "chipCR": 3.61
+   },
+   {
+    "lv": "B2",
+    "chipBg": "#5a566a",
+    "chipInk": "#b0a3cc",
+    "chipCR": 3.01
+   },
+   {
+    "lv": "C1",
+    "chipBg": "#745d49",
+    "chipInk": "#d6a579",
+    "chipCR": 2.8
+   }
+  ],
+  "a1edge": "#93cadc",
+  "a1edgeCR": 6.94,
+  "penCR": 2.28,
+  "textOnPen": 3.53,
+  "textOnPenFixed": 4.64,
+  "textOnCFixed": 5.24
+ },
+ "dracula": {
+  "rows": [
+   {
+    "lv": "A1",
+    "chipBg": "#282a36",
+    "chipInk": "#e3f4f9",
+    "chipCR": 12.56,
+    "wash": "#323e4d",
+    "washCR": 1.3,
+    "washVis": 7.1,
+    "textOnWash": 10.24
+   },
+   {
+    "lv": "A2",
+    "chipBg": "#323e4d",
+    "chipInk": "#e3f4f9",
+    "chipCR": 9.63,
+    "wash": "#323e4d",
+    "washCR": 1.3,
+    "washVis": 7.1,
+    "textOnWash": 10.24
+   },
+   {
+    "lv": "B1",
+    "chipBg": "#3d4a5e",
+    "chipInk": "#e4eef4",
+    "chipCR": 7.62,
+    "wash": "#3d4a5e",
+    "washCR": 1.58,
+    "washVis": 11.9,
+    "textOnWash": 8.43
+   },
+   {
+    "lv": "B2",
+    "chipBg": "#56526d",
+    "chipInk": "#eeebf4",
+    "chipCR": 6.29,
+    "wash": "#56526d",
+    "washCR": 1.92,
+    "washVis": 16.7,
+    "textOnWash": 6.97
+   },
+   {
+    "lv": "C1",
+    "chipBg": "#725a4d",
+    "chipInk": "#f7ebdf",
+    "chipCR": 5.46,
+    "wash": "#725a4d",
+    "washCR": 2.22,
+    "washVis": 20.7,
+    "textOnWash": 6.0
+   },
+   {
+    "lv": "C2",
+    "chipBg": "#d98a4a",
+    "chipInk": "#301e10",
+    "chipCR": 5.82,
+    "wash": "#725a4d",
+    "washCR": 2.22,
+    "washVis": 20.7,
+    "textOnWash": 6.0
+   }
+  ],
+  "adj": [
+   {
+    "pair": "A1\u2192A2",
+    "chipN": 7.1,
+    "chipCVD": 7.0,
+    "washN": 0.0,
+    "washCVD": 0.0
+   },
+   {
+    "pair": "A2\u2192B1",
+    "chipN": 4.8,
+    "chipCVD": 4.7,
+    "washN": 4.8,
+    "washCVD": 4.7
+   },
+   {
+    "pair": "B1\u2192B2",
+    "chipN": 5.3,
+    "chipCVD": 4.0,
+    "washN": 5.3,
+    "washCVD": 4.0
+   },
+   {
+    "pair": "B2\u2192C1",
+    "chipN": 7.8,
+    "chipCVD": 7.1,
+    "washN": 7.8,
+    "washCVD": 7.1
+   },
+   {
+    "pair": "C1\u2192C2",
+    "chipN": 23.3,
+    "chipCVD": 19.8,
+    "washN": 0.0,
+    "washCVD": 0.0
+   }
+  ],
+  "coll": {
+   "A2": {
+    "correct/18": [
+     6.7,
+     5.8
+    ],
+    "incorrect/20": [
+     6.5,
+     3.0
+    ],
+    "pen/40": [
+     13.7,
+     12.0
+    ]
+   },
+   "B1": {
+    "correct/18": [
+     5.9,
+     4.5
+    ],
+    "incorrect/20": [
+     8.1,
+     5.7
+    ],
+    "pen/40": [
+     9.4,
+     7.4
+    ]
+   },
+   "B2": {
+    "correct/18": [
+     9.4,
+     6.9
+    ],
+    "incorrect/20": [
+     10.5,
+     9.7
+    ],
+    "pen/40": [
+     4.5,
+     3.7
+    ]
+   },
+   "C1": {
+    "correct/18": [
+     11.2,
+     6.1
+    ],
+    "incorrect/20": [
+     13.1,
+     13.0
+    ],
+    "pen/40": [
+     9.8,
+     9.8
+    ]
+   }
+  },
+  "cur": [
+   {
+    "lv": "B1",
+    "chipBg": "#3d4a5e",
+    "chipInk": "#97bee0",
+    "chipCR": 4.61
+   },
+   {
+    "lv": "B2",
+    "chipBg": "#56526d",
+    "chipInk": "#beb2dd",
+    "chipCR": 3.75
+   },
+   {
+    "lv": "C1",
+    "chipBg": "#725a4d",
+    "chipInk": "#e5b48a",
+    "chipCR": 3.41
+   }
+  ],
+  "a1edge": "#a6def2",
+  "a1edgeCR": 9.7,
+  "penCR": 2.13,
+  "textOnPen": 6.28,
+  "textOnPenFixed": 6.52,
+  "textOnCFixed": 6.24
+ },
+ "serika-light": {
+  "rows": [
+   {
+    "lv": "A1",
+    "chipBg": "#e1e1e3",
+    "chipInk": "#32444e",
+    "chipCR": 6.82,
+    "wash": "#cfd9e0",
+    "washCR": 1.09,
+    "washVis": 3.2,
+    "textOnWash": 9.53
+   },
+   {
+    "lv": "A2",
+    "chipBg": "#cfd9e0",
+    "chipInk": "#32444e",
+    "chipCR": 6.3,
+    "wash": "#cfd9e0",
+    "washCR": 1.09,
+    "washVis": 3.2,
+    "textOnWash": 9.53
+   },
+   {
+    "lv": "B1",
+    "chipBg": "#becad7",
+    "chipInk": "#333e4a",
+    "chipCR": 5.9,
+    "wash": "#becad7",
+    "washCR": 1.27,
+    "washVis": 7.8,
+    "textOnWash": 8.22
+   },
+   {
+    "lv": "B2",
+    "chipBg": "#c1bcd1",
+    "chipInk": "#3d3b49",
+    "chipCR": 5.37,
+    "wash": "#c1bcd1",
+    "washCR": 1.42,
+    "washVis": 10.9,
+    "textOnWash": 7.36
+   },
+   {
+    "lv": "C1",
+    "chipBg": "#cfb6a4",
+    "chipInk": "#463c35",
+    "chipCR": 5.11,
+    "wash": "#cfb6a4",
+    "washCR": 1.48,
+    "washVis": 12.4,
+    "textOnWash": 7.05
+   },
+   {
+    "lv": "C2",
+    "chipBg": "#d98a4a",
+    "chipInk": "#301e10",
+    "chipCR": 5.82,
+    "wash": "#cfb6a4",
+    "washCR": 1.48,
+    "washVis": 12.4,
+    "textOnWash": 7.05
+   }
+  ],
+  "adj": [
+   {
+    "pair": "A1\u2192A2",
+    "chipN": 3.2,
+    "chipCVD": 2.6,
+    "washN": 0.0,
+    "washCVD": 0.0
+   },
+   {
+    "pair": "A2\u2192B1",
+    "chipN": 4.7,
+    "chipCVD": 4.6,
+    "washN": 4.7,
+    "washCVD": 4.6
+   },
+   {
+    "pair": "B1\u2192B2",
+    "chipN": 3.7,
+    "chipCVD": 3.0,
+    "washN": 3.7,
+    "washCVD": 3.0
+   },
+   {
+    "pair": "B2\u2192C1",
+    "chipN": 6.1,
+    "chipCVD": 6.1,
+    "washN": 6.1,
+    "washCVD": 6.1
+   },
+   {
+    "pair": "C1\u2192C2",
+    "chipN": 12.5,
+    "chipCVD": 11.3,
+    "washN": 0.0,
+    "washCVD": 0.0
+   }
+  ],
+  "coll": {
+   "A2": {
+    "correct/18": [
+     2.7,
+     2.2
+    ],
+    "incorrect/20": [
+     5.9,
+     4.4
+    ],
+    "pen/40": [
+     9.8,
+     9.8
+    ]
+   },
+   "B1": {
+    "correct/18": [
+     4.4,
+     4.2
+    ],
+    "incorrect/20": [
+     4.5,
+     2.3
+    ],
+    "pen/40": [
+     10.7,
+     10.5
+    ]
+   },
+   "B2": {
+    "correct/18": [
+     7.8,
+     7.0
+    ],
+    "incorrect/20": [
+     4.7,
+     3.5
+    ],
+    "pen/40": [
+     12.4,
+     12.2
+    ]
+   },
+   "C1": {
+    "correct/18": [
+     8.8,
+     7.6
+    ],
+    "incorrect/20": [
+     5.5,
+     5.2
+    ],
+    "pen/40": [
+     8.7,
+     8.4
+    ]
+   }
+  },
+  "cur": [
+   {
+    "lv": "B1",
+    "chipBg": "#becad7",
+    "chipInk": "#497297",
+    "chipCR": 2.77
+   },
+   {
+    "lv": "B2",
+    "chipBg": "#c1bcd1",
+    "chipInk": "#716594",
+    "chipCR": 2.59
+   },
+   {
+    "lv": "C1",
+    "chipBg": "#cfb6a4",
+    "chipInk": "#976740",
+    "chipCR": 2.3
+   }
+  ],
+  "a1edge": "#407892",
+  "a1edgeCR": 3.27,
+  "penCR": 1.18,
+  "textOnPen": 8.86,
+  "textOnPenFixed": 8.86,
+  "textOnCFixed": 7.05
+ }
+}

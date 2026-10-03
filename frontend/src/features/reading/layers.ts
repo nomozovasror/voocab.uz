@@ -542,7 +542,7 @@ export const WASH: Record<
   /** A glossed word. Only the shape of the mark lives here: the COLOUR is
    *  the word's level and comes from `cefr.ts`, which is why this one has
    *  no classes of its own — see `wordStyle`. */
-  word: { rest: "", lit: "", tag: "text-foreground" },
+  word: { rest: "", lit: "", tag: "text-mark-ink" },
 };
 
 /**

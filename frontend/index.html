@@ -5,6 +5,23 @@
     <link rel="icon" type="image/svg+xml" href="/voocab.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>voocab</title>
+    <script>
+      // First-paint theme. Mirrors ThemeProvider.applyTheme/resolveInitialTheme
+      // (src/theme/): keep the key, default and dark ids in sync with themes.ts.
+      (function () {
+        try {
+          var dark = { "serika-dark": 1, dracula: 1 };
+          var light = { "serika-light": 1 };
+          var id = localStorage.getItem("voocab-theme");
+          if (!dark[id] && !light[id])
+            id = matchMedia("(prefers-color-scheme: light)").matches ? "serika-light" : "serika-dark";
+          var r = document.documentElement;
+          r.dataset.theme = id;
+          r.classList.toggle("dark", !!dark[id]);
+          r.style.colorScheme = dark[id] ? "dark" : "light";
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
