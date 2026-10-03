@@ -106,6 +106,35 @@ first rule in this file forbids.
   `MaterialVocabulary.hidden`, which exists for exactly this — keeping an
   entry without showing it.
 
+## Lookup shows every sense
+
+The popover used to answer with ONE sense, and when it was the wrong one
+the reader concluded the system was wrong — and a reader who finds one
+error stops trusting the rest. One sense is mandatory for PRACTICE; it was
+never needed for a lookup. Showing every sense we have turns a wrong pick
+into an ordering, not an answer: a poor ordering is an annoyance, a wrong
+answer breaks trust.
+
+- **The popover stays compact.** It was rejected once as "messy and noisy".
+  The first sense (the `used here` one, else the commonest) is fully open as
+  before; the others are ONE line each — start of the definition and the
+  tag — and open on press (`aria-expanded` disclosure buttons). ONE such
+  line shows and a `show all (N)` row holds the rest: two lines measured
+  +70–100px on a many-sense word, past the old card with its `Here:` block,
+  and the user chose the shorter card. Part of speech and the label are inline on the definition's own
+  line, not a line of their own. `SenseList.tsx` owns all of it.
+- **Tags are small dim mono: POS, then one marker.** `used here` (popover)
+  or `saved` (word page) replaces the frequency label on its sense;
+  otherwise `most common` / `common` / `less common`, from SemCor counts on
+  the server. No label where the server sent `null` — an empty space beats
+  an invented label. Never a number or a percentage.
+- **Phrases and old answers have no `senses`**: the popover falls back to
+  the single meaning and the `Here:` block above it. Save is untouched and
+  still saves the `used here` sense only; there are no per-sense buttons.
+- **The word page shows all senses open**, the saved one first and marked
+  `saved`. The saved-words list and practice are unchanged — the learner
+  saved one sense.
+
 ## Two ways in, and the popover is the one they use
 
 The tool row is where somebody LEARNS the feature exists; the popover at the

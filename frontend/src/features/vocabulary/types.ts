@@ -15,7 +15,29 @@
 
 import type { Glossed } from "@/features/vocabulary/meaning";
 
+/** How common a sense is for its word, from SemCor counts on the server.
+ *  `null` where there is no data — and then NO label is drawn, never a
+ *  guessed one. No numbers ever reach the wire or the screen. */
+export type SenseLabel = "most common" | "common" | "less common";
+
+/** One sense of a lemma, in display order. `used_here` is set on the
+ *  lookup's senses, `saved` on the word page's; the other is absent. */
+export interface WordSense {
+  sense_id: string;
+  pos: string;
+  definition_en: string;
+  meaning_uz: string;
+  cefr: string | null;
+  label: SenseLabel | null;
+  used_here?: boolean;
+  saved?: boolean;
+}
+
 export interface VocabularyEntry {
+  /** Every sense we have for the lemma, the one used here first. Absent or
+   *  empty (a phrase, an older cache): the popover falls back to the single
+   *  meaning above. */
+  senses?: WordSense[];
   id: string;
   lemma: string;
   /** The form as it stands in the passage. Not printed on its own — the
@@ -189,6 +211,9 @@ export type WordStatus = "learning" | "review" | "known" | "suspended" | "leech"
  *  `GET /vocabulary/words` now, so one interface has to answer for a list
  *  row, a leech choice and a card's schedule at once. */
 export interface SavedWord {
+  /** Every sense we have for the lemma, the saved one first. Only the word
+   *  page reads it; the list and practice are about the one saved sense. */
+  senses?: WordSense[];
   /** The saved word's own id — a `LexemeSense` per learner, unique on
    *  `(user_id, lexeme_sense_id)`. Routes, delete, leech and bulk actions
    *  all address a word by THIS now: a lemma stopped being unique the

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { getErrorMessage } from "@/lib/api";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { SenseOpen, SenseRows } from "@/features/vocabulary/components/SenseList";
 import { CefrTag } from "@/features/vocabulary/components/CefrTag";
 import { meanings } from "@/features/vocabulary/meaning";
 import { helpFor } from "@/features/reading/help";
@@ -296,6 +297,10 @@ export function LookupPopover({
   const lead = found.data?.phrase ?? found.data?.word ?? null;
   const under = found.data?.phrase ? found.data.word : null;
   const sense = lead ? meanings(lead) : null;
+  // Every sense we have, the one used here first (`senses` is in display
+  // order). Absent for a phrase or an older answer: the single meaning
+  // below stands in, as it always did.
+  const senses = lead?.senses?.length ? lead.senses : null;
 
   // The WORD is what gets charged, not the phrase around it: the phrase came
   // free, as context. Charging it would file the look-up under a string the
@@ -427,7 +432,7 @@ export function LookupPopover({
           <span className="text-[0.95rem] leading-tight font-medium text-foreground">
             {lead ? lead.lemma : word}
           </span>
-          {lead?.pos && (
+          {lead?.pos && !senses && (
             <span className="text-[0.7rem] text-muted-foreground italic">
               {lead.pos}
             </span>
@@ -472,7 +477,14 @@ export function LookupPopover({
             a card that only ever says what the word means HERE is what put
             "a computer process of finding patterns in data" on somebody's
             list under the verb `learn`. */}
-        {sense && (
+        {senses && (
+          <>
+            <SenseOpen sense={senses[0]} />
+            <SenseRows senses={senses} />
+          </>
+        )}
+
+        {sense && !senses && (
           <>
             <p className="text-[0.82rem] leading-snug text-foreground">
               {sense.en}

@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
 import { fmtClock, timeAgo, timeUntil } from "@/lib/time";
+import { SenseList } from "@/features/vocabulary/components/SenseList";
 import { CefrTag } from "@/features/vocabulary/components/CefrTag";
 import { StatusChip } from "@/features/vocabulary/components/StatusChip";
 import { ReportTranslation } from "@/features/vocabulary/components/ReportTranslation";
@@ -178,6 +179,15 @@ export default function VocabularyWordPage() {
               {LEECH_LABEL.keep}
             </Button>
           </div>
+        </section>
+      )}
+
+      {word.senses && word.senses.length > 1 && (
+        <section className="mt-5" aria-labelledby="all-meanings">
+          <h2 id="all-meanings" className="text-sm font-semibold text-foreground">
+            All meanings
+          </h2>
+          <SenseList senses={word.senses} />
         </section>
       )}
 
