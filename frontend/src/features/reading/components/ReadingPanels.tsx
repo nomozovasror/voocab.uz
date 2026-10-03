@@ -10,6 +10,7 @@ import { SenseOpen, SenseRows } from "@/features/vocabulary/components/SenseList
 import { CefrTag } from "@/features/vocabulary/components/CefrTag";
 import { meanings } from "@/features/vocabulary/meaning";
 import { helpFor } from "@/features/reading/help";
+import { cardPoint, opensAbove, toBox, useFollow } from "@/features/reading/anchor";
 import { LOOKUP_BUDGET } from "@/features/reading/lookups";
 import type { QuestionGroupType } from "@/features/paper/types";
 import type { Selected } from "@/features/reading/selection";
@@ -388,7 +389,17 @@ export function LookupPopover({
     onError: (e) => toast(getErrorMessage(e)),
   });
 
-  const box = place(rect ?? null);
+  // Side decided once, at open — see `opensAbove`. The card then follows the
+  // word (`useFollow`) instead of being placed once and left behind.
+  const [above] = useState(() => (rect ? opensAbove(toBox(rect), window.innerHeight, 200, 220) : false));
+  const cardRef = useRef<HTMLDivElement>(null);
+  useFollow(cardRef, rect, (b) =>
+    cardPoint(b, above, window.innerWidth, 150, { above: 10, below: 10 }),
+  );
+  // No rect: the top-right corner, as before.
+  const fallback = rect
+    ? undefined
+    : { left: window.innerWidth - 160, top: 76 };
 
   // The passage's own sense, where it is not the word's usual one. Shown in
   // both shapes of the card — under the single meaning, or under the sense
@@ -418,9 +429,10 @@ export function LookupPopover({
         aria-label={`Meaning of ${word}`}
         className={cn(
           "pointer-events-auto absolute w-[282px] -translate-x-1/2 rounded-xl border border-border bg-popover p-3.5 shadow-lg",
-          box.above ? "-translate-y-full" : "",
+          above ? "-translate-y-full" : "",
         )}
-        style={{ left: box.left, top: box.top }}
+        ref={cardRef}
+        style={fallback}
         // The selection survives a press on this: a pointerdown anywhere
         // else collapses it, and a reader who then reaches for Highlight
         // would find nothing to mark.
@@ -438,7 +450,7 @@ export function LookupPopover({
           aria-hidden
           className={cn(
             "absolute left-1/2 -ml-[5px] size-2.5 rotate-45 border-border bg-popover",
-            box.above
+            above
               ? "-bottom-[5px] border-r border-b"
               : "-top-[5px] border-t border-l",
           )}
@@ -448,7 +460,7 @@ export function LookupPopover({
           <span className="text-[0.95rem] leading-tight font-medium text-foreground">
             {lead ? lead.lemma : word}
           </span>
-          {lead?.pos && !senses && (
+          {lead?.pos && (
             <span className="text-[0.7rem] text-muted-foreground italic">
               {lead.pos}
             </span>
@@ -495,12 +507,21 @@ export function LookupPopover({
             list under the verb `learn`. */}
         {senses && (
           <>
-            <SenseOpen sense={senses[0]} />
+            <SenseOpen
+              sense={senses[0]}
+              level={lead?.cefr_level}
+              showPos={Boolean(senses[0].pos) && senses[0].pos !== lead?.pos}
+              tagged={senses.length > 1}
+            />
             {/* The passage's own gloss stays under the sense used here when
                 the two differ: the lexicon's sense is the nearest dictionary
                 one, and "what does it mean HERE" is the question asked. */}
             {hereBlock}
-            <SenseRows senses={senses} />
+            <SenseRows
+              senses={senses}
+              level={lead?.cefr_level}
+              headerPos={lead?.pos}
+            />
           </>
         )}
 
@@ -607,29 +628,4 @@ export function LookupPopover({
     </div>,
     document.body,
   );
-}
-
-/** Where to put the card, given the selection's own box.
- *
- *  Below the words by default so the arrow points up at them; above where
- *  there is not room below. Clamped to the viewport at both edges, because
- *  a word at the right margin would otherwise put half the card off screen
- *  — and the card is 282 wide, so half of it is a lot. */
-function place(rect: DOMRect | null): {
-  left: number;
-  top: number;
-  above: boolean;
-} {
-  if (!rect) {
-    return { left: window.innerWidth - 160, top: 76, above: false };
-  }
-  const above = rect.bottom + 200 > window.innerHeight && rect.top > 220;
-  return {
-    left: Math.min(
-      Math.max(rect.left + rect.width / 2, 150),
-      window.innerWidth - 150,
-    ),
-    top: above ? rect.top - 10 : rect.bottom + 10,
-    above,
-  };
 }

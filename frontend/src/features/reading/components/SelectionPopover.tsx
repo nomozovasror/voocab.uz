@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { BookOpen, Check, Copy, StickyNote } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Swatch } from "@/features/reading/components/PassageTools";
 import { MARK_MEANING, MARK_STYLES } from "@/features/reading/highlights";
 import type { MarkStyle } from "@/features/reading/highlights";
+import { cardPoint, useFollow } from "@/features/reading/anchor";
 import { LOOKUP_BUDGET, LOOKUP_WORDS } from "@/features/reading/lookups";
 import type { Selected } from "@/features/reading/selection";
 
@@ -42,7 +43,7 @@ import type { Selected } from "@/features/reading/selection";
  * screen, and typing them again is an opportunity to get one wrong that the
  * paper never intended to test.
  *
- * ## Why it is placed rather than anchored
+ * ## Why it is portalled, and how it still follows
  *
  * Fixed to the selection's own rectangle, in a portal. Inside the pane it
  * would be clipped by the pane's `overflow`, and scrolled away by the
@@ -112,17 +113,24 @@ export function SelectionPopover({
   // that was actually made rather than lingering over the next word.
   useEffect(() => setCopied(false), [selected]);
 
+  const rect = selected?.rect;
+  // Above the words where there is room, below them where there is not —
+  // decided when the selection is made and not again while the page scrolls,
+  // so the bar never hops across the words.
+  const above = useMemo(() => (rect ? rect.top > 96 : false), [rect]);
+  const barRef = useRef<HTMLDivElement>(null);
+  useFollow(barRef, rect, (b) =>
+    cardPoint(b, above, window.innerWidth, 120, { above: 6, below: 0 }),
+  );
+
   if (!selected) return null;
 
-  const { rect } = selected;
   const words = selected.text.trim().split(/\s+/).length;
   // Absent for a long selection rather than greyed out. Somebody who has
   // dragged across three sentences is reading them, not asking what they
   // mean, and a disabled control would answer a question they never asked.
   const askable = allowLookup && words <= LOOKUP_WORDS;
   const spent = lookupLeft === 0 && !lookupFree;
-  // Above the words where there is room, below them where there is not.
-  const above = rect.top > 96;
 
   return createPortal(
     <div
@@ -137,13 +145,7 @@ export function SelectionPopover({
           "pointer-events-auto absolute flex -translate-x-1/2 items-center gap-0.5 rounded-xl border border-border bg-card p-1 shadow-lg",
           above ? "-translate-y-full" : "translate-y-2",
         )}
-        style={{
-          left: Math.min(
-            Math.max(rect.left + rect.width / 2, 120),
-            window.innerWidth - 120,
-          ),
-          top: above ? rect.top - 6 : rect.bottom,
-        }}
+        ref={barRef}
         // The selection survives a press on this: a pointerdown anywhere
         // else collapses it, and the panel would then be acting on nothing.
         onMouseDown={(e) => e.preventDefault()}

@@ -115,19 +115,35 @@ never needed for a lookup. Showing every sense we have turns a wrong pick
 into an ordering, not an answer: a poor ordering is an annoyance, a wrong
 answer breaks trust.
 
-- **The popover stays compact.** It was rejected once as "messy and noisy".
-  The first sense (the `used here` one, else the commonest) is fully open as
-  before; the others are ONE line each — start of the definition and the
-  tag — and open on press (`aria-expanded` disclosure buttons). ONE such
-  line shows and a `show all (N)` row holds the rest: two lines measured
-  +70–100px on a many-sense word, past the old card with its `Here:` block,
-  and the user chose the shorter card. Part of speech and the label are inline on the definition's own
-  line, not a line of their own. `SenseList.tsx` owns all of it.
-- **Tags are small dim mono: POS, then one marker.** `used here` (popover)
-  or `saved` (word page) replaces the frequency label on its sense;
-  otherwise `most common` / `common` / `less common`, from SemCor counts on
-  the server. No label where the server sent `null` — an empty space beats
-  an invented label. Never a number or a percentage.
+- **The popover stays compact, and it has been rejected for noise TWICE.**
+  First for growing, then ("messy and noisy") for how the multi-sense card
+  was drawn: the tag before the definition on one sense, at the right on
+  another, a chevron alone on its own line, the level said twice, `n`
+  repeated on senses that all share the header's, a rule under every row.
+  The rules that keep it quiet (`SenseList.tsx` owns all of them):
+  - **Tags (POS + label) sit in ONE place for every sense: the right end of
+    that sense's FIRST line**, small dim mono, never before the definition.
+    They are flex items (`SenseTag`), not inline text, so open, collapsed
+    and word-page senses all put them in the same spot.
+  - **Never repeat the header.** A sense's POS is printed only when it
+    differs from the tapped word's POS (the header prints that, always); on
+    the word page, only when the lemma has more than one POS among its
+    senses. A sense's CEFR chip is printed only when it differs from the
+    header's level, and sits after the Uzbek, not the definition.
+  - **`used here` stays** (the brief requires the mark) as the right-end
+    tag of the first sense. A word with ONE sense has no tag at all: there
+    is nothing to tell it from.
+  - **First sense open, ONE collapsed row, then `show all (N)`.** Two
+    collapsed lines measured +70-100px on a many-sense word, past the old
+    card with its `Here:` block.
+  - **An open row keeps its chevron on the definition's line.** The
+    definition is a `<span>` inside the button (phrasing content, valid
+    there) and simply stops truncating; only the Uzbek and a differing chip
+    live in the sibling panel (`aria-controls`). A chevron alone on a line
+    is the shape that read as broken.
+  - **Few rules.** ONE divider, between the first sense (with its `Here:`
+    line) and the rest. Collapsed rows are separated by spacing, not lines,
+    and nothing is added above Save.
 - **The `Here:` line stays under the `used here` sense** wherever
   `sense_differs`: the lexicon's sense is the nearest dictionary reading,
   and the passage's own gloss can be narrower (`learn` in a passage about
@@ -217,8 +233,8 @@ Lemma, part of speech, CEFR, the word's usual meaning, the meaning in THIS
 passage where that differs, Uzbek and English. Nothing else.
 
 **No example sentence.** It looks like an omission and is not: the reader is
-looking at the sentence, six inches to the left. **No etymology, no other
-senses, no synonyms.** Each lookup has about two seconds to pay for itself,
+looking at the sentence, six inches to the left. **No etymology, no synonyms, and
+no more than one other meaning on show (see "Lookup shows every sense").** Each lookup has about two seconds to pay for itself,
 and a panel that reads like a dictionary page is a panel somebody closes and
 goes back to guessing, having spent one of three for the privilege.
 

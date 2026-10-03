@@ -375,6 +375,31 @@ The words are kept, not just the number, because the review page lists them.
 of a passage just read closely; a bare count is a score for something nobody
 was being scored on.
 
+## The popovers follow the word
+
+The selection bar and the dictionary card are portalled to `document.body`
+and `position: fixed` (inside a pane they would be clipped). Placed once,
+they were left behind when the text scrolled, and a card too tall for the
+screen could not be reached by scrolling — the one thing a reader does.
+`anchor.ts` (`useFollow`) fixes it for both:
+
+- **Anchor = the word's element, not the Range.** At open it hit-tests the
+  rect's centre for `[data-word]` / `[data-paragraph-index]` and remembers
+  the rect's offset from it. A Range does not survive the passage
+  re-rendering its marks. If the element is gone the card keeps its last
+  position.
+- **Listen on `window` with capture** (`scroll` does not bubble; the pane,
+  the review page and the window all scroll), plus `resize`; one rAF per
+  frame, writing only `left`/`top` on the card via a ref. No transition, so
+  `prefers-reduced-motion` has nothing to turn off.
+- **Above/below is decided once, at open** (`opensAbove`). Re-deciding per
+  frame made the card hop across the word. Only the horizontal edge clamp is
+  live; vertically the card rides off-screen with its word, which is what
+  lets a reader scroll to reveal a tall one. It is never closed by scrolling;
+  Esc / the close button close it.
+- Do not set `left`/`top` in the card's JSX style (except the no-rect
+  fallback): the hook owns them.
+
 ## Help follows the group the reader is in
 
 Three lines — the move, the thing marked wrong most often, one piece of

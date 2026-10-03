@@ -187,7 +187,10 @@ export default function VocabularyWordPage() {
           <h2 id="all-meanings" className="text-sm font-semibold text-foreground">
             All meanings
           </h2>
-          <SenseList senses={word.senses} />
+          <SenseList
+            senses={word.senses}
+            level={word.sense_cefr || word.cefr_level}
+          />
         </section>
       )}
 
