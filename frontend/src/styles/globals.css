@@ -100,6 +100,20 @@
   --color-cefr-c2-wash: var(--cefr-c2-wash);
   --color-cefr-a1-edge: var(--cefr-a1-edge);
   --color-cefr-c2-on: var(--cefr-c2-on);
+  --color-cefr-a1-outline: var(--cefr-a1-outline);
+  --color-cefr-a1-outline-ink: var(--cefr-a1-outline-ink);
+  --color-cefr-a2-outline: var(--cefr-a2-outline);
+  --color-cefr-a2-outline-ink: var(--cefr-a2-outline-ink);
+  --color-cefr-b1-outline: var(--cefr-b1-outline);
+  --color-cefr-b1-outline-ink: var(--cefr-b1-outline-ink);
+  --color-cefr-b2-outline: var(--cefr-b2-outline);
+  --color-cefr-b2-outline-ink: var(--cefr-b2-outline-ink);
+  --color-cefr-c1-outline: var(--cefr-c1-outline);
+  --color-cefr-c1-outline-ink: var(--cefr-c1-outline-ink);
+  --color-cefr-c2-outline: var(--cefr-c2-outline);
+  --color-cefr-c2-outline-ink: var(--cefr-c2-outline-ink);
+  --color-primary-ink: var(--primary-ink);
+  --color-freq-dot: var(--freq-dot);
   --color-mark-ink: var(--mark-ink);
   --color-wave: var(--wave);
   --color-wave-progress: var(--wave-progress);
@@ -367,6 +381,38 @@
   --cefr-a1-edge: color-mix(in srgb, var(--cefr-a1) 50%, var(--foreground));
   --cefr-c2-on: color-mix(in srgb, var(--cefr-c2) 22%, black);
 
+  /* The OUTLINE chip (lookup popover header, word page): the level as an
+     empty frame, not a filled badge, so it does not outshout the content.
+     Two derived tokens per level, both mixed from the hue toward the same
+     ink base the chip letters use: the frame (>= 3:1, WCAG 1.4.11) and the
+     letters (>= 4.5:1). The raw hue fails as small text on the light
+     themes, so the letters take more ink than the frame does. The filled
+     chips elsewhere (lists, review, Browse) are untouched.
+     scripts/check-cefr-contrast.mjs measures both on every theme. */
+  --cefr-a1-outline: color-mix(in srgb, var(--cefr-a1) 50%, var(--mark-ink));
+  --cefr-a1-outline-ink: color-mix(in srgb, var(--cefr-a1) 30%, var(--mark-ink));
+  --cefr-a2-outline: color-mix(in srgb, var(--cefr-a2) 50%, var(--mark-ink));
+  --cefr-a2-outline-ink: color-mix(in srgb, var(--cefr-a2) 30%, var(--mark-ink));
+  --cefr-b1-outline: color-mix(in srgb, var(--cefr-b1) 50%, var(--mark-ink));
+  --cefr-b1-outline-ink: color-mix(in srgb, var(--cefr-b1) 30%, var(--mark-ink));
+  --cefr-b2-outline: color-mix(in srgb, var(--cefr-b2) 50%, var(--mark-ink));
+  --cefr-b2-outline-ink: color-mix(in srgb, var(--cefr-b2) 30%, var(--mark-ink));
+  --cefr-c1-outline: color-mix(in srgb, var(--cefr-c1) 50%, var(--mark-ink));
+  --cefr-c1-outline-ink: color-mix(in srgb, var(--cefr-c1) 30%, var(--mark-ink));
+  --cefr-c2-outline: color-mix(in srgb, var(--cefr-c2) 50%, var(--mark-ink));
+  --cefr-c2-outline-ink: color-mix(in srgb, var(--cefr-c2) 30%, var(--mark-ink));
+
+  /* The accent as TEXT (a tag, `Saved`). --primary is a fill colour: the
+     amber that sits well on a dark card is 1.4:1 as letters on serika-light.
+     Dark themes use the accent itself; light themes mix it toward the ink. */
+  --primary-ink-auto: color-mix(in srgb, var(--primary) 25%, var(--foreground));
+  --primary-ink: var(--primary-ink-auto);
+
+  /* The frequency meter's filled dots where they are NOT the accent. A
+     graphic needs 3:1; --muted-foreground is 2.2:1 on serika-dark, so it is
+     pulled toward the foreground. Gated by check-cefr-contrast.mjs. */
+  --freq-dot: color-mix(in srgb, var(--muted-foreground) 50%, var(--foreground));
+
   /* What a drag of the mouse looks like before it becomes anything.
      Left to the browser it is the platform blue, which is the one colour on
      this screen that belongs to no part of the design — and on a reading
@@ -388,6 +434,7 @@
 
 .dark {
   --cefr-ink-base-auto: color-mix(in srgb, white 60%, var(--foreground));
+  --primary-ink-auto: var(--primary);
 }
 
 /* Motion and stacking (§4.1, §4.3). Not in @theme because neither

@@ -102,10 +102,21 @@ export function levelRank(raw: string | null | undefined): number {
  *   a row must not appear to change what the level is.
  * - `ink` — the level's name as text with nothing behind it, for the one
  *   line that prints a level.
+ * - `outline` — the chip as an empty frame, for the two places the level
+ *   heads a card (the lookup popover and the word page): there it must not
+ *   outshout the content below it. Its own derived tokens, because the raw
+ *   hue fails as small text on light themes; see `globals.css`.
  */
 export const CEFR_TONE: Record<
   CefrLevel,
-  { chip: string; wash: string; line: string; lit: string; ink: string }
+  {
+    chip: string;
+    wash: string;
+    line: string;
+    lit: string;
+    ink: string;
+    outline: string;
+  }
 > = {
   // A1: an outline with no ground — the empty end of the scale.
   A1: {
@@ -114,6 +125,7 @@ export const CEFR_TONE: Record<
     line: "decoration-cefr-a1",
     lit: "ring-2 ring-cefr-a1",
     ink: "text-cefr-a1-ink",
+    outline: "border border-cefr-a1-outline text-cefr-a1-outline-ink",
   },
   A2: {
     chip: "bg-cefr-a2-wash text-cefr-a2-ink",
@@ -121,6 +133,7 @@ export const CEFR_TONE: Record<
     line: "decoration-cefr-a2",
     lit: "ring-2 ring-cefr-a2",
     ink: "text-cefr-a2-ink",
+    outline: "border border-cefr-a2-outline text-cefr-a2-outline-ink",
   },
   B1: {
     chip: "bg-cefr-b1-wash text-cefr-b1-ink",
@@ -128,6 +141,7 @@ export const CEFR_TONE: Record<
     line: "decoration-cefr-b1",
     lit: "ring-2 ring-cefr-b1",
     ink: "text-cefr-b1-ink",
+    outline: "border border-cefr-b1-outline text-cefr-b1-outline-ink",
   },
   B2: {
     chip: "bg-cefr-b2-wash text-cefr-b2-ink",
@@ -135,6 +149,7 @@ export const CEFR_TONE: Record<
     line: "decoration-cefr-b2",
     lit: "ring-2 ring-cefr-b2",
     ink: "text-cefr-b2-ink",
+    outline: "border border-cefr-b2-outline text-cefr-b2-outline-ink",
   },
   C1: {
     chip: "bg-cefr-c1-wash text-cefr-c1-ink",
@@ -142,6 +157,7 @@ export const CEFR_TONE: Record<
     line: "decoration-cefr-c1",
     lit: "ring-2 ring-cefr-c1",
     ink: "text-cefr-c1-ink",
+    outline: "border border-cefr-c1-outline text-cefr-c1-outline-ink",
   },
   // C2: C1's orange as a SOLID chip — the full end of the scale. Its wash
   // over the passage is C1's (four marks on a page, not six).
@@ -151,6 +167,7 @@ export const CEFR_TONE: Record<
     line: "decoration-cefr-c2",
     lit: "ring-2 ring-cefr-c2",
     ink: "text-cefr-c2-ink",
+    outline: "border border-cefr-c2-outline text-cefr-c2-outline-ink",
   },
 };
 
@@ -163,6 +180,7 @@ export const CEFR_NONE = {
   line: "decoration-foreground/50",
   lit: "ring-2 ring-foreground/40",
   ink: "text-muted-foreground",
+  outline: "border border-border text-muted-foreground",
 } as const;
 
 /** The tone for whatever the wire said, unrated included. */

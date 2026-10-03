@@ -128,7 +128,7 @@ export default function VocabularyWordPage() {
       <header className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <h1 className="text-2xl font-semibold text-foreground">{word.lemma}</h1>
         {word.pos && <span className="text-sm text-muted-foreground italic">{word.pos}</span>}
-        <CefrTag level={word.sense_cefr || word.cefr_level} />
+        <CefrTag level={word.sense_cefr || word.cefr_level} outline />
         <StatusChip status={word.status} />
       </header>
 

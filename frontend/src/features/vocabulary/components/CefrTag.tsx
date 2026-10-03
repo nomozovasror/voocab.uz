@@ -19,16 +19,22 @@ import { asLevel, toneOf } from "@/features/vocabulary/cefr";
 export function CefrTag({
   level,
   className,
+  outline = false,
 }: {
   level: string | null | undefined;
   className?: string;
+  /** An empty frame instead of a filled badge: where the level heads a card
+   *  (lookup popover, word page) and must not outshout the content. */
+  outline?: boolean;
 }) {
   if (!asLevel(level)) return null;
   return (
     <span
       className={cn(
-        "rounded px-1.5 py-px text-[0.65rem] leading-[1.4] font-medium",
-        toneOf(level).chip,
+        outline
+          ? "rounded-[4px] px-[5px] py-px font-mono text-[10.5px] leading-normal font-medium tracking-[0.04em]"
+          : "rounded px-1.5 py-px text-[0.65rem] leading-[1.4] font-medium",
+        outline ? toneOf(level).outline : toneOf(level).chip,
         className,
       )}
     >

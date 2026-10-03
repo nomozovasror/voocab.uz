@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Plus, TriangleAlert, X } from "lucide-react";
+import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getErrorMessage } from "@/lib/api";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
-import { SenseOpen, SenseRows } from "@/features/vocabulary/components/SenseList";
+import {
+  OtherSenses,
+  PrimarySense,
+  RailSense,
+} from "@/features/vocabulary/components/SenseList";
 import { CefrTag } from "@/features/vocabulary/components/CefrTag";
 import { meanings } from "@/features/vocabulary/meaning";
 import { helpFor } from "@/features/reading/help";
@@ -309,16 +313,11 @@ export function LookupPopover({
   // about.
   const charged = found.data?.word ?? found.data?.phrase ?? null;
 
-  // Whether it was free, decided once, on the way in. Asked before `onFound`
-  // in the same tick — `isKnown` closes over the state as it was before this
-  // look-up — because a moment later the answer is always yes.
-  const [wasFree, setWasFree] = useState<boolean | null>(null);
   // Charged on the way back rather than on the way out. `onFound` is
   // idempotent — `opened()` ignores a word already on the list — so a
   // re-render or a refetch cannot spend twice.
   useEffect(() => {
     if (!charged || !budget) return;
-    setWasFree((was) => was ?? budget.isKnown(charged.lemma));
     budget.onFound(charged.lemma);
   }, [charged, budget]);
 
@@ -393,29 +392,59 @@ export function LookupPopover({
   // word (`useFollow`) instead of being placed once and left behind.
   const [above] = useState(() => (rect ? opensAbove(toBox(rect), window.innerHeight, 200, 220) : false));
   const cardRef = useRef<HTMLDivElement>(null);
+
+  // A press anywhere outside the card closes it, like Esc. `pointerdown`, so
+  // it lands before the click that may open the NEXT card (a tap on another
+  // word on the review page closes this one and opens that one). Presses on
+  // a portalled tooltip of the card's own meters count as inside. Added after
+  // mount, so the press that opened the card cannot close it.
+  useEffect(() => {
+    const outside = (e: PointerEvent) => {
+      const target = e.target as Element | null;
+      if (!target || cardRef.current?.contains(target)) return;
+      if (target.closest?.('[data-slot="tooltip-content"]')) return;
+      onClose();
+    };
+    document.addEventListener("pointerdown", outside, true);
+    return () => document.removeEventListener("pointerdown", outside, true);
+  }, [onClose]);
+
   useFollow(cardRef, rect, (b) =>
-    cardPoint(b, above, window.innerWidth, 150, { above: 10, below: 10 }),
+    cardPoint(b, above, window.innerWidth, 170, { above: 10, below: 10 }),
   );
   // No rect: the top-right corner, as before.
   const fallback = rect
     ? undefined
-    : { left: window.innerWidth - 160, top: 76 };
+    : { left: window.innerWidth - 170, top: 76 };
 
-  // The passage's own sense, where it is not the word's usual one. Shown in
-  // both shapes of the card — under the single meaning, or under the sense
-  // marked `used here` — because that sense is the lexicon's nearest
-  // dictionary reading, and the passage's gloss can be narrower than it.
+  // Pressing Save shows `✓ Saved` and KEEPS showing it until the pointer or
+  // focus has left and come back: a Remove that appears under the very
+  // pointer that just pressed Save means the reader never sees the
+  // confirmation. `hot` is pointer-or-focus on the button; `fresh` is "just
+  // saved, not yet left".
+  const [hot, setHot] = useState(false);
+  const [fresh, setFresh] = useState(false);
+  const peekRemove = on && hot && !fresh;
+  const leave = () => {
+    setHot(false);
+    setFresh(false);
+  };
+
+  // The passage's own sense, where it is not the word's usual one. It sits
+  // INSIDE the rail block, under the Uzbek line, quiet: the rail and this
+  // line between them already say "not its usual sense here", and the card
+  // has room for one rule only, so the separate warning line is gone.
   const hereBlock = sense?.here ? (
-    <div className="mt-1.5 border-l-2 border-border pl-2">
-      <p className="text-[0.8rem] leading-snug text-foreground">
-        <span className="text-muted-foreground">Here: </span>
+    <div className="mt-1.5 text-[12.5px] leading-snug text-muted-foreground">
+      <p>
+        <span className="text-muted-foreground/80">Here: </span>
         {sense.here.en}
       </p>
-      <p className="text-[0.78rem] leading-snug text-muted-foreground">
-        {sense.here.uz}
-      </p>
+      {sense.here.uz && <p>{sense.here.uz}</p>}
     </div>
   ) : null;
+
+  const left = budget ? Math.max(0, LOOKUP_BUDGET - budget.spent) : 0;
 
   return createPortal(
     <div
@@ -428,7 +457,7 @@ export function LookupPopover({
         role="dialog"
         aria-label={`Meaning of ${word}`}
         className={cn(
-          "pointer-events-auto absolute w-[282px] -translate-x-1/2 rounded-xl border border-border bg-popover p-3.5 shadow-lg",
+          "pointer-events-auto absolute w-[340px] max-w-[calc(100vw-1rem)] -translate-x-1/2 rounded-xl border border-border bg-popover px-[17px] pt-[15px] pb-[13px] shadow-lg",
           above ? "-translate-y-full" : "",
         )}
         ref={cardRef}
@@ -456,27 +485,24 @@ export function LookupPopover({
           )}
         />
 
-        <header className="mb-2 flex items-baseline gap-2">
-          <span className="text-[0.95rem] leading-tight font-medium text-foreground">
+        <header className="mb-[13px] flex items-center gap-[9px]">
+          <span className="text-[19px] leading-tight font-semibold tracking-[-0.01em] text-foreground">
             {lead ? lead.lemma : word}
           </span>
           {lead?.pos && (
-            <span className="text-[0.7rem] text-muted-foreground italic">
-              {lead.pos}
-            </span>
+            <span className="font-mono text-xs text-muted-foreground">{lead.pos}</span>
           )}
-          {/* Coloured from here on, and it is the same colour the review
-              will use for this word an hour from now — which is the whole
-              point of the scale having one. See
-              `features/vocabulary/cefr.ts`. */}
-          <CefrTag level={lead?.cefr_level} />
+          {/* An OUTLINE, coloured from the CEFR scale: the level must not
+              outshout the content. Same hue the review will use for this
+              word an hour from now. See `features/vocabulary/cefr.ts`. */}
+          <CefrTag level={lead?.cefr_level} outline />
           <button
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="-mr-1 ml-auto rounded p-0.5 text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            className="-mr-1 ml-auto rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
           >
-            <X className="size-3.5" aria-hidden />
+            <X className="size-4" aria-hidden />
           </button>
         </header>
 
@@ -507,73 +533,55 @@ export function LookupPopover({
             list under the verb `learn`. */}
         {senses && (
           <>
-            <SenseOpen
+            <PrimarySense
               sense={senses[0]}
               level={lead?.cefr_level}
-              showPos={Boolean(senses[0].pos) && senses[0].pos !== lead?.pos}
-              tagged={senses.length > 1}
-            />
-            {/* The passage's own gloss stays under the sense used here when
-                the two differ: the lexicon's sense is the nearest dictionary
-                one, and "what does it mean HERE" is the question asked. */}
-            {hereBlock}
-            <SenseRows
-              senses={senses}
-              level={lead?.cefr_level}
               headerPos={lead?.pos}
-            />
+              tagged={senses.length > 1}
+            >
+              {/* The passage's own gloss stays under the sense used here when
+                  the two differ: the lexicon's sense is the nearest
+                  dictionary one, and "what does it mean HERE" is the
+                  question asked. */}
+              {hereBlock}
+            </PrimarySense>
+            <OtherSenses senses={senses} headerPos={lead?.pos} />
           </>
         )}
 
+        {/* A phrase or an older answer: the same shell, one meaning. */}
         {sense && !senses && (
-          <>
-            <p className="text-[0.82rem] leading-snug text-foreground">
-              {sense.en}
-            </p>
-            <p className="mt-1 text-[0.8rem] leading-snug text-muted-foreground">
-              {sense.uz}
-            </p>
+          <RailSense en={sense.en} uz={sense.uz}>
             {hereBlock}
-          </>
+          </RailSense>
         )}
 
         {/* The word on its own, under the phrase it was standing in. One
             line and the Uzbek only: the English is already above, said of
-            the expression the reader is actually reading. */}
+            the expression the reader is actually reading. No rule — the
+            card has one, above Save. */}
         {under && (
-          <div className="mt-2.5 border-t border-border pt-2">
-            <p className="text-[0.66rem] text-muted-foreground/70">
+          <div className="mt-[18px]">
+            <p className="font-mono text-[11px] text-muted-foreground">
               {under.lemma} — on its own
             </p>
-            <p className="mt-0.5 text-[0.78rem] leading-snug text-muted-foreground">
+            <p className="mt-0.5 text-[13.5px] leading-snug text-foreground/70">
               {under.meaning_uz}
             </p>
           </div>
-        )}
-
-        {/* Only where it is true, and short. `bank` as the side of a river
-            is the nastiest kind of hard word — nothing about it looks
-            difficult, so nothing tells the reader to check. It is the same
-            fact the `Here:` block above is showing, said as a warning: the
-            block gives the meaning, this says to expect one. */}
-        {sense?.here && (
-          <p className="mt-2.5 flex items-start gap-1.5 border-t border-border pt-2 text-[0.7rem] leading-snug text-warning">
-            <TriangleAlert className="mt-px size-3 shrink-0" aria-hidden />
-            Not its usual sense here
-          </p>
         )}
 
         {/* Information, not a warning — saving a second sense of a lemma
             already on the list is an ordinary thing to do, so this is said
             quietly and never as a badge. */}
         {!on && lead?.other_sense_saved && (
-          <p className="mt-1.5 text-[0.68rem] text-muted-foreground/70 italic">
+          <p className="mt-3 text-xs text-muted-foreground italic">
             You&apos;ve saved another meaning of this word.
           </p>
         )}
 
         {lead && (
-          <div className="mt-2.5 flex items-center gap-2.5 border-t border-border pt-2">
+          <div className="mt-[13px] flex items-center border-t border-border pt-[11px]">
             <button
               type="button"
               // Disabled a beat longer on Remove than the pending mutations
@@ -581,45 +589,52 @@ export function LookupPopover({
               // null while the refetch that would carry it is in flight,
               // and there is nothing yet for Remove to act on.
               disabled={keep.isPending || drop.isPending || (on && !savedWordId)}
-              title={on ? "Take it off your list" : "Add to your vocabulary"}
-              onClick={() =>
-                on
-                  ? savedWordId && drop.mutate(savedWordId)
-                  : keep.mutate(lead.lemma)
-              }
+              aria-label={on ? `Saved: ${lead.lemma}. Press to remove` : `Save ${lead.lemma}`}
+              onClick={() => {
+                if (on) {
+                  if (savedWordId) drop.mutate(savedWordId);
+                } else {
+                  setFresh(true);
+                  keep.mutate(lead.lemma);
+                }
+              }}
+              onPointerEnter={() => setHot(true)}
+              onPointerLeave={leave}
+              onFocus={() => setHot(true)}
+              onBlur={leave}
               className={cn(
-                "group flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[0.7rem] transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50",
-                on
-                  ? "bg-correct/10 text-correct hover:bg-destructive/10 hover:text-destructive"
-                  : "bg-surface-hover text-foreground hover:bg-surface-hover/70",
+                // A grid whose cells all hold a label, the unused ones
+                // invisible: the button is as wide as its widest state, so
+                // the counter beside it never shifts.
+                "inline-grid rounded-[7px] border bg-transparent px-3.5 py-1.5 font-mono text-[12.5px] leading-none transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50",
+                peekRemove
+                  ? "border-destructive/50 text-destructive"
+                  : on
+                    ? "border-primary/40 text-primary-ink"
+                    : "border-border text-foreground hover:border-primary hover:text-primary-ink",
               )}
             >
-              {on ? (
-                <>
-                  {/* The tick until the pointer is on it, and then what
-                      pressing would do. A button that says `Saved` and
-                      removes on press is a button nobody presses twice on
-                      purpose. */}
-                  <Check className="size-3 group-hover:hidden" aria-hidden />
-                  <X className="hidden size-3 group-hover:block" aria-hidden />
-                  <span className="group-hover:hidden">Saved</span>
-                  <span className="hidden group-hover:inline">Remove</span>
-                </>
-              ) : (
-                <>
-                  <Plus className="size-3" aria-hidden />
-                  Save
-                </>
-              )}
+              {/* The tick until the pointer is on it AGAIN, and then what
+                  pressing would do. A button that says `Saved` and removes
+                  on press is one nobody presses twice on purpose. Accent,
+                  never green: green is a verdict. */}
+              <span aria-hidden className={cn("col-start-1 row-start-1", (!on || peekRemove) && "invisible")}>
+                ✓ Saved
+              </span>
+              <span aria-hidden className={cn("col-start-1 row-start-1", !peekRemove && "invisible")}>
+                Remove
+              </span>
+              <span aria-hidden className={cn("col-start-1 row-start-1", on && "invisible")}>
+                + Save
+              </span>
             </button>
-            {/* Short, and absent entirely where nothing is being counted.
-                The rule that a repeat is free belongs in the tool row's
-                tooltip, not on every card a reader opens — and on the review
-                page there is no count at all, so printing "unlimited" there
-                would be the page congratulating itself. */}
+            {/* `3 lookups left` says what it counts and that it is not
+                about Save. Take screen only: on the review page there is no
+                budget and so no counter. A repeat is free, so it simply
+                does not move. */}
             {budget && (
-              <span className="ml-auto text-[0.68rem] tabular-nums text-muted-foreground/70">
-                {wasFree ? "free" : `${budget.spent} of ${LOOKUP_BUDGET}`}
+              <span className="ml-auto font-mono text-[11px] tabular-nums text-muted-foreground">
+                {left} {left === 1 ? "lookup" : "lookups"} left
               </span>
             )}
           </div>

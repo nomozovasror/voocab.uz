@@ -400,7 +400,9 @@ screen could not be reached by scrolling — the one thing a reader does.
   frame made the card hop across the word. Only the horizontal edge clamp is
   live; vertically the card rides off-screen with its word, which is what
   lets a reader scroll to reveal a tall one. It is never closed by scrolling;
-  Esc / the close button close it.
+  Esc, the close button, or a press anywhere outside the dictionary card
+  close it (`pointerdown`, so on the review page a tap on another word
+  closes this card before the click opens the next one).
 - Do not set `left`/`top` in the card's JSX style (except the no-rect
   fallback): the hook owns them.
 

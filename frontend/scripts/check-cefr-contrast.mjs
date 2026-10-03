@@ -30,6 +30,10 @@ const MIN = {
   chipText: 4.5, // chip letters on chip ground (WCAG AA, small text)
   passageText: 4.5, // passage text inside any mark
   a1Edge: 3, // the A1 outline against the ground (WCAG 1.4.11)
+  outlineText: 4.5, // outline-chip letters (popover header, word page) on the ground
+  outlineEdge: 3, // outline-chip frame on the ground (WCAG 1.4.11)
+  accentText: 4.5, // --primary-ink (accent used as text) on the ground
+  dotFill: 3, // frequency-meter dots (--primary-ink lit, --freq-dot otherwise) on the ground (WCAG 1.4.11)
   washStep: 3.5, // dE between neighbouring passage washes
   hueVsVerdict: 15, // dE, CEFR hue vs --correct / --incorrect
   washVsPen: 8, // dE, CEFR wash vs the pen's fill
@@ -340,6 +344,36 @@ function measure(theme) {
   if (edgeCR < MIN.a1Edge)
     fail(theme, "A1 outline edge against the ground", f2(edgeCR), MIN.a1Edge, "the base tokens (the edge is the A hue mixed 50% with --foreground)");
 
+  // The outline chip (popover header, word page): letters and frame, on
+  // every surface the popover can sit on. Light themes need darker letters
+  // than the raw hue, so this is derived and measured, never assumed.
+  const outline = LEVELS.map((L) => {
+    const l = L.toLowerCase();
+    const t = get(`--cefr-${l}-outline-ink`);
+    const e = get(`--cefr-${l}-outline`);
+    if (!t || !e) return null;
+    const tcr = Math.min(...Object.values(grounds).map((s) => contrast(t, s)));
+    const ecr = Math.min(...Object.values(grounds).map((s) => contrast(e, s)));
+    if (tcr < MIN.outlineText)
+      fail(theme, `${L} outline chip letters`, f2(tcr), MIN.outlineText, `--cefr-ink-base (the ink --cefr-${l}-outline-ink is mixed toward), or the base tokens`);
+    if (ecr < MIN.outlineEdge)
+      fail(theme, `${L} outline chip frame`, f2(ecr), MIN.outlineEdge, `--cefr-ink-base (the ink --cefr-${l}-outline is mixed toward), or the base tokens`);
+    return { L, tcr, ecr };
+  }).filter(Boolean);
+
+  const accent = get("--primary-ink");
+  const accentCR = accent ? Math.min(...Object.values(grounds).map((s) => contrast(accent, s))) : 0;
+  if (accent && accentCR < MIN.accentText)
+    fail(theme, "accent as text (--primary-ink) on the ground", f2(accentCR), MIN.accentText, "--primary (a lighter or darker accent) or --primary-ink-auto");
+
+  // The frequency meter's filled dots are non-text graphics: 3:1.
+  const muted = get("--freq-dot");
+  const mutedCR = muted ? Math.min(...Object.values(grounds).map((s) => contrast(muted, s))) : 99;
+  if (muted && mutedCR < MIN.dotFill)
+    fail(theme, "frequency dots (--freq-dot) on the ground", f2(mutedCR), MIN.dotFill, "--freq-dot (mix more foreground)");
+  if (accent && accentCR < MIN.dotFill)
+    fail(theme, "frequency dots lit (--primary-ink) on the ground", f2(accentCR), MIN.dotFill, "--primary-ink-auto");
+
   const steps = STEPS.map(([a, b]) => {
     const wa = rows.find((r) => r.L === a).wash;
     const wb = rows.find((r) => r.L === b).wash;
@@ -369,6 +403,8 @@ function measure(theme) {
   }
   lines.push(`  pen fill ${hex(pen)}: CR vs ground ${f2(contrast(pen, bg))}, text on pen ${f2(penTextCR)}${note(theme, "penText")}`);
   lines.push(`  A1 edge ${hex(edge)}: CR ${f2(edgeCR)}`);
+  lines.push("  outline chip letters/frame CR: " + outline.map((o) => `${o.L} ${f2(o.tcr)}/${f2(o.ecr)}`).join("  "));
+  lines.push(`  accent text (--primary-ink) CR ${f2(accentCR)}   frequency dots (--freq-dot) CR ${f2(mutedCR)}`);
   lines.push("  wash steps (dE normal / colour-blind): " + steps.map((s) => `${s.pair} ${f1(s.n)}/${f1(s.c)}`).join("  "));
   for (const k of Object.keys(EXCEPTIONS[theme.id] ?? {})) lines.push(`  approved exception: ${k}, floor ${EXCEPTIONS[theme.id][k]}`);
   lines.push("  hue vs verdict colours (dE): " + verdict.map((v) => `${v.L}/${v.name} ${f1(v.d)}`).join("  "));

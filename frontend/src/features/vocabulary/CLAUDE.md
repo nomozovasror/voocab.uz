@@ -115,43 +115,84 @@ never needed for a lookup. Showing every sense we have turns a wrong pick
 into an ordering, not an answer: a poor ordering is an annoyance, a wrong
 answer breaks trust.
 
-- **The popover stays compact, and it has been rejected for noise TWICE.**
-  First for growing, then ("messy and noisy") for how the multi-sense card
-  was drawn: the tag before the definition on one sense, at the right on
-  another, a chevron alone on its own line, the level said twice, `n`
-  repeated on senses that all share the header's, a rule under every row.
-  The rules that keep it quiet (`SenseList.tsx` owns all of them):
-  - **Tags (POS + label) sit in ONE place for every sense: the right end of
-    that sense's FIRST line**, small dim mono, never before the definition.
-    They are flex items (`SenseTag`), not inline text, so open, collapsed
-    and word-page senses all put them in the same spot.
-  - **Never repeat the header.** A sense's POS is printed only when it
-    differs from the tapped word's POS (the header prints that, always); on
-    the word page, only when the lemma has more than one POS among its
-    senses. A sense's CEFR chip is printed only when it differs from the
-    header's level, and sits after the Uzbek, not the definition.
-  - **`used here` stays** (the brief requires the mark) as the right-end
-    tag of the first sense. A word with ONE sense has no tag at all: there
-    is nothing to tell it from.
-  - **First sense open, ONE collapsed row, then `show all (N)`.** Two
-    collapsed lines measured +70-100px on a many-sense word, past the old
-    card with its `Here:` block.
-  - **An open row keeps its chevron on the definition's line.** The
-    definition is a `<span>` inside the button (phrasing content, valid
-    there) and simply stops truncating; only the Uzbek and a differing chip
-    live in the sibling panel (`aria-controls`). A chevron alone on a line
-    is the shape that read as broken.
-  - **Few rules.** ONE divider, between the first sense (with its `Here:`
-    line) and the rest. Collapsed rows are separated by spacing, not lines,
-    and nothing is added above Save.
-- **The `Here:` line stays under the `used here` sense** wherever
-  `sense_differs`: the lexicon's sense is the nearest dictionary reading,
-  and the passage's own gloss can be narrower (`learn` in a passage about
-  machine learning). Phrases and old answers have no `senses`: the popover
-  falls back to the single meaning with the same `Here:` block. Save is untouched and
+- **The popover stays compact, and it has been rejected for noise THREE
+  times.** First for growing, then ("messy and noisy") for how the
+  multi-sense card was drawn, then for its shape again (right-aligned tags
+  floating beside wrapped definitions and so landing at a different height
+  every time, two rules cutting the card in three with `show all` stranded
+  between them, a ragged left edge, a filled level chip louder than the
+  content, no sign a word was saved, `free` read as "saving is free"). The
+  shape that answers all of it (`SenseList.tsx` owns it; the visual source is
+  the lookup-popover mockup, the decisions are in `brief-lookup-popover-ui.md`):
+  - **Two rules, both with a job.** The one above the action row, and the
+    LABELLED divider (`—— Other meanings ————`, mono 11px muted, rule = the
+    border token) that opens the other senses, shown only when there are
+    any. A rule that names what follows is navigation; the plain 22px gap it
+    replaced was not. Senses themselves are separated by space, never lines.
+    Do not add a rule for a new element; find it a gap.
+  - **The sense that matters has an accent rail** (2px, text inset 11px):
+    the first sense in a lookup, the saved sense on the word page. The
+    others stand FLUSH with the rail, left-aligned, under the divider.
+    Each is a disclosure button (`aria-expanded`/`aria-controls`): the
+    definition on one ellipsised line, the Uzbek beneath it (12.5px, muted,
+    always shown); pressing wraps the full definition, Uzbek still beneath.
+    No chevrons: the mockup has none, and a chevron alone on a line was the
+    shape that read as broken. If one is ever needed it sits inline on the
+    definition's line, never alone.
+  - **The card states ONE level: the header's.** It is the material row's
+    level, the same claim as the word's colour on the passage. A sense's own
+    lexicon level can differ by a band (two models graded it, one for this
+    passage, one for the dictionary sense), and printing both put `B1` in
+    the header and `A2` beside the Uzbek, where it read as the translation's
+    level. So no per-sense chips in the card. The word page, with room and
+    no passage beside it, prints a differing sense level on that sense's
+    DEFINITION line, never beside the Uzbek.
+  - **Frequency is a three-dot meter, not a word** (`Meter` in
+    `SenseList.tsx`): most common ●●●, common ●●○, rare ●○○; null = no dots.
+    Right-aligned ON THE UZBEK LINE of the rail sense and at the right end of
+    each other row's definition line; a differing POS (mono) sits before it.
+    Why dots: they scan. The eye compares three marks down a column without
+    reading, and `main/common/rare` had to be read and compared as words. And
+    dots promise no number: a figure ("rank 3") would claim a precision
+    SemCor does not have. Filled dots are `--primary-ink` on the sense used
+    here / saved, `--freq-dot` elsewhere; empty ones are a faint ring of the
+    same colour (the filled count carries the meaning). `role="img"` with
+    `aria-label` `most common` / `common` / `rare`. `--freq-dot` is
+    `--muted-foreground` pulled toward the foreground, because muted alone is
+    2.2:1 on serika-dark; the CEFR check gates both dot colours at 3:1.
+  - **`senseLabel` is the one wire -> level map** and now feeds the meter:
+    `most common` -> 3 dots, `common` -> 2, `less common` -> 1 (spoken
+    "rare"), `null` -> NOTHING. Never `usual` (near-synonym of `common`; you
+    cannot tell which ranks higher). The blank is deliberate: about 3,000
+    senses have no SemCor data, and a guessed level would hide a difference
+    that matters to us and means nothing to the learner.
+  - **`used here` is not written.** The rail on the first sense and that
+    sense's tag in the accent colour (`text-primary-ink`) say it; a screen
+    reader gets an `sr-only` "Used in this passage". `used here` in
+    words would fight the Uzbek for width.
+  - **Up to three other rows, then `show all (N)`** (N counts every sense,
+    the first included; mono, no rule above it). Three, because the old
+    `Not its usual sense here` warning line is gone and the card has room.
+  - **The accent is TEXT-safe only through `--primary-ink`.** `--primary` is
+    a fill: serika-light's amber is 1.4:1 as letters. Light themes mix it
+    toward the foreground, dark themes use it as is; the CEFR check gates it.
+  - **Fonts:** definition and Uzbek are sans; labels, buttons, the counter
+    and the POS are mono.
+  - **Card:** 340px, padding 15/17/13, header word 19px semibold, POS mono,
+    outline CEFR chip, close button. Phrases and old answers (no `senses`)
+    use the same shell (`RailSense`: rail + gloss row, no tag).
+- **The `Here:` gloss sits INSIDE the rail block**, under the Uzbek, quiet
+  sans, wherever `sense_differs`. The lexicon's sense is the nearest
+  dictionary reading and the passage's own gloss can be narrower (`learn` in
+  a passage about machine learning). The rail plus that line already say
+  "not its usual sense here", so the separate warning line was removed: the
+  card is allowed one rule and one voice per fact. (Recommended by the
+  implementer, pending the user's confirmation; to revert, render the old
+  line from `sense?.here` in `ReadingPanels.tsx`.) Save is untouched and
   still saves the `used here` sense only; there are no per-sense buttons.
-- **The word page shows all senses open**, the saved one first and marked
-  `saved`. The saved-words list and practice are unchanged — the learner
+- **The word page is the same structure with room**: every sense open,
+  nothing truncated, the saved sense first with the rail (and a lit tag),
+  the rest flush with it, 14px apart. The saved-words list and practice are unchanged — the learner
   saved one sense.
 
 ## Two ways in, and the popover is the one they use
@@ -234,15 +275,25 @@ passage where that differs, Uzbek and English. Nothing else.
 
 **No example sentence.** It looks like an omission and is not: the reader is
 looking at the sentence, six inches to the left. **No etymology, no synonyms, and
-no more than one other meaning on show (see "Lookup shows every sense").** Each lookup has about two seconds to pay for itself,
+no more than three other meanings on show (see "Lookup shows every sense").** Each lookup has about two seconds to pay for itself,
 and a panel that reads like a dictionary page is a panel somebody closes and
 goes back to guessing, having spent one of three for the privilege.
 
 **Saving is a toggle, in both places it is offered.** The row's `＋` and
 the card's `Save` both become a tick, and pressing the tick takes the word
-off the learner's whole list — the icon changes to `✕` under the pointer,
-because a button that says `Saved` and removes on press is one nobody
-presses twice on purpose.
+off the learner's whole list — the label changes to `Remove` under the
+pointer or focus, because a button that says `Saved` and removes on press is
+one nobody presses twice on purpose. In the popover the saved state is
+`✓ Saved` in the accent with an accent border — never green, green is a
+verdict — and the button is as wide as its widest label (`+ Save`, `✓ Saved`,
+`Remove` share one grid cell) so the counter beside it never moves.
+`Remove` is withheld until the pointer or focus has LEFT the button and come
+back: otherwise it replaces `✓ Saved` under the very pointer that just
+pressed Save, and the confirmation is never seen.
+
+**The counter says what it counts**: `3 lookups left` (`1 lookup left`), on
+the take screen only. `free` read as "saving is free". The review has no
+budget and prints nothing.
 
 **`forget` is per SENSE now, not per lemma (P4).** It used to be: a saved
 word was deduplicated by lemma, so ✕ meant "the same word wherever they met
@@ -331,6 +382,13 @@ four things that drift on the first afternoon somebody adjusts one.
   collapses under protan/deutan simulation is B1/B2 (blue and violet, ΔE
   about 3), not violet/orange (about 7) — which is why the washes also
   carry an ordered strength.
+- **The outline variant heads a card.** The popover header and the word page
+  draw the level as an empty frame (`CefrTag outline`), so it does not
+  outshout the content. It has its own derived tokens per level
+  (`--cefr-*-outline` for the frame, `--cefr-*-outline-ink` for the
+  letters), mixed from the hue toward the ink base: the raw hue as small
+  text fails AA on light themes. The check gates letters at 4.5 and the
+  frame at 3 on every theme. Lists, review, Browse keep the filled chips.
 - **Chip letters are near-neutral, not the hue.** 15% hue on an ink base,
   which is what makes them pass AA (4.5:1) on every ground: `--foreground`
   on light themes, `--foreground` mixed 60% toward white on dark themes.
@@ -399,7 +457,7 @@ fill merges with the C1/C2 wash; pen vs ground 3.32 -> 3.05) and
 theme block in `globals.css`, resolves the derived colours the way the
 browser would, and fails naming the theme and the token to override: chip
 letters 4.5:1, text in a mark 4.5:1, A1 edge 3:1, neighbouring washes
-ΔE ≥ 3.5, CEFR hues against correct/wrong ΔE ≥ 15, every wash against the pen
+ΔE ≥ 3.5, outline chip letters 4.5:1 / frame 3:1, `--primary-ink` 4.5:1, CEFR hues against correct/wrong ΔE ≥ 15, every wash against the pen
 ΔE ≥ 8 (OKLab ΔE ×100; the colour-blind figure is printed, not gated).
 Shortfalls in the approved design are listed as `EXCEPTIONS` in the script,
 as floors, so a new theme gets none. Two are accepted, by decision:
