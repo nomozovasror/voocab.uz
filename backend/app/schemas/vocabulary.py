@@ -39,6 +39,37 @@ Level = Literal["recognise", "recall", "produce"]
 Mode = Literal["auto", "recognise", "recall", "produce"]
 
 
+SenseLabel = Literal["most common", "common", "less common"]
+
+
+class LookupSenseOut(BaseModel):
+    """One sense of the tapped word's lemma, in display order. ``label`` is
+    from SemCor counts relative to the word's top sense and is null where we
+    have no data (never a guess); no count or percentage is ever sent."""
+
+    sense_id: uuid.UUID
+    pos: str
+    definition_en: str
+    meaning_uz: str
+    cefr: str | None = None
+    label: SenseLabel | None = None
+    #: The sense this passage uses (the material row's). At most one, first.
+    used_here: bool = False
+
+
+class WordSenseOut(BaseModel):
+    """:class:`LookupSenseOut` for the word page: ``saved`` marks the
+    learner's saved sense (first) instead of ``used_here``."""
+
+    sense_id: uuid.UUID
+    pos: str
+    definition_en: str
+    meaning_uz: str
+    cefr: str | None = None
+    label: SenseLabel | None = None
+    saved: bool = False
+
+
 class VocabularyEntryOut(BaseModel):
     """One word or phrase, in this passage's sense."""
 
@@ -116,6 +147,8 @@ class VocabularyEntryOut(BaseModel):
     #: meaning of this word.") shows exactly when this is true AND `saved`
     #: is false.
     other_sense_saved: bool = False
+    #: Every sense we hold for the lemma, display order, `used_here` first.
+    senses: list[LookupSenseOut] = []
 
 
 class LookupIn(BaseModel):
@@ -282,6 +315,9 @@ class SavedWordOut(BaseModel):
     #: Null for a word never browsed. Not practice: no bearing on FSRS, the
     #: ladder, or anything else on this row.
     browsed_at: datetime | None = None
+    #: Word page only: every sense we hold for the lemma, the saved one
+    #: first. Empty on the list and practice rows (one saved sense each).
+    senses: list[WordSenseOut] = []
 
 
 class SavedWordsOut(BaseModel):

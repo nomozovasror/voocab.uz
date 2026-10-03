@@ -550,6 +550,7 @@ class Sense:
     cefr: str | None = None
     oewn_synset_id: str | None = None
     oewn_rank: int | None = None
+    oewn_count: int | None = None
     source_id: str = "model"
     licence: str = MODEL_LICENCE
     provisional: bool = False
@@ -730,6 +731,7 @@ def plan_senses(work: LexemeWork, uses: list[Use], answer: dict | None) -> None:
             id=old.id, definition_en=old.definition_en, meaning_uz=old.meaning_uz,
             meaning_uz_alt=old.meaning_uz_alt, meaning_uz_material=old.meaning_uz_material,
             cefr=old.cefr, oewn_synset_id=old.oewn_synset_id, oewn_rank=old.oewn_rank,
+            oewn_count=old.oewn_count,
             source_id=old.source_id, licence=old.licence,
             review_reasons=list(old.review_reasons), provisional=old.provisional,
         )
@@ -787,6 +789,7 @@ def plan_senses(work: LexemeWork, uses: list[Use], answer: dict | None) -> None:
             entry = oewn_by_rank[int(label[1:])]
             sense.oewn_synset_id = entry["synset"]
             sense.oewn_rank = entry["rank"]
+            sense.oewn_count = entry.get("count", 0)
             sense.definition_en = entry["definition"][:DEF_MAX]
             sense.source_id, sense.licence = "oewn", OEWN_LICENCE
             chosen = candidate_text(uses, info.get("uz"), "bd", label, usual_labels)
@@ -797,6 +800,7 @@ def plan_senses(work: LexemeWork, uses: list[Use], answer: dict | None) -> None:
                 sense.meaning_uz = sense.meaning_uz_material = ""
         elif label.startswith("X"):
             sense.oewn_synset_id, sense.oewn_rank = None, None
+            sense.oewn_count = None
             sense.source_id, sense.licence = "model", MODEL_LICENCE
             definition = candidate_text(uses, info.get("def"), "ac")
             if definition:
@@ -862,6 +866,7 @@ def plan_senses(work: LexemeWork, uses: list[Use], answer: dict | None) -> None:
         if sense.oewn_synset_id in top_synsets or not old_rows:
             kept = clone(sense)
             kept.oewn_rank = sense.oewn_rank
+            kept.oewn_count = sense.oewn_count
             kept.row_ids = []
             if kept.provisional and kept.meaning_uz and not kept.meaning_uz_material:
                 set_copied_uz(kept, kept.meaning_uz)
@@ -887,7 +892,7 @@ def plan_senses(work: LexemeWork, uses: list[Use], answer: dict | None) -> None:
             senses.append(Sense(
                 id=None, definition_en=entry["definition"][:DEF_MAX],
                 oewn_synset_id=entry["synset"], oewn_rank=entry["rank"],
-                source_id="oewn", licence=OEWN_LICENCE, translate=True,
+                oewn_count=entry.get("count", 0), source_id="oewn", licence=OEWN_LICENCE, translate=True,
             ))
 
     work.needs_gap = not senses and not work.oewn
@@ -1533,6 +1538,7 @@ async def load_works(session, lexeme_ids: list[uuid.UUID],
     for lx in lexemes:
         entries = oewn.get((lx.lemma, lx.pos), [])
         rank_of = {e["synset"]: e["rank"] for e in entries}
+        count_of = {e["synset"]: e.get("count", 0) for e in entries}
         works.append(LexemeWork(
             id=lx.id, lemma=lx.lemma, pos=lx.pos, is_phrase=lx.is_phrase,
             frequency_band=lx.frequency_band, oewn=entries,
@@ -1542,6 +1548,7 @@ async def load_works(session, lexeme_ids: list[uuid.UUID],
                 meaning_uz_alt=s.meaning_uz_alt, meaning_uz_material=s.meaning_uz_material,
                 cefr=s.cefr,
                 oewn_synset_id=s.oewn_synset_id, oewn_rank=rank_of.get(s.oewn_synset_id),
+                oewn_count=count_of.get(s.oewn_synset_id),
                 source_id=s.source_id, licence=s.licence, provisional=s.provisional,
                 review_reasons=list(s.review_reasons), sense_rank=s.sense_rank,
             ) for s in sorted(senses_by[lx.id], key=lambda s: s.sense_rank)],
@@ -1727,6 +1734,7 @@ async def apply_work(session, work: LexemeWork) -> None:
         row.cefr = planned.cefr
         row.oewn_synset_id = planned.oewn_synset_id
         row.oewn_rank = planned.oewn_rank
+        row.oewn_count = planned.oewn_count
         row.source_id = planned.source_id
         row.licence = planned.licence
         row.provisional = False

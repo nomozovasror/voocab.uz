@@ -484,6 +484,7 @@ class Candidate:
     oewn_rank: int | None = None
     #: The `LexemeSense` we already hold for it, if any.
     sense_id: uuid.UUID | None = None
+    oewn_count: int | None = None
 
 
 def build_candidates(lemma: str, oewn: dict[tuple[str, str], list[dict]],
@@ -508,7 +509,8 @@ def build_candidates(lemma: str, oewn: dict[tuple[str, str], list[dict]],
             held = held_by_synset.get((pos, entry["synset"]))
             out.append(Candidate(
                 cid="", pos=pos, definition=entry["definition"], synset=entry["synset"],
-                oewn_rank=entry["rank"], sense_id=held.id if held else None,
+                oewn_rank=entry["rank"], oewn_count=entry.get("count", 0),
+                sense_id=held.id if held else None,
             ))
             if held:
                 used.add(held.id)
@@ -582,12 +584,14 @@ class Decision:
     definition: str = ""
     sense_id: uuid.UUID | None = None
     why: str = ""
+    oewn_count: int | None = None
 
     def to_json(self) -> dict:
         out = {"type": self.type, "pos": self.pos, "definition": self.definition}
         if self.synset:
             out["synset"] = self.synset
             out["oewn_rank"] = self.oewn_rank
+            out["oewn_count"] = self.oewn_count
         if self.sense_id:
             out["sense_id"] = str(self.sense_id)
         if self.why:
@@ -598,7 +602,8 @@ class Decision:
     def from_json(cls, data: dict) -> Decision:
         return cls(
             type=data["type"], pos=data.get("pos", ""), synset=data.get("synset"),
-            oewn_rank=data.get("oewn_rank"), definition=data.get("definition", ""),
+            oewn_rank=data.get("oewn_rank"), oewn_count=data.get("oewn_count"),
+            definition=data.get("definition", ""),
             sense_id=uuid.UUID(data["sense_id"]) if data.get("sense_id") else None,
             why=data.get("why", ""),
         )
@@ -618,7 +623,8 @@ def parse_choice(value: object, candidates: list[Candidate]) -> Decision | None:
         cand = by_id[choice]
         if cand.synset and cand.oewn_rank is not None:
             return Decision(type="oewn", pos=cand.pos, synset=cand.synset,
-                            oewn_rank=cand.oewn_rank, definition=cand.definition,
+                            oewn_rank=cand.oewn_rank, oewn_count=cand.oewn_count,
+                            definition=cand.definition,
                             sense_id=cand.sense_id)
         if cand.sense_id:
             return Decision(type="sense", pos=cand.pos, definition=cand.definition,
@@ -692,6 +698,7 @@ def oewn_decision(lemma: str, pos: str, entry: dict, view: LexiconView) -> Decis
         held = next((s.id for s in view.senses_of.get(lexeme.id, [])
                      if s.oewn_synset_id == entry["synset"]), None)
     return Decision(type="oewn", pos=pos, synset=entry["synset"], oewn_rank=entry["rank"],
+                    oewn_count=entry.get("count", 0),
                     definition=entry["definition"], sense_id=held)
 
 
@@ -735,7 +742,7 @@ def core_decision(lemma: str, oewn: dict[tuple[str, str], list[dict]],
         held = oewn_decision(lemma, p, entry, view).sense_id
         candidates.append(Candidate(cid=f"c{i}", pos=p, definition=entry["definition"],
                                     synset=entry["synset"], oewn_rank=entry["rank"],
-                                    sense_id=held))
+                                    oewn_count=entry.get("count", 0), sense_id=held))
     return None, "", candidates
 
 
@@ -750,6 +757,7 @@ def core_pick(candidates: list[Candidate], answer: Decision | None,
         return answer, True
     first = candidates[0]
     return oewn_decision(lemma, first.pos, {"synset": first.synset, "rank": first.oewn_rank,
+                                            "count": first.oewn_count,
                                             "definition": first.definition}, view), False
 
 
@@ -1034,7 +1042,8 @@ async def write_new_sense(session, view: LexiconView, item: NewSense,
         meaning_uz=planned.meaning_uz[: le.UZ_MAX],
         meaning_uz_alt=planned.meaning_uz_alt[: le.UZ_MAX],
         cefr=planned.cefr, oewn_synset_id=planned.oewn_synset_id,
-        oewn_rank=planned.oewn_rank, source_id=planned.source_id, licence=planned.licence,
+        oewn_rank=planned.oewn_rank, oewn_count=planned.oewn_count,
+        source_id=planned.source_id, licence=planned.licence,
         provisional=False, needs_review=bool(reasons), review_reasons=reasons,
     )
     session.add(sense)
@@ -1056,6 +1065,7 @@ def _new_sense_for(lemma: str, decision: Decision, view: LexiconView) -> NewSens
     if decision.type == "oewn":
         sense = le.Sense(id=None, definition_en=decision.definition[: le.DEF_MAX],
                          oewn_synset_id=decision.synset, oewn_rank=decision.oewn_rank,
+                         oewn_count=decision.oewn_count,
                          source_id="oewn", licence=le.OEWN_LICENCE, translate=True)
     else:
         sense = le.Sense(id=None, definition_en=decision.definition[: le.DEF_MAX],

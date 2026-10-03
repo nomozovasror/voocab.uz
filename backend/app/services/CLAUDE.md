@@ -1067,3 +1067,37 @@ already hold).
 - Refusals (`entry_for_answer`): 404 unknown entry, 403 list not active for
   this learner, 409 sense already owned; a refused answer (e.g. 422) creates
   no word, because the row is flushed but committed only with the answer.
+
+## Every sense of the word: lookup and word page (`lemma_senses.py`)
+
+The popover and `/vocabulary/words/:id` list EVERY `LexemeSense` we hold for
+the lemma, so a wrong pick reads as an ordering instead of a wrong answer.
+Practice, the saved list, `needs_review` and "this translation is wrong" are
+unchanged (one sense).
+
+- **Which senses:** every lexeme of the lemma (all POS), minus
+  `is_proper_noun` / `is_function_word` lexemes (the anchor's own too) and
+  senses with neither definition nor Uzbek. Not every OEWN synset: we have
+  no Uzbek for those.
+- **Order:** the anchor sense first overall (`used_here` in the lookup, the
+  learner's `saved` sense on the word page); then the anchor's POS group,
+  then other groups (best SemCor count first, then n/v/adj/adv); inside a
+  group `oewn_rank` senses by rank, then senses with no SemCor data by our
+  `sense_rank`.
+- **Labels come from COUNTS, never ranks** (`LexemeSense.oewn_count`, a
+  persisted copy of the extract's SemCor `count`; rank 2 can be 20 against
+  25 or 1 against 25). Relative to the word's top count across the lemma's
+  held senses: equal -> `most common`; `count*4 >= top` -> `common`; else
+  `less common`. NO label (null) when the sense has no count (model sense,
+  not backfilled) or the whole word has top 0. The label is still sent on the
+  anchor sense; the client shows `used here` instead. No number or
+  percentage ever reaches the wire.
+- **Every writer of `oewn_rank` writes `oewn_count` beside it**
+  (`lexicon_enrich`, `word_lists_build`, `lexicon_cleanup`). Rows written
+  before the column: `uv run python -m scripts.backfill_oewn_count`
+  (`--dry-run` first); idempotent.
+- **One query per request** (`senses_for`): the lemma set is a subquery over
+  the anchors' lexeme ids. Never call it per entry. Wire: `senses` on
+  `VocabularyEntryOut` (lookup + `GET /materials/:id/vocabulary`, items
+  `used_here`) and on `SavedWordOut` (word detail only, items `saved`;
+  empty on the list/practice rows).

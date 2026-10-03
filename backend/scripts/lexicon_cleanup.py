@@ -406,6 +406,7 @@ async def list_only(apply: bool, out: Path | None) -> None:
                     id=first.id if first else None,
                     definition_en=want["sense"]["definition"][:le.DEF_MAX],
                     oewn_synset_id=want["sense"]["synset"], oewn_rank=want["sense"]["rank"],
+                    oewn_count=want["sense"].get("count", 0),
                     source_id="oewn", licence=le.OEWN_LICENCE, translate=True,
                 )
             else:
@@ -712,24 +713,23 @@ async def wordnet_provenance() -> None:
     oewn = le.load_oewn()
     async with async_session_factory() as session:
         rows = (await session.exec(
-            select(LexemeSense.id, LexemeSense.oewn_rank, LexemeSense.oewn_synset_id,
-                  Lexeme.lemma, Lexeme.pos)
+            select(LexemeSense.id, LexemeSense.oewn_rank, LexemeSense.oewn_count,
+                  LexemeSense.oewn_synset_id, Lexeme.lemma, Lexeme.pos)
             .join(Lexeme, Lexeme.id == LexemeSense.lexeme_id)
             .where(LexemeSense.oewn_synset_id.is_not(None))
         )).all()
     print(f"{len(rows)} senses carry an OEWN synset")
     updated = missing = 0
     async with async_session_factory() as session:
-        for sense_id, current_rank, synset_id, lemma, pos in rows:
-            rank_of = {e["synset"]: e["rank"] for e in oewn.get((lemma, pos), [])}
-            rank = rank_of.get(synset_id)
-            if rank is None:
+        for sense_id, current_rank, current_count, synset_id, lemma, pos in rows:
+            entry = next((e for e in oewn.get((lemma, pos), []) if e["synset"] == synset_id), None)
+            if entry is None:
                 missing += 1
                 continue
-            if current_rank != rank:
+            if current_rank != entry["rank"] or current_count != entry["count"]:
                 await session.execute(
                     sa_update(LexemeSense).where(LexemeSense.id == sense_id)
-                    .values(oewn_rank=rank)
+                    .values(oewn_rank=entry["rank"], oewn_count=entry["count"])
                 )
                 updated += 1
         await session.commit()

@@ -51,6 +51,7 @@ from app.schemas.vocabulary import (
     KnownCheckIn,
     LookupIn,
     LookupOut,
+    LookupSenseOut,
     PracticeAnswerIn,
     PracticeAnswerOut,
     PracticeItemOut,
@@ -72,7 +73,9 @@ from app.schemas.vocabulary import (
     WordBulkActionOut,
     WordHistoryEntryOut,
     WordLeechChoiceIn,
+    WordSenseOut,
 )
+from app.services import lemma_senses as lemma_senses_service
 from app.services import lexicon as lexicon_service
 from app.services import materials as materials_service
 from app.services import practice as practice_service
@@ -107,6 +110,7 @@ def _entry(
     saved: bool = False,
     saved_word_id: uuid.UUID | None = None,
     other_sense_saved: bool = False,
+    senses: list[lemma_senses_service.SenseView] | None = None,
 ) -> VocabularyEntryOut:
     # A row written since P3 no longer carries its own usual-meaning copy
     # (`app.services.lexicon.link_row`) -- filled here from the row's own
@@ -141,6 +145,13 @@ def _entry(
         saved=saved,
         saved_word_id=saved_word_id,
         other_sense_saved=other_sense_saved,
+        senses=[
+            LookupSenseOut(
+                sense_id=v.sense_id, pos=v.pos, definition_en=v.definition_en,
+                meaning_uz=v.meaning_uz, cefr=v.cefr, label=v.label, used_here=v.anchor,
+            )
+            for v in senses or []
+        ],
     )
 
 
@@ -187,6 +198,11 @@ async def look_up_word(
     answers = [entry for entry in found.values() if entry is not None]
     saved_state = await vocabulary_service.saved_state_for(session, user.id, answers)
     senses = await vocabulary_service.usual_meanings_for(session, answers)
+    all_senses = dict(zip(
+        (entry.id for entry in answers),
+        await lemma_senses_service.senses_for(
+            session, [(entry.lexeme_id, entry.sense_id) for entry in answers]),
+    ))
 
     def _answer(entry: MaterialVocabulary | None) -> VocabularyEntryOut | None:
         if entry is None:
@@ -200,6 +216,7 @@ async def look_up_word(
             saved=state["saved"],
             saved_word_id=state["saved_word_id"],
             other_sense_saved=state["other_sense_saved"],
+            senses=all_senses.get(entry.id),
         )
 
     return LookupOut(word=_answer(found["word"]), phrase=_answer(found["phrase"]))
@@ -227,6 +244,11 @@ async def material_vocabulary(
     entries = await vocabulary_service.entries(session, material_id)
     saved_state = await vocabulary_service.saved_state_for(session, user.id, entries)
     senses = await vocabulary_service.usual_meanings_for(session, entries)
+    all_senses = dict(zip(
+        (entry.id for entry in entries),
+        await lemma_senses_service.senses_for(
+            session, [(entry.lexeme_id, entry.sense_id) for entry in entries]),
+    ))
     levels = {level: 0 for level in vocabulary_service.LEVELS}
     for entry in entries:
         if entry.cefr_level in levels:
@@ -245,6 +267,7 @@ async def material_vocabulary(
             _entry(
                 entry, material,
                 sense=senses.get(entry.sense_id) if entry.sense_id else None,
+                senses=all_senses.get(entry.id),
                 **saved_state.get(
                     entry.id,
                     {"saved": False, "saved_word_id": None, "other_sense_saved": False},
@@ -346,11 +369,21 @@ async def get_saved_word(
         await practice_service.lapse_counts_for(session, [word.id])
     ).get(word.id, {"passive": 0, "active": 0})
     sense = await session.get(LexemeSense, word.lexeme_sense_id)
+    (every_sense,) = await lemma_senses_service.senses_for(
+        session, [(sense.lexeme_id if sense is not None else None, word.lexeme_sense_id)])
+    saved_out = _saved_word_out(
+        word, contexts, titles, direction=settings.direction,
+        lapse_counts=lapse_counts, sense=sense,
+    )
+    saved_out.senses = [
+        WordSenseOut(
+            sense_id=v.sense_id, pos=v.pos, definition_en=v.definition_en,
+            meaning_uz=v.meaning_uz, cefr=v.cefr, label=v.label, saved=v.anchor,
+        )
+        for v in every_sense
+    ]
     return SavedWordDetailOut(
-        word=_saved_word_out(
-            word, contexts, titles, direction=settings.direction,
-            lapse_counts=lapse_counts, sense=sense,
-        ),
+        word=saved_out,
         history=[
             WordHistoryEntryOut(
                 reviewed_at=log.reviewed_at,

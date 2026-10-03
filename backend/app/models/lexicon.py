@@ -298,6 +298,15 @@ class LexemeSense(SQLModel, table=True):
     #: see that module for why the page is generated from a fact about the
     #: data rather than a permanent hand-written row.
     oewn_rank: int | None = Field(default=None)
+    #: The SemCor tag COUNT behind `oewn_rank` (Princeton WordNet 3.1; 0 =
+    #: the synset exists and SemCor never tagged it; NULL = no OEWN data at
+    #: all, i.e. a `model` sense or one written before this column -- see
+    #: `scripts/backfill_oewn_count.py`). Persisted because the lookup's
+    #: `most common` / `common` / `less common` labels compare COUNTS (a
+    #: sense is `common` when it has at least a quarter of the word's top
+    #: count); a rank cannot say whether rank 2 is 20 against 25 or 1
+    #: against 25. Never shown as a number.
+    oewn_count: int | None = Field(default=None)
     source_id: str = Field(default="model", max_length=16)
     licence: str = Field(default="proprietary", max_length=16)
 
