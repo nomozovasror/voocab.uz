@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useMatch } from "react-router-dom";
 import { Logo } from "@/components/Logo";
 import { PageLoader } from "@/components/ui/spinner";
 import { RouteProgress } from "@/components/ui/route-progress";
@@ -34,6 +34,23 @@ export function Layout() {
   // ...and all three islands go over to a page that fills the window and
   // cannot scroll (see components/layout/header-task.tsx).
   const task = useHeaderTaskState();
+  // A page that owns the viewport (the reading take screen and review) sizes
+  // itself to exactly the window and cancels <main>'s padding with a negative
+  // margin, so ANYTHING after <main> in the flow is extra height and makes the
+  // page scroll. The footer is therefore not rendered there. Decided from
+  // the ROUTE, not only from `task.active`: task mode is switched on in an
+  // effect, so on a direct load the footer would be drawn for one frame and
+  // the page would jump; and the review only enters task mode once its
+  // passages are in. `/reading/statistics` shares the `/reading/:id` shape
+  // and is an ordinary scrolling page, so it is excluded by name.
+  const onTake = useMatch("/reading/:id");
+  const onDrill = useMatch("/reading/drills/:groupId") !== null;
+  const onReview = useMatch("/reading/attempts/:attemptId") !== null;
+  const ownsViewport =
+    task.active ||
+    onReview ||
+    onDrill ||
+    (onTake !== null && onTake.params.id !== "statistics");
 
   // Each group is its own floating island — transparent at the top, frosted
   // glass once scrolled. A shared height keeps the three islands aligned.
@@ -222,7 +239,7 @@ export function Layout() {
               <Outlet />
             </Suspense>
           </main>
-          <Footer />
+          {!ownsViewport && <Footer />}
         </div>
       </HeaderTaskProvider>
     </HeaderCentreProvider>
