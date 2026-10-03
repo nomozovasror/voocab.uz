@@ -390,6 +390,22 @@ export function LookupPopover({
 
   const box = place(rect ?? null);
 
+  // The passage's own sense, where it is not the word's usual one. Shown in
+  // both shapes of the card — under the single meaning, or under the sense
+  // marked `used here` — because that sense is the lexicon's nearest
+  // dictionary reading, and the passage's gloss can be narrower than it.
+  const hereBlock = sense?.here ? (
+    <div className="mt-1.5 border-l-2 border-border pl-2">
+      <p className="text-[0.8rem] leading-snug text-foreground">
+        <span className="text-muted-foreground">Here: </span>
+        {sense.here.en}
+      </p>
+      <p className="text-[0.78rem] leading-snug text-muted-foreground">
+        {sense.here.uz}
+      </p>
+    </div>
+  ) : null;
+
   return createPortal(
     <div
       // `pointer-events-auto` on the card and none on the frame: a fixed
@@ -480,6 +496,10 @@ export function LookupPopover({
         {senses && (
           <>
             <SenseOpen sense={senses[0]} />
+            {/* The passage's own gloss stays under the sense used here when
+                the two differ: the lexicon's sense is the nearest dictionary
+                one, and "what does it mean HERE" is the question asked. */}
+            {hereBlock}
             <SenseRows senses={senses} />
           </>
         )}
@@ -492,17 +512,7 @@ export function LookupPopover({
             <p className="mt-1 text-[0.8rem] leading-snug text-muted-foreground">
               {sense.uz}
             </p>
-            {sense.here && (
-              <div className="mt-1.5 border-l-2 border-border pl-2">
-                <p className="text-[0.8rem] leading-snug text-foreground">
-                  <span className="text-muted-foreground">Here: </span>
-                  {sense.here.en}
-                </p>
-                <p className="text-[0.78rem] leading-snug text-muted-foreground">
-                  {sense.here.uz}
-                </p>
-              </div>
-            )}
+            {hereBlock}
           </>
         )}
 

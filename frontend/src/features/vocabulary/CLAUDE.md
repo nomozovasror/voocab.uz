@@ -128,8 +128,11 @@ answer breaks trust.
   otherwise `most common` / `common` / `less common`, from SemCor counts on
   the server. No label where the server sent `null` — an empty space beats
   an invented label. Never a number or a percentage.
-- **Phrases and old answers have no `senses`**: the popover falls back to
-  the single meaning and the `Here:` block above it. Save is untouched and
+- **The `Here:` line stays under the `used here` sense** wherever
+  `sense_differs`: the lexicon's sense is the nearest dictionary reading,
+  and the passage's own gloss can be narrower (`learn` in a passage about
+  machine learning). Phrases and old answers have no `senses`: the popover
+  falls back to the single meaning with the same `Here:` block. Save is untouched and
   still saves the `used here` sense only; there are no per-sense buttons.
 - **The word page shows all senses open**, the saved one first and marked
   `saved`. The saved-words list and practice are unchanged — the learner
