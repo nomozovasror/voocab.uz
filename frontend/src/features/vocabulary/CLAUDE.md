@@ -170,9 +170,10 @@ answer breaks trust.
     sense's tag in the accent colour (`text-primary-ink`) say it; a screen
     reader gets an `sr-only` "Used in this passage". `used here` in
     words would fight the Uzbek for width.
-  - **Up to three other rows, then `show all (N)`** (N counts every sense,
-    the first included; mono, no rule above it). Three, because the old
-    `Not its usual sense here` warning line is gone and the card has room.
+  - **Up to two other rows, then `show all (N)`** (N counts every sense,
+    the first included; mono, no rule above it). Two, not three: each row
+    is two lines (definition + Uzbek) under the divider, and three made a
+    many-sense card about 90px taller than before. The user chose two.
   - **The accent is TEXT-safe only through `--primary-ink`.** `--primary` is
     a fill: serika-light's amber is 1.4:1 as letters. Light themes mix it
     toward the foreground, dark themes use it as is; the CEFR check gates it.
@@ -186,9 +187,8 @@ answer breaks trust.
   dictionary reading and the passage's own gloss can be narrower (`learn` in
   a passage about machine learning). The rail plus that line already say
   "not its usual sense here", so the separate warning line was removed: the
-  card is allowed one rule and one voice per fact. (Recommended by the
-  implementer, pending the user's confirmation; to revert, render the old
-  line from `sense?.here` in `ReadingPanels.tsx`.) Save is untouched and
+  card is allowed one rule and one voice per fact (confirmed by the user).
+  Save is untouched and
   still saves the `used here` sense only; there are no per-sense buttons.
 - **The word page is the same structure with room**: every sense open,
   nothing truncated, the saved sense first with the rail (and a lit tag),

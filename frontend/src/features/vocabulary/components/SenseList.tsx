@@ -270,10 +270,10 @@ function OtherRow({
   );
 }
 
-/** Other senses visible before `show all (N)`. Three, so a many-sense word
- *  stays near the old card's height now that the `Not its usual sense`
- *  warning line is gone. */
-const VISIBLE_ROWS = 3;
+/** Other senses visible before `show all (N)`. Two: each row is two lines
+ *  now (definition + Uzbek) under a labelled divider, and three made a
+ *  many-sense card ~90px taller than the old one. The user chose two. */
+const VISIBLE_ROWS = 2;
 
 /**
  * The popover's other senses (the first is the caller's `PrimarySense`):
