@@ -149,8 +149,10 @@ answer breaks trust.
     DEFINITION line, never beside the Uzbek.
   - **Frequency is a three-dot meter, not a word** (`Meter` in
     `SenseList.tsx`): most common ●●●, common ●●○, rare ●○○; null = no dots.
-    Right-aligned ON THE UZBEK LINE of the rail sense and at the right end of
-    each other row's definition line; a differing POS (mono) sits before it.
+    Right-aligned ON THE UZBEK LINE of the rail sense; beside each other row
+    it is centred on the row's two lines (definition + Uzbek) — on the
+    definition's line alone it left an empty patch under the dots. A
+    differing POS (mono) sits before it.
     Why dots: they scan. The eye compares three marks down a column without
     reading, and `main/common/rare` had to be read and compared as words. And
     dots promise no number: a figure ("rank 3") would claim a precision

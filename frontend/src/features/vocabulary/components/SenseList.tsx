@@ -12,7 +12,7 @@ import type { SenseLabel, WordSense } from "@/features/vocabulary/types";
  * The shape, in one paragraph: the sense that matters (used here / saved) is
  * a block with an accent rail on its left; the others stand flush with that
  * rail under a labelled divider; the meter is right-aligned ON THE UZBEK LINE
- * of the first sense, or on the definition line of each other row. No rules
+ * of the first sense, and centred beside each other row's two lines. No rules
  * between senses.
  */
 
@@ -224,9 +224,10 @@ export function PrimarySense({
 }
 
 /**
- * One of the other senses: the definition on one truncated line (the tag at
- * its right end), the Uzbek beneath it in a smaller dim sans. No level chip:
- * the card states one level, the header's. A disclosure button (`aria-expanded`/`aria-controls`) — pressing
+ * One of the other senses: the definition on one truncated line, the Uzbek
+ * beneath it in a smaller dim sans, and the tag to the right of both, centred
+ * on the pair. No level chip: the card states one level, the header's. A
+ * disclosure button (`aria-expanded`/`aria-controls`) — pressing
  * lets the SAME definition wrap in full, the Uzbek staying beneath. No
  * chevron: hover and the focus ring say it is pressable, and a chevron alone
  * on a line is the shape that read as broken.
@@ -247,24 +248,28 @@ function OtherRow({
         aria-expanded={open}
         aria-controls={defId}
         onClick={() => setOpen((v) => !v)}
-        className="block w-full rounded py-[5px] text-left transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        // The meter sits beside the WHOLE row (definition + Uzbek), centred
+        // on it. On the definition's line it left an empty patch under the
+        // dots wherever the Uzbek line ran beneath.
+        className="flex w-full items-center gap-3 rounded py-[5px] text-left transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
       >
-        <span
-          className={cn(
-            "flex items-baseline gap-3 text-[13.5px]",
-            open ? "text-foreground" : "text-foreground/70",
-          )}
-        >
-          <span id={defId} className={cn("min-w-0 flex-1", !open && "truncate")}>
+        <span className="min-w-0 flex-1">
+          <span
+            id={defId}
+            className={cn(
+              "block text-[13.5px]",
+              open ? "text-foreground" : "truncate text-foreground/70",
+            )}
+          >
             {sense.definition_en}
           </span>
-          <Tag pos={showPos ? sense.pos : null} freq={senseLabel(sense.label)} />
+          {sense.meaning_uz && (
+            <span className="mt-0.5 block text-[12.5px] leading-snug text-muted-foreground">
+              {sense.meaning_uz}
+            </span>
+          )}
         </span>
-        {sense.meaning_uz && (
-          <span className="mt-0.5 block text-[12.5px] leading-snug text-muted-foreground">
-            {sense.meaning_uz}
-          </span>
-        )}
+        <Tag pos={showPos ? sense.pos : null} freq={senseLabel(sense.label)} />
       </button>
     </li>
   );
