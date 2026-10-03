@@ -386,6 +386,17 @@ export interface PracticeSentencePrompt {
    *  in a way even the `recognise` fallback couldn't absorb, or where the
    *  sense has none. */
   definition: string | null;
+  /** Set when the sentence is a corpus example, not the learner's own
+   *  meeting with the word — every Word-list item has one of these or
+   *  nothing. The practice page prints "Example from {title}"; it must
+   *  never say the learner saw the word there. */
+  example_source?: ExampleSource | null;
+}
+
+/** Where a practice sentence was borrowed from. */
+export interface ExampleSource {
+  material_id: string;
+  material_title: string;
 }
 
 /** The fallback the spec describes: no usable context, so the gap stands
@@ -443,7 +454,10 @@ export type PracticePrompt =
  *  and `exercise_type` are now genuinely variable — stage 1's comment about
  *  a future stage widening them was about this stage. */
 export interface PracticeItem {
-  word_id: string;
+  /** Exactly one of `word_id` / `list_entry_id` is set. A Word-list item
+   *  has no SavedWord yet: it is created by the first answer. */
+  word_id: string | null;
+  list_entry_id?: string | null;
   context_id: string | null;
   lemma: string;
   pos: string;
@@ -476,7 +490,9 @@ export interface PracticeSession {
 }
 
 export interface PracticeAnswerRequest {
-  word_id: string;
+  /** Exactly one of the two, copied from the item. */
+  word_id?: string;
+  list_entry_id?: string;
   context_id: string | null;
   direction: Direction;
   exercise_type: ExerciseType;
@@ -514,6 +530,9 @@ export interface PracticeAnswerRequest {
  *  `meaning.ts`) plus where it came from, for the "source material" link the
  *  reveal shows. */
 export interface PracticeAnswerWord extends Glossed {
+  /** The saved word this answer belongs to. For a Word-list item it is the
+   *  row that answer just created. */
+  word_id?: string;
   lemma: string;
   pos: string;
   cefr_level: string;
@@ -624,4 +643,41 @@ export interface TranslationReportResult {
   id: string;
   sense_id: string;
   status: string;
+}
+
+// --- Word lists -----------------------------------------------------------
+
+export interface WordListSummary {
+  key: string;
+  title: string;
+  description: string;
+  word_count: number;
+  /** Entries whose sense the learner has as a saved word, from anywhere. */
+  owned: number;
+  active: boolean;
+  /** A subscription row exists (active or stopped). */
+  started: boolean;
+}
+
+export interface WordListSample {
+  lemma: string;
+  pos: string;
+  cefr: string | null;
+  definition_en: string | null;
+  meaning_uz: string | null;
+}
+
+export interface WordListDetail extends WordListSummary {
+  cefr: Record<string, number>;
+  samples: WordListSample[];
+  attribution: string;
+  source_title: string;
+  licence_name: string;
+  licence_url: string | null;
+  pending_saved: number;
+}
+
+export interface WordListStarted {
+  active: true;
+  pending_saved: number;
 }

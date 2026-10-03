@@ -4,7 +4,15 @@ import { BookOpen, Play, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 import { localTimeZone, timeUntil } from "@/lib/time";
-import { practiceSummaryKey, vocabularyApi } from "@/features/vocabulary/api";
+import {
+  practiceSummaryKey,
+  vocabularyApi,
+  wordListsKey,
+} from "@/features/vocabulary/api";
+import {
+  WordListCards,
+  WordListCardsSkeleton,
+} from "@/features/vocabulary/components/WordListCards";
 
 /**
  * The practice module's home — not the word list, and that distinction is
@@ -67,9 +75,12 @@ export default function VocabularyHomePage() {
   // brief's own line for this: point them at where words come from rather
   // than showing a due count of zero, which reads as "you're all caught up"
   // on a module nobody has ever used.
-  if (data.totals.total === 0) return <Empty />;
-
+  //
+  // "Nothing saved" is not enough on its own: a learner who has started a
+  // Word list owns no saved word yet and still has today's new words waiting
+  // (the list items become words when answered).
   const planned = data.planned_reviews + data.planned_new;
+  if (data.totals.total === 0 && planned === 0) return <Empty />;
   const manualEmpty = planned === 0 && settings?.exercise_types != null;
 
   return (
@@ -153,6 +164,8 @@ export default function VocabularyHomePage() {
         </Link>
       )}
 
+      <WordListsSection />
+
       <Link
         to="/vocabulary/words"
         className="mt-6 block text-center text-xs text-muted-foreground transition-colors hover:text-foreground"
@@ -160,6 +173,40 @@ export default function VocabularyHomePage() {
         All words ({data.totals.total})
       </Link>
     </div>
+  );
+}
+
+/** Ready-made lists a learner can start from. Subscribing adds no words —
+ *  see the module's CLAUDE.md. Renders nothing when the lists cannot be
+ *  loaded: the practice home must not be taken down by a shelf beside it. */
+function WordListsSection() {
+  const { data, isPending, isError } = useQuery({
+    queryKey: wordListsKey,
+    queryFn: () => vocabularyApi.lists(),
+  });
+  if (isError || (data && data.length === 0)) return null;
+  return (
+    <section aria-labelledby="word-lists-heading" className="mt-8">
+      <div className="mb-3 flex items-baseline justify-between gap-3">
+        <h2
+          id="word-lists-heading"
+          className="text-sm font-medium text-foreground"
+        >
+          Word lists
+        </h2>
+        <Link
+          to="/vocabulary/lists"
+          className="rounded text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          About the lists
+        </Link>
+      </div>
+      {isPending ? (
+        <WordListCardsSkeleton />
+      ) : (
+        <WordListCards lists={data} />
+      )}
+    </section>
   );
 }
 
@@ -186,9 +233,9 @@ function Empty() {
       </header>
       <div className="rounded-xl border border-dashed border-border px-5 py-10 text-center">
         <p className="text-sm text-muted-foreground">
-          There is nothing to practise yet. Sit a reading passage, and the
-          words worth learning from it are waiting on the review page
-          afterwards — save a few, and they land here.
+          There is nothing to practise yet. Start a word list below, or sit a
+          reading passage and save the words worth learning from its review
+          page — either way they land here.
         </p>
         <Link
           to="/reading"
@@ -198,6 +245,7 @@ function Empty() {
           Find a passage
         </Link>
       </div>
+      <WordListsSection />
     </div>
   );
 }

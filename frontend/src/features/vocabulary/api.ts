@@ -14,6 +14,9 @@ import type {
   TranslationReportRequest,
   TranslationReportResult,
   VocabularyList,
+  WordListDetail,
+  WordListStarted,
+  WordListSummary,
   VocabularySettings,
   WordDetail,
 } from "@/features/vocabulary/types";
@@ -63,6 +66,12 @@ export const vocabularyWordsKey = ["vocabulary", "words"] as const;
  *  never carries. */
 export const wordDetailKey = (wordId: string) =>
   ["vocabulary", "words", "detail", wordId] as const;
+
+/** Word lists: the index and each detail. Starting or stopping invalidates
+ *  `["vocabulary","lists"]` (prefix), the practice summary and nothing else. */
+export const wordListsKey = ["vocabulary", "lists"] as const;
+export const wordListKey = (key: string) =>
+  ["vocabulary", "lists", key] as const;
 
 export const vocabularyApi = {
   /** One tapped word, in this passage's sense.
@@ -221,10 +230,24 @@ export const vocabularyApi = {
    *  §4). Swaps in a `recall` item for the one attempt that decides it —
    *  never the item already on screen, so a passive `recognise` turn does
    *  not have to pretend it was something else. */
-  knownCheck: (wordId: string) =>
+  knownCheck: (ref: { word_id?: string; list_entry_id?: string }) =>
     api.post<PracticeItem>("/api/vocabulary/practice/known-check", {
-      json: { word_id: wordId },
+      json: ref,
     }),
+
+  // --- Word lists --------------------------------------------------------
+  // Starting a list subscribes; it adds no words. See the module CLAUDE.md.
+
+  lists: () => api.get<WordListSummary[]>("/api/vocabulary/lists"),
+
+  listDetail: (key: string) =>
+    api.get<WordListDetail>(`/api/vocabulary/lists/${key}`),
+
+  startList: (key: string) =>
+    api.post<WordListStarted>(`/api/vocabulary/lists/${key}/start`),
+
+  stopList: (key: string) =>
+    api.post<{ active: false }>(`/api/vocabulary/lists/${key}/stop`),
 
   settings: () => api.get<VocabularySettings>("/api/vocabulary/settings"),
 

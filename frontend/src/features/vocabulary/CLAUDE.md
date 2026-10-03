@@ -859,3 +859,42 @@ why this is not a fourth exercise beside recognise/recall/produce.
   the same story one level down: the list's row and Browse's card back read
   the same fallback chain for a word's own headline meaning, rather than
   each guessing at it separately.
+
+## Word lists
+
+Ready-made lists (Core, Business, Academic, Medical, TOEIC) a learner can
+start. The UI name is **"Word lists"** — never "Collection" (that is the book
+metaphor on the listening and reading side) and never "Deck" (Anki jargon).
+Screens: the home's "Word lists" section, `/vocabulary/lists`,
+`/vocabulary/lists/:key`. Cards, progress and Start/Stop live in
+`components/WordListCards.tsx` and `WordListControls.tsx`; the data hooks in
+`wordLists.ts`.
+
+- **Subscribing is not adding words.** Start creates a subscription and
+  nothing else: no saved word, no card, nothing in "Your words". A list item
+  becomes a saved word only when the learner first ANSWERS it (including "I
+  know this"). Thirteen hundred rows appearing on Start would swamp the daily
+  queue and break the time budget the session is built around. So Stop is
+  safe too: owned words stay, unseen ones stop coming. Never word either
+  button as adding or removing words.
+- **Progress is `owned / word_count`** (`142 / 1,700`), where owned counts
+  every entry whose sense the learner has as a saved word, wherever it came
+  from. A list can therefore start part-full; that is correct.
+- **The start note** ("You have N saved words still to learn. {Title} will
+  start after those.") is shown once, inline, from the Start response's
+  `pending_saved`, only when N > 0 (singular "word" for 1). The server owns
+  the number; `pendingMessage` only words it. It disappears on Stop.
+- **A list item has no word id.** `PracticeItem.word_id` is null and
+  `list_entry_id` is set; answers and known-checks send whichever is set
+  (`itemRef` in the practice page). The answer's `word.word_id` is the row
+  that answer created, so the Again requeue swaps it in (the server refuses a
+  list entry whose sense is now owned) and the leech call uses it. The
+  session tally keys on the entry id first so a requeued item is one word.
+- **"Example from {title}", never "You saw this in".** A list word's practice
+  sentence is borrowed from a material that contains the sense
+  (`example_source`). The learner did not meet the word there, so the line
+  must not claim they did, and the sentence is never stored as their context.
+  The line is quiet and links to the material.
+- **CEFR bar**: `CefrSpread` reuses the colour system for B1/B2/C1 and the
+  neutral outline for levels it has no tone for (A1, A2, C2); letters always
+  printed. Unrated is said in words, never a segment or chip.

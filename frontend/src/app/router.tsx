@@ -99,6 +99,16 @@ export const router = createBrowserRouter([
             path: "vocabulary/browse",
             ...page(() => import("@/pages/vocabulary/VocabularyBrowsePage")),
           },
+          // Word lists: ready-made lists a learner subscribes to. The index
+          // and one list's page; neither collides with `words/:id`.
+          {
+            path: "vocabulary/lists",
+            ...page(() => import("@/pages/vocabulary/VocabularyListsPage")),
+          },
+          {
+            path: "vocabulary/lists/:key",
+            ...page(() => import("@/pages/vocabulary/VocabularyListPage")),
+          },
           {
             path: "vocabulary/settings",
             ...page(() => import("@/pages/vocabulary/VocabularySettingsPage")),

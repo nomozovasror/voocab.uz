@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
-import { getErrorMessage } from "@/lib/api";
+import { ApiError, getErrorMessage } from "@/lib/api";
 import { localTimeZone, timeUntil } from "@/lib/time";
 import { GapField } from "@/features/paper/components/GapField";
 import { CefrTag } from "@/features/vocabulary/components/CefrTag";
@@ -17,6 +17,7 @@ import { practiceSummaryKey, vocabularyApi } from "@/features/vocabulary/api";
 import { LEECH_LABEL, STATUS_CHIP_LABEL } from "@/features/vocabulary/status";
 import type {
   Direction,
+  ExampleSource,
   ExerciseType,
   LeechChoice,
   PracticeAnswer,
@@ -169,11 +170,14 @@ export default function VocabularyPracticePage() {
   const answer = useMutation({
     mutationFn: vocabularyApi.practiceAnswer,
     onSuccess: (res) => setResult(res),
-    onError: (e) => toast(getErrorMessage(e)),
+    onError: (e, vars) => {
+      if (isListEntryGone(e, vars.list_entry_id)) dropCurrent();
+      else toast(getErrorMessage(e));
+    },
   });
 
   const knownCheck = useMutation({
-    mutationFn: (wordId: string) => vocabularyApi.knownCheck(wordId),
+    mutationFn: (item: PracticeItem) => vocabularyApi.knownCheck(itemRef(item)),
     onSuccess: (item) => {
       // Swaps the item on screen for the recall check the spec describes —
       // never a second item appended, since this IS the current word's one
@@ -186,7 +190,11 @@ export default function VocabularyPracticePage() {
       setResult(null);
       shownAt.current = Date.now();
     },
-    onError: (e) => toast(getErrorMessage(e)),
+    onError: (e, item) => {
+      if (isListEntryGone(e, item.word_id ? undefined : item.list_entry_id))
+        dropCurrent();
+      else toast(getErrorMessage(e));
+    },
   });
 
   const leech = useMutation({
@@ -208,13 +216,32 @@ export default function VocabularyPracticePage() {
 
   const current = queue?.[0] ?? null;
 
+  /** A list item the server will no longer take (409: its sense is already
+   *  owned, e.g. answered in another tab; 403: the list was stopped
+   *  mid-session). Drops it and moves on, so the learner is never stuck on a
+   *  card that can't be answered. */
+  function dropCurrent() {
+    setQueue((was) => (was ? was.slice(1) : was));
+    setTotalCount((t) => Math.max(0, t - 1));
+    setGiven("");
+    setSelectedOptionId(null);
+    setResult(null);
+    setPendingClaim(false);
+    setClaimedResult(false);
+    setUsedKnownCheck(false);
+    setLeechChoice(null);
+    shownAt.current = Date.now();
+    void qc.invalidateQueries({ queryKey: practiceSummaryKey(tz) });
+    toast("That word was skipped.");
+  }
+
   function submit(givenOverride?: string) {
     if (!current || answer.isPending || result) return;
     const claiming = pendingClaim;
     if (claiming) setPendingClaim(false);
     setClaimedResult(claiming);
     answer.mutate({
-      word_id: current.word_id,
+      ...itemRef(current),
       context_id: current.context_id,
       direction: current.direction,
       exercise_type: current.exercise_type,
@@ -250,8 +277,16 @@ export default function VocabularyPracticePage() {
       // card either way (see the spec's §4). `returns_this_session` is
       // exactly `rating === Again`, and nothing else moves a word to the
       // back. Marked `requeued` so the answer that follows can say so (§1).
+      // A Word-list item has no word id until this answer created the
+      // saved word; the requeued copy must point at THAT, because the
+      // server refuses a list entry whose sense the learner now owns.
+      const created = result.word.word_id;
+      const again =
+        current.word_id || !created
+          ? current
+          : { ...current, word_id: created };
       return result.returns_this_session
-        ? [...rest, { ...current, requeued: true }]
+        ? [...rest, { ...again, requeued: true }]
         : rest;
     });
     if (result.returns_this_session) setTotalCount((t) => t + 1);
@@ -295,7 +330,7 @@ export default function VocabularyPracticePage() {
         e.key === "0"
       ) {
         e.preventDefault();
-        knownCheck.mutate(current.word_id);
+        knownCheck.mutate(current);
         return;
       }
 
@@ -413,7 +448,7 @@ export default function VocabularyPracticePage() {
           onExit={exit}
           disabled={answer.isPending || Boolean(result)}
           tone={tone}
-          turnKey={`${current.word_id}-${answeredCount}`}
+          turnKey={`${itemKey(current)}-${answeredCount}`}
         />
       );
     }
@@ -437,7 +472,7 @@ export default function VocabularyPracticePage() {
         onExit={exit}
         disabled={answer.isPending || Boolean(result)}
         tone={tone}
-        turnKey={`${current.word_id}-${answeredCount}`}
+        turnKey={`${itemKey(current)}-${answeredCount}`}
       />
     );
   }
@@ -449,7 +484,7 @@ export default function VocabularyPracticePage() {
           <button
             type="button"
             disabled={knownCheck.isPending}
-            onClick={() => knownCheck.mutate(current.word_id)}
+            onClick={() => knownCheck.mutate(current)}
             className="flex items-center gap-1.5 rounded-full border border-border px-3 py-1 text-xs text-muted-foreground transition-colors duration-fast hover:border-primary/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50"
           >
             <Kbd>0</Kbd>
@@ -458,7 +493,12 @@ export default function VocabularyPracticePage() {
         </div>
       )}
 
-      <div className="flex-1">{renderPrompt()}</div>
+      <div className="flex-1">
+        {renderPrompt()}
+        {prompt.kind === "sentence" && prompt.example_source && (
+          <ExampleLine source={prompt.example_source} />
+        )}
+      </div>
 
       {result && (
         <>
@@ -473,7 +513,7 @@ export default function VocabularyPracticePage() {
               <LeechPanel
                 resolved={leechChoice}
                 busy={leech.isPending}
-                onChoose={(choice) => leech.mutate({ wordId: current.word_id, choice })}
+                onChoose={(choice) => leech.mutate({ wordId: result.word.word_id ?? current.word_id ?? "", choice })}
               />
               {leechChoice === "see_context" && result.leech_context && (
                 <LeechContextPanel context={result.leech_context} />
@@ -962,6 +1002,46 @@ function LeechContextPanel({ context }: { context: PracticeLeechContext }) {
   );
 }
 
+function isListEntryGone(e: unknown, listEntryId: string | null | undefined): boolean {
+  return (
+    Boolean(listEntryId) &&
+    e instanceof ApiError &&
+    (e.status === 409 || e.status === 403)
+  );
+}
+
+/** Which word an item is, for the wire: a saved word, or a Word-list entry
+ *  that becomes one on its first answer. */
+function itemRef(item: PracticeItem): { word_id?: string; list_entry_id?: string } {
+  return item.word_id
+    ? { word_id: item.word_id }
+    : { list_entry_id: item.list_entry_id ?? undefined };
+}
+
+/** A stable key for an item whichever of the two ids it carries. */
+function itemKey(item: PracticeItem): string {
+  // The entry id first: a requeued list item gains a word id, and the
+  // session's tally must still see one word.
+  return item.list_entry_id ?? item.word_id ?? item.lemma;
+}
+
+/** The sentence is a corpus example, not the learner's own meeting. Worded
+ *  as an example on purpose — "You saw this in" would be false, and a quiet
+ *  false line is how a learner stops trusting the others. */
+function ExampleLine({ source }: { source: ExampleSource }) {
+  return (
+    <p className="mt-3 text-xs text-muted-foreground">
+      Example from{" "}
+      <Link
+        to={`/reading/${source.material_id}`}
+        className="underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      >
+        {source.material_title}
+      </Link>
+    </p>
+  );
+}
+
 /** Distinct words this session touched, and the shape `jokes.ts` and the end
  *  screen's stat line both need — collapsed from `turns`, where a word that
  *  came back after an Again appears twice. */
@@ -973,8 +1053,9 @@ function summarise(turns: Turn[]): SessionStats & {
   const wrongCounts = new Map<string, number>();
 
   for (const { item, result } of turns) {
-    if (!firstSeenNew.has(item.word_id)) {
-      firstSeenNew.set(item.word_id, item.is_new);
+    const key = itemKey(item);
+    if (!firstSeenNew.has(key)) {
+      firstSeenNew.set(key, item.is_new);
     }
     if (result.verdict === "wrong") {
       wrongCounts.set(item.lemma, (wrongCounts.get(item.lemma) ?? 0) + 1);
