@@ -16,8 +16,11 @@ from app.services import audio_pcm, word_clips as wc
 from tests.audio_helpers import (
     Created,
     FakeStorage,
+    FlakyStorage,
+    attach,
     make_blob,
     make_user,
+    s3_error,
     sentence,
     tone,
     unique_word,
@@ -241,31 +244,26 @@ async def test_at_most_three_candidates_per_form_across_recordings(created: Crea
     assert again.inserted == 0
 
 
-async def test_a_blob_used_only_by_private_materials_is_not_a_source(created: Created) -> None:
+async def test_only_a_blob_a_public_material_uses_is_a_source(created: Created) -> None:
     form = unique_word()
-    user = await make_user(created)
-    private = await make_blob(created, [sentence(["a", form, "c", "d"])])
-    public = await make_blob(created, [sentence(["a", form, "c", "d"])])
-    unpublished = await make_blob(created, [sentence(["a", form, "c", "d"])])  # no material
+    tokens = ["a", form, "c", "d"]
+    private = await make_blob(created, [sentence(tokens)], visibility="private")
+    public = await make_blob(created, [sentence(tokens)], visibility="public")
+    # Used by a private AND a public material: public wins, it is a source.
+    both = await make_blob(created, [sentence(tokens)], visibility="private")
+    await attach(created, both, "public")
+    # An unattached upload: an ordinary user's asset, in no material at all.
+    unattached = await make_blob(created, [sentence(tokens)], visibility=None)
+    await attach(created, unattached, None)
+    # Not even an asset.
+    orphan = await make_blob(created, [sentence(tokens)], visibility=None)
+    ids = [private.id, public.id, both.id, unattached.id, orphan.id]
     async with async_session_factory() as session:
-        for blob, visibility in ((private, "private"), (public, "public")):
-            asset = AudioAsset(owner_id=user.id, blob_id=blob.id)
-            session.add(asset)
-            await session.flush()
-            material = Material(
-                author_id=user.id, type="listening", title="t",
-                audio_asset_id=asset.id, visibility=visibility,
-            )
-            session.add(material)
-            await session.flush()
-            created.asset_ids.append(asset.id)
-            created.material_ids.append(material.id)
-        await session.commit()
-        await wc.index_clips(
-            session, blob_ids=[private.id, public.id, unpublished.id], forms=[form]
-        )
-    sources = {c.blob_id for c in await _clips(form)}
-    assert sources == {public.id, unpublished.id}
+        await wc.index_clips(session, blob_ids=ids, forms=[form])
+        assert set(await wc.unindexed_blob_ids(session, set())) >= {public.id, both.id}
+        listed = set(await wc.unindexed_blob_ids(session, set()))
+    assert not listed & {private.id, unattached.id, orphan.id}
+    assert {c.blob_id for c in await _clips(form)} == {public.id, both.id}
 
 
 async def test_a_blob_that_is_not_ready_is_not_scanned(created: Created) -> None:
@@ -317,6 +315,106 @@ async def test_a_clip_that_cannot_be_cut_fails_without_stopping_the_rest(created
     assert failed.status == ClipStatus.FAILED and failed.error
     [cut] = await _clips(good)
     assert cut.status == ClipStatus.CUT
+
+
+async def _real_blob(created: Created, form: str, storage: FakeStorage, **kw):
+    blob = await make_blob(created, [sentence(["a", form, "c", "d"])], duration_ms=3000, **kw)
+    storage.objects[blob.storage_key] = audio_pcm.encode_m4a(tone(3000))
+    return blob
+
+
+async def test_a_transient_storage_error_leaves_the_clip_for_the_next_pass(
+    created: Created,
+) -> None:
+    form = unique_word()
+    storage = FlakyStorage()
+    blob = await _real_blob(created, form, storage)
+    async with async_session_factory() as session:
+        await wc.index_clips(session, blob_ids=[blob.id], forms=[form])
+
+    # Fetching the recording fails for a throttling reason: nothing is `failed`.
+    storage.get_error = s3_error("SlowDown")
+    async with async_session_factory() as session:
+        report = await wc.cut_clips(session, storage=storage, blob_ids=[blob.id])
+    assert (report.cut, report.failed, report.deferred) == (0, 0, 1)
+    [clip] = await _clips(form)
+    assert clip.status == ClipStatus.CANDIDATE and "SlowDown" in clip.error
+
+    # Writing the cut fails with a disk blip: still a candidate.
+    storage.get_error, storage.put_error = None, OSError("disk blip")
+    async with async_session_factory() as session:
+        report = await wc.cut_clips(session, storage=storage, blob_ids=[blob.id])
+    assert (report.cut, report.failed, report.deferred) == (0, 0, 1)
+    assert (await _clips(form))[0].status == ClipStatus.CANDIDATE
+
+    # The outage ends: the same row is cut.
+    storage.put_error = None
+    async with async_session_factory() as session:
+        report = await wc.cut_clips(session, storage=storage, blob_ids=[blob.id])
+    assert (report.cut, report.failed) == (1, 0)
+    clip = (await _clips(form))[0]
+    assert clip.status == ClipStatus.CUT and clip.error is None
+
+
+async def test_a_permanent_storage_error_fails_the_clip(created: Created) -> None:
+    for error in (s3_error("NoSuchKey"), FileNotFoundError("gone")):
+        form = unique_word()
+        storage = FlakyStorage()
+        blob = await _real_blob(created, form, storage)
+        storage.get_error = error
+        async with async_session_factory() as session:
+            await wc.index_clips(session, blob_ids=[blob.id], forms=[form])
+            report = await wc.cut_clips(session, storage=storage, blob_ids=[blob.id])
+        assert (report.failed, report.deferred) == (1, 0)
+        assert (await _clips(form))[0].status == ClipStatus.FAILED
+
+
+async def test_a_failed_clip_does_not_hold_a_slot_and_its_recording_is_not_reoffered(
+    created: Created,
+) -> None:
+    form = unique_word()
+    blobs = [
+        await make_blob(created, [sentence(["a", form, "c", "d"], each_ms=300 + 50 * i)])
+        for i in range(5)
+    ]
+    async with async_session_factory() as session:
+        await wc.index_clips(session, blob_ids=[b.id for b in blobs], forms=[form])
+    first = await _clips(form)
+    assert len(first) == 3
+    # Two of the three fail to cut.
+    failed_blobs = {c.blob_id for c in first[:2]}
+    async with async_session_factory() as session:
+        await session.execute(
+            update(WordClip)
+            .where(WordClip.id.in_([c.id for c in first[:2]]))
+            .values(status=ClipStatus.FAILED)
+        )
+        await session.commit()
+        again = await wc.index_clips(session, blob_ids=[b.id for b in blobs], forms=[form])
+    assert again.inserted == 2  # two replacements: the form is not stuck short
+    rows = await _clips(form)
+    live = [c for c in rows if c.status != ClipStatus.FAILED]
+    assert len(live) == 3
+    assert not {c.blob_id for c in live} & failed_blobs  # the broken recordings are not retried
+    # ... and it converges: a third run adds nothing.
+    async with async_session_factory() as session:
+        assert (
+            await wc.index_clips(session, blob_ids=[b.id for b in blobs], forms=[form])
+        ).inserted == 0
+
+
+async def test_a_clip_too_quiet_to_level_fails_with_a_reason(created: Created) -> None:
+    form = unique_word()
+    blob = await make_blob(created, [sentence(["a", form, "c", "d"])], duration_ms=3000)
+    storage = FakeStorage()
+    storage.objects[blob.storage_key] = audio_pcm.encode_m4a(tone(3000, amp=0.0005))  # -69 dBFS
+    async with async_session_factory() as session:
+        await wc.index_clips(session, blob_ids=[blob.id], forms=[form])
+        report = await wc.cut_clips(session, storage=storage, blob_ids=[blob.id])
+    assert (report.cut, report.failed) == (0, 1)
+    [clip] = await _clips(form)
+    assert clip.status == ClipStatus.FAILED and "too quiet" in clip.error
+    assert not [k for k in storage.objects if k.startswith("clips/")]
 
 
 # --- verifying -----------------------------------------------------------------

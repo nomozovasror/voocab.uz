@@ -29,6 +29,10 @@ ceiling on the peak so a quiet clip with one sharp consonant is not driven
 into clipping to reach the target. It is applied to every artefact when it is
 made AND again when pieces are composed, which is harmless: a piece already at
 the target gets a gain of ~1.
+
+The gain is CAPPED (:data:`MAX_GAIN_DB`): a near-silent window brought to
+-20 dBFS is the recording's hiss, not a word. Below :data:`MIN_USABLE_DBFS` a
+cut is refused outright (``word_clips.cut_window``) instead of being amplified.
 """
 
 import io
@@ -49,6 +53,16 @@ TARGET_RMS_DBFS = -20.0
 #: The loudest a sample may be after levelling (just under full scale).
 PEAK_CEILING = 0.97
 
+#: The most levelling may amplify by. A quiet lecture is worth +20 dB; more
+#: than that is mostly noise floor, and the result sounds like a word said
+#: through static.
+MAX_GAIN_DB = 20.0
+
+#: A cut quieter than this (RMS) is unusable rather than levelled. With the
+#: gain cap it would end up at most ``MIN_USABLE_DBFS + MAX_GAIN_DB`` = -30
+#: dBFS: quiet, but speech.
+MIN_USABLE_DBFS = -50.0
+
 #: Below this RMS a piece is treated as silence and left alone: levelling
 #: digital silence would divide by ~zero and amplify the encoder's noise floor
 #: into something audible.
@@ -65,7 +79,8 @@ def decode_range(
     decoding forward and trimming to the sample), not by decoding the whole
     recording and slicing: a clip is cut from a thirty-minute file, and the
     cost of a cut should be the cost of the clip. The trim is by the decoded
-    frames' own timestamps, so a keyframe-granular seek never moves the cut.
+    frames' own timestamps (measured from the stream's start), so a
+    keyframe-granular seek never moves the cut.
     """
     with av.open(io.BytesIO(data)) as container:
         stream = container.streams.audio[0]
@@ -76,13 +91,28 @@ def decode_range(
             container.seek(
                 int((start_ms - 1000) * 1000), backward=True, any_frame=False
             )
+        seeked = start_ms is not None and start_ms > 1000
         resampler = av.AudioResampler(format="flt", layout="mono", rate=SAMPLE_RATE)
         chunks: list[np.ndarray] = []
         first_time: float | None = None
+        # Time zero is the stream's own start, not the container's 0: an MP3
+        # carries its encoder delay as a ~25 ms `start_time`, a decode from the
+        # top drops it, and a cut that kept it would land 25 ms late (the ASR's
+        # word times are relative to the decoded audio).
+        origin_pts = stream.start_time or 0
         for frame in container.decode(stream):
+            frame_time = (
+                float((frame.pts - origin_pts) * stream.time_base)
+                if frame.pts is not None
+                else None
+            )
             if first_time is None:
-                first_time = float(frame.pts * stream.time_base) if frame.pts is not None else 0.0
-            frame_time = float(frame.pts * stream.time_base) if frame.pts is not None else None
+                if frame_time is None and seeked:
+                    # The trim below is by this frame's own timestamp; guessing
+                    # 0 would cut the wrong audio, silently, by up to the whole
+                    # seek distance. Better a failed clip than a wrong one.
+                    raise ValueError("no timestamp on the first frame after a seek")
+                first_time = frame_time if frame_time is not None else 0.0
             if end_ms is not None and frame_time is not None and frame_time * 1000 > end_ms + 500:
                 break
             for out in resampler.resample(frame):
@@ -159,7 +189,8 @@ def normalise_rms(
     peak_ceiling: float = PEAK_CEILING,
 ) -> np.ndarray:
     """``samples`` scaled to ``target_dbfs`` RMS, the peak held under
-    ``peak_ceiling``. Silence is returned unchanged (see :data:`_SILENCE_RMS`).
+    ``peak_ceiling`` and the gain under :data:`MAX_GAIN_DB`. Silence is
+    returned unchanged (see :data:`_SILENCE_RMS`).
 
     The peak ceiling wins over the target: a piece that cannot reach the
     target without clipping ends up quieter than it, which is the right way
@@ -169,7 +200,7 @@ def normalise_rms(
     rms = float(np.sqrt(np.mean(np.square(samples, dtype=np.float64))))
     if rms < _SILENCE_RMS:
         return samples.astype(np.float32, copy=False)
-    gain = (10.0 ** (target_dbfs / 20.0)) / rms
+    gain = min((10.0 ** (target_dbfs / 20.0)) / rms, 10.0 ** (MAX_GAIN_DB / 20.0))
     peak = float(np.max(np.abs(samples)))
     if peak * gain > peak_ceiling:
         gain = peak_ceiling / peak

@@ -69,7 +69,6 @@ import logging
 import signal
 import time
 
-import httpx
 from sqlmodel import select
 
 from app.core.config import settings
@@ -84,27 +83,15 @@ from app.services import tts as tts_service
 from app.services import word_clips as word_clips_service
 from app.services.asr import ASRProvider, GroqASR, TranscriptResult
 from app.services.audio import persist_transcript_result
+from app.services.infra_errors import (  # noqa: F401 - re-exported: the worker's own names
+    NON_RETRYABLE_HTTP_STATUS_CODES,
+    NON_RETRYABLE_S3_ERROR_CODES,
+    RETRYABLE_HTTP_STATUS_CODES,
+    classify_error,
+)
 from app.services.storage import get_storage
 
 logger = logging.getLogger("app.worker")
-
-# §9.3 error classification.
-RETRYABLE_HTTP_STATUS_CODES = {408, 429, 500, 502, 503, 504}
-NON_RETRYABLE_HTTP_STATUS_CODES = {400, 413, 415, 422}
-
-# S3/R2 (botocore) error codes that mean "the object/bucket/credentials are
-# genuinely wrong" -- retrying won't help, so these stay non-retryable.
-# Everything else from botocore (throttling, 5xx, transient timeouts) is
-# treated as a transient infra hiccup -- retryable.
-NON_RETRYABLE_S3_ERROR_CODES = {
-    "NoSuchKey",
-    "NoSuchBucket",
-    "404",
-    "AccessDenied",
-    "InvalidAccessKeyId",
-    "SignatureDoesNotMatch",
-}
-
 
 def get_asr_provider() -> ASRProvider:
     """The ASR backend the worker uses. Only Groq is active today; swapping
@@ -158,46 +145,6 @@ async def claim_one(session: AsyncSession) -> AudioBlob | None:
     await session.commit()
     await session.refresh(blob)
     return blob
-
-
-def classify_error(exc: Exception) -> str:
-    """Map an exception raised while processing a blob to ``"retryable"`` or
-    ``"non_retryable"`` per §9.3.
-
-    Retryable: network timeouts/transport errors, HTTP
-    408/429/500/502/503/504, and transient storage-layer errors (R2/S3
-    throttling or 5xx via botocore, or a local-disk I/O hiccup) — these are
-    infra problems, not a problem with the audio, so they're worth retrying.
-    Non-retryable: HTTP 400/413/415/422, corrupt/unreadable audio, a storage
-    error that means the object genuinely doesn't exist or credentials are
-    wrong (retrying can't fix that), and any other unexpected error —
-    retrying the same bytes against the same provider would just fail the
-    same way, so these go straight to ``failed`` with no fallback provider
-    (§9.3 note).
-    """
-    if isinstance(exc, httpx.HTTPStatusError):
-        code = exc.response.status_code
-        return "retryable" if code in RETRYABLE_HTTP_STATUS_CODES else "non_retryable"
-    if isinstance(exc, (httpx.TimeoutException, httpx.TransportError)):
-        return "retryable"
-
-    # boto3/botocore is only actually exercised by R2Storage, but importing
-    # botocore.exceptions is cheap (boto3 is already a main dependency) and
-    # lets us classify storage errors instead of lumping every non-httpx
-    # exception into "non_retryable".
-    from botocore.exceptions import ClientError
-
-    if isinstance(exc, ClientError):
-        code = exc.response.get("Error", {}).get("Code", "")
-        return "non_retryable" if code in NON_RETRYABLE_S3_ERROR_CODES else "retryable"
-
-    if isinstance(exc, OSError):
-        # Local-disk hiccups (permission/IO blips) are infra -- retryable.
-        # A genuinely missing file means the blob's storage_key points at
-        # nothing, which retrying can't fix.
-        return "non_retryable" if isinstance(exc, FileNotFoundError) else "retryable"
-
-    return "non_retryable"
 
 
 def _is_empty_transcript(result: TranscriptResult) -> bool:
@@ -496,6 +443,10 @@ async def _lexicon_loop() -> None:
 #: Longest sleep after consecutive render failures.
 TTS_BACKOFF_MAX_S = 60.0
 
+#: How often the render loop runs its queue housekeeping (stale `processing`
+#: rows, old `failed` ones). One cheap UPDATE each.
+RENDER_MAINTENANCE_EVERY_S = 60.0
+
 
 async def render_once(
     synth: tts_service.Synth, *, keys: list[str] | None = None
@@ -525,6 +476,25 @@ async def render_once(
         return "retry"
 
 
+async def maintain_renders() -> tuple[int, int]:
+    """Queue housekeeping, run at the loop's start (the "startup recovery") and
+    every :data:`RENDER_MAINTENANCE_EVERY_S`: stale ``processing`` rows back to
+    ``pending``, old ``failed`` ones requeued. Never raises -- it runs inside
+    ``asyncio.gather`` beside the transcription loop, and a database that is
+    not up yet at startup must not take the worker down."""
+    try:
+        async with async_session_factory() as session:
+            recovered, requeued = await tts_service.maintain_queue(session)
+    except Exception:  # noqa: BLE001 - housekeeping only; the next pass retries
+        logger.exception("render queue maintenance failed; will retry")
+        return 0, 0
+    if recovered:
+        logger.info("recovered %d stale processing render(s) to pending", recovered)
+    if requeued:
+        logger.info("requeued %d old failed render(s)", requeued)
+    return recovered, requeued
+
+
 async def _render_loop() -> None:
     """Make the audio the app has asked for -- see the module docstring's
     "Text to speech" section."""
@@ -536,18 +506,21 @@ async def _render_loop() -> None:
         logger.info("text to speech disabled (kokoro is not installed in this image)")
         return
 
-    async with async_session_factory() as session:
-        recovered = await tts_service.recover_stale_renders(session)
-        if recovered:
-            logger.info("recovered %d stale processing render(s) to pending", recovered)
-
     synth = tts_service.KokoroSynth()
     logger.info(
         "text to speech polling every %.1fs (voice %s, max_attempts=%d)",
         interval, tts_service.VOICE, settings.tts_max_attempts,
     )
     failures = 0
+    last_maintenance = float("-inf")
     while not _stop_event.is_set():
+        # Recovery by AGE, inside the loop: a worker that died mid-render
+        # leaves a row `processing` for ever otherwise, and "everything
+        # processing" at startup would take rows a second live worker is
+        # making. `maintain_queue` never raises.
+        if time.monotonic() - last_maintenance >= RENDER_MAINTENANCE_EVERY_S:
+            last_maintenance = time.monotonic()
+            await maintain_renders()
         outcome = await render_once(synth)
         if outcome == "empty":
             failures = 0

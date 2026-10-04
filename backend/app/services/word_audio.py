@@ -65,7 +65,7 @@ from app.models.vocabulary import SavedWord
 from app.models.word_clip import ClipStatus, WordClip
 from app.services import pronunciation, tts
 from app.services.storage import get_storage
-from app.services.word_clips import normalise_form
+from app.services.word_clips import normalise_form, servable_clip_clauses
 
 
 @dataclass(frozen=True)
@@ -134,6 +134,11 @@ async def _blob_ids(
 async def _verified_clips(
     session: AsyncSession, forms: Iterable[str]
 ) -> dict[str, list[WordClip]]:
+    """The servable clips of each form: ``verified``, AND still allowed at
+    this moment -- the recording is still in a public material and the clip's
+    segment is still uncorrected (:func:`word_clips.servable_clip_clauses`).
+    Verification and indexing are earlier decisions; a material made private
+    afterwards must stop being heard now, not at the next seed run."""
     wanted = list(set(forms))
     if not wanted:
         return {}
@@ -143,6 +148,7 @@ async def _verified_clips(
                 WordClip.form.in_(wanted),
                 WordClip.status == ClipStatus.VERIFIED,
                 WordClip.storage_key.is_not(None),
+                *servable_clip_clauses(),
             )
         )
     ).all()

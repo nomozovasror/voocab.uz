@@ -48,7 +48,12 @@ class AudioRender(SQLModel, table=True):
     items) is the output once ``ready``. ``word_offset_ms`` is set for items
     only: where, inside the file, the word begins -- the moment the client
     counts as "the word was played" for the exposure log, and the one thing it
-    must not read off the lock screen."""
+    must not read off the lock screen.
+
+    ``updated_at`` is the heartbeat the queue's recovery reads: a
+    ``processing`` row not touched for ``tts_stale_after_s`` was left by a
+    worker that died, and goes back to ``pending`` (a live worker's row is
+    never that old, so recovery cannot steal one)."""
 
     __tablename__ = "audio_renders"
     __table_args__ = (Index("ix_audio_renders_claim", "status", "created_at"),)
@@ -65,6 +70,13 @@ class AudioRender(SQLModel, table=True):
     storage_key: str | None = Field(default=None)
     duration_ms: int | None = Field(default=None)
     word_offset_ms: int | None = Field(default=None)
+    #: A ``pending`` row is not claimable before this: a failure's back-off, so
+    #: a systemic fault (storage down, a model that will not load) walks the
+    #: queue once per back-off instead of burning every row's attempts in
+    #: seconds. ``None`` = claimable now.
+    next_attempt_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False),

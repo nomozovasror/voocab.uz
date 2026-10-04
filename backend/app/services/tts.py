@@ -64,11 +64,11 @@ import threading
 import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
-from sqlalchemy import case, func, update
+from sqlalchemy import case, func, or_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select
 
@@ -76,6 +76,7 @@ from app.core.config import settings
 from app.core.database import AsyncSession, async_session_factory
 from app.models.audio_render import AudioRender, RenderKind, RenderStatus
 from app.services import audio_pcm
+from app.services.infra_errors import InfrastructureError, guarded
 from app.services.storage import MediaStorage, get_storage
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,9 @@ MASK_PAUSE_MS = 400
 KEY_VERSION = 1
 
 AUDIO_MIME = "audio/mp4"
+
+#: Longest per-row wait between a render's own failed attempts.
+TTS_RETRY_BACKOFF_MAX_S = 3600.0
 
 #: Silence at the edges of synthesised speech is trimmed to this much.
 _EDGE_KEEP_MS = 60
@@ -129,11 +133,16 @@ class KokoroSynth:
 
     def _load(self) -> Any:
         if self._pipeline is None:
-            from kokoro import KPipeline  # lazy: the `tts` extra only
+            try:
+                from kokoro import KPipeline  # lazy: the `tts` extra only
 
-            self._pipeline = KPipeline(
-                lang_code=LANG_CODE, repo_id=MODEL, device=self._device
-            )
+                self._pipeline = KPipeline(
+                    lang_code=LANG_CODE, repo_id=MODEL, device=self._device
+                )
+            except Exception as exc:  # noqa: BLE001 - classified, not swallowed
+                # The model not loading is the machine's fault, not the word's:
+                # no render may spend an attempt on it (`process_render`).
+                raise InfrastructureError(f"Kokoro failed to load: {exc}") from exc
         return self._pipeline
 
     def __call__(self, text: str) -> np.ndarray:
@@ -333,7 +342,18 @@ async def enqueue(specs: Iterable[RenderSpec]) -> int:
     Runs on its OWN short transaction, committed at once. A GET handler never
     commits its session, and a request that later rolls back must not lose
     the work it already asked for; neither is the caller's transaction ours to
-    commit. Returns how many rows were new."""
+    commit. Returns how many rows were new.
+
+    The rows go in SORTED BY ``key``. A multi-row insert takes its row locks in
+    VALUES order, and ``ON CONFLICT DO NOTHING`` waits on a row another
+    transaction has inserted but not committed: two requests asking for
+    overlapping sets in different orders (a list page and a session build) would
+    each hold a lock the other wants -- a deadlock. One global order makes the
+    waits a queue instead of a cycle. The trade-off of the own transaction is
+    a second pooled connection while the request's own is open; at this scale
+    (a handful of requests at once, a pool of ten) that is cheap, and the
+    alternative -- inserting on the request's session -- would make a GET
+    commit."""
     rows = {
         spec.key: {
             "id": uuid.uuid4(),
@@ -350,6 +370,7 @@ async def enqueue(specs: Iterable[RenderSpec]) -> int:
     }
     if not rows:
         return 0
+    rows = dict(sorted(rows.items()))
     async with async_session_factory() as session:
         result = await session.execute(
             pg_insert(AudioRender).values(list(rows.values())).on_conflict_do_nothing(
@@ -366,7 +387,7 @@ async def requeue_failed(session: AsyncSession, *, kinds: Iterable[str] | None =
     stmt = (
         update(AudioRender)
         .where(AudioRender.status == RenderStatus.FAILED)
-        .values(status=RenderStatus.PENDING, attempts=0, error=None)
+        .values(status=RenderStatus.PENDING, attempts=0, error=None, next_attempt_at=None)
     )
     if kinds is not None:
         stmt = stmt.where(AudioRender.kind.in_(list(kinds)))
@@ -375,16 +396,65 @@ async def requeue_failed(session: AsyncSession, *, kinds: Iterable[str] | None =
     return result.rowcount or 0
 
 
-async def recover_stale_renders(session: AsyncSession) -> int:
-    """Startup recovery, like ``worker.recover_stale``: a render left
-    ``processing`` by a crashed worker goes back to ``pending``."""
-    result = await session.execute(
+async def recover_stale_renders(
+    session: AsyncSession, *, older_than_s: float | None = None
+) -> int:
+    """A render left ``processing`` by a dead worker goes back to ``pending``.
+
+    With ``older_than_s`` only rows not touched for that long (``updated_at``,
+    which claiming sets) are taken: a live worker's row is seconds old, so
+    recovery -- at another worker's startup, or from inside the loop -- never
+    steals one. ``None`` takes every ``processing`` row (a single-process
+    caller that knows nothing else is running: the seed script, tests)."""
+    stmt = (
         update(AudioRender)
         .where(AudioRender.status == RenderStatus.PROCESSING)
-        .values(status=RenderStatus.PENDING)
+        .values(status=RenderStatus.PENDING, next_attempt_at=None)
+    )
+    if older_than_s is not None:
+        stmt = stmt.where(
+            AudioRender.updated_at < func.now() - timedelta(seconds=older_than_s)
+        )
+    result = await session.execute(stmt)
+    await session.commit()
+    return result.rowcount or 0
+
+
+async def requeue_failed_older_than(session: AsyncSession, hours: float) -> int:
+    """``failed`` renders untouched for ``hours`` go back to ``pending`` with
+    their attempts reset: a fault that was since fixed (a model update, a
+    storage outage that outlasted the back-off) heals itself. A word that
+    always fails costs three attempts per period; nothing else does."""
+    result = await session.execute(
+        update(AudioRender)
+        .where(
+            AudioRender.status == RenderStatus.FAILED,
+            AudioRender.updated_at < func.now() - timedelta(hours=hours),
+        )
+        .values(status=RenderStatus.PENDING, attempts=0, error=None, next_attempt_at=None)
     )
     await session.commit()
     return result.rowcount or 0
+
+
+async def maintain_queue(session: AsyncSession) -> tuple[int, int]:
+    """The loop's housekeeping, from the settings: ``(stale processing rows
+    recovered, old failed rows requeued)``. Never raises -- recovery that
+    cannot run (a database blip) must not stop the loop it exists to keep
+    alive; the next pass tries again."""
+    recovered = requeued = 0
+    try:
+        recovered = await recover_stale_renders(
+            session, older_than_s=settings.tts_stale_after_s
+        )
+        if settings.tts_failed_requeue_h > 0:
+            requeued = await requeue_failed_older_than(
+                session, settings.tts_failed_requeue_h
+            )
+    except Exception:  # noqa: BLE001 - housekeeping only
+        logger.exception("render queue maintenance failed; will retry")
+        await session.rollback()
+    return recovered, requeued
 
 
 async def claim_render(
@@ -395,7 +465,9 @@ async def claim_render(
 ) -> AudioRender | None:
     """Atomically claim one ``pending`` render, or ``None`` when the queue is
     empty (or every pending row is locked by another worker): ``FOR UPDATE
-    SKIP LOCKED``, exactly :func:`app.worker.claim_one`'s shape.
+    SKIP LOCKED``, exactly :func:`app.worker.claim_one`'s shape. A row still
+    in its failure back-off (``next_attempt_at`` in the future) is not
+    claimable.
 
     Words first, then definitions, then items, oldest first within a kind: a
     request is most often waiting on a word, and an item would only have to
@@ -407,7 +479,10 @@ async def claim_render(
         (AudioRender.kind == RenderKind.DEFINITION, 1),
         else_=2,
     )
-    stmt = select(AudioRender).where(AudioRender.status == RenderStatus.PENDING)
+    stmt = select(AudioRender).where(
+        AudioRender.status == RenderStatus.PENDING,
+        or_(AudioRender.next_attempt_at.is_(None), AudioRender.next_attempt_at <= func.now()),
+    )
     if kinds is not None:
         stmt = stmt.where(AudioRender.kind.in_(list(kinds)))
     if keys is not None:
@@ -420,6 +495,7 @@ async def claim_render(
     if row is None:
         return None
     row.status = RenderStatus.PROCESSING
+    row.updated_at = datetime.now(timezone.utc)  # the heartbeat stale recovery reads
     session.add(row)
     await session.commit()
     await session.refresh(row)
@@ -447,6 +523,8 @@ async def _tts_part(
     if row is not None and row.status == RenderStatus.READY and row.storage_key:
         try:
             return await asyncio.to_thread(audio_pcm.decode_range, await storage.get(row.storage_key))
+        except InfrastructureError:
+            raise  # storage is down: remaking would fail the same way, and say so
         except Exception:  # noqa: BLE001 - the file is gone; fall through and remake it
             logger.warning("render %s is ready but unreadable; remaking", spec.key)
     samples = await asyncio.to_thread(_synthesise, spec, synth)
@@ -538,10 +616,14 @@ async def process_render(
 ) -> None:
     """Make one claimed (``processing``) render and resolve its row. Never
     raises: a failure is recorded on the row (``pending`` again with
-    ``attempts`` bumped, or ``failed`` once ``max_attempts`` is reached) --
-    the same contract as ``worker.process_blob``, for the same reason: one
-    bad input must not take down the loop that serves every other."""
-    storage = storage or get_storage()
+    ``attempts`` bumped and a back-off before it may be claimed again, or
+    ``failed`` once ``max_attempts`` is reached) -- the same contract as
+    ``worker.process_blob``, for the same reason: one bad input must not take
+    down the loop that serves every other. An INFRASTRUCTURE fault (storage
+    down, Kokoro not loading: :class:`InfrastructureError`) spends no attempt
+    at all: the row goes back to ``pending`` behind a back-off, so a systemic
+    outage leaves the queue waiting rather than failed."""
+    storage = guarded(storage or get_storage())
     limit = max_attempts if max_attempts is not None else settings.tts_max_attempts
     row_id, kind, key = row.id, row.kind, row.key
     try:
@@ -562,11 +644,27 @@ async def process_render(
         fresh = await session.get(AudioRender, row_id)
         if fresh is None:
             return
-        fresh.attempts += 1
         fresh.error = message[:2000]
-        fresh.status = (
-            RenderStatus.FAILED if fresh.attempts >= limit else RenderStatus.PENDING
-        )
+        # Due times are the DATABASE's clock (`now()`), the same one `claim_render`
+        # compares them with: a worker's own clock never decides when a row is due.
+        if isinstance(exc, InfrastructureError):
+            # The world's fault (storage down, the model did not load), not this
+            # render's: no attempt is spent, so an outage cannot walk the whole
+            # queue to `failed`. It waits out a back-off and is tried again.
+            fresh.status = RenderStatus.PENDING
+            fresh.next_attempt_at = func.now() + timedelta(seconds=settings.tts_infra_backoff_s)
+        else:
+            fresh.attempts += 1
+            if fresh.attempts >= limit:
+                fresh.status, fresh.next_attempt_at = RenderStatus.FAILED, None
+            else:
+                fresh.status = RenderStatus.PENDING
+                fresh.next_attempt_at = func.now() + timedelta(
+                    seconds=min(
+                        settings.tts_retry_backoff_s * 2 ** (fresh.attempts - 1),
+                        TTS_RETRY_BACKOFF_MAX_S,
+                    )
+                )
         session.add(fresh)
         await session.commit()
         return
@@ -578,6 +676,7 @@ async def process_render(
     fresh.duration_ms = duration
     fresh.word_offset_ms = offset
     fresh.error = None
+    fresh.next_attempt_at = None
     session.add(fresh)
     await session.commit()
 

@@ -2,18 +2,30 @@
 silence, item composition, and the render queue's claim / fail / retry path.
 Kokoro is a fake; PyAV is real."""
 
+import asyncio
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pytest
 from sqlalchemy import update
 from sqlmodel import select
 
+from app.core.config import settings
 from app.core.database import async_session_factory
 from app.models.audio_render import AudioRender, RenderKind, RenderStatus
 from app.services import audio_pcm, tts
-from app.worker import render_once
-from tests.audio_helpers import Created, FakeStorage, FakeSynth, tone, unique_word
+from app.services.infra_errors import InfrastructureError
+from app.worker import maintain_renders, render_once
+from tests.audio_helpers import (
+    Created,
+    FakeStorage,
+    FakeSynth,
+    FlakyStorage,
+    s3_error,
+    tone,
+    unique_word,
+)
 
 SR = audio_pcm.SAMPLE_RATE
 
@@ -23,6 +35,14 @@ async def created():
     made = Created()
     yield made
     await made.cleanup()
+
+
+@pytest.fixture(autouse=True)
+def no_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Most tests drive one render through several attempts back to back; the
+    back-off has its own tests, which set it explicitly."""
+    monkeypatch.setattr(settings, "tts_retry_backoff_s", 0.0)
+    monkeypatch.setattr(settings, "tts_infra_backoff_s", 0.0)
 
 
 def _longest_zero_run(samples: np.ndarray) -> int:
@@ -208,6 +228,65 @@ async def test_recover_stale_puts_processing_rows_back(created: Created) -> None
     assert (await _row(spec.key)).status == RenderStatus.PENDING
 
 
+async def _age(key: str, *, seconds: float, status: str | None = None) -> None:
+    """Make a row look untouched for ``seconds``."""
+    values: dict = {"updated_at": datetime.now(timezone.utc) - timedelta(seconds=seconds)}
+    if status is not None:
+        values["status"] = status
+    async with async_session_factory() as session:
+        await session.execute(update(AudioRender).where(AudioRender.key == key).values(**values))
+        await session.commit()
+
+
+async def test_recovery_by_age_takes_a_dead_workers_row_and_not_a_live_ones(
+    created: Created,
+) -> None:
+    dead, live = tts.word_spec(unique_word(), None), tts.word_spec(unique_word(), None)
+    created.render_keys.extend([dead.key, live.key])
+    await tts.enqueue([dead, live])
+    async with async_session_factory() as session:
+        await tts.claim_render(session, keys=[dead.key])
+        await tts.claim_render(session, keys=[live.key])  # claiming is the heartbeat
+    await _age(dead.key, seconds=settings.tts_stale_after_s + 60)
+    async with async_session_factory() as session:
+        await tts.recover_stale_renders(session, older_than_s=settings.tts_stale_after_s)
+    assert (await _row(dead.key)).status == RenderStatus.PENDING
+    assert (await _row(live.key)).status == RenderStatus.PROCESSING  # another worker's
+
+
+async def test_the_loops_housekeeping_recovers_a_stuck_row_and_never_raises(
+    created: Created, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stuck = tts.word_spec(unique_word(), None)
+    created.render_keys.append(stuck.key)
+    await tts.enqueue([stuck])
+    async with async_session_factory() as session:
+        await tts.claim_render(session, keys=[stuck.key])
+    await _age(stuck.key, seconds=settings.tts_stale_after_s + 60)
+    await maintain_renders()
+    assert (await _row(stuck.key)).status == RenderStatus.PENDING
+
+    # A database that is down at startup must not escape into asyncio.gather.
+    def broken():
+        raise ConnectionError("db is not up yet")
+
+    monkeypatch.setattr("app.worker.async_session_factory", broken)
+    assert await maintain_renders() == (0, 0)
+
+
+async def test_an_old_failed_render_is_requeued_a_recent_one_is_not(created: Created) -> None:
+    old, recent = tts.word_spec(unique_word(), None), tts.word_spec(unique_word(), None)
+    created.render_keys.extend([old.key, recent.key])
+    await tts.enqueue([old, recent])
+    await _age(old.key, seconds=7 * 3600, status=RenderStatus.FAILED)
+    await _age(recent.key, seconds=60, status=RenderStatus.FAILED)
+    async with async_session_factory() as session:
+        await tts.requeue_failed_older_than(session, hours=settings.tts_failed_requeue_h)
+    assert (await _row(old.key)).status == RenderStatus.PENDING
+    assert (await _row(old.key)).attempts == 0
+    assert (await _row(recent.key)).status == RenderStatus.FAILED
+
+
 async def test_a_word_render_is_made_stored_and_marked_ready(created: Created) -> None:
     spec = tts.word_spec(unique_word(), None)
     created.render_keys.append(spec.key)
@@ -249,6 +328,127 @@ async def test_a_failing_render_goes_back_to_pending_then_to_failed(created: Cre
         assert await tts.requeue_failed(session, kinds=[RenderKind.WORD]) >= 1
     assert (await _row(spec.key)).status == RenderStatus.PENDING
     assert (await _row(spec.key)).attempts == 0
+
+
+async def _make(spec: tts.RenderSpec, synth, storage, *, max_attempts: int = 3) -> AudioRender:
+    async with async_session_factory() as session:
+        row = await tts.claim_render(session, keys=[spec.key])
+        assert row is not None
+        await tts.process_render(session, row, synth, storage, max_attempts=max_attempts)
+    return await _row(spec.key)
+
+
+async def test_a_failed_attempt_backs_off_before_it_can_be_claimed_again(
+    created: Created, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "tts_retry_backoff_s", 60.0)
+    spec = tts.word_spec(unique_word(), None)
+    created.render_keys.append(spec.key)
+    await tts.enqueue([spec])
+    row = await _make(spec, FakeSynth(fail_on=spec.input), FakeStorage())
+    assert (row.status, row.attempts) == (RenderStatus.PENDING, 1)
+    assert row.next_attempt_at is not None
+    wait = (row.next_attempt_at - datetime.now(timezone.utc)).total_seconds()
+    assert 50 < wait <= 60
+    async with async_session_factory() as session:
+        assert await tts.claim_render(session, keys=[spec.key]) is None  # waiting it out
+    async with async_session_factory() as session:
+        await session.execute(
+            update(AudioRender)
+            .where(AudioRender.key == spec.key)
+            .values(next_attempt_at=datetime.now(timezone.utc) - timedelta(seconds=1))
+        )
+        await session.commit()
+        assert await tts.claim_render(session, keys=[spec.key]) is not None  # due
+
+
+async def test_a_systemic_failure_leaves_every_row_pending_with_a_back_off(
+    created: Created, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Storage down: a pass over the whole queue, three times over, must not
+    walk it to `failed` -- no attempt is spent, and no row is claimable until
+    the back-off has passed."""
+    monkeypatch.setattr(settings, "tts_infra_backoff_s", 120.0)
+    specs = [tts.word_spec(unique_word(), None) for _ in range(4)]
+    created.render_keys.extend(s.key for s in specs)
+    await tts.enqueue(specs)
+    storage = FlakyStorage()
+    storage.put_error = s3_error("SlowDown")
+    for spec in specs:
+        row = await _make(spec, FakeSynth(), storage, max_attempts=1)  # one strike would fail it
+        assert (row.status, row.attempts) == (RenderStatus.PENDING, 0)
+        assert row.next_attempt_at is not None and "SlowDown" in row.error
+    async with async_session_factory() as session:
+        assert await tts.claim_render(session, keys=[s.key for s in specs]) is None
+    # The outage ends and the back-off passes: they are made.
+    storage.put_error = None
+    async with async_session_factory() as session:
+        await session.execute(
+            update(AudioRender)
+            .where(AudioRender.key.in_([s.key for s in specs]))
+            .values(next_attempt_at=None)
+        )
+        await session.commit()
+    for spec in specs:
+        assert (await _make(spec, FakeSynth(), storage)).status == RenderStatus.READY
+
+
+async def test_a_model_that_will_not_load_spends_no_attempts(created: Created) -> None:
+    spec = tts.word_spec(unique_word(), None)
+    created.render_keys.append(spec.key)
+    await tts.enqueue([spec])
+
+    def not_loaded(text: str) -> np.ndarray:
+        raise InfrastructureError("Kokoro failed to load: no weights")
+
+    row = await _make(spec, not_loaded, FakeStorage(), max_attempts=1)
+    assert (row.status, row.attempts) == (RenderStatus.PENDING, 0)
+
+
+async def test_a_permanent_storage_error_still_counts_as_an_attempt(created: Created) -> None:
+    spec = tts.word_spec(unique_word(), None)
+    created.render_keys.append(spec.key)
+    await tts.enqueue([spec])
+    storage = FlakyStorage()
+    storage.put_error = s3_error("AccessDenied")  # credentials wrong: retrying cannot help
+    row = await _make(spec, FakeSynth(), storage, max_attempts=1)
+    assert (row.status, row.attempts) == (RenderStatus.FAILED, 1)
+
+
+async def test_overlapping_enqueues_in_different_orders_do_not_deadlock(
+    created: Created,
+) -> None:
+    for _round in range(5):
+        shared = [tts.word_spec(unique_word(), None) for _ in range(60)]
+        only_a = [tts.word_spec(unique_word(), None) for _ in range(20)]
+        only_b = [tts.word_spec(unique_word(), None) for _ in range(20)]
+        created.render_keys.extend(s.key for s in shared + only_a + only_b)
+        first = [*shared, *only_a]
+        second = [*reversed(shared), *only_b]  # the same rows, the opposite order
+        results = await asyncio.gather(tts.enqueue(first), tts.enqueue(second))
+        assert sum(results) == len(shared) + len(only_a) + len(only_b)
+
+
+async def test_enqueue_inserts_in_key_order(created: Created, monkeypatch: pytest.MonkeyPatch) -> None:
+    specs = [tts.word_spec(unique_word(), None) for _ in range(10)]
+    created.render_keys.extend(s.key for s in specs)
+    seen: list[list[str]] = []
+    real_values = tts.pg_insert
+
+    def spy(table):
+        stmt = real_values(table)
+        original = stmt.values
+
+        def values(rows):
+            seen.append([r["key"] for r in rows])
+            return original(rows)
+
+        stmt.values = values  # type: ignore[method-assign]
+        return stmt
+
+    monkeypatch.setattr(tts, "pg_insert", spy)
+    await tts.enqueue(list(reversed(specs)))
+    assert seen == [sorted(s.key for s in specs)]
 
 
 async def test_an_item_is_composed_from_parts_it_makes_itself(created: Created) -> None:

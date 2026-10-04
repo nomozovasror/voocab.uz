@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from sqlalchemy import delete
 from sqlalchemy import select as sa_select
+from sqlmodel import select
 
 from app.core.database import async_session_factory
 from app.models.audio_asset import AudioAsset
@@ -73,6 +74,32 @@ class FakeStorage:
         return f"/media/{key}"
 
 
+class FlakyStorage(FakeStorage):
+    """A storage that raises ``get_error`` / ``put_error`` while they are set --
+    an outage that a test can end."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.get_error: Exception | None = None
+        self.put_error: Exception | None = None
+
+    async def put(self, key: str, data: bytes, mime_type: str) -> None:
+        if self.put_error is not None:
+            raise self.put_error
+        await super().put(key, data, mime_type)
+
+    async def get(self, key: str) -> bytes:
+        if self.get_error is not None:
+            raise self.get_error
+        return await super().get(key)
+
+
+def s3_error(code: str) -> Exception:
+    from botocore.exceptions import ClientError
+
+    return ClientError({"Error": {"Code": code, "Message": code}}, "GetObject")
+
+
 @dataclass
 class Created:
     """What a test made, for one call to :meth:`cleanup`."""
@@ -83,6 +110,8 @@ class Created:
     user_ids: list[uuid.UUID] = field(default_factory=list)
     material_ids: list[uuid.UUID] = field(default_factory=list)
     asset_ids: list[uuid.UUID] = field(default_factory=list)
+    #: The one user who owns every recording ``attach`` makes for a test.
+    owner_id: uuid.UUID | None = None
 
     async def cleanup(self) -> None:
         async with async_session_factory() as session:
@@ -134,14 +163,54 @@ def sentence(tokens: list[str], *, start_ms: int = 1000, each_ms: int = 400) -> 
     return out
 
 
+async def attach(
+    created: Created, blob: AudioBlob, visibility: str | None = "public"
+) -> tuple[AudioAsset, Material | None]:
+    """An owner's asset over ``blob``, and -- unless ``visibility`` is ``None``
+    -- a listening material of that visibility using it. ``None`` is an
+    unattached upload: some user's private file, in no material at all."""
+    if created.owner_id is None:
+        created.owner_id = (await make_user(created)).id
+    async with async_session_factory() as session:
+        asset = (
+            await session.exec(
+                select(AudioAsset).where(
+                    AudioAsset.owner_id == created.owner_id, AudioAsset.blob_id == blob.id
+                )
+            )
+        ).first()
+        if asset is None:
+            asset = AudioAsset(owner_id=created.owner_id, blob_id=blob.id)
+            session.add(asset)
+            await session.flush()
+            created.asset_ids.append(asset.id)
+        material = None
+        if visibility is not None:
+            material = Material(
+                author_id=created.owner_id,
+                type="listening",
+                title="audio test",
+                audio_asset_id=asset.id,
+                visibility=visibility,
+            )
+            session.add(material)
+            await session.flush()
+            created.material_ids.append(material.id)
+        await session.commit()
+    return asset, material
+
+
 async def make_blob(
     created: Created,
     segments: list[list[dict]],
     *,
     duration_ms: int = 60_000,
     status: str = TranscriptStatus.READY,
+    visibility: str | None = "public",
 ) -> AudioBlob:
-    """A ready blob with one ``AudioSegment`` per list of words."""
+    """A ready blob with one ``AudioSegment`` per list of words, used by a
+    PUBLIC material by default -- the only kind of recording a clip may come
+    from. ``visibility="private"`` or ``None`` (no material) make the others."""
     async with async_session_factory() as session:
         blob = AudioBlob(
             sha256=f"test-{uuid.uuid4().hex}",
@@ -167,6 +236,8 @@ async def make_blob(
         await session.commit()
         await session.refresh(blob)
     created.blob_ids.append(blob.id)
+    if visibility is not None:
+        await attach(created, blob, visibility)
     return blob
 
 
@@ -241,3 +312,39 @@ async def add_clip(
         await session.commit()
         await session.refresh(clip)
     return clip
+
+
+def encode_mp3(left: np.ndarray, right: np.ndarray | None = None, *, rate: int = 44_100) -> bytes:
+    """``left``/``right`` (float32 at ``rate``) as a stereo MP3 -- what the
+    material recordings really look like (44.1 kHz stereo), as opposed to the
+    24 kHz mono AAC the layer itself stores. Through a real file: PyAV's mp3
+    muxer wants a seekable output with a name."""
+    import os
+    import tempfile
+    from fractions import Fraction
+
+    import av
+
+    right = left if right is None else right
+    pcm = np.clip(np.stack([left, right]), -1.0, 1.0).astype(np.float32)
+    with tempfile.TemporaryDirectory() as workdir:
+        path = os.path.join(workdir, "in.mp3")
+        with av.open(path, mode="w", format="mp3") as container:
+            stream = container.add_stream("libmp3lame", rate=rate, layout="stereo")
+            stream.bit_rate = 128_000
+            pts = 0
+            for offset in range(0, pcm.shape[1], rate):
+                piece = np.ascontiguousarray(pcm[:, offset : offset + rate])
+                frame = av.AudioFrame.from_ndarray(
+                    piece.reshape(1, -1, order="F").copy(), format="flt", layout="stereo"
+                )
+                frame.sample_rate = rate
+                frame.pts = pts
+                frame.time_base = Fraction(1, rate)
+                pts += piece.shape[1]
+                for packet in stream.encode(frame):
+                    container.mux(packet)
+            for packet in stream.encode(None):
+                container.mux(packet)
+        with open(path, "rb") as handle:
+            return handle.read()

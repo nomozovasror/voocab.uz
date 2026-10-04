@@ -17,7 +17,12 @@ class OnTheGoExposure(SQLModel, table=True):
     for the learner's own history and for the day somebody asks how often a
     word was heard before it was known. ``mode`` is a plain string for the
     same reason ``exercise_type`` is -- a second audio mode is a value, not a
-    migration."""
+    migration.
+
+    ``saved_word_id`` is ``ON DELETE SET NULL`` and ``lemma`` is copied onto
+    the row, exactly as ``VocabularyReviewLog`` does: forgetting a word is a
+    decision about a list, not about the history of what was heard, and the
+    row must still say which word it was once the pointer is null."""
 
     __tablename__ = "on_the_go_exposures"
     __table_args__ = (Index("ix_on_the_go_exposures_user_played", "user_id", "played_at"),)
@@ -30,13 +35,17 @@ class OnTheGoExposure(SQLModel, table=True):
             nullable=False,
         )
     )
-    saved_word_id: uuid.UUID = Field(
+    saved_word_id: uuid.UUID | None = Field(
+        default=None,
         sa_column=Column(
             SA_UUID(as_uuid=True),
-            ForeignKey("saved_words.id", ondelete="CASCADE"),
-            nullable=False,
+            ForeignKey("saved_words.id", ondelete="SET NULL"),
+            nullable=True,
             index=True,
-        )
+        ),
+    )
+    lemma: str = Field(
+        default="", max_length=80, sa_column_kwargs={"server_default": ""}
     )
     played_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
@@ -53,7 +62,8 @@ class SpeakMiss(SQLModel, table=True):
     written to FSRS or the review log -- this row is the only trace. It keeps
     the browser's alternatives verbatim (up to five strings) so the matcher's
     rules can be tuned against what recognition really returned for a word,
-    which is the one thing nobody can guess in advance."""
+    which is the one thing nobody can guess in advance. ``saved_word_id`` /
+    ``lemma``: as on :class:`OnTheGoExposure` -- the miss outlives the word."""
 
     __tablename__ = "speak_misses"
     __table_args__ = (Index("ix_speak_misses_user_created", "user_id", "created_at"),)
@@ -66,13 +76,17 @@ class SpeakMiss(SQLModel, table=True):
             nullable=False,
         )
     )
-    saved_word_id: uuid.UUID = Field(
+    saved_word_id: uuid.UUID | None = Field(
+        default=None,
         sa_column=Column(
             SA_UUID(as_uuid=True),
-            ForeignKey("saved_words.id", ondelete="CASCADE"),
-            nullable=False,
+            ForeignKey("saved_words.id", ondelete="SET NULL"),
+            nullable=True,
             index=True,
-        )
+        ),
+    )
+    lemma: str = Field(
+        default="", max_length=80, sa_column_kwargs={"server_default": ""}
     )
     attempt: int
     alternatives: list[str] = Field(

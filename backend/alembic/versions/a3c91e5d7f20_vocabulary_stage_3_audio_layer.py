@@ -17,7 +17,9 @@ migration of their own:
 * `vocabulary_settings.pronunciation` -- default TRUE, every existing row set
   to true (decision 20: nobody ever chose false, the control did not exist).
 * `on_the_go_exposures` -- the exposure log (decision 14).
-* `speak_misses` -- the speak-miss log (decision 18).
+* `speak_misses` -- the speak-miss log (decision 18). Both keep their rows
+  when a saved word is forgotten (`saved_word_id` is ON DELETE SET NULL, the
+  `lemma` is copied), like `vocabulary_review_logs`.
 
 Reversible: `downgrade()` drops them in the opposite order and puts the
 settings default back.
@@ -89,6 +91,8 @@ def upgrade() -> None:
             "updated_at", sa.DateTime(timezone=True), nullable=False,
             server_default=sa.func.now(),
         ),
+        # A row is not claimable before this (a failure's back-off).
+        sa.Column("next_attempt_at", sa.DateTime(timezone=True), nullable=True),
     )
     op.create_index("ix_audio_renders_key", "audio_renders", ["key"], unique=True)
     op.create_index("ix_audio_renders_claim", "audio_renders", ["status", "created_at"])
@@ -112,8 +116,11 @@ def upgrade() -> None:
         ),
         sa.Column(
             "saved_word_id", postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("saved_words.id", ondelete="CASCADE"), nullable=False,
+            sa.ForeignKey("saved_words.id", ondelete="SET NULL"), nullable=True,
         ),
+        # Copied, like vocabulary_review_logs.lemma: forgetting a word keeps
+        # its history, and the row must still say which word it was about.
+        sa.Column("lemma", sa.String(80), nullable=False, server_default=""),
         sa.Column("played_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("mode", sa.String(16), nullable=False, server_default="on_the_go"),
     )
@@ -133,8 +140,11 @@ def upgrade() -> None:
         ),
         sa.Column(
             "saved_word_id", postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("saved_words.id", ondelete="CASCADE"), nullable=False,
+            sa.ForeignKey("saved_words.id", ondelete="SET NULL"), nullable=True,
         ),
+        # Copied, like vocabulary_review_logs.lemma: forgetting a word keeps
+        # its history, and the row must still say which word it was about.
+        sa.Column("lemma", sa.String(80), nullable=False, server_default=""),
         sa.Column("attempt", sa.Integer(), nullable=False),
         sa.Column(
             "alternatives", postgresql.JSONB(), nullable=False, server_default="[]"

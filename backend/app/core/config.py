@@ -130,6 +130,22 @@ class Settings(BaseSettings):
     # Sleep after a failed render: base * 2 ** (consecutive failures - 1),
     # capped at a minute, so a broken model cannot spin the loop.
     tts_backoff_base_s: float = 5.0
+    # A render that failed for a REASON OF ITS OWN is not claimable again for
+    # base * 2 ** (attempts - 1) seconds (capped at an hour): a systemic fault
+    # then walks the queue once per back-off instead of burning every row's
+    # attempts in seconds.
+    tts_retry_backoff_s: float = 60.0
+    # Infrastructure faults (storage down, the model failed to load) do not
+    # count as attempts; the row waits this long and is tried again.
+    tts_infra_backoff_s: float = 60.0
+    # A `processing` render not touched for this long was left by a dead
+    # worker: back to `pending`. Age, not "everything processing", so one
+    # worker's recovery never takes a row another is making right now.
+    tts_stale_after_s: float = 900.0
+    # `failed` renders are put back to `pending` (attempts reset) after this
+    # many hours, so a fault that has since been fixed heals without anyone
+    # running `requeue_failed`. 0 disables it.
+    tts_failed_requeue_h: float = 6.0
     # How often the worker indexes and cuts clips for recordings that became
     # ready since it last looked. 0 disables it. Clips are only SERVED once
     # `seed_tts verify-clips` has verified them; this keeps the pipeline

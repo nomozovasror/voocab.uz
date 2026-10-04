@@ -50,10 +50,25 @@ because they run in three separate places:
 * **Plausible timings only.** A word shorter than 60 ms or longer than 1.5 s
   per word is an alignment artefact (ASR "words" can swallow a pause), not a
   word, and the verifier would only spend GPU time rejecting it.
-* **Not from a recording only private materials use.** A clip is a derivative
-  served to everyone, so a blob that is attached to materials and to NONE
-  that is public is not a source. A blob attached to no material at all (the
-  owner's seeded library, before it is published) is.
+* **Only from a recording a PUBLIC material uses.** A clip is a derivative
+  served to everyone, so eligibility is POSITIVE: a blob is a source only if at
+  least one material with ``visibility = 'public'`` uses it (``materials
+  .audio_asset_id`` -> ``audio_asset.blob_id``). A blob in no material at all
+  is NOT a source -- an unattached upload is some Studio user's private file,
+  and "nobody has said it is private" is not "its owner published it". The same
+  test is made again when a clip is SERVED (:func:`servable_clip_clauses`): a
+  material turned private after verification takes its clips out of service
+  at once, and so does a correction (``transcript_overrides``) made after.
+* **A failed clip does not hold a slot.** ``failed`` is a fault of the cut
+  (an undecodable recording), not an answer about the word, so it does not
+  count toward the three and the form may get a replacement -- from another
+  recording: the blob that failed is not offered again for that form. A
+  *transient* storage error is not a failure at all: the row stays
+  ``candidate`` for the next pass (see :func:`cut_clips`).
+* **A clip too quiet to level is unusable** (:data:`~app.services.audio_pcm
+  .MIN_USABLE_DBFS`): levelling is capped, so a near-silent window would
+  otherwise be served as noise. It goes ``failed`` with the reason, and TTS
+  serves the word.
 
 ## Padding
 
@@ -72,7 +87,7 @@ from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import exists, or_
+from sqlalchemy import String, cast, exists, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select
 
@@ -84,6 +99,7 @@ from app.models.lexicon import Lexeme
 from app.models.material import Material
 from app.models.word_clip import ClipStatus, WordClip
 from app.services import audio_pcm, pronunciation
+from app.services.infra_errors import InfrastructureError, guarded
 from app.services.storage import MediaStorage, get_storage, sha256_hex
 
 logger = logging.getLogger(__name__)
@@ -323,21 +339,44 @@ async def lexicon_forms(session: AsyncSession) -> set[str]:
     return {form for form in (normalise_form(lemma) for lemma in lemmas) if form}
 
 
-def _eligible_blob_clause():
-    """Ready, and not used only by private materials (see the module
-    docstring)."""
-    has_material = exists().where(
-        AudioAsset.blob_id == AudioBlob.id, Material.audio_asset_id == AudioAsset.id
-    )
-    has_public = exists().where(
-        AudioAsset.blob_id == AudioBlob.id,
+def _used_by_public_material(blob_id_column):
+    """EXISTS: a material with ``visibility = 'public'`` plays this blob. The
+    ONLY way a recording becomes a clip source -- no material, or only private
+    ones, is not."""
+    return exists().where(
+        AudioAsset.blob_id == blob_id_column,
         Material.audio_asset_id == AudioAsset.id,
         Material.visibility == "public",
     )
+
+
+def _eligible_blob_clause():
+    """Ready, and used by at least one public material (see the module
+    docstring). Clauses over ``AudioBlob``."""
     return (
         AudioBlob.transcript_status == TranscriptStatus.READY,
-        or_(~has_material, has_public),
+        _used_by_public_material(AudioBlob.id),
     )
+
+
+def servable_clip_clauses():
+    """Clauses over ``WordClip`` that must hold at SERVE time, on top of
+    ``status = 'verified'``: the recording is STILL a source (ready, still in a
+    public material) and the clip's segment is STILL uncorrected by any asset
+    over that recording. Indexing checked both once; a material can be made
+    private, or a segment corrected, any time after a clip was verified."""
+    still_a_source = exists().where(
+        AudioBlob.id == WordClip.blob_id,
+        AudioBlob.transcript_status == TranscriptStatus.READY,
+        _used_by_public_material(AudioBlob.id),
+    )
+    corrected = exists().where(
+        AudioAsset.blob_id == WordClip.blob_id,
+        func.jsonb_exists(
+            AudioAsset.transcript_overrides, cast(WordClip.segment_order_index, String)
+        ),
+    )
+    return (still_a_source, ~corrected)
 
 
 async def _overridden_segments(
@@ -393,9 +432,15 @@ async def index_clips(
         query = query.where(AudioBlob.id.in_(list(blob_ids)))
     blobs = (await session.exec(query.order_by(AudioBlob.created_at, AudioBlob.id))).all()
 
-    # What already exists, per form: which places and which recordings.
+    # What already exists, per form: which places and which recordings. A
+    # `failed` row keeps its PLACE taken (it would only fail again) but not its
+    # slot, and its recording is not offered again for the form: failing is a
+    # fault of the cut, not an answer about the word, so the form may get a
+    # replacement from elsewhere.
     taken_places: dict[str, set[tuple[uuid.UUID, int, int, int]]] = defaultdict(set)
     taken_blobs: dict[str, set[uuid.UUID]] = defaultdict(set)
+    failed_blobs: dict[str, set[uuid.UUID]] = defaultdict(set)
+    holding: dict[str, int] = defaultdict(int)
     existing = (
         await session.exec(
             select(
@@ -404,12 +449,17 @@ async def index_clips(
                 WordClip.segment_order_index,
                 WordClip.word_start_index,
                 WordClip.word_end_index,
+                WordClip.status,
             )
         )
     ).all()
-    for form, blob_id, seg, i, j in existing:
+    for form, blob_id, seg, i, j, status in existing:
         taken_places[form].add((blob_id, seg, i, j))
-        taken_blobs[form].add(blob_id)
+        if status == ClipStatus.FAILED:
+            failed_blobs[form].add(blob_id)
+        else:
+            taken_blobs[form].add(blob_id)
+            holding[form] += 1
 
     found: dict[str, list[Occurrence]] = defaultdict(list)
     for offset in range(0, len(blobs), blob_batch):
@@ -441,11 +491,11 @@ async def index_clips(
     rows: list[dict] = []
     now = datetime.now(timezone.utc)
     for form, occurrences in found.items():
-        slots = MAX_PER_FORM - len(taken_places.get(form, ()))
+        slots = MAX_PER_FORM - holding.get(form, 0)
         if slots <= 0:
             continue
         for o in choose_candidates(
-            occurrences,
+            (o for o in occurrences if o.blob_id not in failed_blobs.get(form, ())),
             taken_places=taken_places.get(form, set()),
             taken_blobs=taken_blobs.get(form, set()),
             slots=slots,
@@ -491,13 +541,25 @@ async def unindexed_blob_ids(
 
 # --- Cut ----------------------------------------------------------------------
 
+class UnusableClip(ValueError):
+    """The window cannot become a clip: nothing there, or too quiet to level."""
+
+
 def cut_window(data: bytes, start_ms: int, end_ms: int) -> bytes:
     """One window of ``data`` as a levelled 24 kHz mono AAC m4a. Raises
-    ``ValueError`` if the window decodes to nothing (a timestamp past the end
-    of a truncated file)."""
+    :class:`UnusableClip` (a ``ValueError``) if the window decodes to nothing (a
+    timestamp past the end of a truncated file) or is quieter than
+    :data:`audio_pcm.MIN_USABLE_DBFS` -- levelling is capped, so a window like
+    that would be served as amplified noise rather than a word."""
     samples = audio_pcm.decode_range(data, start_ms, end_ms)
     if len(samples) < audio_pcm.SAMPLE_RATE // 100:  # under 10 ms
-        raise ValueError(f"nothing to cut at {start_ms}-{end_ms} ms")
+        raise UnusableClip(f"nothing to cut at {start_ms}-{end_ms} ms")
+    level = audio_pcm.rms_dbfs(samples)
+    if level < audio_pcm.MIN_USABLE_DBFS:
+        raise UnusableClip(
+            f"too quiet at {start_ms}-{end_ms} ms ({level:.0f} dBFS, "
+            f"floor {audio_pcm.MIN_USABLE_DBFS:.0f})"
+        )
     return audio_pcm.encode_m4a(audio_pcm.normalise_rms(samples))
 
 
@@ -505,6 +567,9 @@ def cut_window(data: bytes, start_ms: int, end_ms: int) -> bytes:
 class CutReport:
     cut: int = 0
     failed: int = 0
+    #: Left ``candidate`` because storage had a transient fault; the next pass
+    #: tries again.
+    deferred: int = 0
 
 
 async def cut_clips(
@@ -521,9 +586,13 @@ async def cut_clips(
     Grouped by recording so each blob's bytes are fetched once however many
     clips come from it. A clip that cannot be cut goes to ``failed`` with the
     reason, and the rest carry on -- one truncated recording must not stop a
-    library-wide run. Rows are claimed ``FOR UPDATE SKIP LOCKED`` so the seed
+    library-wide run. A TRANSIENT storage error (throttling, a disk blip --
+    ``infra_errors.classify_error``) is not the clip's fault: its rows stay
+    ``candidate`` for the next pass, and only a permanent error (an undecodable
+    or missing recording, a window with nothing audible in it) marks ``failed``.
+    Rows are claimed ``FOR UPDATE SKIP LOCKED`` so the seed
     script and the worker can overlap without cutting twice."""
-    storage = storage or get_storage()
+    storage = guarded(storage or get_storage())
     report = CutReport()
     query = (
         select(WordClip)
@@ -542,20 +611,37 @@ async def cut_clips(
     for clip in clips:
         by_blob[clip.blob_id].append(clip)
 
+    def fail(clip: WordClip, exc: Exception) -> None:
+        clip.status, clip.error = ClipStatus.FAILED, f"{type(exc).__name__}: {exc}"[:500]
+        session.add(clip)
+        report.failed += 1
+
+    def defer(group: Sequence[WordClip], exc: Exception) -> None:
+        """Storage is having a bad time: not the clips' fault. Leave them
+        `candidate` (the error is noted, so an operator can see why they wait)
+        and give the rest of this recording up for this pass."""
+        logger.warning("clip cut deferred, storage fault: %s", exc)
+        for clip in group:
+            clip.error = f"deferred: {exc}"[:500]
+            session.add(clip)
+        report.deferred += len(group)
+
     for blob_id, group in by_blob.items():
         blob = await session.get(AudioBlob, blob_id)
         try:
             if blob is None:
                 raise ValueError("recording is gone")
             data = await storage.get(blob.storage_key)
-        except Exception as exc:  # noqa: BLE001 - recorded on each row below
-            for clip in group:
-                clip.status, clip.error = ClipStatus.FAILED, f"{type(exc).__name__}: {exc}"[:500]
-                session.add(clip)
-                report.failed += 1
+        except InfrastructureError as exc:
+            defer(group, exc)
             await session.commit()
             continue
-        for clip in group:
+        except Exception as exc:  # noqa: BLE001 - recorded on each row below
+            for clip in group:
+                fail(clip, exc)
+            await session.commit()
+            continue
+        for position, clip in enumerate(group):
             try:
                 word = await asyncio.to_thread(cut_window, data, clip.start_ms, clip.end_ms)
                 context = await asyncio.to_thread(
@@ -564,16 +650,18 @@ async def cut_clips(
                 word_key, context_key = clip_storage_key(word), clip_storage_key(context)
                 await storage.put(word_key, word, CLIP_MIME)
                 await storage.put(context_key, context, CLIP_MIME)
+            except InfrastructureError as exc:
+                defer(group[position:], exc)
+                break
             except Exception as exc:  # noqa: BLE001 - one bad clip must not stop the run
                 logger.warning("clip %s (%r) failed to cut: %s", clip.id, clip.form, exc)
-                clip.status, clip.error = ClipStatus.FAILED, f"{type(exc).__name__}: {exc}"[:500]
-                report.failed += 1
+                fail(clip, exc)
             else:
                 clip.storage_key, clip.context_storage_key = word_key, context_key
                 clip.status, clip.error = ClipStatus.CUT, None
                 clip.cut_at = datetime.now(timezone.utc)
                 report.cut += 1
-            session.add(clip)
+                session.add(clip)
         await session.commit()
     if not by_blob:
         await session.rollback()  # release the (empty) FOR UPDATE transaction
@@ -611,14 +699,16 @@ async def verify_clips(
     which costs nothing and spends no GPU time on a word that is already
     covered. Longest clips are tried first.
 
-    Forms that already have a verified clip are skipped, so a re-run after new
+    Forms that already have a verified, still-servable clip are skipped, so a re-run after new
     materials only works on what is new."""
     storage = storage or get_storage()
     report = VerifyReport()
     already = set(
         (
             await session.exec(
-                select(WordClip.form).where(WordClip.status == ClipStatus.VERIFIED)
+                select(WordClip.form).where(
+                    WordClip.status == ClipStatus.VERIFIED, *servable_clip_clauses()
+                )
             )
         ).all()
     )

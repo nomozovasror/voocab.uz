@@ -1133,7 +1133,11 @@ below are the ones a later change can silently break.
   once: a GET never commits its session, and a request that rolls back must
   not lose the work it asked for. It only inserts specs with NO row
   (`ON CONFLICT (key) DO NOTHING`): a `failed` render is not retried by every
-  page view -- `tts.requeue_failed` is the lever.
+  page view -- `tts.requeue_failed` is the lever. The rows go in **sorted by
+  `key`**: a multi-row insert locks in VALUES order, so two overlapping
+  enqueues in different orders deadlock (`test_overlapping_enqueues...`).
+  The own transaction costs a second pooled connection while the request's
+  is open -- cheap at this scale, and the alternative is a GET that commits.
 - **The resolution order is a rule, not a preference**: a heteronym is always
   TTS with its sense's phonemes -> else a VERIFIED clip of the exact form (the
   learner's own listening materials first, then the longest word) -> else the
@@ -1141,8 +1145,13 @@ below are the ones a later change can silently break.
   context press. Resolve through `word_sources`/`word_audio_many`; a list
   endpoint calling `word_audio` per row is the N+1 the `*_many` functions
   exist to prevent.
-- **Only `verified` clips are ever served.** Cut and candidate rows are
-  scaffolding. Verification is the seed run's (faster-whisper, GPU); a
+- **Only `verified` clips are ever served, and only while they are still
+  allowed.** `word_audio._verified_clips` re-checks at SERVE time
+  (`word_clips.servable_clip_clauses`) that the recording is still ready and in
+  a PUBLIC material and that the clip's segment is still uncorrected by any
+  asset. Indexing decided that once; a material made private, or a segment
+  corrected, after verification must stop being heard now, not at the next
+  seed run. Cut and candidate rows are scaffolding. Verification is the seed run's (faster-whisper, GPU); a
   recording that becomes ready later is indexed and cut by the worker but stays
   unserved, TTS covering for it, until the next `verify-clips`.
 - **Exact form, never an inflection** (`word_clips.find_occurrences`): `played`
@@ -1152,9 +1161,21 @@ below are the ones a later change can silently break.
   corrects (`transcript_overrides` rewrites the TEXT; the timings no longer
   describe it). Padding is 150 ms a side, clamped to the recording, baked into
   `start_ms`/`end_ms`. At most three candidates per form in TOTAL (rejected ones
-  count): the index converges instead of digging for a fourth. A recording
-  attached only to PRIVATE materials is not a source -- a clip is a derivative
-  served to everyone.
+  count): the index converges instead of digging for a fourth -- except
+  `failed` rows, which do not hold a slot (their recording is not offered
+  again for that form, so a replacement comes from elsewhere). **Eligibility
+  is positive: a recording is a source only if a material with
+  `visibility = 'public'` uses it** (`materials.audio_asset_id` ->
+  `audio_asset.blob_id`). No material at all is NOT eligible -- an unattached
+  upload is some Studio user's private file, and a clip is a derivative served
+  to everyone. A cut window quieter than `audio_pcm.MIN_USABLE_DBFS` is
+  unusable (`failed`, with the reason) and TTS serves the word.
+- **A transient storage error is not a failed clip.** `cut_clips` runs its
+  storage through `infra_errors.GuardedStorage`: a retryable error (botocore
+  `ClientError` other than the permanent codes, `OSError` other than
+  `FileNotFoundError` -- `infra_errors.classify_error`, shared with the
+  worker's transcription) leaves the rows `candidate` for the next pass
+  (`CutReport.deferred`); only a permanent error marks `failed`.
 - **Heteronyms never take a clip** (decision 2) and are not even indexed: the
   transcript has no part of speech. `pronunciation.is_heteronym(lemma)` is
   exact and per lemma, and means two or more candidates that differ once
@@ -1204,6 +1225,13 @@ below are the ones a later change can silently break.
   parts, and the worker resolves them itself, synthesising a missing part
   inline, so an item never fails because the queue was drained in a different
   order. Claim order is still word, definition, item.
+- **Levelling is capped, and a cut is timed from the stream's start.**
+  `normalise_rms` never amplifies by more than `MAX_GAIN_DB` (+20): a
+  near-silent window brought to -20 dBFS is the recording's hiss. And
+  `decode_range` measures frame times from `stream.start_time`, not from 0 --
+  an MP3's ~25 ms encoder delay otherwise lands every seeked cut 25 ms late
+  (a full decode drops it; the ASR's word times are relative to that). A first
+  frame with no `pts` after a seek raises rather than assuming 0.
 - **Everything stored is 24 kHz mono AAC in MP4, faststart** (`audio_pcm`):
   Kokoro's native rate, small files, `moov` first so the browser can start
   playing. FFmpeg's native `aac` encoder only (always compiled in); PyAV is a
@@ -1211,15 +1239,92 @@ below are the ones a later change can silently break.
   decode of the window, never a decode of the whole recording.
 - **The queue is `audio_renders`, claimed `FOR UPDATE SKIP LOCKED`**, the same
   contract as `audio_blob.transcript_status`: `pending` -> `processing` ->
-  `ready`, a failure goes back to `pending` with `attempts` bumped and to
-  `failed` at `tts_max_attempts`, startup recovery returns `processing` rows
-  to `pending`, the loop backs off after repeated failures. `process_render`
-  never raises. The seed script drains the same queue in-process
-  (`tts.drain`) -- the 3060 has no worker -- so seeded and worker-made audio
-  are the same rows under the same keys.
+  `ready`. `process_render` never raises, and a failure is one of two kinds
+  (`infra_errors`): the render's OWN (bad input, a synth error) bumps
+  `attempts` and sets `next_attempt_at` (`tts_retry_backoff_s`, doubling) --
+  `failed` at `tts_max_attempts`; an INFRASTRUCTURE fault (storage down via
+  `GuardedStorage`, Kokoro failing to load) spends NO attempt and only waits
+  `tts_infra_backoff_s`. `claim_render` skips rows still in back-off (the
+  database's clock, never a worker's), so a systemic outage walks the queue
+  once per back-off instead of burning every row's attempts in seconds.
+  Recovery is by AGE inside the loop (`maintain_renders` every minute): a
+  `processing` row whose `updated_at` -- claiming is the heartbeat -- is older
+  than `tts_stale_after_s` goes back to `pending`; never "everything
+  processing", which would take a row another live worker is making. `failed`
+  rows older than `tts_failed_requeue_h` are requeued with attempts reset.
+  Maintenance never raises out of `asyncio.gather`. The seed script drains
+  the same queue in-process (`tts.drain`) -- the 3060 has no worker -- so
+  seeded and worker-made audio are the same rows under the same keys.
 - **Exposure and speak-miss tables exist and are written by the practice
   layer, not here** (`on_the_go_exposures`, `speak_misses`). An exposure is
-  never an FSRS review: hearing a word is not recalling it.
+  never an FSRS review: hearing a word is not recalling it. Both keep their
+  history when a word is forgotten: `saved_word_id` is `ON DELETE SET NULL`
+  and `lemma` is copied onto the row (default `""` for a writer that does not
+  set it), like `vocabulary_review_logs`.
 - **Seed order matters**: `clips` -> `verify-clips` -> `words` -> `definitions`
   (-> `items`). `words` skips senses that already have a verified clip (the
   brief: do not generate what exists), so it must run after verification.
+
+## Vocabulary practice (stage 3): the third rung, `listen`, `speak`, On the go
+
+`practice.py` still owns every rating; the audio comes from `word_audio.py`
+(above). What stage 3 added to the rules:
+
+- **The passive ladder is `recognise -> recall -> listen`** (`PASSIVE_LADDER`);
+  the active one is unchanged. `_apply_ladder` is one index walk: Again at any
+  rung above the floor goes back one (Hard never demotes), enough corrects go
+  forward one. **2 consecutive corrects, or 1 if the word has been at the NEXT
+  rung before** -- `_has_reached_level` is asked about `ladder[index + 1]`, not
+  `ladder[-1]`, which stopped meaning "the next rung" with three. A word
+  already at `recall` with a streak in the log promotes on its next correct
+  with no backfill: the streak is read from the log either way.
+- **A `recognise` answer to a plan above the floor (the readability fallback)
+  is never promotion evidence.** With two rungs it could not promote anything;
+  with `recall` in the middle a correct choice-of-four would otherwise count as
+  recalling the word. Wrong, it still demotes, as before.
+- **`speak` is on no ladder and the ladder cannot see it.** Logged as
+  `exercise_type="speak"`, `planned_exercise="speak"` (and a recall typed as
+  `speak`'s fallback also has plan `speak`); `_promotion_streak` skips both,
+  `_has_reached_level` never matches them, `_apply_ladder` is not called. A
+  spoken answer between two typed ones must not reset a streak. It IS an FSRS
+  answer on the passive card and counts as a lapse like any (Again on a Review
+  card).
+- **`record_answer` stays the authority.** `listen` is accepted only when the
+  word's own level is `listen`; its fallback is `recall` (`LISTEN_FALLBACK_
+  EXERCISE`; the plan stays `listen`, an Again demotes). `speak` (or recall
+  claiming plan `speak`) is accepted only for a passive word at `recall` or
+  `listen` (`SPEAK_LEVELS`). Anything else is the same 422 as any unknown
+  claim. The claim "plan = speak" is the one client value that is read, and it
+  cannot be verified -- it buys only a ladder that does not move.
+- **`listen` is graded against the LEMMA**, not the sentence's surface (the
+  recall fallback is graded against the surface, as it always was): the audio
+  is the exact lemma, and "type what you hear" must not mark the lemma wrong
+  because the sentence said `undertaken`. Same rating table as recall.
+- **A `listen` item exists only with its audio READY**; otherwise it is an
+  ordinary recall item with `planned_exercise="listen"` (the render is queued
+  by `word_audio`). Audio for a whole session is ONE `word_audio_many` call
+  (and `definition_audio_urls` for `speak`) -- never per item. `prefer_material_
+  ids` is the learner's saved-from materials as one set per learner
+  (`learner_material_ids`), so the listen card, the reveal and the word page
+  agree on the clip.
+- **`speak` is manual only** (`mode="speak"` or settings `["speak"]`); candidates
+  are passive words at `recall`/`listen`; an automatic session never builds
+  one. Its prompt carries the definition masked exactly as recall masks it. The
+  answer is verified server-side by re-running the matcher on `given`
+  (`speech_match.matches`, 422 on no match); `gave_up` (only valid with
+  `exercise_type="speak"`) rates Again.
+- **The matcher is spelling rules, not similarity** (`speech_match.py`):
+  th -> t/s/d/z, w -> v, a<->e on the target's letters, an `i`/`e` before an
+  initial consonant cluster, phrases whole. No inflection, no edit distance.
+  `cat`/`ket`, `play`/`pray`, `school`/`iskool` are misses on purpose; a false
+  accept teaches the wrong word and a miss costs nothing (decision 18). The
+  target becomes ONE regex, never a list of variants.
+- **`speak-check` writes nothing to the schedule or review log**, only a
+  `speak_misses` row per miss; `answer`/`audio` appear only on attempt 3 with
+  no match. Three misses are OUR miss, never an Again.
+- **On the go (`on_the_go.py`)**: words in rotation (not `EXCLUDED_STATUSES`,
+  practisable), `created_at` desc, independent of the daily queue, ready item
+  renders only, `preparing` = the rest (already queued; a word with no
+  speakable definition counts in neither). Exposures insert one
+  `on_the_go_exposures` row and touch no card.
+

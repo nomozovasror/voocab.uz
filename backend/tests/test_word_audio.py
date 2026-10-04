@@ -12,10 +12,12 @@ from app.models.audio_render import AudioRender, RenderStatus
 from app.models.lexicon import LexemeSense
 from app.models.material import Material
 from app.models.vocabulary import SavedWord
+from app.models.word_audio_log import OnTheGoExposure, SpeakMiss
 from app.services import pronunciation, tts, word_audio
 from tests.audio_helpers import (
     Created,
     add_clip,
+    attach,
     make_blob,
     make_lexeme,
     make_user,
@@ -155,6 +157,92 @@ async def test_only_verified_clips_are_ever_served(created: Created) -> None:
     async with async_session_factory() as session:
         assert await word_audio.word_audio(session, sense, lexeme) is None
     assert len(await _render_rows(spec.key)) == 1  # fell through to TTS, queued
+
+
+async def _source_of(session, sense, lexeme) -> str | None:
+    audio = await word_audio.word_audio(session, sense, lexeme)
+    return None if audio is None else audio.source
+
+
+async def test_a_clip_stops_being_served_when_its_material_goes_private(
+    created: Created,
+) -> None:
+    lemma = unique_word()
+    lexeme, sense = await make_lexeme(created, lemma)
+    blob = await make_blob(created, [sentence(["a", lemma, "c", "d"])])
+    await add_clip(blob, lemma)
+    spec = tts.word_spec(lemma, None)
+    created.render_keys.append(spec.key)
+    async with async_session_factory() as session:
+        assert await _source_of(session, sense, lexeme) == "clip"
+
+    # The author withdraws the material AFTER the clip was verified.
+    async with async_session_factory() as session:
+        await session.execute(
+            update(Material)
+            .where(Material.id.in_(created.material_ids))
+            .values(visibility="private")
+        )
+        await session.commit()
+    async with async_session_factory() as session:
+        assert await _source_of(session, sense, lexeme) is None  # TTS, queued
+    assert len(await _render_rows(spec.key)) == 1
+
+    # Published again: the clip is back (nothing was deleted).
+    async with async_session_factory() as session:
+        await session.execute(
+            update(Material)
+            .where(Material.id.in_(created.material_ids))
+            .values(visibility="public")
+        )
+        await session.commit()
+    async with async_session_factory() as session:
+        assert await _source_of(session, sense, lexeme) == "clip"
+
+
+async def test_a_verified_clip_on_a_recording_no_public_material_uses_is_not_served(
+    created: Created,
+) -> None:
+    lemma = unique_word()
+    lexeme, sense = await make_lexeme(created, lemma)
+    unattached = await make_blob(created, [sentence(["a", lemma, "c", "d"])], visibility=None)
+    await attach(created, unattached, None)  # an ordinary user's private upload
+    await add_clip(unattached, lemma)
+    spec = tts.word_spec(lemma, None)
+    created.render_keys.append(spec.key)
+    async with async_session_factory() as session:
+        assert await _source_of(session, sense, lexeme) is None
+
+
+async def test_a_clip_stops_being_served_when_its_segment_is_corrected_later(
+    created: Created,
+) -> None:
+    lemma = unique_word()
+    lexeme, sense = await make_lexeme(created, lemma)
+    blob = await make_blob(created, [sentence(["a", lemma, "c", "d"])])
+    await add_clip(blob, lemma)  # on segment 0
+    spec = tts.word_spec(lemma, None)
+    created.render_keys.append(spec.key)
+    async with async_session_factory() as session:
+        assert await _source_of(session, sense, lexeme) == "clip"
+        asset = (
+            await session.exec(select(AudioAsset).where(AudioAsset.id.in_(created.asset_ids)))
+        ).one()
+        # A correction to ANOTHER segment leaves the clip alone ...
+        asset.transcript_overrides = {"7": "unrelated"}
+        session.add(asset)
+        await session.commit()
+    async with async_session_factory() as session:
+        assert await _source_of(session, sense, lexeme) == "clip"
+        asset = (
+            await session.exec(select(AudioAsset).where(AudioAsset.id.in_(created.asset_ids)))
+        ).one()
+        # ... a correction to ITS segment, by any asset over the recording, takes it out.
+        asset.transcript_overrides = {"0": "corrected text"}
+        session.add(asset)
+        await session.commit()
+    async with async_session_factory() as session:
+        assert await _source_of(session, sense, lexeme) is None
 
 
 async def test_the_learners_own_materials_come_first_then_the_longest_word(created: Created) -> None:
@@ -365,3 +453,29 @@ async def test_the_batch_item_variant_covers_every_saved_word_without_one_query_
     async with async_session_factory() as session:
         result = await word_audio.item_renders(session, saved)
     assert set(result) == {w.id for w in saved} and all(v is None for v in result.values())
+
+
+async def test_forgetting_a_word_keeps_its_exposure_and_speak_miss_history(
+    created: Created,
+) -> None:
+    lemma = unique_word()
+    lexeme, sense = await make_lexeme(created, lemma)
+    word = await _saved_word(created, lexeme, sense)
+    async with async_session_factory() as session:
+        session.add(OnTheGoExposure(user_id=word.user_id, saved_word_id=word.id, lemma=lemma))
+        session.add(SpeakMiss(user_id=word.user_id, saved_word_id=word.id, lemma=lemma, attempt=2))
+        # A writer that has not heard of `lemma` still works: it defaults to "".
+        session.add(OnTheGoExposure(user_id=word.user_id, saved_word_id=word.id))
+        await session.commit()
+        await session.delete(await session.get(SavedWord, word.id))
+        await session.commit()
+    async with async_session_factory() as session:
+        exposures = (
+            await session.exec(select(OnTheGoExposure).where(OnTheGoExposure.user_id == word.user_id))
+        ).all()
+        misses = (
+            await session.exec(select(SpeakMiss).where(SpeakMiss.user_id == word.user_id))
+        ).all()
+    assert len(exposures) == 2 and all(e.saved_word_id is None for e in exposures)
+    assert sorted(e.lemma for e in exposures) == ["", lemma]
+    assert len(misses) == 1 and misses[0].saved_word_id is None and misses[0].lemma == lemma
