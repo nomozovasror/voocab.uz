@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, Play, Settings } from "lucide-react";
+import { BookOpen, Headphones, Play, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 import { localTimeZone, timeUntil } from "@/lib/time";
@@ -151,6 +151,22 @@ export default function VocabularyHomePage() {
         <Total label="Learning" value={data.totals.learning} />
         <Total label="Mastered" value={data.totals.mastered} />
       </dl>
+
+      {/* Independent of today's amount on purpose: it plays whatever is in
+       *  rotation, so it is offered whether or not anything is due. Named
+       *  "On the go" and nothing else (not "Listen", which is an exercise). */}
+      <Link
+        to="/vocabulary/on-the-go"
+        className="mt-4 flex items-center gap-3 rounded-xl border border-border px-4 py-3 transition-colors hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      >
+        <Headphones className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        <span>
+          <span className="block text-sm text-foreground">On the go</span>
+          <span className="block text-xs text-muted-foreground">
+            Your words, played one after another. No screen needed.
+          </span>
+        </span>
+      </Link>
 
       {/* Said rather than hidden — a word that has been set aside and will
        *  come back in three weeks is not a word that vanished, and the spec

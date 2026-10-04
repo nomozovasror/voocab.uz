@@ -10,6 +10,11 @@ import { ApiError, getErrorMessage } from "@/lib/api";
 import { localTimeZone, timeUntil } from "@/lib/time";
 import { GapField } from "@/features/paper/components/GapField";
 import { CefrTag } from "@/features/vocabulary/components/CefrTag";
+import { ListenCard } from "@/features/vocabulary/components/ListenCard";
+import { SpeakCard } from "@/features/vocabulary/components/SpeakCard";
+import { SpeakerButton } from "@/features/vocabulary/components/SpeakerButton";
+import { isPlaying, playClip } from "@/features/vocabulary/audio";
+import { speechSupported } from "@/features/vocabulary/speech";
 import { ReportTranslation } from "@/features/vocabulary/components/ReportTranslation";
 import { meanings } from "@/features/vocabulary/meaning";
 import { pickJoke, type SessionStats } from "@/features/vocabulary/jokes";
@@ -123,6 +128,18 @@ export default function VocabularyPracticePage() {
   // turn while its one attempt is still pending.
   const [usedKnownCheck, setUsedKnownCheck] = useState(false);
   const [leechChoice, setLeechChoice] = useState<LeechChoice | null>(null);
+  // Stage 3, all session-scoped and none of it sent anywhere: "Can't listen
+  // now" turns every remaining `listen` card into its typing fallback, a
+  // browser or microphone that cannot do `speak` does the same for those, and
+  // `0.75x` stays on once chosen. A card whose own audio file would not play
+  // is turned into its fallback alone (`unavailable`, by item).
+  const [listenOff, setListenOff] = useState(false);
+  const [speakOff, setSpeakOff] = useState(false);
+  const [slow, setSlow] = useState(false);
+  const [unavailable, setUnavailable] = useState<ReadonlySet<string>>(new Set());
+  // The learner pressed "I don't know" on a `speak` card — the one reveal
+  // that plays the word whatever the Pronunciation setting says.
+  const [gaveUp, setGaveUp] = useState(false);
   // Wall-clock, not a React state value: resetting it must never itself
   // cause a render, and reading it happens only once, at submit.
   const shownAt = useRef(Date.now());
@@ -214,7 +231,15 @@ export default function VocabularyPracticePage() {
     onError: (e) => toast(getErrorMessage(e)),
   });
 
-  const current = queue?.[0] ?? null;
+  const head = queue?.[0] ?? null;
+  // What is actually asked: the served item, or — when its audio or
+  // microphone is off the table — the typing fallback the server sent with
+  // it. Resolved HERE, once, so everything below (submit, the reveal, the
+  // requeue) sees one item and cannot disagree about which task this is.
+  const current = useMemo(
+    () => (head ? resolveItem(head, { listenOff, speakOff, unavailable }) : null),
+    [head, listenOff, speakOff, unavailable],
+  );
 
   /** A list item the server will no longer take (409: its sense is already
    *  owned, e.g. answered in another tab; 403: the list was stopped
@@ -230,12 +255,13 @@ export default function VocabularyPracticePage() {
     setClaimedResult(false);
     setUsedKnownCheck(false);
     setLeechChoice(null);
+    setGaveUp(false);
     shownAt.current = Date.now();
     void qc.invalidateQueries({ queryKey: practiceSummaryKey(tz) });
     toast("That word was skipped.");
   }
 
-  function submit(givenOverride?: string) {
+  function submit(givenOverride?: string, extra?: { gaveUp?: boolean }) {
     if (!current || answer.isPending || result) return;
     const claiming = pendingClaim;
     if (claiming) setPendingClaim(false);
@@ -252,6 +278,7 @@ export default function VocabularyPracticePage() {
       planned_exercise: current.planned_exercise,
       given: givenOverride ?? given,
       elapsed_ms: Date.now() - shownAt.current,
+      ...(extra?.gaveUp ? { gave_up: true } : {}),
       ...(claiming ? { claim_known: true } : {}),
       // Set exactly on the same-session requeue `advance` below produces —
       // never on an item's first appearance, and never on the known-check
@@ -264,6 +291,21 @@ export default function VocabularyPracticePage() {
     if (!current || answer.isPending || result) return;
     setSelectedOptionId(id);
     submit(id);
+  }
+
+  /** `speak`, three misses: the word was shown and NOTHING is written — no
+   *  answer is posted, so there is no FSRS write, no review log row and no
+   *  requeue. The card is simply done with for this session and comes back in
+   *  the next one. Counted as seen, so the position line keeps moving. */
+  function continueAfterMiss() {
+    if (!current || result) return;
+    setQueue((was) => (was ? was.slice(1) : was));
+    setAnsweredCount((c) => c + 1);
+    setGiven("");
+    setSelectedOptionId(null);
+    setUsedKnownCheck(false);
+    setGaveUp(false);
+    shownAt.current = Date.now();
   }
 
   function advance() {
@@ -297,6 +339,7 @@ export default function VocabularyPracticePage() {
     setUsedKnownCheck(false);
     setClaimedResult(false);
     setLeechChoice(null);
+    setGaveUp(false);
     shownAt.current = Date.now();
   }
 
@@ -315,6 +358,9 @@ export default function VocabularyPracticePage() {
 
       if (e.key === "Enter" && result) {
         if (result.became_leech && !leechChoice) return;
+        // A speaker button's Enter is its own (see `SpeakerButton`).
+        if (e.target instanceof HTMLElement && e.target.closest("[data-no-advance]"))
+          return;
         e.preventDefault();
         advance();
         return;
@@ -463,6 +509,44 @@ export default function VocabularyPracticePage() {
         />
       );
     }
+    if (prompt.kind === "listen") {
+      return (
+        <ListenCard
+          key={`${itemKey(current)}-${answeredCount}`}
+          prompt={prompt}
+          value={given}
+          onChange={setGiven}
+          onSubmit={() => submit()}
+          onExit={exit}
+          onCantListen={() => setListenOff(true)}
+          onUnavailable={() =>
+            setUnavailable((was) => new Set(was).add(itemKey(current)))
+          }
+          slow={slow}
+          onToggleSlow={() => setSlow((s) => !s)}
+          disabled={answer.isPending || Boolean(result)}
+          tone={tone}
+          turnKey={`${itemKey(current)}-${answeredCount}`}
+        />
+      );
+    }
+    if (prompt.kind === "speak") {
+      return (
+        <SpeakCard
+          key={`${itemKey(current)}-${answeredCount}`}
+          prompt={prompt}
+          wordId={current.word_id ?? ""}
+          disabled={answer.isPending || Boolean(result)}
+          onCaught={(matched) => submit(matched)}
+          onGiveUp={() => {
+            setGaveUp(true);
+            submit("", { gaveUp: true });
+          }}
+          onUnsupported={() => setSpeakOff(true)}
+          onMissContinue={continueAfterMiss}
+        />
+      );
+    }
     return (
       <ProducePrompt
         prompt={prompt}
@@ -507,6 +591,10 @@ export default function VocabularyPracticePage() {
             exerciseType={current.exercise_type}
             direction={current.direction}
             claimed={claimedResult}
+            // On when the learner asked for it (Settings) — and always after
+            // "I don't know" on a `speak` card, where hearing the word is
+            // the point of the reveal.
+            autoplay={settings?.pronunciation === true || gaveUp}
           />
           {result.became_leech && (
             <>
@@ -821,6 +909,7 @@ function Reveal({
   exerciseType,
   direction,
   claimed,
+  autoplay,
 }: {
   result: PracticeAnswer;
   exerciseType: ExerciseType;
@@ -829,8 +918,20 @@ function Reveal({
    *  spec's §4. Adds a headline the ordinary reveal doesn't have; nothing
    *  else about the reveal changes. */
   claimed: boolean;
+  /** Play the word once as the reveal appears. */
+  autoplay: boolean;
 }) {
   const sense = meanings(result.word);
+  const wordAudio = result.word.audio;
+
+  // Once per reveal (it mounts when an answer lands). Never over a clip that
+  // is still sounding — the listen card may have been playing when the
+  // answer went in, and a second voice on top of the first says nothing.
+  useEffect(() => {
+    if (autoplay && wordAudio && !isPlaying()) void playClip(wordAudio.url);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const passiveRecognise = exerciseType === "recognise" && direction === "passive";
   const verdictLabel =
     result.verdict === "correct"
@@ -875,6 +976,7 @@ function Reveal({
           </span>
         )}
         <CefrTag level={result.word.cefr_level} />
+        {wordAudio && <SpeakerButton url={wordAudio.url} className="self-center" />}
       </p>
       {passiveRecognise ? (
         <>
@@ -1000,6 +1102,27 @@ function LeechContextPanel({ context }: { context: PracticeLeechContext }) {
       )}
     </div>
   );
+}
+
+/** The item as it will really be asked. A `listen` card whose audio is off the
+ *  table ("Can't listen now", or its own file would not play) and a `speak`
+ *  card on a device that cannot listen (or for a word with no saved id to
+ *  check against) become the ordinary recall card the server sent along as
+ *  `prompt.fallback`. It is answered as `recall`, with `planned_exercise`
+ *  naming what was planned, which is exactly how the server already reads a
+ *  fallback — graded as recall, no penalty, the word's rung unmoved. */
+function resolveItem(
+  item: QueueItem,
+  off: { listenOff: boolean; speakOff: boolean; unavailable: ReadonlySet<string> },
+): QueueItem {
+  const p = item.prompt;
+  if (p.kind === "listen" && (off.listenOff || off.unavailable.has(itemKey(item)))) {
+    return { ...item, exercise_type: "recall", planned_exercise: "listen", prompt: p.fallback };
+  }
+  if (p.kind === "speak" && (off.speakOff || !speechSupported() || !item.word_id)) {
+    return { ...item, exercise_type: "recall", planned_exercise: "speak", prompt: p.fallback };
+  }
+  return item;
 }
 
 function isListEntryGone(e: unknown, listEntryId: string | null | undefined): boolean {

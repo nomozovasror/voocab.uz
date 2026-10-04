@@ -961,6 +961,129 @@ merely different.
   looking at their own history has no reason to have that number reset out
   from under them the moment a leech is resolved.
 
+## Stage 3: audio — `listen`, `speak`, and On the go
+
+Three things, one audio layer. The contract the server and this client were
+built against is in `brief-vocabulary-stage3-decisions.md`; the reasons below
+are the ones that are easy to undo by accident.
+
+- **One place plays sound: `audio.ts`.** `playClip(url, {rate})` stops the
+  previous clip, sets `playbackRate` with `preservesPitch` (slower is not
+  lower), and never throws: it answers `started`, `blocked` (autoplay policy —
+  the file is fine), `failed` (missing, undecodable, offline) or `replaced`.
+  **A file that will not play is "no audio", never an error** — a card, the
+  reveal and the word page all treat it so. The practice reveal asks
+  `isPlaying()` before its autoplay, so a word the learner is still hearing is
+  not restarted over itself. On the go is the one exception and owns its own
+  `<audio>` (below). `SpeakerButton` is the speaker everywhere except the
+  listen card (tooltip "Play pronunciation"; a failed file makes it a quiet
+  disabled "Audio isn't available", tried again on the next press).
+- **`resolveItem` is the one place a card becomes its fallback.** The server
+  serves `listen`/`speak` prompts with `prompt.fallback` (the ordinary recall
+  gap). The page derives `current` from the head of the queue through it, so
+  submit, the reveal and the requeue all see ONE item. A fallback is answered
+  as `exercise_type: "recall"` with `planned_exercise` naming what was
+  planned — graded as recall, no penalty, the rung unmoved. Three triggers,
+  all session-scoped and none sent to the server: "Can't listen now"
+  (`listenOff`, every remaining listen card), a `speak` card on a device that
+  cannot do it (`speakOff`, and no `SpeechRecognition` at all is decided at
+  resolve time, so there is no flash of a card that cannot work), and a listen
+  card whose own file will not play (that one item only). The requeue pushes
+  the RESOLVED item, so an Again on a fallback comes back as the fallback.
+
+### `listen`
+
+- **The spelling is never on screen before the answer** — not in a
+  placeholder, an aria-label or a title; the prompt does not even carry it.
+  A play button, a field, nothing else (plus two quiet controls below).
+- **Plays once by itself when the card appears and never repeats by itself.**
+  The automatic play is the word and is not a "press". Replay is the button or
+  `Tab`; with `audio.context_url` presses alternate word -> context -> word,
+  and the button says which it will play. `0.75x` is held by the page, so it
+  stays for the session.
+- **Tab replays, and that is a keyboard-trap risk that is bounded, not
+  ignored.** Only plain forward `Tab`, only inside the field; focus never
+  leaves the field. `Shift+Tab` is untouched and the other controls (Can't
+  listen now, play, `0.75x`) are in the DOM BEFORE the field, in the order they
+  are drawn, so it reaches all of them. The hint line under the field says
+  "Tab to hear it again", and the field is `aria-describedby` it. After the
+  answer the field is disabled and Tab is an ordinary Tab again. Esc leaves.
+- **"Can't listen now" is a quiet link at the top, no dialog, no penalty.** It
+  sits first in the DOM for the reason above.
+
+### `speak`
+
+- **Two outcomes that must never look alike.** "I didn't catch that" is the
+  RECOGNISER missing: grey, neutral, with a Try again button, never red and
+  never the word "wrong". Three misses show the word and its sound, record
+  NOTHING (no answer is posted — no FSRS, no review log, no requeue), and the
+  card goes on; it comes back next session. "I don't know" is the learner's
+  own choice: one button, always visible, honestly named, no separate Next or
+  Skip anywhere on the card. It posts `exercise_type: "speak"`,
+  `gave_up: true`, `given: ""` -> Again, the normal reveal, and the word
+  plays whatever Pronunciation says (hearing it is the point). Merging the
+  two would write a wrong rejection into the schedule.
+- **The microphone opens only on a press** (the button, or Space when focus is
+  not on a control — on a control Space already does its job). `speech.ts`
+  runs ONE recognition: `en-GB`, `maxAlternatives = 5`, `interimResults` off,
+  never continuous, never restarted by code, no grammar list (dead in every
+  engine). The open state is drawn AND said ("Listening… say the word",
+  `role="status"`).
+- **Silence is not an attempt.** `no-speech` / an empty result gives nothing to
+  send (the contract takes 1 to 5 alternatives), so it is shown as "I didn't
+  catch that" locally and does NOT use one of the three. The learner always
+  has "I don't know". A failed `speak-check` call (network) is a toast and
+  nothing else — not a miss.
+- **Unsupported degrades, never breaks.** No API, `not-allowed`,
+  `service-not-allowed`, `audio-capture`, `language-not-supported` and
+  `network` all end in the typing fallback for the rest of the session. It is
+  not asked again each card. The real-iPhone behaviour of `SpeechRecognition`
+  is untested: "partial" in the docs needs a device to mean anything.
+- **Settings still list `Speak` on browsers that cannot do it.** Settings are
+  per ACCOUNT; a phone that cannot speak must not change what a laptop is
+  offered. The card's fallback is the answer.
+
+### The reveal
+
+A speaker button whenever `word.audio` exists. When settings `pronunciation`
+is on (default on server-side) the word plays once as the reveal appears, for
+every exercise type, unless something is already sounding. The reveal's
+speaker carries `data-no-advance`, which the page's Enter-to-advance listener
+respects, so Enter on the speaker plays it instead of also skipping the card.
+
+### On the go (`/vocabulary/on-the-go`)
+
+Entry: a row on the vocabulary home, named exactly "On the go" — never
+"Blinkers" (an English horse's eye-shade) and never "Listen" (that is an
+exercise).
+
+- **One `<audio>`, items back to back, no `setTimeout`.** The three-second
+  pause is baked into each file by the server. A timer between clips dies
+  when an iPhone locks; the audio element does not. `src` is set imperatively
+  in the same call stack as `ended` (or the headphone's "next"), never via a
+  render. Leaving the page pauses it through a callback ref (an effect's
+  cleanup runs after the ref is cleared, and a detached playing element keeps
+  playing).
+- **The word is never on the screen or in the metadata**; the wire does not
+  carry it. Lock-screen title is `On the go · 3 / 40`, artist `voocab`.
+- **Media Session**: play, pause, nexttrack, previoustrack, and
+  `playbackState` kept in step with the element's own events.
+- **Exposure**: `POST /on-the-go/exposures` once per item per pass, when
+  `currentTime * 1000 >= word_offset_ms`; Previous and replays cannot count a
+  hearing twice; Start again begins a new pass. Never FSRS: listening is not
+  recalling.
+- Plays the list once, then "That's all" and Start again. `preparing > 0`
+  adds a quiet "N more words are being prepared". A file that errors is
+  skipped. Empty list: "No words in rotation yet."
+- **Real-iPhone lock-screen test is PENDING and is the owner's.** Check, with
+  the phone locked: (1) it keeps going from file to file without a tap;
+  (2) the lock-screen shows `On the go · N / M` and never the word; (3)
+  headphone/lock-screen play, pause, next and previous all act; (4) the
+  3-second pause is audible in the file and nothing else interrupts it;
+  (5) the exposure POSTs still arrive while locked (Network tab on a
+  connected Mac, or the server log) — `timeupdate` while backgrounded is the
+  least certain part. Also the `speak` microphone card in iOS Safari.
+
 ## Browse: reading the list, not practising it
 
 `/vocabulary/browse` (`VocabularyBrowsePage.tsx`) turns the saved list into

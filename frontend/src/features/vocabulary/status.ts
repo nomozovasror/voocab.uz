@@ -78,6 +78,8 @@ export const EXERCISE_LABEL: Record<ExerciseType, string> = {
   recognise: "Recognise",
   recall: "Recall",
   produce: "Produce",
+  listen: "Listen",
+  speak: "Speak",
 };
 
 /** The manual choice's fourth option — not an `ExerciseType`, so it is not
@@ -115,6 +117,7 @@ export const RATING_TONE: Record<1 | 2 | 3 | 4, string> = {
 /** A direction's level, in a sentence rather than a wire token — the word
  *  page's "per-direction state in plain words" (the spec's §Frontend). */
 export function passiveLevelLabel(level: PassiveLevel): string {
+  if (level === "listen") return "Hearing it";
   return level === "recognise" ? "Recognising it" : "Recalling it";
 }
 

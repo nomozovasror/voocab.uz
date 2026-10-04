@@ -5,12 +5,15 @@ import type {
   LeechChoice,
   LeechChoiceResponse,
   Lookup,
+  OnTheGoList,
   PracticeAnswer,
   PracticeAnswerRequest,
   PracticeItem,
   PracticeSession,
   PracticeSummary,
   SavedWords,
+  SpeakCheckRequest,
+  SpeakCheckResult,
   TranslationReportRequest,
   TranslationReportResult,
   VocabularyList,
@@ -72,6 +75,11 @@ export const wordDetailKey = (wordId: string) =>
 export const wordListsKey = ["vocabulary", "lists"] as const;
 export const wordListKey = (key: string) =>
   ["vocabulary", "lists", key] as const;
+
+/** "On the go"'s list. Its own key, never a sub-key of the practice ones: it
+ *  is independent of the daily queue and nothing a practice answer does
+ *  changes it. */
+export const onTheGoKey = ["vocabulary", "on-the-go"] as const;
 
 export const vocabularyApi = {
   /** One tapped word, in this passage's sense.
@@ -235,6 +243,28 @@ export const vocabularyApi = {
       json: ref,
     }),
 
+  /** "Did the recogniser hear the word?" — `speak` only. Writes nothing to
+   *  FSRS; the answer that does is `practiceAnswer`, posted by the caller
+   *  once this says `caught` (or the learner says "I don't know"). */
+  speakCheck: (payload: SpeakCheckRequest) =>
+    api.post<SpeakCheckResult>("/api/vocabulary/practice/speak-check", {
+      json: payload,
+    }),
+
+  // --- On the go ----------------------------------------------------------
+
+  /** The words in rotation as rendered files, newest first. Independent of
+   *  the daily queue. */
+  onTheGo: () => api.get<OnTheGoList>("/api/vocabulary/on-the-go"),
+
+  /** One row in the exposure log, sent once the WORD part of an item has
+   *  actually played. 204. It is a log, never an FSRS write: hearing a word
+   *  is not recalling it. */
+  onTheGoExposure: (wordId: string) =>
+    api.post<void>("/api/vocabulary/on-the-go/exposures", {
+      json: { word_id: wordId },
+    }),
+
   // --- Word lists --------------------------------------------------------
   // Starting a list subscribes; it adds no words. See the module CLAUDE.md.
 
@@ -257,7 +287,10 @@ export const vocabularyApi = {
    *  fields, saved together, never a lone minutes picker sending its own
    *  value and leaving the other two for the server to guess at. */
   updateSettings: (
-    settings: Pick<VocabularySettings, "daily_minutes" | "direction" | "exercise_types">,
+    settings: Pick<VocabularySettings, "daily_minutes" | "direction" | "exercise_types"> &
+      // Optional: absent means unchanged, so only the Pronunciation control
+      // sends it.
+      Partial<Pick<VocabularySettings, "pronunciation">>,
   ) =>
     api.put<VocabularySettings>("/api/vocabulary/settings", {
       json: settings,

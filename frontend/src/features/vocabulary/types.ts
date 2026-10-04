@@ -175,7 +175,7 @@ export interface SavedContext {
  *  `recall` (produce it from a gap). Active only exists once the passive
  *  card is strong enough to be worth the extra work — see the spec's §2 —
  *  so a word without one is `null`, not a third level. */
-export type PassiveLevel = "recognise" | "recall";
+export type PassiveLevel = "recognise" | "recall" | "listen";
 export type ActiveLevel = "recognise" | "produce";
 
 /** Which of a word's two cards is being asked about. Scheduled and levelled
@@ -186,8 +186,11 @@ export type Direction = "passive" | "active";
 /** The three tasks the ladder can ask for, in the order they get harder.
  *  `recognise` never differs between directions in KIND — four options,
  *  one right — only in what the options are (see `PracticeChoicePrompt`).
- *  `listen` is stage 3's; nothing here ever sends or expects it. */
-export type ExerciseType = "recognise" | "recall" | "produce";
+ *  Stage 3 adds two that are not rungs in the same sense: `listen` is the
+ *  top of the PASSIVE ladder (recognise -> recall -> listen), and `speak` is
+ *  on no ladder at all — manual-only, answered by voice, never moves a word's
+ *  rung (see the module CLAUDE.md, "Stage 3"). */
+export type ExerciseType = "recognise" | "recall" | "produce" | "listen" | "speak";
 
 /** What a word IS right now, independent of either card's level.
  *  `learning`/`review` are FSRS's own phases; `known`, `suspended` and
@@ -321,6 +324,12 @@ export interface WordHistoryEntry {
 export interface WordDetail {
   word: SavedWord;
   history: WordHistoryEntry[];
+  /** The word's pronunciation, for the speaker beside it. `null` = not
+   *  ready yet (the server has queued it); the page then shows no speaker
+   *  rather than a dead one. Top level, beside `word`, as the contract's
+   *  "GET /vocabulary/words/{id} gains audio" reads for a response that is
+   *  already `{word, history}`. */
+  audio: AudioOut | null;
 }
 
 /** `POST /vocabulary/words/bulk`'s four verbs. `suspend` is "set aside for
@@ -363,6 +372,19 @@ export type LeechChoiceResponse = SavedWord;
  * count — see the stage 1 spec for why a daily word quota is the thing that
  * makes people quit Anki.
  */
+
+/** One word's audio. `url` is the word alone; `context_url` is the same word
+ *  inside the 2 words either side of it, where the word came from a recording
+ *  (a TTS word has none). `source` says whether it is a clip cut from a real
+ *  recording or synthesised — kept on the type because the contract carries
+ *  it, not because any screen distinguishes the two to a learner: a word is
+ *  a word either way. `null` wherever an `AudioOut` field is allowed means
+ *  "not ready yet" and the server has already queued it. */
+export interface AudioOut {
+  url: string;
+  context_url: string | null;
+  source: "clip" | "tts";
+}
 
 /** The home screen's numbers. Nothing here is a queue — `due_now` and
  *  `new_available` are what COULD be practised; `planned_reviews` and
@@ -469,11 +491,39 @@ export interface PracticeProducePrompt {
   cue: string;
 }
 
+/** What a `listen` or `speak` card falls back to: the item's ordinary recall
+ *  gap prompt, so the card can become a typing card without the client ever
+ *  building one. Narrower than `PracticePrompt` on purpose — a fallback is
+ *  never itself a listen or speak card, and never a `recognise`. */
+export type PracticeFallbackPrompt =
+  | PracticeSentencePrompt
+  | PracticeDefinitionPrompt;
+
+/** A `listen` turn: the word, only as sound. The spelling is nowhere on this
+ *  object, which is the whole exercise. `fallback` is "Can't listen now". */
+export interface PracticeListenPrompt {
+  kind: "listen";
+  audio: AudioOut;
+  fallback: PracticeFallbackPrompt;
+}
+
+/** A `speak` turn: the (masked) definition, read aloud once if its audio is
+ *  ready, and the learner says the word. `fallback` is for a browser that
+ *  cannot listen — the same card as a typing one. */
+export interface PracticeSpeakPrompt {
+  kind: "speak";
+  definition: string;
+  definition_audio_url: string | null;
+  fallback: PracticeFallbackPrompt;
+}
+
 export type PracticePrompt =
   | PracticeSentencePrompt
   | PracticeDefinitionPrompt
   | PracticeChoicePrompt
-  | PracticeProducePrompt;
+  | PracticeProducePrompt
+  | PracticeListenPrompt
+  | PracticeSpeakPrompt;
 
 /** One card, already the exercise it will be answered as. Both `direction`
  *  and `exercise_type` are now genuinely variable — stage 1's comment about
@@ -549,6 +599,11 @@ export interface PracticeAnswerRequest {
    *  (`VocabularyPracticePage`'s `advance`), never on the item's first
    *  appearance. */
   requeued: boolean;
+  /** `speak` only: "I don't know". Posted with `given: ""` and answered
+   *  Again. It is the learner's own choice to open the answer — never sent
+   *  for a recognition miss, which is not an answer at all (see
+   *  `SpeakCheckResult`). */
+  gave_up?: boolean;
 }
 
 /** The word as this answer's context knew it — a `Glossed` (see
@@ -566,6 +621,9 @@ export interface PracticeAnswerWord extends Glossed {
   sense_id: string;
   material_id: string | null;
   material_title: string | null;
+  /** The word's pronunciation, for the reveal's speaker button and the
+   *  autoplay. `null` = not ready yet. */
+  audio: AudioOut | null;
 }
 
 /** What one answer comes back with. `rating` is never sent BY the client —
@@ -635,8 +693,9 @@ export interface VocabularySettings {
    *  this yet." case that follows from picking one nothing currently
    *  matches. */
   exercise_types: [ExerciseType] | null;
-  /** Read back but never written from this settings page — stage 3's, and
-   *  absent from the UI per the spec. */
+  /** When on, the word's audio plays by itself once an answer is revealed.
+   *  The speaker button is there either way. Written from the settings page
+   *  since stage 3; absent from a `PUT` body means "unchanged". */
   pronunciation: boolean;
   /** How many words currently have an active card, regardless of whether
    *  `direction` is `both` right now. Only meaningful for the warning under
@@ -705,4 +764,42 @@ export interface WordListDetail extends WordListSummary {
 export interface WordListStarted {
   active: true;
   pending_saved: number;
+}
+
+/**
+ * `POST /vocabulary/practice/speak-check` — did the browser's recogniser hear
+ * the word? Writes nothing to FSRS or the review log; a miss is logged
+ * server-side and that is all.
+ *
+ * `answer` and `audio` are filled ONLY on attempt 3 with `caught: false` —
+ * the reveal. Before that a miss tells the client nothing about the word.
+ */
+export interface SpeakCheckRequest {
+  word_id: string;
+  /** 1 to 5, each at most 200 characters — the recogniser's own alternatives. */
+  alternatives: string[];
+  attempt: 1 | 2 | 3;
+}
+
+export interface SpeakCheckResult {
+  caught: boolean;
+  matched: string | null;
+  answer: string | null;
+  audio: AudioOut | null;
+}
+
+/** One item of "On the go": a single rendered file (definition, a pause, the
+ *  word, a short tail). `word_offset_ms` is where the WORD starts inside it —
+ *  the moment an exposure counts. The word itself is never on the wire. */
+export interface OnTheGoItem {
+  word_id: string;
+  url: string;
+  duration_ms: number;
+  word_offset_ms: number;
+}
+
+export interface OnTheGoList {
+  items: OnTheGoItem[];
+  /** Words in rotation whose file is not rendered yet — already queued. */
+  preparing: number;
 }

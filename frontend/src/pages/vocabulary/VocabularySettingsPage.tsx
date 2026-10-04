@@ -10,7 +10,13 @@ import { AUTOMATIC_LABEL, EXERCISE_LABEL } from "@/features/vocabulary/status";
 import type { ExerciseType, VocabularySettings } from "@/features/vocabulary/types";
 
 const MINUTES_OPTIONS: VocabularySettings["daily_minutes"][] = [5, 10, 15, 20];
-const EXERCISE_TYPES: ExerciseType[] = ["recognise", "recall", "produce"];
+const EXERCISE_TYPES: ExerciseType[] = [
+  "recognise",
+  "recall",
+  "produce",
+  "listen",
+  "speak",
+];
 
 /**
  * `/vocabulary/settings` — the plan's screen 6, and the whole reason this
@@ -23,9 +29,14 @@ const EXERCISE_TYPES: ExerciseType[] = ["recognise", "recall", "produce"];
  * defaults to, say), so the source of truth after every write is what the
  * server sends back, not what was clicked.
  *
- * No pronunciation control, per the spec — the field still travels on the
- * wire (`VocabularySettings.pronunciation`) because stage 3 will want the
- * row it already occupies, but nothing here reads or writes it.
+ * Pronunciation (stage 3) is the one control that is not part of the
+ * triple: it is sent alone, and an absent `pronunciation` on a `PUT` means
+ * "unchanged" on the server.
+ *
+ * `Listen` and `Speak` are in the manual list for every learner, on every
+ * device. Settings follow the ACCOUNT, not this browser, so a phone that
+ * cannot do `speak` must not rewrite what a laptop is offered; the speak card
+ * turns itself into a typing card where it cannot listen.
  *
  * `PUT /vocabulary/settings` takes `daily_minutes` and `direction` as
  * REQUIRED fields, a plain replace saved together per the server's own
@@ -156,6 +167,24 @@ export default function VocabularySettingsPage() {
             practised actively — they&apos;ll pause, not reset.
           </p>
         )}
+      </section>
+
+      <section className="mt-4 rounded-xl border border-border px-4 py-3">
+        <label className="flex items-start gap-3">
+          <input
+            type="checkbox"
+            checked={data.pronunciation}
+            disabled={update.isPending}
+            onChange={(e) => patch({ pronunciation: e.target.checked })}
+            className="mt-0.5 size-4 shrink-0 rounded border-border bg-surface-sunken accent-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          />
+          <span>
+            <span className="block text-sm text-foreground">Pronunciation</span>
+            <span className="block text-xs text-muted-foreground">
+              Play the word after each answer
+            </span>
+          </span>
+        </label>
       </section>
 
       <section className="mt-4 rounded-xl border border-border px-4 py-3">

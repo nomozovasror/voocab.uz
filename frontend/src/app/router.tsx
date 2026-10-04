@@ -109,6 +109,12 @@ export const router = createBrowserRouter([
             path: "vocabulary/lists/:key",
             ...page(() => import("@/pages/vocabulary/VocabularyListPage")),
           },
+          // Audio only, screen optional (stage 3). Its own path beside
+          // `practice`: it is not a session and answers nothing.
+          {
+            path: "vocabulary/on-the-go",
+            ...page(() => import("@/pages/vocabulary/VocabularyOnTheGoPage")),
+          },
           {
             path: "vocabulary/settings",
             ...page(() => import("@/pages/vocabulary/VocabularySettingsPage")),
