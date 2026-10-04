@@ -228,6 +228,10 @@ LISTEN_FALLBACK_EXERCISE = "recall"
 #: so it opens at `recall` and above, never on a word still being recognised.
 SPEAK_LEVELS: frozenset[str] = frozenset({"recall", "listen"})
 
+#: The rungs a REQUEUED `listen` answer may find the word on: `listen`, or
+#: `recall` because the Again that is being requeued has just demoted it.
+LISTEN_REQUEUE_LEVELS: frozenset[str] = frozenset({"recall", "listen"})
+
 #: How long a client's claim that this answer is a same-session REQUEUE (see
 #: :func:`record_answer`'s ``requeued`` handling) may be validated against --
 #: generous enough for a genuinely long sitting, tight enough that a stale
@@ -931,8 +935,8 @@ async def _promotion_streak(
       same-session requeue, neither of which is the ladder's own evidence
       about a level (see ``VocabularyReviewLog.planned_exercise``'s own
       docstring);
-    * a ``speak`` row, or a recall answered as `speak`'s typing fallback
-      (``planned_exercise = "speak"``): `speak` is on no ladder, so a
+    * a ``speak`` row (``planned_exercise = "speak"``; `speak`'s typing
+      fallback is an ordinary recall row and is NOT one): `speak` is on no ladder, so a
       spoken answer between two typed ones must not reset a streak the
       learner earned, and must not count towards one either;
     * a ``recognise`` answer to a plan above the floor -- the readability
@@ -1951,7 +1955,8 @@ def _speak_item(
     so the two exercises can never disagree about what hides the answer.
 
     ``planned_exercise`` is ``speak``: there is no rung it stands for, and
-    :func:`record_answer` reads that as "never move the ladder". A word with
+    :func:`record_answer` reads that, for a SPOKEN answer, as "never move the
+    ladder" -- the item's own typing fallback is graded as the recall it is. A word with
     no definition at all has nothing to say, and is served as the ordinary
     recall item (with ``speak`` planned, so it is not mistaken for a
     ladder fallback) rather than as an empty card."""
@@ -2332,13 +2337,28 @@ async def build_session(
         and (speak or candidate.level == "listen")
     ]
     if audio_senses:
-        if speak:
-            definition_urls = await word_audio.definition_audio_urls(session, audio_senses)
-        else:
-            audio_by_sense = await word_audio.word_audio_many(
-                session, audio_senses,
-                prefer_material_ids=await learner_material_ids(session, user.id),
+        # The audio layer is an enhancement of the session, never a
+        # precondition of it: a failure here (storage down, a bad row) must
+        # not 500 the whole queue. Empty maps are exactly the "audio not
+        # ready" case -- `listen` items become their recall fallback with plan
+        # `listen`, `speak` items carry no definition URL -- and the learner
+        # still practises.
+        try:
+            if speak:
+                definition_urls = await word_audio.definition_audio_urls(
+                    session, audio_senses
+                )
+            else:
+                audio_by_sense = await word_audio.word_audio_many(
+                    session, audio_senses,
+                    prefer_material_ids=await learner_material_ids(session, user.id),
+                )
+        except Exception:
+            logger.warning(
+                "audio unavailable for a practice session; serving without it",
+                exc_info=True,
             )
+            audio_by_sense, definition_urls = {}, {}
     fallbacks = await _fallback_contexts(
         session,
         [c.word for c in queue if not contexts_by_word.get(c.word.id)],
@@ -2439,6 +2459,20 @@ async def build_known_check_item(
 # --- Recording an answer --------------------------------------------------------
 
 
+def _requeue_exercise_matches(logged: str, answered: str) -> bool:
+    """Whether a requeued answer's ``exercise_type`` is the card that failed.
+
+    The same exercise, or its ALLOWED fallback: a requeued `listen` or `speak`
+    card the learner cannot do this time ("Can't listen now", a refused
+    microphone) is answered as its typed `recall` fallback and still carries
+    ``requeued`` -- refusing that would leave a card the client cannot get
+    past. Nothing else converts: a failed `recall` is not requeued as
+    `listen`, and `speak` is not requeued as `listen`."""
+    return answered == logged or (
+        answered == LISTEN_FALLBACK_EXERCISE and logged in ("listen", "speak")
+    )
+
+
 async def _last_log(
     session: AsyncSession, word_id: uuid.UUID, direction: Direction
 ) -> VocabularyReviewLog | None:
@@ -2479,7 +2513,8 @@ async def record_answer(
     sends back.
 
     ``planned_exercise`` is accepted on the wire (:class:`PracticeAnswerIn`
-    echoes whatever the item carried) but its VALUE is never read here --
+    echoes whatever the item carried) but its VALUE is never read here, not
+    even ``"speak"`` --
     see below. The server is the only party that gets to say what the
     ladder asked for; a client that could name its own ``planned_exercise``
     could plant a fabricated ``vocabulary_review_logs`` row claiming a word
@@ -2548,8 +2583,9 @@ async def record_answer(
     first Again), so it counts towards neither promotion nor a second
     demotion. Verified server-side against :func:`_last_log`, not trusted on
     the client's word alone: the word's own last logged answer in this
-    direction must be an ``Again`` at exactly this ``exercise_type``, within
-    :data:`REQUEUE_WINDOW` -- otherwise a client could claim ``requeued`` on
+    direction must be an ``Again`` at this ``exercise_type`` (or, for a
+    `listen`/`speak` card, at the `recall` fallback it may be answered as --
+    :func:`_requeue_exercise_matches`), within :data:`REQUEUE_WINDOW` -- otherwise a client could claim ``requeued`` on
     any answer to buy a free pass around the ladder's authority check below.
     A verified requeue is logged with ``planned_exercise = NULL`` -- never
     ``exercise_type``, which would forge the same "has reached this level"
@@ -2576,22 +2612,28 @@ async def record_answer(
     (:data:`LISTEN_FALLBACK_EXERCISE`), graded as recall, and read by the
     ladder like any fallback: an Again demotes ``listen`` to ``recall``.
 
-    ``speak`` is on no ladder, so there is no level to derive its plan from.
-    It is accepted (as ``exercise_type="speak"``, or as ``recall`` claiming
-    ``planned_exercise="speak"`` -- the unsupported-browser typing fallback)
-    only for a passive word whose own level is in :data:`SPEAK_LEVELS`, and
-    is then logged as ``planned_exercise="speak"`` with the ladder skipped
-    outright: it moves no rung and, because every ladder read skips such a
-    row, neither extends nor breaks a streak. This is the one place a client's
-    ``planned_exercise`` is READ -- as a claim that this was `speak`'s
-    fallback, which cannot be verified (nothing records that a session was in
-    `speak` mode) and buys a forger nothing but a ladder that does not move.
-    A spoken answer is verified by RE-RUNNING the matcher on ``given`` against
-    the lemma (:func:`speech_match.matches`; a mismatch is a 422), so what
-    the browser's recogniser claimed is never taken as proof; ``gave_up`` is
-    "I don't know" and rates Again. The matcher cannot prove anyone spoke --
-    a client can send the lemma as ``given`` -- which is why a `speak` answer
-    is not ladder evidence in either direction.
+    ``speak`` is on no ladder, so a SPOKEN answer has no level to derive its
+    plan from. It is accepted (``exercise_type="speak"``) only for a passive
+    word whose own level is in :data:`SPEAK_LEVELS`, and is logged as
+    ``planned_exercise="speak"`` with the ladder skipped outright: it moves no
+    rung and, because every ladder read skips such a row, neither extends nor
+    breaks a streak. A spoken answer is verified by RE-RUNNING the matcher on
+    ``given`` against the lemma (:func:`speech_match.matches`; a mismatch is a
+    422), so what the browser's recogniser claimed is never taken as proof;
+    ``gave_up`` is "I don't know" and rates Again. The matcher cannot prove
+    anyone spoke -- a client can send the lemma as ``given`` -- which is why a
+    spoken answer is not ladder evidence in either direction.
+
+    ``speak``'s TYPING fallback (decision 19) is not a `speak` answer at all:
+    it is a typed `recall` answer, and the server treats it exactly as one.
+    The client's ``planned_exercise="speak"`` on it is accepted on the wire and
+    never read -- the plan is derived from the word's own level like any
+    other, so a word at `recall` gets a normal `recall` answer (full ladder
+    effect) and a word at `listen` gets the `listen`-plan recall fallback. A
+    claim that could skip the ladder would let a client hide every wrong typed
+    answer behind it. The fact that the answer came from a speak card is not
+    recorded (nothing could verify it and the row's ``planned_exercise`` is
+    what the ladder reads).
 
     The context named in the request is trusted only as far as it actually
     belongs to this word; a mismatched or unknown id is treated as no
@@ -2722,13 +2764,35 @@ async def record_answer(
             if (
                 last_log is None
                 or last_log.rating != int(fsrs.Rating.Again)
-                or last_log.exercise_type != exercise_type
+                or not _requeue_exercise_matches(last_log.exercise_type, exercise_type)
                 or last_log.reviewed_at < now - REQUEUE_WINDOW
             ):
                 raise HTTPException(
                     status.HTTP_422_UNPROCESSABLE_ENTITY,
                     "requeued does not match a recent Again at this exercise "
                     "for this word",
+                )
+            # The level gates still apply: a requeue is the same card again,
+            # not a way round the rule that decided whether it was offered.
+            # `speak` (spoken, or its typing fallback) needs a passive word at
+            # `recall`/`listen`. A `listen` card's own Again has ALREADY
+            # demoted the word to `recall`, so the requeued `listen` answer is
+            # checked against the rungs it can legitimately sit on now:
+            # `listen`, or `recall` after that very demotion.
+            level_now = _current_level(word, direction)
+            if "speak" in (last_log.exercise_type, exercise_type) and (
+                direction != "passive" or level_now not in SPEAK_LEVELS
+            ):
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "speak is not open for this word",
+                )
+            if "listen" in (last_log.exercise_type, exercise_type) and (
+                direction != "passive" or level_now not in LISTEN_REQUEUE_LEVELS
+            ):
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "listen is not open for this word",
                 )
             # Logged with no plan at all, not `exercise_type` -- the ladder
             # asked for nothing this time round (this is the SAME task the
@@ -2743,12 +2807,11 @@ async def record_answer(
             # ladder's plan, so it is neither.
             planned_exercise = None
             skip_ladder = True
-        elif exercise_type == "speak" or (
-            exercise_type == "recall" and planned_exercise == "speak"
-        ):
-            # `speak`, or its typing fallback: on no ladder -- see the
-            # docstring. Open only to a passive word already on `recall` or
-            # `listen`; the level is the word's own, never the client's.
+        elif exercise_type == "speak":
+            # SPOKEN `speak`: on no ladder -- see the docstring. Open only to
+            # a passive word already on `recall` or `listen`; the level is the
+            # word's own, never the client's. (Its typing fallback is NOT
+            # here: that is an ordinary typed recall answer, below.)
             if (
                 direction != "passive"
                 or _current_level(word, direction) not in SPEAK_LEVELS
@@ -2987,6 +3050,18 @@ async def record_answer(
 # --- `speak`: did the recogniser hear the word? --------------------------------
 
 
+#: How far back a learner's misses on one word count as the SAME run of
+#: attempts. The server numbers the attempt itself (the client's ``attempt`` is
+#: not trusted: ``attempt=3`` on a first call would otherwise buy the reveal),
+#: from the ``speak_misses`` rows inside this window.
+SPEAK_ATTEMPT_WINDOW = timedelta(minutes=10)
+#: Rows kept per (learner, word, window): a loop of failing checks cannot grow
+#: the table without bound. Past it the miss is answered but not written.
+SPEAK_MISS_ROW_CAP = 10
+#: The attempt on which the answer is revealed (decision 18).
+SPEAK_REVEAL_ATTEMPT = 3
+
+
 async def speak_check(
     session: AsyncSession,
     user: User,
@@ -3008,10 +3083,17 @@ async def speak_check(
     is the separate ``speak`` answer (:func:`record_answer`), posted by the
     client once this says ``caught`` -- and re-checked there.
 
-    ``answer`` (the lemma) and ``audio`` are filled only on attempt 3 with no
-    match -- the reveal. Before that a miss tells the client nothing about the
-    word: it is the same "the answer never reaches the client early" rule as
-    recall's.
+    ``answer`` (the lemma) and ``audio`` are filled only when THIS miss is the
+    third of a run -- the reveal. Before that a miss tells the client nothing
+    about the word: it is the same "the answer never reaches the client early"
+    rule as recall's. The run is counted server-side from this learner's
+    recent misses on the word (:data:`SPEAK_ATTEMPT_WINDOW`), starting after
+    the last reveal; ``attempt`` is accepted for compatibility with the
+    client and never believed. A learner who sends three failing checks gets
+    the answer, which is the design -- what they cannot do is get it from one.
+    A caught attempt writes nothing, so it does not end a run; a fresh card
+    for the word inside the window can therefore reveal a miss early, which
+    costs the learner a hint, never a rating.
 
     Open under the same gate :func:`record_answer` applies to a `speak`
     answer (a passive word on `recall` or `listen`): a check for a word that
@@ -3030,16 +3112,35 @@ async def speak_check(
     if matched is not None:
         return {"caught": True, "matched": matched, "answer": None, "audio": None}
 
-    session.add(
-        SpeakMiss(
-            user_id=user.id, saved_word_id=word.id, attempt=attempt,
-            alternatives=list(alternatives),
-            # Copied once the model has the column (see `on_the_go._lemma_of`).
-            **({"lemma": word.lemma} if "lemma" in SpeakMiss.model_fields else {}),
+    since = datetime.now(timezone.utc) - SPEAK_ATTEMPT_WINDOW
+    recent = (
+        await session.exec(
+            select(SpeakMiss.attempt)
+            .where(
+                SpeakMiss.user_id == user.id,
+                SpeakMiss.saved_word_id == word.id,
+                SpeakMiss.created_at >= since,
+            )
+            .order_by(SpeakMiss.created_at.desc())
+            .limit(SPEAK_MISS_ROW_CAP)
         )
-    )
-    await session.commit()
-    if attempt < 3:
+    ).all()
+    run = 0
+    for logged_attempt in recent:  # newest first, up to the last reveal
+        if logged_attempt >= SPEAK_REVEAL_ATTEMPT:
+            break
+        run += 1
+    attempt_now = run + 1
+    if len(recent) < SPEAK_MISS_ROW_CAP:
+        session.add(
+            SpeakMiss(
+                user_id=user.id, saved_word_id=word.id, attempt=attempt_now,
+                alternatives=[alt[:200] for alt in alternatives[:5]],
+                lemma=word.lemma,
+            )
+        )
+        await session.commit()
+    if attempt_now < SPEAK_REVEAL_ATTEMPT:
         return {"caught": False, "matched": None, "answer": None, "audio": None}
 
     sense = await session.get(LexemeSense, word.lexeme_sense_id)

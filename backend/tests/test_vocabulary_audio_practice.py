@@ -235,9 +235,8 @@ async def test_speak_never_counts_as_reaching_a_rung_or_a_demotion(created: Crea
     assert await _level(word) == "listen"
     logs = await _logs(word)
     assert logs[0].exercise_type == "speak" and logs[0].planned_exercise == "speak"
-    # Speak-fallback typing: graded as recall, an Again moves nothing.
-    out = await _answer(user, word, "recall", "no", planned_exercise="speak")
-    assert out["rating"] == int(fsrs.Rating.Again) and await _level(word) == "listen"
+    # The typing fallback of a speak card is an ordinary typed answer (see
+    # `test_a_claimed_speak_plan_is_never_read`), so it is NOT in this list.
 
 
 async def test_speak_lapse_counts_towards_leech_like_any_answer(created: Created) -> None:
@@ -277,7 +276,6 @@ async def test_other_new_combinations_are_rejected(created: Created) -> None:
     await _rejects(user, at_recognise, "listen", at_recognise.lemma)
     await _rejects(user, at_listen, "produce", at_listen.lemma)
     await _rejects(user, at_recognise, "speak", at_recognise.lemma)  # speak opens at recall
-    await _rejects(user, at_recognise, "recall", at_recognise.lemma, planned_exercise="speak")
     async with async_session_factory() as session:
         with pytest.raises(HTTPException):
             await practice_service.record_answer(
@@ -587,3 +585,203 @@ async def test_exposures_are_owner_only_and_never_touch_fsrs(created: Created) -
         assert len(rows) == 1 and rows[0].user_id == user.id
         assert (await session.get(SavedWord, word.id)).model_dump() == snapshot
     assert await _logs(word) == before
+
+
+# --- the speak typing fallback is an ordinary typed answer --------------------
+
+
+async def test_a_claimed_speak_plan_is_never_read(created: Created) -> None:
+    """Forging: `planned_exercise="speak"` on a typed answer used to skip the
+    ladder, hiding a wrong answer. Now the plan is the word's own level."""
+    user = await make_user(created)
+    word = await _word(created, user, level="recall")
+    first = await _answer(user, word, "recall", word.lemma, planned_exercise="speak")
+    assert first["rating"] == int(fsrs.Rating.Good) and await _level(word) == "recall"
+    wrong = await _answer(user, word, "recall", "zzzzzzzz", planned_exercise="speak")
+    assert wrong["rating"] == int(fsrs.Rating.Again)
+    assert wrong["level"] == "recognise"  # demoted: the ladder saw it
+    again = await _answer(user, word, "recall", word.lemma, planned_exercise="speak")
+    assert again["rating"] == int(fsrs.Rating.Good) and await _level(word) != "listen"
+    assert [log.planned_exercise for log in await _logs(word)] == [
+        "recall", "recall", "recognise"]
+
+
+async def test_the_speak_fallback_at_listen_is_the_listen_plan_fallback(created: Created) -> None:
+    user = await make_user(created)
+    word = await _word(created, user, level="listen")
+    wrong = await _answer(user, word, "recall", "zzzzzzzz", planned_exercise="speak")
+    assert wrong["level"] == "recall"
+    assert (await _logs(word))[0].planned_exercise == "listen"
+
+
+async def test_a_streak_counts_through_a_speak_fallback_answer(created: Created) -> None:
+    user = await make_user(created)
+    word = await _word(created, user, level="recall")
+    await _answer(user, word, "recall", word.lemma)
+    out = await _answer(user, word, "recall", word.lemma, planned_exercise="speak")
+    assert out["level"] == "listen"
+
+
+# --- the requeue of a listen / speak card -------------------------------------
+
+
+async def test_a_requeued_listen_card_may_be_answered_as_its_recall_fallback(
+    created: Created,
+) -> None:
+    user = await make_user(created)
+    word = await _word(created, user, level="listen")
+    failed = await _answer(user, word, "listen", "zzzzzzzz")
+    assert failed["level"] == "recall"  # the Again demoted it
+    out = await _answer(user, word, "recall", word.lemma, requeued=True,
+                        planned_exercise="listen")
+    assert out["verdict"] == "correct" and await _level(word) == "recall"
+    log = (await _logs(word))[-1]
+    assert log.exercise_type == "recall" and log.planned_exercise is None
+
+
+async def test_a_requeued_listen_card_is_still_accepted_as_listen(created: Created) -> None:
+    user = await make_user(created)
+    word = await _word(created, user, level="listen")
+    await _answer(user, word, "listen", "zzzzzzzz")
+    out = await _answer(user, word, "listen", word.lemma, requeued=True)
+    assert out["verdict"] == "correct" and await _level(word) == "recall"
+
+
+async def test_a_requeued_speak_card_may_be_answered_as_its_typed_fallback(created: Created) -> None:
+    user = await make_user(created)
+    word = await _word(created, user, level="recall")
+    await _answer(user, word, "speak", "", gave_up=True)
+    typed = await _answer(user, word, "recall", word.lemma, requeued=True,
+                          planned_exercise="speak")
+    assert typed["verdict"] == "correct"
+    assert (await _logs(word))[-1].planned_exercise is None  # a requeue, no plan
+    assert await _level(word) == "recall"
+
+
+async def test_requeue_does_not_convert_other_exercises(created: Created) -> None:
+    user = await make_user(created)
+    word = await _word(created, user, level="recall")
+    await _answer(user, word, "recall", "no")  # Again at recall, demoted to recognise
+    await _rejects(user, word, "listen", word.lemma, requeued=True)
+    await _rejects(user, word, "speak", word.lemma, requeued=True)
+
+
+async def test_requeue_applies_the_speak_and_listen_level_gates(created: Created) -> None:
+    user = await make_user(created)
+    spoken = await _word(created, user, level="recall")
+    await _answer(user, spoken, "speak", "", gave_up=True)
+    heard = await _word(created, user, level="listen")
+    await _answer(user, heard, "listen", "zzzzzzzz")
+    async with async_session_factory() as session:
+        await session.execute(
+            update(SavedWord).where(SavedWord.id.in_([spoken.id, heard.id]))
+            .values(passive_level="recognise")
+        )
+        await session.commit()
+    for exercise_type in ("speak", "recall"):
+        await _rejects(user, spoken, exercise_type, spoken.lemma, requeued=True)
+    for exercise_type in ("listen", "recall"):
+        await _rejects(user, heard, exercise_type, heard.lemma, requeued=True)
+    # Nothing was logged for either refused requeue.
+    assert len(await _logs(spoken)) == 1 and len(await _logs(heard)) == 1
+
+
+# --- the audio layer failing does not fail the session -------------------------
+
+
+async def test_a_failing_audio_lookup_degrades_the_session(created: Created, monkeypatch) -> None:
+    user = await make_user(created)
+    await _word(created, user, level="listen")
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("storage is down")
+
+    monkeypatch.setattr(practice_service.word_audio, "word_audio_many", boom)
+    monkeypatch.setattr(practice_service.word_audio, "definition_audio_urls", boom)
+    (item,) = await _session(user)
+    assert (item["exercise_type"], item["planned_exercise"]) == ("recall", "listen")
+    assert item["prompt"]["kind"] == "definition"
+    (spoken,) = await _session(user, mode="speak")
+    assert spoken["exercise_type"] == "speak"
+    assert spoken["prompt"]["definition_audio_url"] is None
+
+
+# --- speak-check counts the attempts itself ------------------------------------
+
+
+async def _check(user, word, alts, attempt):
+    async with async_session_factory() as session:
+        return await practice_service.speak_check(
+            session, user, word_id=word.id, alternatives=alts, attempt=attempt)
+
+
+async def _miss_rows(user, word) -> list[SpeakMiss]:
+    async with async_session_factory() as session:
+        return list((await session.exec(
+            select(SpeakMiss).where(SpeakMiss.saved_word_id == word.id)
+            .order_by(SpeakMiss.created_at))).all())
+
+
+async def test_a_forged_attempt_reveals_nothing(created: Created) -> None:
+    user = await make_user(created)
+    word = await _word(created, user, level="recall", lemma="window")
+    first = await _check(user, word, ["wind"], 3)
+    assert first == {"caught": False, "matched": None, "answer": None, "audio": None}
+    assert (await _check(user, word, ["wind"], 3))["answer"] is None
+    third = await _check(user, word, ["wind"], 1)  # the server's third
+    assert third["answer"] == word.lemma
+    rows = await _miss_rows(user, word)
+    assert [m.attempt for m in rows] == [1, 2, 3] and {m.lemma for m in rows} == {"window"}
+    # A new run starts after the reveal.
+    assert (await _check(user, word, ["wind"], 3))["answer"] is None
+    assert [m.attempt for m in await _miss_rows(user, word)] == [1, 2, 3, 1]
+
+
+async def test_old_misses_do_not_count_and_rows_are_capped(created: Created) -> None:
+    user = await make_user(created)
+    word = await _word(created, user, level="recall", lemma="window")
+    await _check(user, word, ["wind"], 1)
+    await _check(user, word, ["wind"], 1)
+    async with async_session_factory() as session:
+        await session.execute(
+            update(SpeakMiss).where(SpeakMiss.saved_word_id == word.id)
+            .values(created_at=NOW - practice_service.SPEAK_ATTEMPT_WINDOW - timedelta(minutes=1))
+        )
+        await session.commit()
+    assert (await _check(user, word, ["wind"], 1))["answer"] is None  # attempt 1 again
+    for _ in range(30):
+        await _check(user, word, ["wind"], 3)
+    in_window = [m for m in await _miss_rows(user, word)
+                 if m.created_at >= NOW - timedelta(minutes=5)]
+    assert len(in_window) == practice_service.SPEAK_MISS_ROW_CAP
+
+
+# --- On the go: a failed render is not "being prepared" ------------------------
+
+
+async def test_on_the_go_preparing_ignores_failed_renders(created: Created) -> None:
+    user = await make_user(created)
+    failed_item = await _word(created, user, level="recognise", due=False)
+    failed_part = await _word(created, user, level="recognise", due=False)
+    waiting = await _word(created, user, level="recognise", due=False)
+    cookies = {"access_token": create_access_token(str(user.id))}
+    async with _client() as client:  # queues all three words' renders
+        first = (await client.get("/api/vocabulary/on-the-go", cookies=cookies)).json()
+        assert first["preparing"] == 3 and first["items"] == []
+        for word in (failed_item, failed_part, waiting):
+            definition = tts.definition_spec(DEFINITION, word.lemma)
+            spoken = tts.word_spec(word.lemma, None)
+            item = tts.item_spec(definition, word_spec_=spoken, clip_storage_key=None)
+            created.render_keys.extend([definition.key, spoken.key, item.key])
+        key_item = tts.item_spec(
+            tts.definition_spec(DEFINITION, failed_item.lemma),
+            word_spec_=tts.word_spec(failed_item.lemma, None), clip_storage_key=None).key
+        key_part = tts.word_spec(failed_part.lemma, None).key
+        async with async_session_factory() as session:
+            await session.execute(
+                update(AudioRender).where(AudioRender.key.in_([key_item, key_part]))
+                .values(status=RenderStatus.FAILED)
+            )
+            await session.commit()
+        data = (await client.get("/api/vocabulary/on-the-go", cookies=cookies)).json()
+    assert data["items"] == [] and data["preparing"] == 1

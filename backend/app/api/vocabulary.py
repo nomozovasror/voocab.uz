@@ -712,7 +712,8 @@ async def practice_speak_check(
     word? Writes nothing to the schedule or the review log -- only a miss is
     logged (``speak_misses``) -- see ``app.services.practice.speak_check``.
     The body is bounded by the schema (1 to 5 alternatives of at most 200
-    characters, attempt 1 to 3). 404 for a word that is not the caller's."""
+    characters, attempt 1 to 3 -- which the server does not believe: it counts
+    the misses itself). 404 for a word that is not the caller's."""
     result = await practice_service.speak_check(
         session, user, word_id=data.word_id, alternatives=data.alternatives,
         attempt=data.attempt,

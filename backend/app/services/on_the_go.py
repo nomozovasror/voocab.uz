@@ -21,18 +21,12 @@ import uuid
 from sqlmodel import select
 
 from app.core.database import AsyncSession
-from app.models.lexicon import LexemeSense
+from app.models.audio_render import AudioRender, RenderStatus
+from app.models.lexicon import Lexeme, LexemeSense
 from app.models.user import User
 from app.models.vocabulary import SavedWord
 from app.models.word_audio_log import OnTheGoExposure
 from app.services import practice, tts, word_audio
-
-
-def _lemma_of(word: SavedWord) -> dict[str, str]:
-    """The word's lemma, copied onto the log row once the model has the
-    column (the audio-layer fix adds it so the row outlives a forgotten word,
-    as ``vocabulary_review_logs`` does). Until then, nothing."""
-    return {"lemma": word.lemma} if "lemma" in OnTheGoExposure.model_fields else {}
 
 
 async def in_rotation(session: AsyncSession, user_id: uuid.UUID) -> list[SavedWord]:
@@ -57,9 +51,11 @@ async def item_list(
     """``(ready items in order, how many are still being prepared)``.
 
     Only items whose render is READY are listed -- a half-made file is no use
-    in a pocket -- and everything else counts towards ``preparing``;
-    :func:`app.services.word_audio.item_renders` has already queued it. All
-    words go through ONE ``item_renders`` call: its queries are per table, not
+    in a pocket -- and everything else that is still being made counts towards
+    ``preparing``;
+    :func:`app.services.word_audio.item_renders` has already queued it. A word
+    whose render has ``failed`` is in neither number (:func:`_failed_words`).
+    All words go through ONE ``item_renders`` call: its queries are per table, not
     per word.
 
     A word whose sense has nothing speakable as a definition can never have an
@@ -84,12 +80,83 @@ async def item_list(
         and tts.definition_spec(senses[word.lexeme_sense_id].definition_en, word.lemma)
         is not None
     ]
+    material_ids = await practice.learner_material_ids(session, user.id)
     renders = await word_audio.item_renders(
-        session, playable,
-        prefer_material_ids=await practice.learner_material_ids(session, user.id),
+        session, playable, prefer_material_ids=material_ids
     )
     ready = [(word, renders[word.id]) for word in playable if renders.get(word.id)]
-    return ready, len(playable) - len(ready)
+    waiting = [word for word in playable if not renders.get(word.id)]
+    failed = await _failed_words(
+        session, waiting, senses, prefer_material_ids=material_ids
+    )
+    return ready, len(waiting) - len(failed)
+
+
+async def _failed_words(
+    session: AsyncSession,
+    words: list[SavedWord],
+    senses: dict[uuid.UUID, LexemeSense],
+    *,
+    prefer_material_ids: frozenset[uuid.UUID],
+) -> set[uuid.UUID]:
+    """The words whose item, or one of the parts it is made of (definition,
+    word), has a ``failed`` render. Such a word is not "being prepared": a
+    failed render waits for an operator's requeue (or the age-based one), and
+    counting it in ``preparing`` would keep the client's "preparing N" up for
+    ever. A word whose parts are merely ``pending``/``processing`` -- or not
+    enqueued yet -- is not in the set.
+
+    The keys are re-derived with the same public helpers
+    :func:`app.services.word_audio.item_renders` uses, so they are the same
+    keys; only unready words are looked at."""
+    if not words:
+        return set()
+    wanted = [senses[word.lexeme_sense_id] for word in words]
+    lexemes = {
+        lexeme.id: lexeme
+        for lexeme in (
+            await session.exec(
+                select(Lexeme).where(Lexeme.id.in_({s.lexeme_id for s in wanted}))
+            )
+        ).all()
+    }
+    sources = await word_audio.word_sources(
+        session, wanted, lexemes=lexemes, prefer_material_ids=prefer_material_ids
+    )
+    keys_of: dict[uuid.UUID, list[str]] = {}
+    for word in words:
+        sense = senses[word.lexeme_sense_id]
+        lexeme = lexemes.get(sense.lexeme_id)
+        if lexeme is None or sense.id not in sources:
+            continue
+        definition = tts.definition_spec(sense.definition_en, lexeme.lemma)
+        if definition is None:
+            continue
+        source = sources[sense.id]
+        item = tts.item_spec(
+            definition,
+            word_spec_=source.spec,
+            clip_storage_key=source.clip.storage_key if source.clip is not None else None,
+        )
+        keys_of[word.id] = [
+            spec.key for spec in (definition, source.spec, item) if spec is not None
+        ]
+    all_keys = {key for keys in keys_of.values() for key in keys}
+    if not all_keys:
+        return set()
+    failed_keys = set(
+        (
+            await session.exec(
+                select(AudioRender.key).where(
+                    AudioRender.key.in_(all_keys),
+                    AudioRender.status == RenderStatus.FAILED,
+                )
+            )
+        ).all()
+    )
+    return {
+        word_id for word_id, keys in keys_of.items() if failed_keys.intersection(keys)
+    }
 
 
 async def record_exposure(
@@ -102,6 +169,10 @@ async def record_exposure(
     word = await session.get(SavedWord, word_id)
     if word is None or word.user_id != user.id:
         return False
-    session.add(OnTheGoExposure(user_id=user.id, saved_word_id=word.id, **_lemma_of(word)))
+    # `lemma` is copied so the row still says which word it was after the word
+    # is forgotten (`saved_word_id` goes null), as `vocabulary_review_logs` does.
+    session.add(
+        OnTheGoExposure(user_id=user.id, saved_word_id=word.id, lemma=word.lemma)
+    )
     await session.commit()
     return True

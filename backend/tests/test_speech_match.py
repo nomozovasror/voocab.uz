@@ -18,7 +18,13 @@ from app.services import speech_match as sm
         ("cat", "cet"), ("bed", "bad"), ("water", "veter"),
         # a vowel before an initial consonant cluster
         ("stop", "istop"), ("stop", "estop"), ("school", "ischool"),
+        ("stop", "ostop"), ("stop", "astop"), ("stop", "ustop"),  # any vowel
+        # ... or split off as its own one-letter token, as a recogniser does
+        ("stop", "a stop"), ("stop", "i stop"), ("stop", "e stop"),
+        ("stop", "o stop"), ("stop", "u stop"), ("stop", "I  Stop."),
+        ("stop it", "i stop it"), ("stop", "a stop".upper()),
         ("state", "estate"),  # a real word, accepted on purpose (docstring)
+        ("cross", "across"),  # likewise
         # normalisation: case, punctuation, hyphens, spacing
         ("think", "Think."), ("tip-of-the-tongue", "tip of the tongue"),
         ("give rise to", "  Give   rise to "),
@@ -36,8 +42,12 @@ def test_accepted(target: str, heard: str) -> None:
         ("play", "pray"),            # l -> r is not a rule
         ("cat", "ket"),              # c -> k is not a rule
         ("school", "iskool"),        # needs ch -> k and oo: not a rule
-        ("stop", "ostop"),           # only i / e go in front
-        ("stop", "astop"),
+        ("stop", "aistop"),          # one vowel, not two
+        ("stop", "ab stop"),         # a one-letter VOWEL token only
+        ("stop", "the stop"),
+        ("stop", "s stop"),
+        ("sit", "a sit"),            # no initial cluster, also split
+        ("this", "a this"),          # th is ONE sound, split or not
         ("sit", "isit"),             # no initial cluster, no prefix
         ("this", "ithis"),           # th is ONE sound, not a cluster
         ("think", "thinks"),         # no inflection tolerance

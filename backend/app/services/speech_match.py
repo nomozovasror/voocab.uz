@@ -21,10 +21,14 @@ these ways**, together:
 * ``w`` -> ``v``;
 * ``a`` <-> ``e`` (a target ``a`` may be heard as ``e`` and a target ``e`` as
   ``a``);
-* a vowel, ``i`` or ``e``, put in front of an INITIAL consonant cluster
-  (``stop`` -> ``istop`` / ``estop``). A cluster is two or more consonant
-  SOUNDS at the start of the word, ``th``/``sh``/``ch``/``ph``/``gh``/``wh``
-  counting as one (``this`` has no cluster; ``school`` has ``sch``).
+* a vowel -- ANY vowel (decision 17) -- put in front of an INITIAL consonant
+  cluster (``stop`` -> ``istop`` / ``estop`` / ``ostop``). Because a real
+  recogniser returns WORDS, the same vowel split off as its own one-letter
+  token is accepted too (``a stop``, ``i stop``, ``e stop``). A cluster is two
+  or more consonant SOUNDS at the start of the word,
+  ``th``/``sh``/``ch``/``ph``/``gh``/``wh`` counting as one (``this`` has no
+  cluster; ``school`` has ``sch``). A vowel before a word with no cluster
+  (``isit`` for ``sit``) is not a rule, and neither is any longer prefix.
 
 A phrase is compared WHOLE -- ``give rise to`` is matched as one string, so a
 recogniser that heard only ``rise`` is a miss, never a partial credit.
@@ -34,15 +38,16 @@ recogniser that heard only ``rise`` is a miss, never a partial credit.
 No inflection tolerance (``thinks`` is not ``think``), no edit distance, no
 phonetic similarity, no other letters: ``c`` -> ``k`` (``cat`` / ``ket``),
 ``ch`` -> ``k`` with a changed vowel (``school`` / ``iskool``), ``l`` -> ``r``
-(``play`` / ``pray``), a different prefix vowel (``ostop``) are all misses.
+(``play`` / ``pray``), a vowel before a word with no initial cluster
+(``isit``) are all misses.
 Everything fuzzier than a written-down rule is a guess about what the
 recogniser meant, and a guess that accepts ``pray`` for ``play`` teaches the
 wrong word. A miss is cheap here -- three attempts, nothing written to the
 schedule (decision 18) -- and a false accept is not.
 
 Accepting is deliberately a little generous where the REAL English word the
-recogniser returns is a different word: ``sink`` for ``think`` and ``estate``
-for ``state`` are accepted, because they are exactly what a learner who said
+recogniser returns is a different word: ``sink`` for ``think``, ``estate``
+for ``state`` and ``across`` for ``cross`` are accepted, because they are exactly what a learner who said
 the right word would be handed back. The rule cannot tell the two apart and
 the recogniser cannot either.
 
@@ -64,11 +69,10 @@ _VOWELS = frozenset("aeiou")
 #: Digraphs that are ONE consonant sound, so ``this`` and ``shop`` do not count
 #: as having an initial cluster (nobody puts a vowel in front of ``sh``).
 _DIGRAPHS = ("th", "sh", "ch", "ph", "gh", "wh")
-#: The vowels a learner puts in front of an initial cluster -- the two the
-#: decision names (``istop``/``estop``). Not ``a``/``o``/``u``: ``across`` and
-#: ``abridge`` are real words that would then be accepted for ``cross`` and
-#: ``bridge``.
-_PREFIX_VOWELS = "ie"
+#: The prefix vowel of decision 17 is ANY vowel, written either glued to the
+#: word (``istop``) or as its own one-letter token (``i stop``) -- what a
+#: recogniser that returns words does. Only ever before an initial CLUSTER.
+_PREFIX = "(?:[aeiou] ?)?"
 #: What a target ``th`` may be written as.
 _TH_SPELLINGS = ("th", "t", "s", "d", "z")
 
@@ -109,7 +113,7 @@ def _pattern(target: str) -> re.Pattern[str] | None:
         return None
     parts: list[str] = []
     if _has_initial_cluster(target):
-        parts.append(f"[{_PREFIX_VOWELS}]?")
+        parts.append(_PREFIX)
     index = 0
     while index < len(target):
         if target[index : index + 2] == "th":

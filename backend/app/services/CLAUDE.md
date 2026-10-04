@@ -1282,20 +1282,38 @@ below are the ones a later change can silently break.
   is never promotion evidence.** With two rungs it could not promote anything;
   with `recall` in the middle a correct choice-of-four would otherwise count as
   recalling the word. Wrong, it still demotes, as before.
-- **`speak` is on no ladder and the ladder cannot see it.** Logged as
-  `exercise_type="speak"`, `planned_exercise="speak"` (and a recall typed as
-  `speak`'s fallback also has plan `speak`); `_promotion_streak` skips both,
-  `_has_reached_level` never matches them, `_apply_ladder` is not called. A
-  spoken answer between two typed ones must not reset a streak. It IS an FSRS
-  answer on the passive card and counts as a lapse like any (Again on a Review
-  card).
+- **A SPOKEN `speak` answer is on no ladder and the ladder cannot see it.**
+  Logged as `exercise_type="speak"`, `planned_exercise="speak"`;
+  `_promotion_streak` skips it, `_has_reached_level` never matches it,
+  `_apply_ladder` is not called. A spoken answer between two typed ones must
+  not reset a streak. It IS an FSRS answer on the passive card and counts as a
+  lapse like any (Again on a Review card).
+- **`speak`'s typing fallback is NOT `speak`.** The card becomes the recall
+  prompt (decision 19) and the answer is an ordinary typed `recall`; the
+  client's `planned_exercise="speak"` on it is accepted on the wire and never
+  read. The plan is the word's own level -- at `recall` a normal recall answer
+  with full ladder effect, at `listen` the `listen`-plan recall fallback -- and
+  that is what is logged. (A claim that skipped the ladder would hide every
+  wrong typed answer; it was the one client value ever read, and is gone. That
+  the answer came from a speak card is not recorded.)
 - **`record_answer` stays the authority.** `listen` is accepted only when the
   word's own level is `listen`; its fallback is `recall` (`LISTEN_FALLBACK_
-  EXERCISE`; the plan stays `listen`, an Again demotes). `speak` (or recall
-  claiming plan `speak`) is accepted only for a passive word at `recall` or
-  `listen` (`SPEAK_LEVELS`). Anything else is the same 422 as any unknown
-  claim. The claim "plan = speak" is the one client value that is read, and it
-  cannot be verified -- it buys only a ladder that does not move.
+  EXERCISE`; the plan stays `listen`, an Again demotes). Spoken `speak` is
+  accepted only for a passive word at `recall` or `listen` (`SPEAK_LEVELS`).
+  Anything else is the same 422 as any unknown claim. No client-claimed plan
+  is read.
+- **"Can't listen now" costs nothing to press, not nothing to answer.** The
+  link itself writes nothing; the item is then answered as the `recall`
+  fallback, graded as recall, and a wrong one is an FSRS Again that demotes
+  `listen` -> `recall` like any fallback answer (the same pattern as the
+  distractor fallback). A correct one is a Good and moves nothing.
+- **Requeue of `listen`/`speak`.** The client turns a requeued `listen`/`speak`
+  card into its recall fallback and still sends `requeued`, so the check is
+  `_requeue_exercise_matches`: the same exercise as the last logged Again, or
+  `recall` after a logged `listen`/`speak`. The level gates run again on the
+  requeue: `speak` (either form) needs `SPEAK_LEVELS`; `listen` (either form)
+  needs `LISTEN_REQUEUE_LEVELS` -- `recall` too, because the Again being
+  requeued has already demoted the word off `listen`.
 - **`listen` is graded against the LEMMA**, not the sentence's surface (the
   recall fallback is graded against the surface, as it always was): the audio
   is the exact lemma, and "type what you hear" must not mark the lemma wrong
@@ -1314,17 +1332,24 @@ below are the ones a later change can silently break.
   (`speech_match.matches`, 422 on no match); `gave_up` (only valid with
   `exercise_type="speak"`) rates Again.
 - **The matcher is spelling rules, not similarity** (`speech_match.py`):
-  th -> t/s/d/z, w -> v, a<->e on the target's letters, an `i`/`e` before an
-  initial consonant cluster, phrases whole. No inflection, no edit distance.
+  th -> t/s/d/z, w -> v, a<->e on the target's letters, ANY vowel before an
+  initial consonant cluster (glued, `istop`, or split off as a one-letter
+  token, `i stop` -- a recogniser returns words), phrases whole. No inflection, no edit distance.
   `cat`/`ket`, `play`/`pray`, `school`/`iskool` are misses on purpose; a false
   accept teaches the wrong word and a miss costs nothing (decision 18). The
   target becomes ONE regex, never a list of variants.
 - **`speak-check` writes nothing to the schedule or review log**, only a
-  `speak_misses` row per miss; `answer`/`audio` appear only on attempt 3 with
-  no match. Three misses are OUR miss, never an Again.
+  `speak_misses` row per miss (with `lemma`, always). The attempt is counted
+  SERVER-side from the learner's misses on the word in the last
+  `SPEAK_ATTEMPT_WINDOW` (10 min), since the last reveal; the wire's `attempt`
+  is accepted and never believed. `answer`/`audio` appear only when this miss
+  is the server's third. At most `SPEAK_MISS_ROW_CAP` rows per (learner, word,
+  window) are written. Three misses are OUR miss, never an Again.
 - **On the go (`on_the_go.py`)**: words in rotation (not `EXCLUDED_STATUSES`,
   practisable), `created_at` desc, independent of the daily queue, ready item
-  renders only, `preparing` = the rest (already queued; a word with no
-  speakable definition counts in neither). Exposures insert one
+  renders only, `preparing` = the rest that is still being made (queued or
+  in progress). A word with no speakable definition, or whose item or part
+  render is `failed`, counts in neither (`_failed_words`: the keys are
+  re-derived with the same public helpers `item_renders` uses). Exposures insert one
   `on_the_go_exposures` row and touch no card.
 

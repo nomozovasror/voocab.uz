@@ -1126,9 +1126,12 @@ function LeechContextPanel({ context }: { context: PracticeLeechContext }) {
  *  table ("Can't listen now", or its own file would not play) and a `speak`
  *  card on a device that cannot listen (or for a word with no saved id to
  *  check against) become the ordinary recall card the server sent along as
- *  `prompt.fallback`. It is answered as `recall`, with `planned_exercise`
- *  naming what was planned, which is exactly how the server already reads a
- *  fallback — graded as recall, no penalty, the word's rung unmoved. */
+ *  `prompt.fallback`. It is answered as `recall`, and the server reads it as
+ *  the ordinary typed recall answer it is. Pressing "Can't listen now" costs
+ *  nothing by itself, but the typed answer is graded for real: a wrong one is
+ *  an FSRS Again and demotes `listen` to `recall`, like any fallback answer.
+ *  The `planned_exercise` it carries is never believed (the plan is the
+ *  word's own level, server-side). */
 function resolveItem(
   item: QueueItem,
   off: { listenOff: boolean; speakOff: boolean; unavailable: ReadonlySet<string> },

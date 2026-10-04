@@ -600,8 +600,13 @@ class PracticeAnswerIn(BaseModel):
     card at the end of the session rather than whatever the ladder would
     now serve. Verified server-side against the word's own last logged
     answer for this direction (see ``record_answer``); a claim that does
-    not match a recent ``Again`` at exactly this ``exercise_type`` is a 422,
-    not a silent no-op.
+    not match a recent ``Again`` at this ``exercise_type`` (or, for a
+    `listen`/`speak` card, its `recall` fallback) is a 422, not a silent
+    no-op.
+
+    ``planned_exercise`` is never believed, ``"speak"`` included: a typed
+    answer from a speak card (the unsupported-browser fallback) is graded and
+    laddered as the ordinary `recall` answer it is.
     """
 
     #: Exactly one of the two. ``list_entry_id`` for the first answer to a
@@ -830,7 +835,9 @@ class SpeakCheckIn(BaseModel):
     """What the browser's recogniser heard: up to five alternatives for ONE
     attempt (``maxAlternatives = 5``), each capped at 200 characters -- the
     same cap ``given`` has -- so the body cannot be used to carry anything
-    else. ``attempt`` is 1 to 3: the third miss is the reveal."""
+    else. ``attempt`` is 1 to 3 on the wire and is NOT trusted: the server
+    counts the learner's recent misses itself, and the reveal is the miss it
+    counts as the third."""
 
     word_id: uuid.UUID
     alternatives: list[Annotated[str, Field(max_length=200)]] = Field(
@@ -842,7 +849,8 @@ class SpeakCheckIn(BaseModel):
 class SpeakCheckOut(BaseModel):
     """``caught`` with the alternative that matched, or a miss. ``answer`` and
     ``audio`` are filled ONLY on attempt 3 with ``caught: false`` -- the
-    reveal -- so before that a miss tells the client nothing about the word."""
+    reveal (the server's own count, not the request's ``attempt``) -- so
+    before that a miss tells the client nothing about the word."""
 
     caught: bool
     matched: str | None = None
@@ -863,7 +871,9 @@ class OnTheGoItemOut(BaseModel):
 
 class OnTheGoOut(BaseModel):
     items: list[OnTheGoItemOut]
-    #: Words in rotation whose file is not rendered yet -- already queued.
+    #: Words in rotation whose file is not rendered yet and still being made
+    #: (queued or in progress). A render that has FAILED is not "preparing":
+    #: it is not coming, and counting it would leave the client waiting.
     preparing: int
 
 
