@@ -34,20 +34,27 @@ right, non-obvious thing on its own -- ``Rating.Again`` drops the card's
 *stability* and raises its *difficulty*, which is what actually slows the
 card down long-term. The ladder (below) is a second, DELIBERATELY separate
 thing: promotion and demotion move a word between TASKS (``recognise`` /
-``recall`` / ``produce``), never touch a schedule, and FSRS keeps scoring
+``recall`` / ``listen`` / ``produce``), never touch a schedule, and FSRS keeps scoring
 this card exactly as it would with no ladder at all.
 
 ## The ladder is a stored level, not a derived one
 
 ``SavedWord.passive_level``/``active_level`` say which task is currently
-served for each direction. Promotion needs 2 consecutive corrects at the
-floor (``recognise``) -- or 1, if the word has ever been at the top rung
-before (a re-promotion after a demotion, which shouldn't cost what the FIRST
-promotion cost) -- and demotion is a single Again at the top rung. Both are
-read from ``vocabulary_review_logs.planned_exercise`` (see that column's own
-docstring), never recomputed from FSRS state, because the ladder's question
--- "which task was this encounter AT" -- and FSRS's question -- "how well
-was it remembered" -- are independent facts about the same answer.
+served for each direction. The passive ladder has three rungs (stage 3):
+``recognise`` -> ``recall`` -> ``listen``; the active one two. Promotion off
+a rung needs 2 consecutive corrects at it -- or 1, if the word has ever been
+at the NEXT rung before (a re-promotion after a demotion, which shouldn't
+cost what the FIRST promotion cost) -- and demotion is a single Again at any
+rung above the floor. Both are read from
+``vocabulary_review_logs.planned_exercise`` (see that column's own docstring),
+never recomputed from FSRS state, because the ladder's question -- "which
+task was this encounter AT" -- and FSRS's question -- "how well was it
+remembered" -- are independent facts about the same answer.
+
+``speak`` is on no ladder. It is graded and scheduled like any answer but a
+``speak`` row is invisible to the ladder in both directions: it never moves a
+rung and is never counted by, nor allowed to break, a promotion streak or a
+"has reached" check (see :func:`_promotion_streak`).
 
 ## Card <-> columns, one direction at a time
 
@@ -70,7 +77,7 @@ import logging
 import math
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -85,6 +92,7 @@ from app.core.database import AsyncSession
 from app.models.lexicon import Lexeme, LexemeSense
 from app.models.material import Material
 from app.models.user import User
+from app.models.word_audio_log import SpeakMiss
 from app.models.vocabulary import (
     ACTIVE_LADDER,
     PASSIVE_LADDER,
@@ -97,7 +105,7 @@ from app.models.vocabulary import (
 from app.services import distractors
 from app.services import materials as materials_service
 from app.services import mistakes
-from app.services import word_lists
+from app.services import speech_match, word_audio, word_lists
 from app.services.answers import normalize_answer
 
 logger = logging.getLogger("app.services.practice")
@@ -117,7 +125,7 @@ SCHEDULER = fsrs.Scheduler(
 )
 
 Direction = Literal["passive", "active"]
-ExerciseType = Literal["recognise", "recall", "produce", "listen"]
+ExerciseType = Literal["recognise", "recall", "produce", "listen", "speak"]
 Verdict = Literal["correct", "close", "wrong"]
 
 #: Rating from exercise + verdict -- see the module docstring. ``close`` on
@@ -145,6 +153,14 @@ RATING_TABLE: dict[ExerciseType, dict[Verdict, fsrs.Rating]] = {
         "close": fsrs.Rating.Hard,
         "wrong": fsrs.Rating.Again,
     },
+    # Saying the word is graded by the matcher (`speech_match`), which has
+    # only two outcomes: heard, or the learner's own "I don't know". There is
+    # no "close" in speech, so the cell is Again like `wrong`.
+    "speak": {
+        "correct": fsrs.Rating.Good,
+        "close": fsrs.Rating.Again,
+        "wrong": fsrs.Rating.Again,
+    },
 }
 
 #: Excluded from every queue -- a suspended word was set aside on purpose, a
@@ -168,9 +184,9 @@ MASTERED_STABILITY_DAYS = 21.0
 #: gate), and a future change to either must not silently move the other.
 ACTIVE_UNLOCK_STABILITY_DAYS = 21.0
 
-#: How many consecutive correct answers at the ladder's floor
-#: (``recognise``) are needed to promote -- unless the word has been at the
-#: top rung before, which needs only 1 (see :func:`_apply_ladder`).
+#: How many consecutive correct answers at a rung are needed to promote off
+#: it -- unless the word has been at the NEXT rung before, which needs only 1
+#: (see :func:`_apply_ladder`).
 PROMOTE_STREAK = 2
 
 #: The ONE exercise a fallback may substitute for the ladder's own planned
@@ -194,6 +210,23 @@ FALLBACK_EXERCISE: dict[Direction, str] = {"passive": "recall", "active": "produ
 #: read differently depending on which level it was keyed by. Active has no
 #: entry: `produce`'s prompt is a bare Uzbek meaning with nothing to mask.
 READABILITY_FALLBACK_EXERCISE: dict[Direction, str] = {"passive": "recognise"}
+
+#: What a passive ``listen`` encounter is served as when it cannot be heard --
+#: its audio is not ready ("Can't listen" for lack of a file), or the learner
+#: pressed "Can't listen now". Always the word's ordinary `recall` gap, and
+#: always a substitution BACK one rung (the audio exercise is the hardest on
+#: the ladder), so like the readability fallback it is the ladder's plan that
+#: stays `listen` while the exercise is `recall` -- measurable as
+#: ``planned_exercise != exercise_type``. Unlike that one it needs no
+#: re-verification: the only thing a forged claim buys is an EASIER exercise
+#: for a word at the top rung, whose Good moves nothing and whose Again
+#: demotes it as any wrong answer would.
+LISTEN_FALLBACK_EXERCISE = "recall"
+
+#: The rungs a word may be on for `speak` to be offered or answered: `speak`
+#: is a harder way to retrieve a word the learner already recalls by typing,
+#: so it opens at `recall` and above, never on a word still being recognised.
+SPEAK_LEVELS: frozenset[str] = frozenset({"recall", "listen"})
 
 #: How long a client's claim that this answer is a same-session REQUEUE (see
 #: :func:`record_answer`'s ``requeued`` handling) may be validated against --
@@ -809,6 +842,26 @@ async def _senses_for(
     return {sense.id: sense for sense in rows.all()}
 
 
+async def learner_material_ids(
+    session: AsyncSession, user_id: uuid.UUID
+) -> frozenset[uuid.UUID]:
+    """The materials this learner has saved a word from -- what
+    ``word_audio``'s ``prefer_material_ids`` is ("the learner's own
+    materials": a clip from a recording they met the word in wins over any
+    other). ONE set per learner rather than one per word, deliberately: it is
+    a single query however many words an item list needs audio for, and it
+    makes the same word resolve to the same clip in the listen card, on the
+    reveal and on the word page (a per-word set would differ between a
+    session built over the whole queue and an answer about one word)."""
+    rows = await session.exec(
+        select(SavedWordContext.material_id)
+        .join(SavedWord, SavedWord.id == SavedWordContext.saved_word_id)
+        .where(SavedWord.user_id == user_id)
+        .distinct()
+    )
+    return frozenset(rows.all())
+
+
 async def _contexts_by_word(
     session: AsyncSession, word_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, list[SavedWordContext]]:
@@ -869,13 +922,24 @@ async def _promotion_streak(
     the streak": the wrong answer becomes the newest row, and the very next
     read of this function stops on it immediately.
 
-    A ``planned_exercise IS NULL`` row -- a known-check answer or a verified
-    same-session requeue, neither of which is the ladder's own evidence
-    about a level (see ``VocabularyReviewLog.planned_exercise``'s own
-    docstring) -- is SKIPPED rather than treated as "a different level":
-    skipping it neither breaks a genuine streak sitting either side of it
-    nor extends one, because it never happened as far as the ladder is
-    concerned.
+    Three kinds of row are SKIPPED rather than read as "a different level",
+    because skipping neither breaks a genuine streak sitting either side of
+    them nor extends one -- as far as the ladder is concerned they never
+    happened:
+
+    * ``planned_exercise IS NULL`` -- a known-check answer or a verified
+      same-session requeue, neither of which is the ladder's own evidence
+      about a level (see ``VocabularyReviewLog.planned_exercise``'s own
+      docstring);
+    * a ``speak`` row, or a recall answered as `speak`'s typing fallback
+      (``planned_exercise = "speak"``): `speak` is on no ladder, so a
+      spoken answer between two typed ones must not reset a streak the
+      learner earned, and must not count towards one either;
+    * a ``recognise`` answer to a plan above the floor -- the readability
+      fallback, which serves an EASIER exercise. With two rungs it could
+      never promote anything; now that ``recall`` is a middle rung, a correct
+      choice-of-four would otherwise be counted as evidence of recalling the
+      word. It is not (a WRONG one still demotes -- see :func:`_apply_ladder`).
     """
     rows = await session.exec(
         select(
@@ -886,21 +950,19 @@ async def _promotion_streak(
         .where(
             VocabularyReviewLog.saved_word_id == word_id,
             VocabularyReviewLog.direction == direction,
+            VocabularyReviewLog.exercise_type != "speak",
         )
         .order_by(VocabularyReviewLog.reviewed_at.desc())
         .limit(50)
     )
     streak = 0
     for exercise_type, rating, planned in rows.all():
-        if planned is None:
-            # A known-check answer or a verified same-session requeue --
-            # neither is the ladder's own evidence about this level (see
-            # the column's own docstring), so it is skipped rather than
-            # read as "a different level", which would wrongly END the
-            # streak the way a genuine answer at another level should.
+        if planned is None or planned == "speak":
             continue
         if planned != level:
             break
+        if exercise_type == "recognise" and planned != "recognise":
+            continue
         if not _was_correct(exercise_type, fsrs.Rating(rating)):
             break
         streak += 1
@@ -911,16 +973,20 @@ async def _has_reached_level(
     session: AsyncSession, word_id: uuid.UUID, direction: Direction, level: str
 ) -> bool:
     """Whether this word has EVER been asked at ``level`` before -- the
-    ladder's re-promotion exception: a word demoted from the top rung goes
-    back up after 1 correct, not :data:`PROMOTE_STREAK`, because it has
-    already proven it once.
+    ladder's re-promotion exception: a word demoted back down goes up again
+    after 1 correct, not :data:`PROMOTE_STREAK`, because it has already
+    proven the step once. :func:`_apply_ladder` asks it about the rung ABOVE
+    the one an answer was at (the rung being promoted TO): with three rungs,
+    "the top of the ladder" stopped being the same thing as "the next one".
 
     ``planned_exercise IS NULL`` rows (a known-check answer, or a verified
     same-session requeue) never satisfy this on their own -- the equality
     below excludes them the same way SQL excludes any ``NULL`` from ``= ...``
     -- because neither kind is the ladder's own evidence that the word has
     reached ``level``; see ``VocabularyReviewLog.planned_exercise``'s own
-    docstring for why those two rows are logged with no plan at all.
+    docstring for why those two rows are logged with no plan at all. A
+    ``speak`` row can never satisfy it either: its plan is ``"speak"``, which
+    is not a rung of either ladder.
     """
     row = await session.exec(
         select(VocabularyReviewLog.id)
@@ -934,7 +1000,7 @@ async def _has_reached_level(
     return row.first() is not None
 
 
-def _ladder_for(direction: Direction) -> tuple[str, str]:
+def _ladder_for(direction: Direction) -> tuple[str, ...]:
     """The direction's own ladder -- see :data:`PASSIVE_LADDER`/
     :data:`ACTIVE_LADDER`'s own docstring for why this is a list walked by
     INDEX rather than a hand-named ``low``/``high`` pair."""
@@ -954,36 +1020,52 @@ async def _apply_ladder(
     encounter), never ``exercise_type`` alone, so a fallback answered
     correctly at a HARDER exercise than the ladder currently asks for still
     counts as evidence for promotion, and a fallback answered wrong still
-    counts as a miss at the floor rather than nothing at all.
+    counts as a miss rather than nothing at all.
 
     Promotion and demotion are one step of the ladder's own INDEX, not a
-    hand-written floor/top special case: the rung this answer was AT moves
-    one place towards the end of :func:`_ladder_for` on enough correct
-    answers, and one place back towards its start on an outright Again. The
-    floor can only be promoted FROM (there is nothing before index 0) and
-    the top rung can only be demoted FROM (there is nothing after the last
-    index) -- both are simply what "one step" already means at either end of
-    a list, so a ladder gaining a middle rung later needs no new branch here.
+    hand-written floor/top special case. An outright Again (the rating a
+    ``wrong`` verdict produces at every rung above the floor -- and Hard,
+    a spelling slip, is NOT Again, so it never demotes) moves the rung this
+    answer was AT one place back; enough correct answers move it one place
+    forward. The floor has nothing before it to be demoted to and the top
+    rung nothing after it to be promoted to -- both are simply what "one
+    step" already means at either end of a list, so the middle rung
+    (`recall`, stage 3) needed no branch of its own: it does both.
+
+    Promotion off a rung takes :data:`PROMOTE_STREAK` consecutive corrects
+    at it, or ONE if the word has been at the NEXT rung before. A word that
+    answers at the passive floor and then at `recall` and at `listen`, is
+    demoted a rung, and answers right again is going back to somewhere it
+    has already proved it can be, which should not cost what the first
+    climb did. An answer to a plan outside the ladder -- `speak`'s -- moves
+    nothing.
+
+    An EASIER exercise than the plan -- a ``recognise`` answered for a plan
+    above the floor, the readability fallback -- is never promotion evidence
+    (see :func:`_promotion_streak`); wrong, it still counts as the miss
+    it is.
     """
     ladder = _ladder_for(direction)
+    if planned_exercise not in ladder:
+        return
     index = ladder.index(planned_exercise)
-    if index == 0:
-        if not _was_correct(exercise_type, rating):
-            return
-        streak = await _promotion_streak(session, word.id, direction, ladder[0]) + 1
-        ever_reached_higher = await _has_reached_level(
-            session, word.id, direction, ladder[-1]
-        )
-        threshold = 1 if ever_reached_higher else PROMOTE_STREAK
-        if streak >= threshold:
-            setattr(word, f"{direction}_level", ladder[index + 1])
-    elif index == len(ladder) - 1:
-        # Hard (spelling/plural, `close`) does NOT demote -- only an actual
-        # Again does, which is exactly the rating a `wrong` verdict produces
-        # at the top rung of either ladder (see RATING_TABLE: recall's
-        # `close` is Hard, produce's is Good, neither is Again).
-        if rating == fsrs.Rating.Again:
+    if rating == fsrs.Rating.Again:
+        if index > 0:
             setattr(word, f"{direction}_level", ladder[index - 1])
+        return
+    if index == len(ladder) - 1:
+        return
+    if not _was_correct(exercise_type, rating):
+        return
+    if exercise_type == "recognise" and planned_exercise != "recognise":
+        return
+    streak = await _promotion_streak(session, word.id, direction, planned_exercise) + 1
+    ever_reached_next = await _has_reached_level(
+        session, word.id, direction, ladder[index + 1]
+    )
+    threshold = 1 if ever_reached_next else PROMOTE_STREAK
+    if streak >= threshold:
+        setattr(word, f"{direction}_level", ladder[index + 1])
 
 
 # --- Leech -----------------------------------------------------------------
@@ -1324,8 +1406,9 @@ def _effective_mode(mode: str, settings: VocabularySettings) -> str:
     """``auto`` unless the caller forced something, or the learner's own
     default narrows it for them: the settings screen's exercise type is one
     choice -- ``Automatic`` (``exercise_types`` null) or exactly one of
-    ``recognise``/``recall``/``produce`` (:class:`app.schemas.vocabulary
-    .VocabularySettingsIn` refuses more than one at the door) -- so a
+    ``recognise``/``recall``/``produce``/``listen``/``speak``
+    (:class:`app.schemas.vocabulary.VocabularySettingsIn` refuses more than
+    one at the door) -- so a
     non-null settings value is exactly as forceful as typing that mode by
     hand, and the brief's "bugun faqat yozish" is meant to work either way.
     Mapped onto candidates by :func:`_gather_candidates`'s ``_matches_mode``:
@@ -1334,7 +1417,10 @@ def _effective_mode(mode: str, settings: VocabularySettings) -> str:
     ``recall`` rung) and ``produce`` only ever matches active, so the
     brief's table ("Recognise -> both directions' recognise cards; Recall ->
     passive recall; Produce -> active produce") falls out of the ladders'
-    own shapes rather than needing a second table here.
+    own shapes rather than needing a second table here. ``listen`` follows
+    the same rule (passive words whose level IS ``listen``); ``speak`` is
+    the one mode that is not a level -- it takes passive words at ``recall``
+    or ``listen`` and serves them as speaking cards.
     """
     if mode and mode != "auto":
         return mode
@@ -1451,7 +1537,15 @@ async def _gather_candidates(
         )
 
     def _matches_mode(candidate: _Candidate) -> bool:
-        return effective_mode == "auto" or candidate.level == effective_mode
+        if effective_mode == "auto":
+            return True
+        if effective_mode == "speak":
+            # `speak` is on no ladder: it is offered over words that are
+            # already on `recall` or `listen` (passive), whichever of the two
+            # they are on, and ONLY here -- an automatic session never
+            # builds one (see :func:`build_session`).
+            return candidate.direction == "passive" and candidate.level in SPEAK_LEVELS
+        return candidate.level == effective_mode
 
     due_list = sorted(
         (c for c in due_by_word.values() if _matches_mode(c)),
@@ -1742,16 +1836,22 @@ async def update_settings(
     daily_minutes: int,
     direction: Literal["passive", "both"],
     exercise_types: list[str] | None,
+    pronunciation: bool | None = None,
 ) -> VocabularySettings:
     """Stage 2's settings screen, all three fields at once -- a PUT rather
     than three separate setters, because the screen shows them together and
-    saves them together."""
+    saves them together. ``pronunciation`` (stage 3) is the exception that
+    proves the rule: ``None`` leaves it as it was, so a save of the other
+    three can never flip a toggle the caller did not mention (a new row
+    starts at the column's default, on)."""
     row = await session.get(VocabularySettings, user_id)
     if row is None:
         row = VocabularySettings(user_id=user_id)
     row.daily_minutes = daily_minutes
     row.direction = direction
     row.exercise_types = exercise_types
+    if pronunciation is not None:
+        row.pronunciation = pronunciation
     session.add(row)
     await session.commit()
     await session.refresh(row)
@@ -1804,6 +1904,70 @@ def _recall_item(
         "after": gap.after,
         "cue": gap.cue,
         "definition": gap.definition,
+    }
+    return item
+
+
+def _listen_item(
+    word: SavedWord,
+    context: SavedWordContext | None,
+    *,
+    is_new: bool,
+    sense: LexemeSense | None,
+    audio: word_audio.AudioOut | None,
+) -> dict:
+    """The passive ladder's top rung, ``listen``: the word as sound, typed
+    back. Served as ``listen`` ONLY with its audio READY (the learner never
+    waits on a render); otherwise -- and the render is already queued by
+    :mod:`app.services.word_audio` -- it is an ordinary `recall` item whose
+    plan stays ``listen``, the same fallback shape as the readability one
+    (``planned_exercise != exercise_type`` is what measures it).
+
+    ``fallback`` is the word's own recall gap prompt, which is what "Can't
+    listen now" turns the card into without a second request. Nothing in the
+    prompt spells the word: the audio URL is a content hash."""
+    item = _recall_item(
+        word, context, direction="passive", planned_exercise="listen",
+        is_new=is_new, sense=sense,
+    )
+    if audio is None:
+        return item
+    item["exercise_type"] = "listen"
+    item["prompt"] = {"kind": "listen", "audio": asdict(audio), "fallback": item["prompt"]}
+    return item
+
+
+def _speak_item(
+    word: SavedWord,
+    context: SavedWordContext | None,
+    *,
+    is_new: bool,
+    sense: LexemeSense | None,
+    definition_audio_url: str | None,
+) -> dict:
+    """``speak`` (decisions 15-19): the (masked) definition, read aloud once
+    if its render is ready, and the learner says the word. The definition is
+    exactly the one recall shows -- :func:`resolve_gap`'s own masked cue --
+    so the two exercises can never disagree about what hides the answer.
+
+    ``planned_exercise`` is ``speak``: there is no rung it stands for, and
+    :func:`record_answer` reads that as "never move the ladder". A word with
+    no definition at all has nothing to say, and is served as the ordinary
+    recall item (with ``speak`` planned, so it is not mistaken for a
+    ladder fallback) rather than as an empty card."""
+    item = _recall_item(
+        word, context, direction="passive", planned_exercise="speak",
+        is_new=is_new, sense=sense,
+    )
+    definition = item["prompt"]["definition"]
+    if not definition:
+        return item
+    item["exercise_type"] = "speak"
+    item["prompt"] = {
+        "kind": "speak",
+        "definition": definition,
+        "definition_audio_url": definition_audio_url,
+        "fallback": item["prompt"],
     }
     return item
 
@@ -1958,6 +2122,9 @@ async def _build_item(
     source_material_ids: frozenset[uuid.UUID],
     family_keys: frozenset[str],
     sense: LexemeSense | None = None,
+    speak: bool = False,
+    audio: word_audio.AudioOut | None = None,
+    definition_audio_url: str | None = None,
 ) -> dict:
     """One queued (word, direction) -> one item, dispatching on the
     ladder's current level. ``recall``/``produce`` are direct; ``recognise``
@@ -1965,11 +2132,24 @@ async def _build_item(
     (never sideways to a worse prompt) when it comes back empty -- see the
     module docstring and ``app.services.distractors``.
 
+    ``speak`` (the manual mode, passed by :func:`build_session` and by
+    nothing else) turns a passive word into a speaking card whatever rung it
+    is on; ``audio``/``definition_audio_url`` are what the caller already
+    resolved, in one batch for the whole queue, for a ``listen``/``speak``
+    item -- never fetched here, one word at a time.
+
     ``sense`` is the word's own ``LexemeSense`` (P4), batched by the caller
     over the whole queue -- every prompt below reads its usual
     meaning/definition LIVE from it rather than the dead ``SavedWord
     .meaning_core_*`` columns.
     """
+    if speak and direction == "passive":
+        return _speak_item(
+            word, context, is_new=is_new, sense=sense,
+            definition_audio_url=definition_audio_url,
+        )
+    if direction == "passive" and level == "listen":
+        return _listen_item(word, context, is_new=is_new, sense=sense, audio=audio)
     if direction == "passive" and level == "recall":
         return await _passive_recall_or_readability_fallback(
             session, word, context, is_new=is_new,
@@ -2136,6 +2316,29 @@ async def build_session(
     last_used = await _last_used_map(session, all_context_ids)
     family_keys = await distractors.learning_family_keys(session, user.id)
     senses = await _senses_for(session, [candidate.word for candidate in queue])
+    speak = _effective_mode(mode, settings) == "speak"
+    # Audio for the whole queue in ONE batch each (`word_audio_many` and
+    # `definition_audio_urls` are the list API; per-word calls are the N+1 they
+    # exist to prevent). Only what an item will actually use is asked for, so
+    # a session with no `listen`/`speak` card touches the audio tables not at
+    # all and enqueues nothing.
+    audio_by_sense: dict[uuid.UUID, word_audio.AudioOut | None] = {}
+    definition_urls: dict[uuid.UUID, str | None] = {}
+    audio_senses = [
+        senses[candidate.word.lexeme_sense_id]
+        for candidate in queue
+        if candidate.direction == "passive"
+        and candidate.word.lexeme_sense_id in senses
+        and (speak or candidate.level == "listen")
+    ]
+    if audio_senses:
+        if speak:
+            definition_urls = await word_audio.definition_audio_urls(session, audio_senses)
+        else:
+            audio_by_sense = await word_audio.word_audio_many(
+                session, audio_senses,
+                prefer_material_ids=await learner_material_ids(session, user.id),
+            )
     fallbacks = await _fallback_contexts(
         session,
         [c.word for c in queue if not contexts_by_word.get(c.word.id)],
@@ -2157,6 +2360,9 @@ async def build_session(
             is_new=candidate.is_new, source_material_ids=source_material_ids,
             family_keys=family_keys,
             sense=senses.get(candidate.word.lexeme_sense_id),
+            speak=speak,
+            audio=audio_by_sense.get(candidate.word.lexeme_sense_id),
+            definition_audio_url=definition_urls.get(candidate.word.lexeme_sense_id),
         )
         _finish_item(item, candidate.entry, fallback, example_titles)
         items.append(item)
@@ -2174,8 +2380,11 @@ def _finish_item(
     that a list entry has no word yet."""
     if fallback is not None:
         item["context_id"] = None
-        if fallback.material_id is not None and item["prompt"].get("kind") == "sentence":
-            item["prompt"]["example_source"] = {
+        # A `listen`/`speak` prompt carries the recall gap it falls back to,
+        # and that gap is the one whose sentence is the stand-in.
+        prompt = item["prompt"].get("fallback") or item["prompt"]
+        if fallback.material_id is not None and prompt.get("kind") == "sentence":
+            prompt["example_source"] = {
                 "material_id": fallback.material_id,
                 "material_title": titles.get(fallback.material_id, ""),
             }
@@ -2262,6 +2471,7 @@ async def record_answer(
     planned_exercise: str | None = None,
     claim_known: bool = False,
     requeued: bool = False,
+    gave_up: bool = False,
 ) -> dict | None:
     """Grade one answer, advance its card, move the ladder, and log it.
     Returns ``None`` for a word that is not this learner's -- the API turns
@@ -2353,6 +2563,35 @@ async def record_answer(
     metric (``planned_exercise IS NOT NULL AND planned_exercise !=
     exercise_type``) -- a requeue is neither the ladder's plan nor a
     distractor-pipeline fallback, so it is measured as neither.
+
+    ## Stage 3: `listen` and `speak`
+
+    ``listen`` is the passive ladder's top rung: accepted exactly when the
+    word's own stored level is ``listen``, and graded as `recall` is (exact
+    -> Good, a slip -> Hard, else Again) -- against the LEMMA, not the
+    sentence's inflected surface, because the audio is the lemma's (a clip is
+    the exact lemma form, decision 1) and "type what you hear" cannot be
+    marked wrong for typing what was said. Its fallback ("Can't listen now",
+    or no audio ready) is `recall` with the plan still ``listen``
+    (:data:`LISTEN_FALLBACK_EXERCISE`), graded as recall, and read by the
+    ladder like any fallback: an Again demotes ``listen`` to ``recall``.
+
+    ``speak`` is on no ladder, so there is no level to derive its plan from.
+    It is accepted (as ``exercise_type="speak"``, or as ``recall`` claiming
+    ``planned_exercise="speak"`` -- the unsupported-browser typing fallback)
+    only for a passive word whose own level is in :data:`SPEAK_LEVELS`, and
+    is then logged as ``planned_exercise="speak"`` with the ladder skipped
+    outright: it moves no rung and, because every ladder read skips such a
+    row, neither extends nor breaks a streak. This is the one place a client's
+    ``planned_exercise`` is READ -- as a claim that this was `speak`'s
+    fallback, which cannot be verified (nothing records that a session was in
+    `speak` mode) and buys a forger nothing but a ladder that does not move.
+    A spoken answer is verified by RE-RUNNING the matcher on ``given`` against
+    the lemma (:func:`speech_match.matches`; a mismatch is a 422), so what
+    the browser's recogniser claimed is never taken as proof; ``gave_up`` is
+    "I don't know" and rates Again. The matcher cannot prove anyone spoke --
+    a client can send the lemma as ``given`` -- which is why a `speak` answer
+    is not ladder evidence in either direction.
 
     The context named in the request is trusted only as far as it actually
     belongs to this word; a mismatched or unknown id is treated as no
@@ -2504,10 +2743,28 @@ async def record_answer(
             # ladder's plan, so it is neither.
             planned_exercise = None
             skip_ladder = True
+        elif exercise_type == "speak" or (
+            exercise_type == "recall" and planned_exercise == "speak"
+        ):
+            # `speak`, or its typing fallback: on no ladder -- see the
+            # docstring. Open only to a passive word already on `recall` or
+            # `listen`; the level is the word's own, never the client's.
+            if (
+                direction != "passive"
+                or _current_level(word, direction) not in SPEAK_LEVELS
+            ):
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "speak is not open for this word",
+                )
+            planned_exercise = "speak"
+            skip_ladder = True
         else:
             planned_exercise = _current_level(word, direction)
             if planned_exercise == "recognise":
                 fallback = FALLBACK_EXERCISE.get(direction)
+            elif planned_exercise == "listen":
+                fallback = LISTEN_FALLBACK_EXERCISE
             elif planned_exercise == "recall":
                 # The readability guard's own substitution -- masking the
                 # definition made the sentence unreadable, so this
@@ -2555,6 +2812,20 @@ async def record_answer(
     elif exercise_type == "produce":
         forms = await _accepted_produce_forms(session, word)
         verdict = _kindest([verdict_for(given, form) for form in forms])
+        answer_text = word.lemma
+    elif exercise_type == "speak":
+        answer_text = word.lemma
+        if gave_up:
+            verdict = "wrong"
+        elif speech_match.matches(given, word.lemma):
+            verdict = "correct"
+        else:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "what was heard does not match this word",
+            )
+    elif exercise_type == "listen":
+        verdict = verdict_for(given, word.lemma)
         answer_text = word.lemma
     else:  # "recall" -- including every fallback that lands here
         gap = resolve_gap(word, gap_context, sense)
@@ -2669,6 +2940,19 @@ async def record_answer(
     definition_en = sense.definition_en if sense is not None else word.meaning_core_en
     meaning_uz = sense.meaning_uz if sense is not None else word.meaning_core_uz
 
+    # The reveal's pronunciation. The answer is already committed, so a
+    # failure to resolve audio must never turn into a failed response (the
+    # client would answer again and be logged twice): no audio, logged.
+    audio: word_audio.AudioOut | None = None
+    if sense is not None:
+        try:
+            audio = await word_audio.word_audio(
+                session, sense,
+                prefer_material_ids=await learner_material_ids(session, user.id),
+            )
+        except Exception:
+            logger.warning("word audio unavailable for reveal", exc_info=True)
+
     return {
         "verdict": verdict,
         "rating": int(rating),
@@ -2695,5 +2979,82 @@ async def record_answer(
             "sense_differs": context.sense_differs if context else False,
             "material_id": material_id,
             "material_title": material_title,
+            "audio": asdict(audio) if audio is not None else None,
         },
+    }
+
+
+# --- `speak`: did the recogniser hear the word? --------------------------------
+
+
+async def speak_check(
+    session: AsyncSession,
+    user: User,
+    *,
+    word_id: uuid.UUID,
+    alternatives: list[str],
+    attempt: int,
+) -> dict | None:
+    """One attempt of a `speak` card: did any of the recogniser's alternatives
+    match the word (:func:`speech_match.match`)? ``None`` for a word that is
+    not this learner's (the API's 404).
+
+    **Writes nothing to the schedule or the review log, ever.** Decision 18
+    and the brief's "two outcomes, never mixed": an unrecognised attempt is
+    OUR miss, not the learner's, so rating it would be a false rejection in
+    disguise. What it does write is a ``speak_misses`` row for every miss,
+    the browser's alternatives verbatim, so the matcher's rules can be tuned
+    against what recognition really returned. The answer that DOES reach FSRS
+    is the separate ``speak`` answer (:func:`record_answer`), posted by the
+    client once this says ``caught`` -- and re-checked there.
+
+    ``answer`` (the lemma) and ``audio`` are filled only on attempt 3 with no
+    match -- the reveal. Before that a miss tells the client nothing about the
+    word: it is the same "the answer never reaches the client early" rule as
+    recall's.
+
+    Open under the same gate :func:`record_answer` applies to a `speak`
+    answer (a passive word on `recall` or `listen`): a check for a word that
+    could not then be answered is a client confused about which card it is on,
+    and a 422 says so rather than logging a miss against a word `speak` was
+    never offered for.
+    """
+    word = await session.get(SavedWord, word_id)
+    if word is None or word.user_id != user.id:
+        return None
+    if _current_level(word, "passive") not in SPEAK_LEVELS:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "speak is not open for this word"
+        )
+    matched = speech_match.match(alternatives, word.lemma)
+    if matched is not None:
+        return {"caught": True, "matched": matched, "answer": None, "audio": None}
+
+    session.add(
+        SpeakMiss(
+            user_id=user.id, saved_word_id=word.id, attempt=attempt,
+            alternatives=list(alternatives),
+            # Copied once the model has the column (see `on_the_go._lemma_of`).
+            **({"lemma": word.lemma} if "lemma" in SpeakMiss.model_fields else {}),
+        )
+    )
+    await session.commit()
+    if attempt < 3:
+        return {"caught": False, "matched": None, "answer": None, "audio": None}
+
+    sense = await session.get(LexemeSense, word.lexeme_sense_id)
+    audio: word_audio.AudioOut | None = None
+    if sense is not None:
+        try:
+            audio = await word_audio.word_audio(
+                session, sense,
+                prefer_material_ids=await learner_material_ids(session, user.id),
+            )
+        except Exception:
+            logger.warning("word audio unavailable for speak reveal", exc_info=True)
+    return {
+        "caught": False,
+        "matched": None,
+        "answer": word.lemma,
+        "audio": asdict(audio) if audio is not None else None,
     }

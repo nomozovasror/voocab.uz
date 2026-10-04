@@ -29,17 +29,30 @@ from pydantic import BaseModel, Field, model_validator
 #: rather than repeated as a bare ``Literal`` in five schemas that would
 #: then have to be kept in step by hand.
 Direction = Literal["passive", "active"]
-ExerciseType = Literal["recognise", "recall", "produce", "listen"]
+ExerciseType = Literal["recognise", "recall", "produce", "listen", "speak"]
 Verdict = Literal["correct", "close", "wrong"]
-#: The ladder's two tasks, per direction -- what `PracticeAnswerOut.level`
-#: and `planned_exercise` are drawn from. Narrower than `ExerciseType`
-#: (which also carries the unused `listen`) because these two fields are
-#: never anything else.
-Level = Literal["recognise", "recall", "produce"]
-Mode = Literal["auto", "recognise", "recall", "produce"]
+#: What `PracticeItemOut`/`PracticeAnswerIn` call a level (`exercise_type`,
+#: `planned_exercise`) and what the settings screen's exercise type is drawn
+#: from: the ladder's rungs (passive `recognise`/`recall`/`listen`, active
+#: `recognise`/`produce`) and `speak`, which is on no ladder but is planned
+#: and chosen like one. `PracticeAnswerOut.level` is only ever a rung.
+Level = Literal["recognise", "recall", "produce", "listen", "speak"]
+Mode = Literal["auto", "recognise", "recall", "produce", "listen", "speak"]
 
 
 SenseLabel = Literal["most common", "common", "less common"]
+
+
+class AudioOut(BaseModel):
+    """One word's audio. ``url`` is the word alone; ``context_url`` the same
+    word with its neighbours, for a clip cut from a recording (never for TTS).
+    ``source`` says which -- only a clip has a context press. Wherever a field
+    of this type may be ``null`` it means "not ready yet", and the server has
+    already queued it (``app.services.word_audio``)."""
+
+    url: str
+    context_url: str | None = None
+    source: Literal["clip", "tts"]
 
 
 class LookupSenseOut(BaseModel):
@@ -344,6 +357,10 @@ class SavedWordDetailOut(BaseModel):
 
     word: SavedWordOut
     history: list[WordHistoryEntryOut]
+    #: The word's pronunciation for the speaker beside it -- at the TOP
+    #: level, beside ``word``, because that is where the frontend reads it.
+    #: ``null`` = not ready (queued); the page then shows no speaker.
+    audio: AudioOut | None = None
 
 
 class WordBulkActionIn(BaseModel):
@@ -459,6 +476,29 @@ class PracticePromptOut(BaseModel):
     example_source: ExampleSourceOut | None = None
 
 
+class PracticeListenOut(BaseModel):
+    """A `listen` turn: the word, only as sound. The spelling is on nothing
+    here -- the audio's URL is a content hash, and ``fallback`` is the
+    ordinary recall gap (with the answer left off, like any recall prompt),
+    used for "Can't listen now". Served only when the audio is READY; until
+    then the word is an ordinary recall item (see ``practice._listen_item``)."""
+
+    kind: Literal["listen"] = "listen"
+    audio: AudioOut
+    fallback: PracticePromptOut
+
+
+class PracticeSpeakOut(BaseModel):
+    """A `speak` turn: the definition, masked exactly as recall masks it, and
+    -- when its render is ready -- read aloud once. ``fallback`` is the
+    ordinary recall gap, for a browser that cannot recognise speech."""
+
+    kind: Literal["speak"] = "speak"
+    definition: str
+    definition_audio_url: str | None = None
+    fallback: PracticePromptOut
+
+
 class PracticeChoiceOptionOut(BaseModel):
     """One recognise option. ``id`` is opaque (see
     ``app.services.distractors.option_id``) -- nothing about which of the
@@ -521,7 +561,13 @@ class PracticeItemOut(BaseModel):
     exercise_type: Level
     planned_exercise: Level
     prompt: Annotated[
-        Union[PracticePromptOut, PracticeChoiceOut, PracticeProduceOut],
+        Union[
+            PracticePromptOut,
+            PracticeChoiceOut,
+            PracticeProduceOut,
+            PracticeListenOut,
+            PracticeSpeakOut,
+        ],
         Field(discriminator="kind"),
     ]
 
@@ -538,8 +584,16 @@ class PracticeAnswerIn(BaseModel):
     rejected (see ``app.services.practice.record_answer``).
 
     ``given`` is reused across every exercise: the option id for
-    `recognise`, the typed word for `recall`/`produce`. ``claim_known`` is
-    set only by the "I know this" flow's single follow-up answer.
+    `recognise`, the typed word for `recall`/`produce`/`listen`, the matched
+    speech alternative for `speak` (the server re-runs the matcher on it), and
+    empty for "I don't know". ``claim_known`` is set only by the "I know
+    this" flow's single follow-up answer.
+
+    ``gave_up`` is `speak`'s "I don't know": a deliberate answer, rated
+    Again, never to be confused with the recogniser failing to hear (that is
+    ``speak-check``'s miss, and writes nothing to the schedule). It is
+    refused on any other exercise -- nothing else has an "I don't know" that
+    is not simply a wrong answer.
 
     ``requeued`` marks this as the SAME item's second serving within one
     session, after an earlier ``Again`` -- the client re-shows the failed
@@ -566,11 +620,14 @@ class PracticeAnswerIn(BaseModel):
     elapsed_ms: int = Field(ge=0)
     claim_known: bool = False
     requeued: bool = False
+    gave_up: bool = False
 
     @model_validator(mode="after")
     def _one_of(self) -> "PracticeAnswerIn":
         if (self.word_id is None) == (self.list_entry_id is None):
             raise ValueError("send exactly one of word_id and list_entry_id")
+        if self.gave_up and self.exercise_type != "speak":
+            raise ValueError("gave_up is only for a speak answer")
         return self
 
 
@@ -600,6 +657,9 @@ class PracticeAnswerWordOut(BaseModel):
     sense_differs: bool
     material_id: uuid.UUID | None
     material_title: str
+    #: The word's pronunciation, for the reveal's speaker button and the
+    #: pronunciation autoplay. ``null`` = not ready yet (queued).
+    audio: AudioOut | None = None
 
 
 class LeechContextOut(BaseModel):
@@ -658,9 +718,8 @@ class VocabularySettingsOut(BaseModel):
     daily_minutes: int
     direction: Literal["passive", "both"]
     exercise_types: list[str] | None
-    #: Never surfaced in the UI (no control on the settings screen), but
-    #: still readable -- see the model's own docstring for why the column
-    #: outlives the screen not showing it.
+    #: Whether a word's audio plays by itself as an answer is revealed (the
+    #: speaker button is there either way). Default on.
     pronunciation: bool
     #: How many of the learner's active cards have actually started and
     #: are not already retired -- shown beside the direction toggle so
@@ -679,11 +738,18 @@ class VocabularySettingsIn(BaseModel):
     #: ``both`` is the toggle switched on.
     direction: Literal["passive", "both"]
     #: Null means "Automatic" (the system chooses); otherwise exactly ONE of
-    #: the three tasks -- the settings screen's exercise type is a single
-    #: choice (Automatic / Recognise / Recall / Produce), never a subset, so
-    #: both an empty list and a list of more than one are refused here
-    #: rather than accepted and silently narrowed to the first entry.
+    #: the tasks -- the settings screen's exercise type is a single choice
+    #: (Automatic / Recognise / Recall / Produce / Listen / Speak), never a
+    #: subset, so both an empty list and a list of more than one are refused
+    #: here rather than accepted and silently narrowed to the first entry.
+    #: `listen` and `speak` are manual picks like the rest: they filter the
+    #: queue to words already on that rung (`speak`: at `recall` or
+    #: `listen`) and never bypass the ladder.
     exercise_types: list[Level] | None = Field(default=None, min_length=1, max_length=1)
+    #: Absent (or null) = unchanged: the screen's own save carries the three
+    #: fields above and must not flip this one, and only the Pronunciation
+    #: control sends it.
+    pronunciation: bool | None = None
 
 
 # --- "This translation is wrong" (P4) ---------------------------------------
@@ -755,3 +821,51 @@ class WordListStartOut(BaseModel):
 
 class WordListStopOut(BaseModel):
     active: Literal[False] = False
+
+
+# --- speak, and On the go (stage 3) ------------------------------------------
+
+
+class SpeakCheckIn(BaseModel):
+    """What the browser's recogniser heard: up to five alternatives for ONE
+    attempt (``maxAlternatives = 5``), each capped at 200 characters -- the
+    same cap ``given`` has -- so the body cannot be used to carry anything
+    else. ``attempt`` is 1 to 3: the third miss is the reveal."""
+
+    word_id: uuid.UUID
+    alternatives: list[Annotated[str, Field(max_length=200)]] = Field(
+        min_length=1, max_length=5
+    )
+    attempt: Literal[1, 2, 3]
+
+
+class SpeakCheckOut(BaseModel):
+    """``caught`` with the alternative that matched, or a miss. ``answer`` and
+    ``audio`` are filled ONLY on attempt 3 with ``caught: false`` -- the
+    reveal -- so before that a miss tells the client nothing about the word."""
+
+    caught: bool
+    matched: str | None = None
+    answer: str | None = None
+    audio: AudioOut | None = None
+
+
+class OnTheGoItemOut(BaseModel):
+    """One rendered file: definition, a pause, the word, a short tail.
+    ``word_offset_ms`` is where the WORD starts inside it -- the moment an
+    exposure counts. The word is never on the wire."""
+
+    word_id: uuid.UUID
+    url: str
+    duration_ms: int
+    word_offset_ms: int
+
+
+class OnTheGoOut(BaseModel):
+    items: list[OnTheGoItemOut]
+    #: Words in rotation whose file is not rendered yet -- already queued.
+    preparing: int
+
+
+class OnTheGoExposureIn(BaseModel):
+    word_id: uuid.UUID

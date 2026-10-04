@@ -60,14 +60,16 @@ STATUSES: tuple[str, ...] = ("learning", "review", "known", "suspended", "leech"
 #: so the columns never need a later migration.
 DIRECTIONS: tuple[str, ...] = ("passive", "active")
 
-#: The four drills the rating table (``app.services.practice.RATING_TABLE``)
-#: is shaped for. Stage 1 issues only ``recall`` -- a gap in the word's own
-#: sentence -- the other three are enum members with nothing behind them yet.
-EXERCISE_TYPES: tuple[str, ...] = ("recognise", "recall", "produce", "listen")
+#: The five drills the rating table (``app.services.practice.RATING_TABLE``)
+#: is shaped for. ``listen`` is the top of the passive ladder (stage 3);
+#: ``speak`` (stage 3) is on NO ladder -- manual-only, written to the passive
+#: card and the log but never moving a word's rung.
+EXERCISE_TYPES: tuple[str, ...] = ("recognise", "recall", "produce", "listen", "speak")
 
 #: The ladder for each direction, floor first. A passive card climbs
-#: ``recognise`` -> ``recall``; an active card climbs ``recognise`` ->
-#: ``produce`` -- two different top rungs because recognising a word from
+#: ``recognise`` -> ``recall`` -> ``listen`` (stage 3: ``recall`` became the
+#: middle rung); an active card climbs ``recognise`` -> ``produce`` -- two
+#: different top rungs because recognising a word from
 #: four options and typing it from nothing are different skills, per the
 #: brief's addendum (which replaced the original brief's single shared
 #: ladder for exactly this reason: a single number ("level 2") would mean
@@ -77,11 +79,11 @@ EXERCISE_TYPES: tuple[str, ...] = ("recognise", "recall", "produce", "listen")
 #: TEXT matching :data:`EXERCISE_TYPES` exactly, never a bare integer.
 #: ``app.services.practice`` is the only place that moves a word along
 #: either ladder, and does so by INDEX -- one step within the list named
-#: here, not a hand-written floor/top special case -- so a ladder gaining a
-#: middle rung later is a one-line change to the list, not a rewrite of the
-#: function that walks it.
-PASSIVE_LADDER: tuple[str, str] = ("recognise", "recall")
-ACTIVE_LADDER: tuple[str, str] = ("recognise", "produce")
+#: here, not a hand-written floor/top special case -- which is what made the
+#: passive ladder gaining its third rung a change to this list plus the
+#: promotion rule, not a rewrite of the function that walks it.
+PASSIVE_LADDER: tuple[str, ...] = ("recognise", "recall", "listen")
+ACTIVE_LADDER: tuple[str, ...] = ("recognise", "produce")
 
 
 class MaterialVocabulary(SQLModel, table=True):

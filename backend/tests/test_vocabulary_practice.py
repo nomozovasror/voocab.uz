@@ -56,6 +56,7 @@ def test_rating_table_matches_the_brief_exactly():
         "recall": {"correct": Good, "close": Hard, "wrong": Again},
         "produce": {"correct": Easy, "close": Good, "wrong": Again},
         "listen": {"correct": Good, "close": Hard, "wrong": Again},
+        "speak": {"correct": Good, "close": Again, "wrong": Again},
     }
 
 
@@ -2334,7 +2335,7 @@ def test_ladder_constants_match_the_addendum_exactly():
     """Named exactly as the addendum's own table, in text matching
     `EXERCISE_TYPES`, never a bare integer -- see the constants' own
     docstring for why a single shared "level 2" was the bug."""
-    assert PASSIVE_LADDER == ("recognise", "recall")
+    assert PASSIVE_LADDER == ("recognise", "recall", "listen")
     assert ACTIVE_LADDER == ("recognise", "produce")
 
 

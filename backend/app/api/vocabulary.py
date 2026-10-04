@@ -36,7 +36,9 @@ enforce it either way. ``LookupIn.context`` is written down rather than
 checked.
 """
 
+import logging
 import uuid
+from dataclasses import asdict
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -52,6 +54,9 @@ from app.schemas.vocabulary import (
     LookupIn,
     LookupOut,
     LookupSenseOut,
+    OnTheGoExposureIn,
+    OnTheGoItemOut,
+    OnTheGoOut,
     PracticeAnswerIn,
     PracticeAnswerOut,
     PracticeItemOut,
@@ -63,6 +68,8 @@ from app.schemas.vocabulary import (
     SavedWordOut,
     SavedWordsOut,
     SaveWordsIn,
+    SpeakCheckIn,
+    SpeakCheckOut,
     TranslationReportIn,
     TranslationReportOut,
     VocabularyEntryOut,
@@ -78,8 +85,12 @@ from app.schemas.vocabulary import (
 from app.services import lemma_senses as lemma_senses_service
 from app.services import lexicon as lexicon_service
 from app.services import materials as materials_service
+from app.services import on_the_go as on_the_go_service
 from app.services import practice as practice_service
 from app.services import vocabulary as vocabulary_service
+from app.services import word_audio as word_audio_service
+
+logger = logging.getLogger("app.api.vocabulary")
 
 router = APIRouter(prefix="/api", tags=["vocabulary"])
 
@@ -385,8 +396,24 @@ async def get_saved_word(
         )
         for v in every_sense
     ]
+    # The speaker beside the word. A GET never waits on a render: not ready is
+    # `null` (and already queued), and a failure to resolve it must not cost
+    # the learner their word page.
+    audio = None
+    if sense is not None:
+        try:
+            found_audio = await word_audio_service.word_audio(
+                session, sense,
+                prefer_material_ids=await practice_service.learner_material_ids(
+                    session, user.id
+                ),
+            )
+            audio = asdict(found_audio) if found_audio is not None else None
+        except Exception:
+            logger.warning("word audio unavailable for the word page", exc_info=True)
     return SavedWordDetailOut(
         word=saved_out,
+        audio=audio,
         history=[
             WordHistoryEntryOut(
                 reviewed_at=log.reviewed_at,
@@ -670,10 +697,66 @@ async def practice_answer(
         elapsed_ms=data.elapsed_ms,
         claim_known=data.claim_known,
         requeued=data.requeued,
+        gave_up=data.gave_up,
     )
     if result is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not on your list")
     return PracticeAnswerOut(**result)
+
+
+@router.post("/vocabulary/practice/speak-check", response_model=SpeakCheckOut)
+async def practice_speak_check(
+    data: SpeakCheckIn, user: CurrentUser, session: SessionDep
+) -> SpeakCheckOut:
+    """One attempt of a `speak` card: did the browser's recogniser hear the
+    word? Writes nothing to the schedule or the review log -- only a miss is
+    logged (``speak_misses``) -- see ``app.services.practice.speak_check``.
+    The body is bounded by the schema (1 to 5 alternatives of at most 200
+    characters, attempt 1 to 3). 404 for a word that is not the caller's."""
+    result = await practice_service.speak_check(
+        session, user, word_id=data.word_id, alternatives=data.alternatives,
+        attempt=data.attempt,
+    )
+    if result is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not on your list")
+    return SpeakCheckOut(**result)
+
+
+# --- On the go ---------------------------------------------------------------
+
+
+@router.get("/vocabulary/on-the-go", response_model=OnTheGoOut)
+async def on_the_go(user: CurrentUser, session: SessionDep) -> OnTheGoOut:
+    """The learner's words in rotation as rendered files, newest first --
+    independent of the daily queue. Only ready renders are listed;
+    ``preparing`` counts the rest, which are already queued. The word itself is
+    never on the wire (only the audio, and where the word starts inside it):
+    the lock screen and the network tab must not show the answer during the
+    pause."""
+    ready, preparing = await on_the_go_service.item_list(session, user)
+    return OnTheGoOut(
+        items=[
+            OnTheGoItemOut(
+                word_id=word.id, url=item.url, duration_ms=item.duration_ms,
+                word_offset_ms=item.word_offset_ms,
+            )
+            for word, item in ready
+        ],
+        preparing=preparing,
+    )
+
+
+@router.post(
+    "/vocabulary/on-the-go/exposures", status_code=status.HTTP_204_NO_CONTENT
+)
+async def on_the_go_exposure(
+    data: OnTheGoExposureIn, user: CurrentUser, session: SessionDep
+) -> None:
+    """The WORD part of an item played: one row in the exposure log and
+    nothing else -- hearing a word is not recalling it, so no FSRS card is
+    touched (decision 14). 404 for a word that is not the caller's."""
+    if not await on_the_go_service.record_exposure(session, user, data.word_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not on your list")
 
 
 @router.get("/vocabulary/settings", response_model=VocabularySettingsOut)
@@ -702,6 +785,7 @@ async def put_vocabulary_settings(
         daily_minutes=data.daily_minutes,
         direction=data.direction,
         exercise_types=data.exercise_types,
+        pronunciation=data.pronunciation,
     )
     return VocabularySettingsOut(
         daily_minutes=settings.daily_minutes,
