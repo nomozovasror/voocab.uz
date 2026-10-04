@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
+import { stopAudio } from "@/features/vocabulary/audio";
 import { onTheGoKey, vocabularyApi } from "@/features/vocabulary/api";
 
 /**
@@ -30,6 +31,12 @@ import { onTheGoKey, vocabularyApi } from "@/features/vocabulary/api";
  *   has played (`currentTime >= word_offset_ms`) and nothing else happens: no
  *   FSRS, no schedule. Once per item per pass, so `Previous` and replays
  *   cannot count one hearing twice.
+ * - **Playing is an INTENT, not `el.paused`.** `ended` fires AFTER `pause`
+ *   (the spec pauses a finished element first), so at the moment an item ends
+ *   `el.paused` is already true; deciding "keep playing?" from it stops the
+ *   list after item 1. `intent` is what the learner wants: it turns on with
+ *   any play, off with a pause they asked for, and `ended`/an error simply
+ *   continue under it. Next/Previous keep whatever it currently is.
  * - **The list plays once and stops.** "That's all", and Start again.
  *
  * Headphones and the lock screen drive it through the Media Session API
@@ -68,6 +75,7 @@ export default function VocabularyOnTheGoPage() {
   // Read from event handlers that fire between renders (`timeupdate`,
   // `ended`), where state is a step behind the element's `src`.
   const indexRef = useRef(0);
+  const intent = useRef(false);
   const posted = useRef<Set<string>>(new Set());
 
   /** Point the one element at item `i`, optionally playing it. */
@@ -75,6 +83,10 @@ export default function VocabularyOnTheGoPage() {
     const el = audioRef.current;
     const item = items[i];
     if (!el || !item) return;
+    // The practice clips share nothing with this element; make sure none is
+    // still talking over the list.
+    stopAudio();
+    intent.current = play;
     indexRef.current = i;
     setIndex(i);
     setStarted(true);
@@ -84,11 +96,15 @@ export default function VocabularyOnTheGoPage() {
       // A refusal here would be the browser's autoplay policy; the user
       // pressed something to get here, so it is unlikely, and the button
       // simply shows Play.
-      el.play().catch(() => setPlaying(false));
+      el.play().catch(() => {
+        intent.current = false;
+        setPlaying(false);
+      });
     }
   }
 
   function finish() {
+    intent.current = false;
     audioRef.current?.pause();
     setFinished(true);
     setPlaying(false);
@@ -99,20 +115,17 @@ export default function VocabularyOnTheGoPage() {
     load(0, true);
   }
 
-  function next() {
+  /** `autoplay` is explicit: `ended` and an error under playback pass true;
+   *  the Next button and headphone keys pass nothing and keep the intent. */
+  function next(autoplay: boolean = intent.current) {
     const i = indexRef.current;
-    if (i + 1 < total) load(i + 1, finished || isAudible());
+    if (i + 1 < total) load(i + 1, finished || autoplay);
     else finish();
   }
 
   function previous() {
     // At the first item "previous" means "from the top of this one".
-    load(Math.max(0, indexRef.current - 1), finished || isAudible());
-  }
-
-  function isAudible() {
-    const el = audioRef.current;
-    return Boolean(el && started && !el.paused);
+    load(Math.max(0, indexRef.current - 1), finished || intent.current);
   }
 
   function togglePlay() {
@@ -120,8 +133,16 @@ export default function VocabularyOnTheGoPage() {
     if (!el) return;
     if (finished) startAgain();
     else if (!started) load(index, true);
-    else if (el.paused) void el.play().catch(() => setPlaying(false));
-    else el.pause();
+    else if (intent.current) {
+      intent.current = false;
+      el.pause();
+    } else {
+      intent.current = true;
+      void el.play().catch(() => {
+        intent.current = false;
+        setPlaying(false);
+      });
+    }
   }
 
   // The handlers the element and the Media Session call are registered once;
@@ -159,9 +180,12 @@ export default function VocabularyOnTheGoPage() {
     if (!("mediaSession" in navigator)) return;
     const ms = navigator.mediaSession;
     ms.setActionHandler("play", () => {
-      if (audioRef.current?.paused) controls.current.togglePlay();
+      if (!intent.current) controls.current.togglePlay();
     });
-    ms.setActionHandler("pause", () => audioRef.current?.pause());
+    ms.setActionHandler("pause", () => {
+      intent.current = false;
+      audioRef.current?.pause();
+    });
     ms.setActionHandler("nexttrack", () => controls.current.next());
     ms.setActionHandler("previoustrack", () => controls.current.previous());
     return () => {
@@ -226,11 +250,21 @@ export default function VocabularyOnTheGoPage() {
       <audio
         ref={setAudio}
         preload="auto"
-        onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
-        onEnded={() => controls.current.next()}
-        // A file that will not load is skipped; the list never stalls on one.
-        onError={() => started && controls.current.next()}
+        onPlay={() => {
+          intent.current = true;
+          setPlaying(true);
+        }}
+        // `pause` fires just before `ended`; that one is the file finishing,
+        // not the learner pausing, and `ended` carries on (or `finish`
+        // stops) — so it must not flip the button to Play for a moment.
+        onPause={(e) => {
+          if (e.currentTarget.ended) return;
+          setPlaying(false);
+        }}
+        onEnded={() => controls.current.next(intent.current)}
+        // A file that will not load is skipped; the list never stalls on one,
+        // and keeps playing if the learner was listening.
+        onError={() => started && controls.current.next(intent.current)}
         onTimeUpdate={onTimeUpdate}
       />
 
@@ -268,7 +302,7 @@ export default function VocabularyOnTheGoPage() {
             <button
               type="button"
               aria-label="Next"
-              onClick={next}
+              onClick={() => next()}
               className="flex size-12 items-center justify-center rounded-full text-muted-foreground transition-colors duration-fast hover:bg-surface-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
             >
               <SkipForward className="size-5" aria-hidden />

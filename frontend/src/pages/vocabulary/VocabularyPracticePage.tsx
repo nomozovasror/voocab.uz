@@ -13,7 +13,7 @@ import { CefrTag } from "@/features/vocabulary/components/CefrTag";
 import { ListenCard } from "@/features/vocabulary/components/ListenCard";
 import { SpeakCard } from "@/features/vocabulary/components/SpeakCard";
 import { SpeakerButton } from "@/features/vocabulary/components/SpeakerButton";
-import { isPlaying, playClip } from "@/features/vocabulary/audio";
+import { armAudioUnlock, isPlaying, playClip } from "@/features/vocabulary/audio";
 import { speechSupported } from "@/features/vocabulary/speech";
 import { ReportTranslation } from "@/features/vocabulary/components/ReportTranslation";
 import { meanings } from "@/features/vocabulary/meaning";
@@ -143,6 +143,10 @@ export default function VocabularyPracticePage() {
   // Wall-clock, not a React state value: resetting it must never itself
   // cause a render, and reading it happens only once, at submit.
   const shownAt = useRef(Date.now());
+
+  // Unlock the shared audio element on the first real gesture (iOS Safari);
+  // see `armAudioUnlock`. The home screen's Start press does it too.
+  useEffect(() => armAudioUnlock(), []);
 
   useEffect(() => {
     if (data && queue === null) {
@@ -923,12 +927,19 @@ function Reveal({
 }) {
   const sense = meanings(result.word);
   const wordAudio = result.word.audio;
+  const [needsTap, setNeedsTap] = useState(false);
 
   // Once per reveal (it mounts when an answer lands). Never over a clip that
   // is still sounding — the listen card may have been playing when the
   // answer went in, and a second voice on top of the first says nothing.
   useEffect(() => {
-    if (autoplay && wordAudio && !isPlaying()) void playClip(wordAudio.url);
+    if (autoplay && wordAudio && !isPlaying()) {
+      // Refused (iOS before it is unlocked): the speaker pulses "Tap to
+      // play" instead of the reveal being silent for no visible reason.
+      void playClip(wordAudio.url).then((r) => {
+        if (r === "blocked") setNeedsTap(true);
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -976,7 +987,14 @@ function Reveal({
           </span>
         )}
         <CefrTag level={result.word.cefr_level} />
-        {wordAudio && <SpeakerButton url={wordAudio.url} className="self-center" />}
+        {wordAudio && (
+          <SpeakerButton
+            url={wordAudio.url}
+            className="self-center"
+            needsTap={needsTap}
+            onPlay={() => setNeedsTap(false)}
+          />
+        )}
       </p>
       {passiveRecognise ? (
         <>

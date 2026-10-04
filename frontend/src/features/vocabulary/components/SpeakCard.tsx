@@ -100,11 +100,17 @@ export function SpeakCard({
   const attempt = useRef<1 | 2 | 3>(1);
   const listening = useRef<Listening | null>(null);
   const alive = useRef(true);
+  // Autoplay refused by the browser: the speaker says "Tap to play".
+  const [tapDefinition, setTapDefinition] = useState(false);
+  const [tapMiss, setTapMiss] = useState(false);
 
   useEffect(() => {
     alive.current = true;
     // The definition, once. Whoever missed it presses the speaker beside it.
-    if (prompt.definition_audio_url) void playClip(prompt.definition_audio_url);
+    if (prompt.definition_audio_url)
+      void playClip(prompt.definition_audio_url).then((r) => {
+        if (alive.current && r === "blocked") setTapDefinition(true);
+      });
     return () => {
       alive.current = false;
       listening.current?.abort();
@@ -157,7 +163,10 @@ export function SpeakCard({
         setPhase("missed");
         // Always, not only when the Pronunciation setting is on: showing the
         // word's sound is the point of this reveal (brief, section 5).
-        if (res.audio) void playClip(res.audio.url);
+        if (res.audio)
+          void playClip(res.audio.url).then((r) => {
+            if (alive.current && r === "blocked") setTapMiss(true);
+          });
       }
     } catch (e) {
       if (!alive.current) return;
@@ -215,6 +224,8 @@ export function SpeakCard({
           <SpeakerButton
             url={prompt.definition_audio_url}
             label="Hear the definition again"
+            needsTap={tapDefinition}
+            onPlay={() => setTapDefinition(false)}
             className="ml-1 align-middle"
           />
         )}
@@ -229,6 +240,8 @@ export function SpeakCard({
               {miss.audio && (
                 <SpeakerButton
                   url={miss.audio.url}
+                  needsTap={tapMiss}
+                  onPlay={() => setTapMiss(false)}
                   className="ml-1.5 align-middle"
                 />
               )}

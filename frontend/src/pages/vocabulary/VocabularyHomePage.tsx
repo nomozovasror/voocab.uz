@@ -1,9 +1,11 @@
+import { useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { BookOpen, Headphones, Play, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 import { localTimeZone, timeUntil } from "@/lib/time";
+import { armAudioUnlock } from "@/features/vocabulary/audio";
 import {
   practiceSummaryKey,
   vocabularyApi,
@@ -41,6 +43,10 @@ import {
 export default function VocabularyHomePage() {
   const tz = localTimeZone();
   const navigate = useNavigate();
+
+  // The Start press unlocks the audio element for iOS Safari, so the listen
+  // card that follows can play without a gesture of its own.
+  useEffect(() => armAudioUnlock(), []);
 
   const { data, isPending, isError } = useQuery({
     queryKey: practiceSummaryKey(tz),

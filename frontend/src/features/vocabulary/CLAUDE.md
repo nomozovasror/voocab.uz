@@ -974,7 +974,19 @@ are the ones that are easy to undo by accident.
   **A file that will not play is "no audio", never an error** — a card, the
   reveal and the word page all treat it so. The practice reveal asks
   `isPlaying()` before its autoplay, so a word the learner is still hearing is
-  not restarted over itself. On the go is the one exception and owns its own
+  not restarted over itself.
+- **ONE shared `<audio>` element, unlocked for iOS.** `playClip` swaps `src`
+  on one long-lived element instead of `new Audio()` per clip: Safari plays an
+  element only inside a gesture, or after a gesture has unlocked THAT element,
+  and the listen card's first play and the reveal's autoplay both happen after
+  an await. `armAudioUnlock()` (called by the vocabulary home and the practice
+  page, so the Start press does it) plays a silent data-URI WAV once on the
+  first `click` / `touchend` / `keydown` (capture) — `touchstart` and
+  `pointerdown` are NOT activating on iOS — then pauses it. A play that comes
+  back `blocked` is SHOWN: the listen button pulses and says "Tap to play"; the
+  reveal's / speak card's `SpeakerButton` takes `needsTap` (pulse plus a
+  "Tap to play" word). Never silently nothing. The unlock itself is untested
+  on a real iPhone (owner's list). On the go is the one exception and owns its own
   `<audio>` (below). `SpeakerButton` is the speaker everywhere except the
   listen card (tooltip "Play pronunciation"; a failed file makes it a quiet
   disabled "Audio isn't available", tried again on the next press).
@@ -1007,7 +1019,7 @@ are the ones that are easy to undo by accident.
   listen now, play, `0.75x`) are in the DOM BEFORE the field, in the order they
   are drawn, so it reaches all of them. The hint line under the field says
   "Tab to hear it again", and the field is `aria-describedby` it. After the
-  answer the field is disabled and Tab is an ordinary Tab again. Esc leaves.
+  answer the field is disabled and Tab is an ordinary Tab again. Esc leaves. Forward Tab is captured only while focus is in the field, never during IME composition (`isComposing`) and never with a modifier.
 - **"Can't listen now" is a quiet link at the top, no dialog, no penalty.** It
   sits first in the DOM for the reason above.
 
@@ -1061,7 +1073,12 @@ exercise).
   pause is baked into each file by the server. A timer between clips dies
   when an iPhone locks; the audio element does not. `src` is set imperatively
   in the same call stack as `ended` (or the headphone's "next"), never via a
-  render. Leaving the page pauses it through a callback ref (an effect's
+  render. **"Playing" is the learner's INTENT, never `el.paused`**: `pause`
+  fires before `ended`, so `paused` is already true when an item ends and
+  chaining from it stops the list after item 1. `ended` and an error continue
+  under the intent (`next(autoplay)`); Next/Previous and headphone keys keep
+  it; `pause` at `el.ended` is ignored by the button state. Starting it also
+  stops any shared practice clip. Leaving the page pauses it through a callback ref (an effect's
   cleanup runs after the ref is cleared, and a detached playing element keeps
   playing).
 - **The word is never on the screen or in the metadata**; the wire does not

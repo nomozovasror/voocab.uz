@@ -44,6 +44,9 @@ const SLOW_RATE = 0.75;
  *   that walk finds all of them. Focus never leaves the field on a replay —
  *   a screen reader hears no focus change, and the caret stays where the
  *   learner was typing.
+ * - **Forward Tab is captured ONLY while focus is in the answer field.**
+ *   Shift+Tab and Esc always leave, and Tab is left alone during IME
+ *   composition and with any modifier held.
  * - **It says so, on screen,** in the hint line the field is `aria-describedby`.
  * - **After the answer the field is disabled**, so `Tab` is an ordinary Tab
  *   again and walks the reveal.
@@ -86,6 +89,9 @@ export function ListenCard({
   const hasContext = Boolean(audio.context_url) && !contextBroken;
   // What the NEXT press plays. The automatic first play was the word.
   const [next, setNext] = useState<"word" | "context">("word");
+  // The browser refused to play without a gesture (iOS Safari before it is
+  // unlocked). Shown, never silent: the button pulses and says "Tap to play".
+  const [blocked, setBlocked] = useState(false);
 
   // The handlers below are called from the mount effect and from key events;
   // refs keep them reading the current rate and state without re-running the
@@ -99,6 +105,8 @@ export function ListenCard({
     const url = kind === "context" ? audio.context_url : audio.url;
     if (!url) return;
     const result = await playClip(url, { rate: slowRef.current ? SLOW_RATE : 1 });
+    if (result === "blocked") setBlocked(true);
+    else if (result === "started") setBlocked(false);
     if (result !== "failed") return;
     if (kind === "context") {
       // The longer clip is missing; the word alone still works.
@@ -123,7 +131,9 @@ export function ListenCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const nextLabel = !hasContext
+  const nextLabel = blocked
+    ? "Tap to play"
+    : !hasContext
     ? "Play again"
     : next === "word"
       ? "Play the word"
@@ -148,7 +158,10 @@ export function ListenCard({
           type="button"
           onClick={replay}
           aria-label={nextLabel}
-          className="flex size-16 items-center justify-center rounded-full bg-primary text-primary-foreground transition-colors duration-fast hover:bg-primary/80 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none"
+          className={cn(
+            "flex size-16 items-center justify-center rounded-full bg-primary text-primary-foreground transition-colors duration-fast hover:bg-primary/80 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none",
+            blocked && "animate-pulse",
+          )}
         >
           <Volume2 className="size-7" aria-hidden />
         </button>
@@ -187,6 +200,9 @@ export function ListenCard({
               onExit();
             } else if (
               e.key === "Tab" &&
+              // Never mid-composition (an IME may use Tab to pick a
+              // candidate), and never with any modifier.
+              !e.nativeEvent.isComposing &&
               !e.shiftKey &&
               !e.altKey &&
               !e.ctrlKey &&
