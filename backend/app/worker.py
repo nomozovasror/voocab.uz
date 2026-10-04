@@ -1,8 +1,8 @@
-"""The background process: transcription, the difficulty refresh, and the
-lexicon's own enrichment.
+"""The background process: transcription, the difficulty refresh, the
+lexicon's own enrichment, and the audio layer's text-to-speech and clips.
 
-Three loops, run concurrently, and they have nothing to do with each other
-beyond all three being work that must not happen inside a request.
+Five loops, run concurrently, and they have nothing to do with each other
+beyond all five being work that must not happen inside a request.
 
 **Transcription** (§9 of the audio-ingestion brief). The queue is
 ``audio_blob.transcript_status`` itself — no Redis, no external broker
@@ -39,6 +39,23 @@ difficulty is: a Gemini call has nothing to do with polling the
 transcription queue, and gating either on the other's pace would be an
 accident of implementation, not a decision.
 
+**Text to speech** (`app.services.tts`, vocabulary stage 3). The queue is
+``audio_renders`` -- the same shape as transcription: a request inserts a
+``pending`` row (never synthesises), this loop claims one with ``FOR UPDATE
+SKIP LOCKED``, Kokoro-82M makes it, the row goes ``ready`` or back to
+``pending`` with ``attempts`` bumped (``failed`` at ``tts_max_attempts``). It
+needs the ``tts`` extra -- installed in the worker image only -- and where
+``kokoro`` is not importable (the API image, a Mac host) it says so ONCE and
+does not run: the rest of the worker is unaffected. A failure sleeps out a
+doubling back-off, because a broken model must not spin the loop.
+
+**Clips** (`app.services.word_clips`). For recordings that became ready since
+the loop last looked, index where each lexicon word is spoken and cut the
+small word / context files. It never verifies (that needs a GPU model and is
+the seed script's job) -- clips are only SERVED once verified -- but it keeps
+the cuts primed, so a later verification run has bytes to listen to. Own loop,
+own interval: cutting is CPU the transcription poll should not queue behind.
+
 Entrypoint: ``python -m app.worker``.
 
 Logic is split into small, independently testable functions (rather than one
@@ -58,10 +75,13 @@ from sqlmodel import select
 from app.core.config import settings
 from app.core.database import AsyncSession, async_session_factory
 from app.models.audio_blob import AudioBlob, TranscriptStatus
+from app.models.audio_render import AudioRender, RenderStatus
 from app.models.lexicon import Lexeme
 from app.services import difficulty as difficulty_service
 from app.services import lexicon_enrich as lexicon_enrich_service
 from app.services import lexicon_hints as lexicon_hints_service
+from app.services import tts as tts_service
+from app.services import word_clips as word_clips_service
 from app.services.asr import ASRProvider, GroqASR, TranscriptResult
 from app.services.audio import persist_transcript_result
 from app.services.storage import get_storage
@@ -473,6 +493,115 @@ async def _lexicon_loop() -> None:
         await gemini.aclose()
 
 
+#: Longest sleep after consecutive render failures.
+TTS_BACKOFF_MAX_S = 60.0
+
+
+async def render_once(
+    synth: tts_service.Synth, *, keys: list[str] | None = None
+) -> str:
+    """Claim and make ONE render. Returns ``"empty"`` (nothing pending),
+    ``"ready"``, ``"retry"`` (failed, will be tried again) or ``"failed"``
+    (out of attempts). Never raises: ``process_render`` records its own
+    failures on the row, and anything it could not -- a database that went
+    away mid-claim -- is logged here and reported as a retry. ``keys`` narrows
+    the claim to those renders (tests; the loop passes nothing)."""
+    try:
+        async with async_session_factory() as session:
+            row = await tts_service.claim_render(session, keys=keys)
+        if row is None:
+            return "empty"
+        async with async_session_factory() as session:
+            fresh = await session.get(AudioRender, row.id)
+            assert fresh is not None
+            await tts_service.process_render(session, fresh, synth)
+            await session.refresh(fresh)
+            return {
+                RenderStatus.READY: "ready",
+                RenderStatus.FAILED: "failed",
+            }.get(fresh.status, "retry")
+    except Exception:  # noqa: BLE001 - last-resort safety net
+        logger.exception("render pass failed unexpectedly; continuing")
+        return "retry"
+
+
+async def _render_loop() -> None:
+    """Make the audio the app has asked for -- see the module docstring's
+    "Text to speech" section."""
+    interval = settings.tts_poll_interval_s
+    if interval <= 0:
+        logger.info("text to speech disabled (interval <= 0)")
+        return
+    if not tts_service.kokoro_available():
+        logger.info("text to speech disabled (kokoro is not installed in this image)")
+        return
+
+    async with async_session_factory() as session:
+        recovered = await tts_service.recover_stale_renders(session)
+        if recovered:
+            logger.info("recovered %d stale processing render(s) to pending", recovered)
+
+    synth = tts_service.KokoroSynth()
+    logger.info(
+        "text to speech polling every %.1fs (voice %s, max_attempts=%d)",
+        interval, tts_service.VOICE, settings.tts_max_attempts,
+    )
+    failures = 0
+    while not _stop_event.is_set():
+        outcome = await render_once(synth)
+        if outcome == "empty":
+            failures = 0
+            await _sleep_or_stop(interval)
+        elif outcome == "ready":
+            failures = 0
+        else:
+            failures += 1
+            backoff = min(settings.tts_backoff_base_s * 2 ** (failures - 1), TTS_BACKOFF_MAX_S)
+            logger.info("render %s; backing off %.1fs", outcome, backoff)
+            await _sleep_or_stop(backoff)
+
+
+#: Blobs whose clips this process has indexed. In memory: a restart simply
+#: indexes everything once more, which is idempotent.
+_clip_indexed: set = set()
+
+
+async def clips_once() -> tuple[int, int]:
+    """One pass of the clip step: index recordings not yet indexed by this
+    process, then cut up to ``clips_batch_size`` candidates. Returns
+    ``(indexed blobs, cut clips)``. Never raises."""
+    try:
+        async with async_session_factory() as session:
+            fresh_blobs = await word_clips_service.unindexed_blob_ids(session, _clip_indexed)
+            if fresh_blobs:
+                report = await word_clips_service.index_clips(session, blob_ids=fresh_blobs)
+                _clip_indexed.update(fresh_blobs)
+                logger.info(
+                    "clips: indexed %d recording(s), %d new candidate(s)",
+                    report.blobs, report.inserted,
+                )
+        async with async_session_factory() as session:
+            cut = await word_clips_service.cut_clips(
+                session, limit=settings.clips_batch_size
+            )
+        return len(fresh_blobs), cut.cut
+    except Exception:  # noqa: BLE001 - logged; the next pass tries again
+        logger.exception("clip pass failed; will retry next interval")
+        return 0, 0
+
+
+async def _clips_loop() -> None:
+    interval = settings.clips_interval_s
+    if interval <= 0:
+        logger.info("clip indexing disabled (interval <= 0)")
+        return
+    logger.info("clip indexing and cutting every %.0fs", interval)
+    while not _stop_event.is_set():
+        _indexed, cut = await clips_once()
+        # A full batch means more are waiting: keep draining.
+        await _sleep_or_stop(1.0 if cut >= settings.clips_batch_size else interval)
+
+
 async def _transcription_loop(provider: ASRProvider) -> None:
     async with async_session_factory() as session:
         recovered = await recover_stale(session)
@@ -543,14 +672,16 @@ async def main() -> None:
             pass
 
     logger.info("worker started")
-    # All three loops watch the same stop event, so one SIGTERM ends them
+    # All five loops watch the same stop event, so one SIGTERM ends them
     # all and `gather` returns when the slowest has finished its current
     # step. None is allowed to fail another: the transcription loop guards
-    # every blob it touches, and both refreshers swallow their own errors.
+    # every blob it touches, and the others swallow their own errors.
     await asyncio.gather(
         _transcription_loop(get_asr_provider()),
         _difficulty_loop(),
         _lexicon_loop(),
+        _render_loop(),
+        _clips_loop(),
     )
 
     logger.info("worker stopping")

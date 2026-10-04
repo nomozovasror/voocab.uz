@@ -31,15 +31,22 @@ services:
     # Same image/codebase as the API, different entrypoint: the background
     # process. No ports — it's not an HTTP service. Two loops: the Postgres-
     # backed ASR transcription queue (§9, polling
-    # audio_blob.transcript_status) and the periodic refresh of the
-    # material_difficulty projection.
+    # audio_blob.transcript_status), the periodic refresh of the
+    # material_difficulty projection, the lexicon enrichment, the TTS render
+    # queue (audio_renders) and the word-clip cutter.
     #
     # One instance. A second would double the difficulty refresh — harmless,
     # it is an idempotent upsert, but pointless; the transcription half is
     # the part that is safe to scale out (SKIP LOCKED), and DIFFICULTY_REFRESH_INTERVAL_S=0
     # is how a second instance would opt out of the other half.
-    build: ./backend
-    command: uv run python -m app.worker
+    #
+    # Built with the `tts` extra (Kokoro-82M, CPU torch, the baked-in weights)
+    # for the text-to-speech render loop; the API image above stays without it.
+    build:
+      context: ./backend
+      args:
+        EXTRAS: tts
+    command: uv run --no-sync python -m app.worker
     volumes:
       - ./backend:/app
     environment:

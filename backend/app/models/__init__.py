@@ -8,6 +8,7 @@ Alembic's autogenerate and the app both rely on.
 from app.models.attempt import Attempt
 from app.models.audio_asset import AudioAsset
 from app.models.audio_blob import AudioBlob
+from app.models.audio_render import AudioRender
 from app.models.audio_segment import AudioSegment
 from app.models.auth_identity import AuthIdentity
 from app.models.collection import Collection, CollectionItem
@@ -32,6 +33,8 @@ from app.models.vocabulary import (
     VocabularyReviewLog,
     VocabularySettings,
 )
+from app.models.word_audio_log import OnTheGoExposure, SpeakMiss
+from app.models.word_clip import WordClip
 from app.models.word_list import UserWordList, WordList, WordListEntry
 
 __all__ = [
@@ -66,4 +69,8 @@ __all__ = [
     "WordList",
     "WordListEntry",
     "UserWordList",
+    "AudioRender",
+    "WordClip",
+    "OnTheGoExposure",
+    "SpeakMiss",
 ]

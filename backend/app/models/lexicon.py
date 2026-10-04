@@ -331,6 +331,16 @@ class LexemeSense(SQLModel, table=True):
     #: has never run against is simply `false`, never a guess.
     needs_letter_hint: bool = Field(default=False, index=True)
 
+    #: How this sense is SPOKEN, in misaki's British phoneme alphabet
+    #: (`ɹˈɛkɔːd`, `klˈQs` -- not IPA) -- set ONLY for a heteronym's senses
+    #: (`record` the noun and `record` the verb are different words to the
+    #: ear). Null for every other sense, which the TTS voice reads from plain
+    #: text. Written by `scripts/decide_heteronyms.py apply` from the
+    #: replayable decisions log, never by hand; see
+    #: `app.services.pronunciation` for why a sense without a decision still
+    #: gets a fallback and what it is.
+    pronunciation: str | None = Field(default=None, max_length=120)
+
     #: Who last cleared this sense in Studio's admin review tab (P5), and
     #: when -- null means "never approved", which is a different fact from
     #: `needs_review is False`: a P1 provisional sense with no reasons at all

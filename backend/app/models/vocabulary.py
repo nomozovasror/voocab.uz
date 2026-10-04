@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -9,6 +10,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     UniqueConstraint,
+    true as sa_true,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as SA_UUID
@@ -947,11 +949,12 @@ class VocabularySettings(SQLModel, table=True):
     Stage 1 read and wrote ``daily_minutes`` only; stage 2's
     ``PUT /vocabulary/settings`` also writes ``direction`` (``passive`` or
     ``both`` -- the brief's toggle has no "active only") and
-    ``exercise_types``. ``pronunciation`` stays a column with no setter and
-    no UI control -- kept from stage 1 rather than dropped, because a screen
-    that shows three of four settings today and grows a fourth later must
-    not need the row's shape to change under people who already saved a
-    preference.
+    ``exercise_types``. ``pronunciation`` sat as a column with no setter and
+    no UI control until stage 3 -- kept from stage 1 rather than dropped,
+    because a screen that shows three of four settings and grows a fourth
+    later must not need the row's shape to change under people who already
+    saved a preference. Stage 3 gives it its meaning (autoplay of the word's
+    audio on reveal) and the default TRUE.
     """
 
     __tablename__ = "vocabulary_settings"
@@ -967,4 +970,12 @@ class VocabularySettings(SQLModel, table=True):
     exercise_types: list[str] | None = Field(
         default=None, sa_column=Column(ARRAY(String(length=16)), nullable=True)
     )
-    pronunciation: bool = Field(default=False)
+    #: When on, a word's audio plays by itself as its answer is revealed (the
+    #: speaker button is there either way). Default TRUE since stage 3: the
+    #: control did not exist before, so no existing row holds a choice -- the
+    #: migration sets them all, and the server default does the same for any
+    #: row written by code that never heard of the column.
+    pronunciation: bool = Field(
+        default=True,
+        sa_column=Column(Boolean, nullable=False, server_default=sa_true()),
+    )

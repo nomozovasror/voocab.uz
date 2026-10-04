@@ -1116,3 +1116,110 @@ unchanged (one sense).
   `VocabularyEntryOut` (lookup + `GET /materials/:id/vocabulary`, items
   `used_here`) and on `SavedWordOut` (word detail only, items `saved`;
   empty on the list/practice rows).
+
+## The audio layer: clips first, one voice behind them (vocabulary stage 3)
+
+What a learner hears for a word is made in advance, never inside a request.
+`word_audio.py` is the one door the rest of the app uses; `word_clips.py`,
+`tts.py`, `pronunciation.py` and `audio_pcm.py` are what stands behind it.
+Design decisions are in `brief-vocabulary-stage3-decisions.md`; the rules
+below are the ones a later change can silently break.
+
+- **A request only reads and enqueues.** `word_audio` answers a URL or `None`
+  ("not ready, and already queued"); synthesis, cutting and verification happen
+  in the worker (`app/worker.py`: the render loop and the clip step) or the seed
+  script (`scripts/seed_tts.py`). Nothing in `word_audio` may call Kokoro,
+  PyAV or a model. `tts.enqueue` runs on its **own transaction** and commits at
+  once: a GET never commits its session, and a request that rolls back must
+  not lose the work it asked for. It only inserts specs with NO row
+  (`ON CONFLICT (key) DO NOTHING`): a `failed` render is not retried by every
+  page view -- `tts.requeue_failed` is the lever.
+- **The resolution order is a rule, not a preference**: a heteronym is always
+  TTS with its sense's phonemes -> else a VERIFIED clip of the exact form (the
+  learner's own listening materials first, then the longest word) -> else the
+  TTS render. `source` on the wire says which, because only a clip has a
+  context press. Resolve through `word_sources`/`word_audio_many`; a list
+  endpoint calling `word_audio` per row is the N+1 the `*_many` functions
+  exist to prevent.
+- **Only `verified` clips are ever served.** Cut and candidate rows are
+  scaffolding. Verification is the seed run's (faster-whisper, GPU); a
+  recording that becomes ready later is indexed and cut by the worker but stays
+  unserved, TTS covering for it, until the next `verify-clips`.
+- **Exact form, never an inflection** (`word_clips.find_occurrences`): `played`
+  is not a clip of `play`, because in `listen` the learner types what they
+  hear. A phrase is a consecutive run. Never the first or last word of a
+  segment (the ASR clips boundary words), and never a segment any asset
+  corrects (`transcript_overrides` rewrites the TEXT; the timings no longer
+  describe it). Padding is 150 ms a side, clamped to the recording, baked into
+  `start_ms`/`end_ms`. At most three candidates per form in TOTAL (rejected ones
+  count): the index converges instead of digging for a fourth. A recording
+  attached only to PRIVATE materials is not a source -- a clip is a derivative
+  served to everyone.
+- **Heteronyms never take a clip** (decision 2) and are not even indexed: the
+  transcript has no part of speech. `pronunciation.is_heteronym(lemma)` is
+  exact and per lemma, and means two or more candidates that differ once
+  stress is ignored -- misaki's table also holds stress-only variants (`be`)
+  that are NOT heteronyms. Its data is `app/data/tts/` (see the README there),
+  in **misaki's phoneme alphabet, not IPA**; `tests/test_heteronyms.py`
+  checks every string against misaki's alphabet.
+- **Which pronunciation a sense takes is decided once and kept in the repo.**
+  `scripts/decide_heteronyms.py` asks a model per lemma and appends to
+  `heteronym_decisions.jsonl`, keyed by lemma + pos + synset (or definition)
+  and never by a database id, so the log replays onto any database
+  (`apply` writes `lexeme_senses.pronunciation`). A heteronym sense with no
+  decision is NOT guessed into the column: serving falls back to misaki's own
+  entry for the part of speech (`DEFAULT` if none) and logs it
+  (`pronunciation.sense_pronunciation`). A wrong pronunciation is the one
+  defect that raises no error, so a new heteronym lemma means: run `decide`,
+  read the new lines, commit them.
+- **A render's key is the hash of its INPUT** (`tts.render_key`: kind + exact
+  synthesis string + voice + model, canonical JSON, `KEY_VERSION` inside), so
+  a row exists before its audio does and one word is synthesised once in the
+  whole system. A corrected definition, a newly decided pronunciation or a
+  verified clip arriving is a NEW key and a new render -- never an edit of an
+  old row. Storage keys are `tts/{key}.m4a`, `renders/{key}.m4a` (items) and
+  `clips/{sha256 of the bytes}.m4a`. Bump `KEY_VERSION` to re-render
+  everything after changing trimming, levelling or composition.
+- **The voice is `bf_emma` of Kokoro-82M, `lang_code='b'`, everywhere.** A
+  heteronym sense is spoken from `[word](/phonemes/)`, anything else from the
+  lemma as plain text. Kokoro is imported ONLY inside `KokoroSynth._load`; on
+  macOS its `espeakng-loader` wheel kills the interpreter, so never import it
+  at module level and never from a test -- tests inject a fake `Synth`. It
+  lives in the worker image only (`ARG EXTRAS=tts`; weights baked in at build,
+  `HF_HUB_OFFLINE=1`); the render loop disables itself with ONE log line
+  where `kokoro` is not installed.
+- **A definition is spoken exactly as recall shows it, with the headword as a
+  silence.** `tts.masked_definition` calls `practice._mask_definition` (one
+  definition of masking; imported inside the function, because `practice`
+  will import the audio service and a top-level import closes the cycle); the
+  text is cut at the masks, each piece is synthesised on its own, and a run of
+  masks (a masked phrase is one blank per word) is ONE `MASK_PAUSE_MS`
+  silence. The text with its `_____` is the render's `input` and key.
+- **An On the go item is composed, not synthesised, and is one file**
+  (decision 13): definition + 3.0 s silence + word + 1.5 s, every speech part
+  levelled to the same RMS (`audio_pcm.normalise_rms`; a lecture clip and
+  Kokoro differ by many dB), `word_offset_ms` recorded -- where the word
+  starts, which the client counts as "the word was heard". The word part is
+  whatever `word_audio` would serve (clip or TTS). An item's `input` names its
+  parts, and the worker resolves them itself, synthesising a missing part
+  inline, so an item never fails because the queue was drained in a different
+  order. Claim order is still word, definition, item.
+- **Everything stored is 24 kHz mono AAC in MP4, faststart** (`audio_pcm`):
+  Kokoro's native rate, small files, `moov` first so the browser can start
+  playing. FFmpeg's native `aac` encoder only (always compiled in); PyAV is a
+  main dependency and there is no `ffmpeg` binary anywhere. A cut is a seek +
+  decode of the window, never a decode of the whole recording.
+- **The queue is `audio_renders`, claimed `FOR UPDATE SKIP LOCKED`**, the same
+  contract as `audio_blob.transcript_status`: `pending` -> `processing` ->
+  `ready`, a failure goes back to `pending` with `attempts` bumped and to
+  `failed` at `tts_max_attempts`, startup recovery returns `processing` rows
+  to `pending`, the loop backs off after repeated failures. `process_render`
+  never raises. The seed script drains the same queue in-process
+  (`tts.drain`) -- the 3060 has no worker -- so seeded and worker-made audio
+  are the same rows under the same keys.
+- **Exposure and speak-miss tables exist and are written by the practice
+  layer, not here** (`on_the_go_exposures`, `speak_misses`). An exposure is
+  never an FSRS review: hearing a word is not recalling it.
+- **Seed order matters**: `clips` -> `verify-clips` -> `words` -> `definitions`
+  (-> `items`). `words` skips senses that already have a verified clip (the
+  brief: do not generate what exists), so it must run after verification.

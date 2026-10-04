@@ -19,6 +19,7 @@ from sqlalchemy import func
 from sqlmodel import select
 
 from app.core.database import AsyncSession
+from app.models.audio_render import AudioRender, RenderStatus
 from app.models.lexicon import Lexeme, LexemeSense
 
 
@@ -37,6 +38,7 @@ class _Entry:
 
 _CC_BY_SA_4 = "https://creativecommons.org/licenses/by-sa/4.0/"
 _CC_BY_4 = "https://creativecommons.org/licenses/by/4.0/"
+_APACHE_2 = "https://www.apache.org/licenses/LICENSE-2.0"
 _NGSL_FAMILY_AUTHORS = "Browne, C., Culligan, B. & Phillips, J."
 _NGSL_FAMILY_URL = "https://www.newgeneralservicelist.com"
 
@@ -95,6 +97,29 @@ REGISTRY: dict[str, _Entry] = {
         "https://wordnetcode.princeton.edu/wn3.1.dict.tar.gz",
         usage_note="Sense ordering only, not stored as definitions.",
     ),
+    # The two below are not in the lexicon's own columns at all: they are the
+    # software and weights behind the app's spoken words. Keyed by "the app
+    # has spoken audio" (`AudioRender` rows that are ready) in `sources`, the
+    # same rule as every other row -- shown because they are in use.
+    #
+    # Kokoro-82M's weights and the `kokoro` package are Apache-2.0; misaki's
+    # package (which carries the pronunciation lexicon vendored under
+    # `app/data/tts/`) is Apache-2.0 too (its LICENSE ships in the wheel).
+    "kokoro": _Entry(
+        "Kokoro-82M text-to-speech", "hexgrad",
+        "Apache-2.0", _APACHE_2,
+        "https://huggingface.co/hexgrad/Kokoro-82M",
+        usage_note="The British voice (bf_emma) that reads words and definitions aloud.",
+    ),
+    "misaki": _Entry(
+        "misaki grapheme-to-phoneme engine and British lexicon", "hexgrad",
+        "Apache-2.0", _APACHE_2,
+        "https://github.com/hexgrad/misaki",
+        usage_note=(
+            "Turns text into phonemes for the voice; its part-of-speech "
+            "pronunciation table settles words like record, present and live."
+        ),
+    ),
 }
 
 
@@ -144,7 +169,18 @@ async def sources(session: AsyncSession) -> list[dict]:
         entry = REGISTRY["wordnet-semcor"]
         rows.append({"key": "wordnet-semcor", "count": wordnet_count, **entry.__dict__})
 
-    # Registry order (NGSL family, then OEWN, then Princeton), not whatever
+    # Kokoro and misaki: both are exactly as present as the audio they made.
+    # `count` is that audio -- ready renders -- not a claim about entries of a
+    # list; the page only prints "N entries".
+    spoken = (await session.exec(
+        select(func.count(AudioRender.id)).where(AudioRender.status == RenderStatus.READY)
+    )).one()
+    if spoken:
+        for key in ("kokoro", "misaki"):
+            entry = REGISTRY[key]
+            rows.append({"key": key, "count": spoken, **entry.__dict__})
+
+    # Registry order (NGSL family, then OEWN, then Princeton, then the voice), not whatever
     # order SQL's GROUP BY happened to return.
     order = {key: i for i, key in enumerate(REGISTRY)}
     rows.sort(key=lambda r: order.get(r["key"], len(order)))
