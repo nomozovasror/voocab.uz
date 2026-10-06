@@ -5,8 +5,12 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: app
+    # Loopback only: the credentials are postgres/postgres, and on every
+    # interface that is the whole dev database to anyone on the network. The
+    # host still reaches it on localhost:5432; the seed machine reaches it
+    # through an SSH reverse tunnel (backend/scripts/SEED_TTS_WINDOWS.md).
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql
 
