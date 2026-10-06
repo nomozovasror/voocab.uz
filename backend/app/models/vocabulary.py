@@ -989,5 +989,5 @@ class VocabularySettings(SQLModel, table=True):
     #: written before the column existed.
     accent: str = Field(
         default="british",
-        sa_column=Column(String(8), nullable=False, server_default="british"),
+        sa_column=Column(String(16), nullable=False, server_default="british"),
     )

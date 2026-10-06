@@ -82,11 +82,11 @@ async def _apply(args: argparse.Namespace) -> None:
         report = await hd.apply(session, log, args.accent)
     print(f"{report.heteronym_senses} heteronym sense(s): wrote {report.written}, "
           f"already right {report.unchanged}, no decision {len(report.undecided)}, "
-          f"stale {len(report.stale)}")
+          f"stale {len(report.stale)} (cleared {report.cleared})")
     for label in report.undecided:
         print(f"  no decision (falls back to misaki's own at serving time): {label}")
     for label in report.stale:
-        print(f"  stale (not a current candidate, not written): {label}")
+        print(f"  stale (not a current candidate, not written, column cleared): {label}")
 
 
 def parse_args(argv: list[str] | None = None) -> tuple[argparse.ArgumentParser, argparse.Namespace]:

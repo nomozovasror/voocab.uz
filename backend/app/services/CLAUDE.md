@@ -1177,7 +1177,10 @@ below are the ones a later change can silently break.
   worker's transcription) leaves the rows `candidate` for the next pass
   (`CutReport.deferred`); only a permanent error marks `failed`.
 - **Heteronyms never take a clip** (decision 2) and are not even indexed: the
-  transcript has no part of speech. `pronunciation.is_heteronym(lemma)` is
+  transcript has no part of speech. `pronunciation.is_heteronym_any_accent(lemma)`
+  (heteronym in EITHER accent -- a clip is heard by everyone and the transcript
+  cannot say which reading was spoken) gates both the index and the serve-time
+  clip choice in `word_sources`; `is_heteronym(lemma, accent)` is
   exact and per lemma, and means two or more candidates that differ once
   stress is ignored -- misaki's table also holds stress-only variants (`be`)
   that are NOT heteronyms. Its data is `app/data/tts/` (see the README there),
@@ -1186,7 +1189,7 @@ below are the ones a later change can silently break.
   British table and extras' `ps`, the AMERICAN one (`O` not `Q`, no `ː`, plus
   `æ ɾ ᵻ ʔ`) for `misaki_us_pos_entries.json` and the extras' `us`. Heteronym-
   ness is per accent (`is_heteronym(lemma, accent)`); the extras items are
-  `{ps (British), us (American), note}`.
+  `{ps (British), us (American), note}`; they only choose phonemes.
 - **Which pronunciation a sense takes is decided once and kept in the repo.**
   `scripts/decide_heteronyms.py` asks a model per lemma and appends to
   `heteronym_decisions.jsonl`, keyed by lemma + pos + synset (or definition)
@@ -1194,7 +1197,8 @@ below are the ones a later change can silently break.
   (`apply` writes `lexeme_senses.pronunciation`; `--accent american` uses
   `heteronym_decisions_us.jsonl` and writes `pronunciation_us` -- a phoneme
   string is only right in its own alphabet, so the two accents never share a
-  log or a column). A heteronym sense with no
+  log or a column; an answer that is no longer a current candidate is
+  reported as stale AND its column is set back to NULL). A heteronym sense with no
   decision is NOT guessed into the column: serving falls back to misaki's own
   entry for the part of speech (`DEFAULT` if none) and logs it
   (`pronunciation.sense_pronunciation`). A wrong pronunciation is the one

@@ -100,7 +100,7 @@ export default function VocabularyPracticePage() {
   // Read only to tell "genuinely nothing to practise" apart from "you asked
   // for one task and nothing is at that rung yet" (F2) — shares the
   // settings page's own cache key.
-  const { data: settings } = useQuery({
+  const { data: settings, isPending: settingsPending } = useQuery({
     queryKey: ["vocabulary", "settings"],
     queryFn: () => vocabularyApi.settings(),
   });
@@ -549,6 +549,7 @@ export default function VocabularyPracticePage() {
           onUnsupported={() => setSpeakOff(true)}
           onMissContinue={continueAfterMiss}
           accent={settings?.accent}
+          accentReady={!settingsPending}
         />
       );
     }

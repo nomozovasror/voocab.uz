@@ -217,12 +217,12 @@ class Occurrence:
 def forms_index(forms: Iterable[str]) -> dict[str, list[tuple[str, ...]]]:
     """``{first word: [every form's word tuple starting with it]}``, longest
     first, so a scan checks the few forms that can start at a word instead of
-    all of them. Heteronyms are dropped here (decision 2); forms with no
+    all of them. Heteronyms (in either accent) are dropped here (decision 2); forms with no
     words are ignored."""
     index: dict[str, list[tuple[str, ...]]] = defaultdict(list)
     for form in set(forms):
         words = tuple(form.split())
-        if not words or pronunciation.is_heteronym(form):
+        if not words or pronunciation.is_heteronym_any_accent(form):
             continue
         index[words[0]].append(words)
     for runs in index.values():

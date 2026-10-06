@@ -309,6 +309,8 @@ class ApplyReport:
     unchanged: int = 0
     undecided: list[str] = field(default_factory=list)
     stale: list[str] = field(default_factory=list)
+    #: stale answers whose previously written column was set back to NULL.
+    cleared: int = 0
 
 
 async def apply(
@@ -317,7 +319,8 @@ async def apply(
     """Write the accent's column (``pronunciation`` / ``pronunciation_us``)
     from the log for every heteronym sense it answers (module docstring). A logged answer that is not one of
     the lemma's CURRENT candidates (the extras table changed under it) is
-    reported and not written. Commits."""
+    reported, not written, and any value an earlier apply left in the column is
+    set to NULL (serving then uses misaki's POS entry). Commits."""
     report = ApplyReport()
     column = "pronunciation_us" if accent == "american" else "pronunciation"
     current = dict(
@@ -334,6 +337,21 @@ async def apply(
             continue
         if ps not in {c.ps for c in pronunciation.candidates(row.lemma, accent)}:
             report.stale.append(f"{label}: {ps}")
+            # Clear what an earlier apply wrote: a phoneme string that is no
+            # longer a candidate would be served as is, so serving falls back
+            # to misaki's own entry instead.
+            if current.get(row.sense_id) is not None:
+                await session.execute(
+                    update(LexemeSense)
+                    .where(LexemeSense.id == row.sense_id)
+                    .values({column: None})
+                )
+                report.cleared += 1
+                logger.warning(
+                    "heteronym %s: logged %r is no longer a candidate in %s; "
+                    "cleared, serving falls back to misaki's own",
+                    label, ps, accent,
+                )
             continue
         if current.get(row.sense_id) == ps:
             report.unchanged += 1

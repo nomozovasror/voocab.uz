@@ -198,6 +198,19 @@ def is_heteronym(lemma: str, accent: Accent = DEFAULT_ACCENT) -> bool:
     return len(candidates(lemma, accent)) >= 2
 
 
+def is_heteronym_any_accent(lemma: str) -> bool:
+    """Whether ``lemma`` is a heteronym in ANY accent we serve.
+
+    This is the clip test. A live clip is heard by every learner whatever
+    their accent (decision 23), and the transcript cannot say WHICH reading
+    the speaker used, so a lemma that is ambiguous in one accent only (say a
+    word the American table splits and the British one does not) could still
+    put the wrong reading in a learner's ear. It is therefore never a clip, in
+    either accent. Choosing phonemes stays per accent
+    (:func:`is_heteronym` with the accent)."""
+    return any(is_heteronym(lemma, accent) for accent in MISAKI_PATHS)
+
+
 @lru_cache(maxsize=None)
 def heteronym_lemmas(accent: Accent = DEFAULT_ACCENT) -> frozenset[str]:
     """Every heteronym lemma we know in ``accent``, lower-cased."""

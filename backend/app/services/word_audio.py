@@ -202,7 +202,9 @@ async def word_sources(
 
     plans: dict[uuid.UUID, tuple[LexemeSense, Lexeme, bool, str]] = {}
     for sense, lexeme in pairs:
-        heteronym = pronunciation.is_heteronym(lexeme.lemma, accent)
+        # Any accent, not the learner's: a clip is heard by everyone and its
+        # transcript cannot say which reading was spoken (decision 2).
+        heteronym = pronunciation.is_heteronym_any_accent(lexeme.lemma)
         plans[sense.id] = (sense, lexeme, heteronym, normalise_form(lexeme.lemma))
     clips = await _verified_clips(
         session, (form for _sense, _lexeme, heteronym, form in plans.values() if not heteronym)

@@ -84,6 +84,7 @@ export function SpeakCard({
   onUnsupported,
   onMissContinue,
   accent = "british",
+  accentReady = true,
 }: {
   prompt: PracticeSpeakPrompt;
   wordId: string;
@@ -97,6 +98,10 @@ export function SpeakCard({
   onMissContinue: () => void;
   /** The learner's accent setting: the recogniser listens for it. */
   accent?: Accent;
+  /** False while the accent setting is still loading: the recogniser would
+   * silently listen for en-GB, so the microphone waits. A FAILED settings
+   * load is "ready" (en-GB), never a card that cannot be answered. */
+  accentReady?: boolean;
 }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [miss, setMiss] = useState<{ answer: string | null; audio: AudioOut | null } | null>(null);
@@ -124,7 +129,13 @@ export function SpeakCard({
   }, []);
 
   async function start() {
-    if (disabled || phase === "listening" || phase === "checking" || phase === "missed")
+    if (
+      disabled ||
+      !accentReady ||
+      phase === "listening" ||
+      phase === "checking" ||
+      phase === "missed"
+    )
       return;
     // The definition must not be in the room while the microphone is open.
     stopAudio();
@@ -198,7 +209,7 @@ export function SpeakCard({
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.repeat || isInteractive(e.target)) return;
-      if (e.key === " " && !disabled && phase !== "missed") {
+      if (e.key === " " && !disabled && accentReady && phase !== "missed") {
         e.preventDefault();
         toggleMic();
       } else if (e.key === "Enter" && phase === "missed") {
@@ -210,7 +221,7 @@ export function SpeakCard({
     return () => document.removeEventListener("keydown", onKeyDown);
     // `toggleMic`/`start` close over this render's phase.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, disabled]);
+  }, [phase, disabled, accentReady]);
 
   const open = phase === "listening";
   const status =
@@ -270,7 +281,7 @@ export function SpeakCard({
                   variant="outline"
                   size="sm"
                   autoFocus
-                  disabled={disabled}
+                  disabled={disabled || !accentReady}
                   onClick={() => void start()}
                   className="mt-2 gap-1.5"
                 >
@@ -283,7 +294,7 @@ export function SpeakCard({
                 <button
                   type="button"
                   autoFocus
-                  disabled={disabled || phase === "checking"}
+                  disabled={disabled || !accentReady || phase === "checking"}
                   aria-pressed={open}
                   aria-label={open ? "Stop listening" : "Say the word"}
                   onClick={toggleMic}

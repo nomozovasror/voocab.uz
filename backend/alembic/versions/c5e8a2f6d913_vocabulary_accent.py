@@ -37,7 +37,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.add_column(
         "vocabulary_settings",
-        sa.Column("accent", sa.String(8), nullable=False, server_default="british"),
+        sa.Column("accent", sa.String(16), nullable=False, server_default="british"),
     )
     op.add_column(
         "lexeme_senses", sa.Column("pronunciation_us", sa.String(120), nullable=True)
