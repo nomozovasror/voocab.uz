@@ -136,7 +136,9 @@ def encode_m4a(samples: np.ndarray) -> bytes:
     # `faststart` rewrites the file once the index is known, which FFmpeg does
     # by re-opening it by NAME -- an in-memory buffer has none, so the encode
     # goes through a real temporary file.
-    with tempfile.TemporaryDirectory() as workdir:
+    # ignore_cleanup_errors: on Windows a virus scanner may still hold the file
+    # for a moment; the bytes are already read, a leftover temp dir is not a failure.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as workdir:
         path = os.path.join(workdir, "out.m4a")
         _encode_to(path, samples)
         with open(path, "rb") as handle:

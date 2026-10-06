@@ -83,6 +83,7 @@ import asyncio
 import logging
 import uuid
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -572,6 +573,71 @@ class CutReport:
     deferred: int = 0
 
 
+@dataclass
+class _BlobOutcome:
+    """What cutting one recording came to, gathered off the session so the
+    cuts can run concurrently and the session still be touched by one task."""
+
+    group: Sequence[WordClip]
+    #: ``(clip, word key, context key)`` for each clip cut and stored.
+    cut: list[tuple[WordClip, str, str]]
+    failed: list[tuple[WordClip, Exception]]
+    #: Clips left ``candidate`` by a transient fault, and its error.
+    deferred: Sequence[WordClip] = ()
+    deferred_error: Exception | None = None
+
+
+async def count_candidates() -> int:
+    """Clips still waiting to be cut (progress for the seed script)."""
+    from app.core.database import async_session_factory
+
+    async with async_session_factory() as session:
+        return int(
+            (
+                await session.exec(
+                    select(func.count()).select_from(WordClip).where(
+                        WordClip.status == ClipStatus.CANDIDATE
+                    )
+                )
+            ).one()
+        )
+
+
+async def _cut_blob(
+    storage: MediaStorage, storage_key: str | None, group: Sequence[WordClip]
+) -> _BlobOutcome:
+    """Fetch one recording and cut every clip of it. Touches no session."""
+    out = _BlobOutcome(group=group, cut=[], failed=[])
+    try:
+        if storage_key is None:
+            raise ValueError("recording is gone")
+        data = await storage.get(storage_key)
+    except InfrastructureError as exc:
+        out.deferred, out.deferred_error = group, exc
+        return out
+    except Exception as exc:  # noqa: BLE001 - recorded on each row
+        out.failed = [(clip, exc) for clip in group]
+        return out
+    for position, clip in enumerate(group):
+        try:
+            word = await asyncio.to_thread(cut_window, data, clip.start_ms, clip.end_ms)
+            context = await asyncio.to_thread(
+                cut_window, data, clip.context_start_ms, clip.context_end_ms
+            )
+            word_key, context_key = clip_storage_key(word), clip_storage_key(context)
+            await storage.put(word_key, word, CLIP_MIME)
+            await storage.put(context_key, context, CLIP_MIME)
+        except InfrastructureError as exc:
+            out.deferred, out.deferred_error = group[position:], exc
+            break
+        except Exception as exc:  # noqa: BLE001 - one bad clip must not stop the run
+            logger.warning("clip %s (%r) failed to cut: %s", clip.id, clip.form, exc)
+            out.failed.append((clip, exc))
+        else:
+            out.cut.append((clip, word_key, context_key))
+    return out
+
+
 async def cut_clips(
     session: AsyncSession,
     *,
@@ -579,6 +645,7 @@ async def cut_clips(
     limit: int | None = None,
     blob_ids: Sequence[uuid.UUID] | None = None,
     form_whitelist: Iterable[str] | None = None,
+    concurrency: int = 1,
 ) -> CutReport:
     """Cut every ``candidate`` clip (up to ``limit``): the word, and the word
     in its context, stored content-addressed; the row goes to ``cut``.
@@ -591,7 +658,12 @@ async def cut_clips(
     ``candidate`` for the next pass, and only a permanent error (an undecodable
     or missing recording, a window with nothing audible in it) marks ``failed``.
     Rows are claimed ``FOR UPDATE SKIP LOCKED`` so the seed
-    script and the worker can overlap without cutting twice."""
+    script and the worker can overlap without cutting twice.
+
+    ``concurrency`` recordings are fetched and cut at once (the storage round
+    trips overlap the decoding); the rows are updated, and committed once per
+    recording, by this task alone -- one session is not for concurrent use.
+    Memory is bounded by ``concurrency`` recordings' bytes."""
     storage = guarded(storage or get_storage())
     report = CutReport()
     query = (
@@ -610,61 +682,49 @@ async def cut_clips(
     by_blob: dict[uuid.UUID, list[WordClip]] = defaultdict(list)
     for clip in clips:
         by_blob[clip.blob_id].append(clip)
+    if not by_blob:
+        await session.rollback()  # release the (empty) FOR UPDATE transaction
+        return report
+    storage_keys = {
+        blob.id: blob.storage_key
+        for blob in (
+            await session.exec(select(AudioBlob).where(AudioBlob.id.in_(list(by_blob))))
+        ).all()
+    }
 
-    def fail(clip: WordClip, exc: Exception) -> None:
-        clip.status, clip.error = ClipStatus.FAILED, f"{type(exc).__name__}: {exc}"[:500]
-        session.add(clip)
-        report.failed += 1
+    gate = asyncio.Semaphore(max(1, concurrency))
 
-    def defer(group: Sequence[WordClip], exc: Exception) -> None:
-        """Storage is having a bad time: not the clips' fault. Leave them
-        `candidate` (the error is noted, so an operator can see why they wait)
-        and give the rest of this recording up for this pass."""
-        logger.warning("clip cut deferred, storage fault: %s", exc)
-        for clip in group:
-            clip.error = f"deferred: {exc}"[:500]
-            session.add(clip)
-        report.deferred += len(group)
+    async def run(blob_id: uuid.UUID, group: list[WordClip]) -> _BlobOutcome:
+        async with gate:
+            return await _cut_blob(storage, storage_keys.get(blob_id), group)
 
-    for blob_id, group in by_blob.items():
-        blob = await session.get(AudioBlob, blob_id)
-        try:
-            if blob is None:
-                raise ValueError("recording is gone")
-            data = await storage.get(blob.storage_key)
-        except InfrastructureError as exc:
-            defer(group, exc)
-            await session.commit()
-            continue
-        except Exception as exc:  # noqa: BLE001 - recorded on each row below
-            for clip in group:
-                fail(clip, exc)
-            await session.commit()
-            continue
-        for position, clip in enumerate(group):
-            try:
-                word = await asyncio.to_thread(cut_window, data, clip.start_ms, clip.end_ms)
-                context = await asyncio.to_thread(
-                    cut_window, data, clip.context_start_ms, clip.context_end_ms
-                )
-                word_key, context_key = clip_storage_key(word), clip_storage_key(context)
-                await storage.put(word_key, word, CLIP_MIME)
-                await storage.put(context_key, context, CLIP_MIME)
-            except InfrastructureError as exc:
-                defer(group[position:], exc)
-                break
-            except Exception as exc:  # noqa: BLE001 - one bad clip must not stop the run
-                logger.warning("clip %s (%r) failed to cut: %s", clip.id, clip.form, exc)
-                fail(clip, exc)
-            else:
+    tasks = [asyncio.create_task(run(blob_id, group)) for blob_id, group in by_blob.items()]
+    try:
+        for finished in asyncio.as_completed(tasks):
+            outcome = await finished
+            for clip, word_key, context_key in outcome.cut:
                 clip.storage_key, clip.context_storage_key = word_key, context_key
                 clip.status, clip.error = ClipStatus.CUT, None
                 clip.cut_at = datetime.now(timezone.utc)
-                report.cut += 1
                 session.add(clip)
-        await session.commit()
-    if not by_blob:
-        await session.rollback()  # release the (empty) FOR UPDATE transaction
+                report.cut += 1
+            for clip, exc in outcome.failed:
+                clip.status, clip.error = ClipStatus.FAILED, f"{type(exc).__name__}: {exc}"[:500]
+                session.add(clip)
+                report.failed += 1
+            if outcome.deferred:
+                # Storage is having a bad time: not the clips' fault. Leave
+                # them `candidate` (the error is noted, so an operator can see
+                # why they wait) and give the rest of this recording up.
+                logger.warning("clip cut deferred, storage fault: %s", outcome.deferred_error)
+                for clip in outcome.deferred:
+                    clip.error = f"deferred: {outcome.deferred_error}"[:500]
+                    session.add(clip)
+                report.deferred += len(outcome.deferred)
+            await session.commit()
+    finally:
+        for task in tasks:
+            task.cancel()
     return report
 
 
@@ -681,6 +741,15 @@ class VerifyReport:
     verified: int = 0
     rejected: int = 0
     forms_done: int = 0
+    #: Forms this run will look at (set once the plan is made); progress only.
+    forms_total: int = 0
+
+
+class VerifyAborted(RuntimeError):
+    """Too many clips in a row could not be verified at all (not rejected --
+    unreadable or untranscribable): the model or the storage is broken, and
+    carrying on would walk the whole library past it, leaving every clip
+    ``cut`` and a log of warnings."""
 
 
 async def verify_clips(
@@ -691,6 +760,9 @@ async def verify_clips(
     limit_forms: int | None = None,
     form_whitelist: Iterable[str] | None = None,
     stop_at_first: bool = True,
+    concurrency: int = 1,
+    report: VerifyReport | None = None,
+    max_consecutive_failures: int = 10,
 ) -> VerifyReport:
     """Transcribe each form's ``cut`` word clips and mark them ``verified``
     (the normalised transcription contains the form, :func:`heard_contains`) or
@@ -700,9 +772,27 @@ async def verify_clips(
     covered. Longest clips are tried first.
 
     Forms that already have a verified, still-servable clip are skipped, so a re-run after new
-    materials only works on what is new."""
+    materials only works on what is new.
+
+    **One transcription stream, the rest overlapped.** ``transcribe`` (one
+    model, one GPU) always runs on a single dedicated thread; ``concurrency``
+    forms are worked on at once, so while one waits on a storage read or its
+    database write another is being transcribed. Each form is still tried
+    clip by clip, longest first, so ``stop_at_first`` means what it did.
+    Results are written one ``UPDATE`` per clip on its own session (``WHERE
+    status = 'cut'``, so a clip somebody else already resolved is not
+    overwritten); ``session`` is used for the opening reads only and is rolled
+    back after them rather than held open for hours.
+
+    ``report`` may be passed in to be updated live (progress).
+    :class:`VerifyAborted` after ``max_consecutive_failures`` clips in a row that
+    could not be read or transcribed."""
+    from sqlalchemy import update
+
+    from app.core.database import async_session_factory
+
     storage = storage or get_storage()
-    report = VerifyReport()
+    report = report if report is not None else VerifyReport()
     already = set(
         (
             await session.exec(
@@ -717,35 +807,75 @@ async def verify_clips(
         query = query.where(WordClip.form.in_(list(form_whitelist)))
     clips = (await session.exec(query.order_by(WordClip.form))).all()
 
-    by_form: dict[str, list[WordClip]] = defaultdict(list)
+    # Plain tuples, longest clip first: nothing ORM crosses into the tasks.
+    by_form: dict[str, list[tuple[uuid.UUID, str, int]]] = defaultdict(list)
     for clip in clips:
-        by_form[clip.form].append(clip)
+        assert clip.storage_key is not None
+        by_form[clip.form].append((clip.id, clip.storage_key, clip.end_ms - clip.start_ms))
+    await session.rollback()
 
-    for form, group in by_form.items():
-        if stop_at_first and form in already:
-            continue
-        if limit_forms is not None and report.forms_done >= limit_forms:
-            break
-        group.sort(key=lambda c: -(c.end_ms - c.start_ms))
-        for clip in group:
-            assert clip.storage_key is not None
-            try:
-                data = await storage.get(clip.storage_key)
-                heard = await asyncio.to_thread(transcribe, data)
-            except Exception as exc:  # noqa: BLE001 - leave the clip `cut`, try the next
-                logger.warning("verifying clip %s (%r) failed: %s", clip.id, form, exc)
-                continue
-            clip.heard = heard[:500]
-            if heard_contains(form, heard):
-                clip.status = ClipStatus.VERIFIED
-                clip.verified_at = datetime.now(timezone.utc)
-                report.verified += 1
-            else:
-                clip.status = ClipStatus.REJECTED
-                report.rejected += 1
-            session.add(clip)
-            await session.commit()
-            if clip.status == ClipStatus.VERIFIED and stop_at_first:
-                break
-        report.forms_done += 1
+    plan = [
+        (form, sorted(group, key=lambda c: -c[2]))
+        for form, group in by_form.items()
+        if not (stop_at_first and form in already)
+    ]
+    if limit_forms is not None:
+        plan = plan[:limit_forms]
+    report.forms_total = len(plan)
+    pending = list(reversed(plan))  # pop() from the end keeps the form order
+    failures = 0
+    aborted: VerifyAborted | None = None
+    executor = ThreadPoolExecutor(1, thread_name_prefix="whisper")
+
+    async def write(clip_id: uuid.UUID, heard: str, ok: bool) -> bool:
+        values: dict = {"heard": heard[:500], "status": ClipStatus.VERIFIED if ok else ClipStatus.REJECTED}
+        if ok:
+            values["verified_at"] = datetime.now(timezone.utc)
+        async with async_session_factory() as own:
+            result = await own.execute(
+                update(WordClip)
+                .where(WordClip.id == clip_id, WordClip.status == ClipStatus.CUT)
+                .values(**values)
+            )
+            await own.commit()
+        return bool(result.rowcount)
+
+    async def one_form() -> None:
+        nonlocal failures, aborted
+        loop = asyncio.get_running_loop()
+        while pending and aborted is None:
+            form, group = pending.pop()
+            for clip_id, storage_key, _length in group:
+                if aborted is not None:
+                    return
+                try:
+                    data = await storage.get(storage_key)
+                    heard = await loop.run_in_executor(executor, transcribe, data)
+                except Exception as exc:  # noqa: BLE001 - leave the clip `cut`, try the next
+                    logger.warning("verifying clip %s (%r) failed: %s", clip_id, form, exc)
+                    failures += 1
+                    if failures >= max_consecutive_failures:
+                        aborted = VerifyAborted(
+                            f"{failures} clips in a row could not be verified; last error: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+                        return
+                    continue
+                failures = 0
+                ok = heard_contains(form, heard)
+                if await write(clip_id, heard, ok):
+                    if ok:
+                        report.verified += 1
+                    else:
+                        report.rejected += 1
+                if ok and stop_at_first:
+                    break
+            report.forms_done += 1
+
+    try:
+        await asyncio.gather(*(one_form() for _ in range(max(1, concurrency))))
+    finally:
+        executor.shutdown(wait=False)
+    if aborted is not None:
+        raise aborted
     return report

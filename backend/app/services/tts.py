@@ -59,6 +59,7 @@ of, the order the queue happened to be drained in.
 """
 
 import asyncio
+import contextvars
 import hashlib
 import importlib.util
 import json
@@ -67,6 +68,7 @@ import re
 import threading
 import uuid
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -116,6 +118,24 @@ _EDGE_THRESHOLD_DBFS = -45.0
 #: accents.
 Synth = Callable[[str, str], np.ndarray]
 
+#: The thread every synthesis runs on during a concurrent drain (see
+#: :func:`drain`); ``None`` outside one, where ``asyncio.to_thread`` serves.
+_synth_executor: contextvars.ContextVar[ThreadPoolExecutor | None] = contextvars.ContextVar(
+    "tts_synth_executor", default=None
+)
+
+#: Most renders a drain works on at once. Each holds a database connection for
+#: its whole life and the engine's pool is 5 + 10 overflow.
+MAX_CONCURRENCY = 12
+
+
+async def _in_synth_thread(fn: Callable[..., Any], *args: Any) -> Any:
+    executor = _synth_executor.get()
+    if executor is None:
+        return await asyncio.to_thread(fn, *args)
+    return await asyncio.get_running_loop().run_in_executor(executor, fn, *args)
+
+
 _MASK_RUN = re.compile(r"(?:\s*_{3,}\s*)+")
 
 
@@ -125,6 +145,41 @@ def kokoro_available() -> bool:
     ``espeakng-loader`` wheel kills the interpreter), which is why this checks
     for the module without importing it."""
     return importlib.util.find_spec("kokoro") is not None
+
+
+#: What misaki is told to put where it cannot pronounce something, instead of
+#: Kokoro's own ``unk=''``. An empty string is invisible -- the word is simply
+#: not spoken and the file has a silent gap where it was (the one defect that
+#: raises no error, brief §2) -- and, inside a hyphenated compound, one unknown
+#: half is dropped from the merged token while the other half survives. A mark
+#: that cannot be a phoneme survives the merge, so :func:`unknown_words` can see it.
+UNKNOWN_MARK = "❓"
+
+
+class UnknownPronunciation(ValueError):
+    """The text has a word the voice cannot pronounce: misaki has no entry for
+    it and its espeak fallback produced nothing (or is not available on this
+    machine). The render FAILS with this reason rather than being spoken with
+    a silent gap where the word should be. The render's own fault -- it spends
+    an attempt -- unless every out-of-lexicon word fails on a machine whose
+    fallback is missing, which ``seed_tts doctor`` reports up front."""
+
+
+def unknown_words(tokens: Iterable[Any]) -> list[str]:
+    """The words among misaki's ``tokens`` (anything with ``.text`` and
+    ``.phonemes``) that would be spoken as nothing: a token with a letter or
+    digit in it whose phonemes are missing, empty, or carry the
+    :data:`UNKNOWN_MARK`. Punctuation has phonemes of its own or none and is
+    not a word."""
+    bad: list[str] = []
+    for token in tokens:
+        text = str(getattr(token, "text", "") or "")
+        if not any(ch.isalnum() for ch in text):
+            continue
+        phonemes = getattr(token, "phonemes", None)
+        if not phonemes or UNKNOWN_MARK in phonemes:
+            bad.append(text)
+    return bad
 
 
 class KokoroSynth:
@@ -138,25 +193,50 @@ class KokoroSynth:
     lexicon), the network is the same. The first pipeline loads the model and
     the next ones are handed it (``KPipeline(model=<KModel>)``), so serving
     both accents costs one model, not two. The voices themselves are small
-    (~0.5 MB each) and load when first asked for."""
+    (~0.5 MB each) and load when first asked for.
 
-    def __init__(self, device: str | None = None) -> None:
+    **A word with no pronunciation fails the render.** The G2P is run here, not
+    inside ``KPipeline.__call__``, so its tokens can be read before any audio is
+    made: a token with no phonemes (:func:`unknown_words`) raises
+    :class:`UnknownPronunciation`. Kokoro builds its G2P with ``unk=''`` and
+    swallows an espeak fallback that fails to load (a warning, then "OOD words
+    will be skipped"), so left alone the word is just missing from the audio.
+
+    Not safe to call from two threads at once (they share a model and torch
+    state), so ``__call__`` holds a lock; the seed's drain goes further and runs
+    every call on ONE dedicated thread (:func:`_in_synth_thread`), so nothing
+    ever waits on that lock."""
+
+    def __init__(
+        self,
+        device: str | None = None,
+        *,
+        pipeline_factory: Callable[[str, Any], Any] | None = None,
+    ) -> None:
         self._device = device
         self._pipelines: dict[str, Any] = {}
         self._lock = threading.Lock()
+        #: ``(lang_code, shared KModel or True) -> pipeline``; tests inject a fake.
+        self._factory = pipeline_factory or self._build_pipeline
+
+    def _build_pipeline(self, lang_code: str, model: Any) -> Any:
+        from kokoro import KPipeline  # lazy: the `tts` extra only
+
+        pipeline = KPipeline(
+            lang_code=lang_code, repo_id=MODEL, model=model, device=self._device
+        )
+        # See UNKNOWN_MARK. Set after construction: Kokoro hard-codes ``unk=''``.
+        if hasattr(pipeline, "g2p"):
+            pipeline.g2p.unk = UNKNOWN_MARK
+        return pipeline
 
     def _load(self, lang_code: str) -> Any:
         pipeline = self._pipelines.get(lang_code)
         if pipeline is None:
             try:
-                from kokoro import KPipeline  # lazy: the `tts` extra only
-
                 shared = next(iter(self._pipelines.values()), None)
-                pipeline = KPipeline(
-                    lang_code=lang_code,
-                    repo_id=MODEL,
-                    model=shared.model if shared is not None else True,
-                    device=self._device,
+                pipeline = self._factory(
+                    lang_code, shared.model if shared is not None else True
                 )
             except Exception as exc:  # noqa: BLE001 - classified, not swallowed
                 # The model not loading is the machine's fault, not the word's:
@@ -165,16 +245,43 @@ class KokoroSynth:
             self._pipelines[lang_code] = pipeline
         return pipeline
 
+    @staticmethod
+    def _load_voice(pipeline: Any, voice: str) -> None:
+        """The voice file (``voices/{voice}.pt``, fetched on first use) loaded
+        up front: a missing or undownloadable file is the machine's fault, not
+        the word's, and must not be read as the render's own failure when
+        ``generate_from_tokens`` would otherwise load it lazily."""
+        loader = getattr(pipeline, "load_voice", None)
+        if loader is None:
+            return
+        try:
+            loader(voice)
+        except Exception as exc:  # noqa: BLE001 - classified, not swallowed
+            raise InfrastructureError(f"Kokoro voice {voice!r} failed to load: {exc}") from exc
+
     def __call__(self, text: str, voice: str) -> np.ndarray:
         lang_code = accents.lang_code_for_voice(voice)
         # One caller at a time: the pipelines share a model and hold torch state.
         with self._lock:
             pipeline = self._load(lang_code)
+            self._load_voice(pipeline, voice)
             chunks: list[np.ndarray] = []
-            for result in pipeline(text, voice=voice, speed=1.0):
-                audio = result.audio
-                if audio is not None:
-                    chunks.append(audio.detach().cpu().numpy().reshape(-1))
+            for segment in re.split(r"\n+", text.strip()):
+                if not segment.strip():
+                    continue
+                _phonemes, tokens = pipeline.g2p(segment)
+                missing = unknown_words(tokens)
+                if missing:
+                    fallback = getattr(pipeline.g2p, "fallback", None)
+                    raise UnknownPronunciation(
+                        f"no pronunciation for {', '.join(repr(w) for w in missing)} in "
+                        f"{text!r} (misaki has no entry and its espeak fallback "
+                        f"{'gave nothing' if fallback is not None else 'is not available'})"
+                    )
+                for result in pipeline.generate_from_tokens(tokens, voice=voice, speed=1.0):
+                    audio = result.audio
+                    if audio is not None:
+                        chunks.append(audio.detach().cpu().numpy().reshape(-1))
         if not chunks:
             raise RuntimeError(f"Kokoro produced no audio for {text!r}")
         return np.concatenate(chunks).astype(np.float32, copy=False)
@@ -496,17 +603,21 @@ async def maintain_queue(session: AsyncSession) -> tuple[int, int]:
     return recovered, requeued
 
 
-async def claim_render(
+async def claim_renders(
     session: AsyncSession,
     *,
     kinds: Iterable[str] | None = None,
     keys: Iterable[str] | None = None,
-) -> AudioRender | None:
-    """Atomically claim one ``pending`` render, or ``None`` when the queue is
-    empty (or every pending row is locked by another worker): ``FOR UPDATE
-    SKIP LOCKED``, exactly :func:`app.worker.claim_one`'s shape. A row still
-    in its failure back-off (``next_attempt_at`` in the future) is not
-    claimable.
+    limit: int = 1,
+) -> list[AudioRender]:
+    """Atomically claim up to ``limit`` ``pending`` renders (empty list when the
+    queue is empty, or every pending row is locked by another worker):
+    ``FOR UPDATE SKIP LOCKED``, exactly :func:`app.worker.claim_one`'s shape,
+    and the status flip is committed before anyone works on them -- so a second
+    claimer (the dev worker draining the same queue while the seed runs
+    elsewhere) skips what is taken whether or not the first is still alive. A
+    row still in its failure back-off (``next_attempt_at`` in the future) is
+    not claimable.
 
     Words first, then definitions, then items, oldest first within a kind: a
     request is most often waiting on a word, and an item would only have to
@@ -526,19 +637,50 @@ async def claim_render(
         stmt = stmt.where(AudioRender.kind.in_(list(kinds)))
     if keys is not None:
         stmt = stmt.where(AudioRender.key.in_(list(keys)))
-    row = (
-        await session.exec(
-            stmt.order_by(rank, AudioRender.created_at).limit(1).with_for_update(skip_locked=True)
-        )
-    ).first()
-    if row is None:
-        return None
-    row.status = RenderStatus.PROCESSING
-    row.updated_at = datetime.now(timezone.utc)  # the heartbeat stale recovery reads
-    session.add(row)
+    rows = list(
+        (
+            await session.exec(
+                stmt.order_by(rank, AudioRender.created_at)
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+            )
+        ).all()
+    )
+    if not rows:
+        await session.rollback()  # release the (empty) FOR UPDATE transaction
+        return []
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        row.status = RenderStatus.PROCESSING
+        row.updated_at = now  # the heartbeat stale recovery reads
+        session.add(row)
     await session.commit()
-    await session.refresh(row)
-    return row
+    return rows
+
+
+async def claim_render(
+    session: AsyncSession,
+    *,
+    kinds: Iterable[str] | None = None,
+    keys: Iterable[str] | None = None,
+) -> AudioRender | None:
+    """:func:`claim_renders` for one row (the worker's loop)."""
+    rows = await claim_renders(session, kinds=kinds, keys=keys, limit=1)
+    if not rows:
+        return None
+    await session.refresh(rows[0])
+    return rows[0]
+
+
+async def queue_depth(kinds: Iterable[str] | None = None) -> int:
+    """Renders still to be made: ``pending`` or ``processing`` (any worker's)."""
+    stmt = select(func.count()).select_from(AudioRender).where(
+        AudioRender.status.in_((RenderStatus.PENDING, RenderStatus.PROCESSING))
+    )
+    if kinds is not None:
+        stmt = stmt.where(AudioRender.kind.in_(list(kinds)))
+    async with async_session_factory() as session:
+        return int((await session.exec(stmt)).one())
 
 
 async def _store(
@@ -566,7 +708,7 @@ async def _tts_part(
             raise  # storage is down: remaking would fail the same way, and say so
         except Exception:  # noqa: BLE001 - the file is gone; fall through and remake it
             logger.warning("render %s is ready but unreadable; remaking", spec.key)
-    samples = await asyncio.to_thread(_synthesise, spec, synth)
+    samples = await _in_synth_thread(_synthesise, spec, synth)
     storage_key, duration = await _store(storage, spec.kind, spec.key, samples)
     stmt = pg_insert(AudioRender).values(
         id=uuid.uuid4(),
@@ -670,7 +812,7 @@ async def process_render(
         if kind == RenderKind.ITEM:
             samples, offset = await build_item(session, row, synth, storage)
         else:
-            samples = await asyncio.to_thread(
+            samples = await _in_synth_thread(
                 _synthesise,
                 RenderSpec(kind, row.input, key, row.voice, row.model),
                 synth,
@@ -728,24 +870,102 @@ async def drain(
     limit: int | None = None,
     storage: MediaStorage | None = None,
     on_progress: Callable[[int], None] | None = None,
+    concurrency: int = 1,
 ) -> int:
     """Claim and process renders until the queue is empty (or ``limit``). The
     seed script's engine -- the 3060 has no worker -- using exactly the
-    worker's claim and process. Returns how many it handled (ready or not)."""
+    worker's claim and process. Returns how many it handled (ready or not).
+
+    **One synthesis stream, everything else overlapped.** The GPU is the scarce
+    thing and Kokoro is not safe to call concurrently, so with ``concurrency``
+    above 1 every synthesis runs on ONE dedicated thread
+    (:func:`_in_synth_thread`), while up to ``concurrency`` renders are in
+    flight at once: while one waits on encoding, a storage write or its commit
+    (round trips to a database and a disk that may be across a tunnel), another
+    is on the GPU. Memory is bounded: a claim is at most ``concurrency`` rows,
+    the hand-off queue holds ``concurrency``, and only in-flight renders hold
+    samples.
+
+    **Safe beside another drainer** (the dev worker on the same queue): a claim
+    is ``SKIP LOCKED`` and committed as ``processing`` before work starts, so no
+    row is made twice; claimed rows' ``updated_at`` is at most a few seconds old
+    while they wait, far inside ``tts_stale_after_s``, so the other side's
+    stale recovery never takes them. If this drain is cancelled (Ctrl+C) the
+    rows it claimed and did not resolve go straight back to ``pending``."""
     storage = storage or get_storage()
     kinds = list(kinds) if kinds is not None else None
     keys = list(keys) if keys is not None else None
-    done = 0
-    while limit is None or done < limit:
+    if concurrency > MAX_CONCURRENCY:
+        logger.warning("concurrency %d capped at %d (database pool)", concurrency, MAX_CONCURRENCY)
+    concurrency = max(1, min(concurrency, MAX_CONCURRENCY))
+    queue: asyncio.Queue[AudioRender | None] = asyncio.Queue(maxsize=concurrency)
+    held: dict[uuid.UUID, AudioRender] = {}  # claimed and not yet resolved
+    handled = 0
+
+    async def produce() -> None:
+        claimed = 0
+        try:
+            while limit is None or claimed < limit:
+                want = concurrency if limit is None else min(concurrency, limit - claimed)
+                async with async_session_factory() as session:
+                    rows = await claim_renders(session, kinds=kinds, keys=keys, limit=want)
+                if not rows:
+                    break
+                claimed += len(rows)
+                for row in rows:
+                    held[row.id] = row
+                for row in rows:
+                    await queue.put(row)
+        finally:
+            for _ in range(concurrency):
+                await queue.put(None)
+
+    async def work() -> None:
+        nonlocal handled
+        while (row := await queue.get()) is not None:
+            try:
+                async with async_session_factory() as session:
+                    fresh = await session.get(AudioRender, row.id)
+                    if fresh is not None:
+                        await process_render(session, fresh, synth, storage)
+            except Exception:  # noqa: BLE001 - one row must not stop the drain
+                # process_render records its own failures; this is the database
+                # going away mid-row. The row stays `processing` and goes back
+                # to `pending` below.
+                logger.exception("render %s could not be resolved", row.key[:12])
+            else:
+                held.pop(row.id, None)
+            handled += 1
+            if on_progress is not None:
+                on_progress(handled)
+
+    executor = ThreadPoolExecutor(1, thread_name_prefix="tts-synth") if concurrency > 1 else None
+    token = _synth_executor.set(executor)
+    try:
+        async with asyncio.TaskGroup() as group:
+            group.create_task(produce())
+            for _ in range(concurrency):
+                group.create_task(work())
+    finally:
+        _synth_executor.reset(token)
+        if executor is not None:
+            executor.shutdown(wait=False)
+        if held:
+            await _release(list(held))
+    return handled
+
+
+async def _release(ids: list[uuid.UUID]) -> None:
+    """Put claimed-but-unresolved renders back to ``pending`` (no attempt
+    spent): the drain was stopped or the database blinked under it. Best
+    effort -- stale recovery is the backstop."""
+    try:
         async with async_session_factory() as session:
-            row = await claim_render(session, kinds=kinds, keys=keys)
-        if row is None:
-            break
-        async with async_session_factory() as session:
-            fresh = await session.get(AudioRender, row.id)
-            assert fresh is not None
-            await process_render(session, fresh, synth, storage)
-        done += 1
-        if on_progress is not None:
-            on_progress(done)
-    return done
+            await session.execute(
+                update(AudioRender)
+                .where(AudioRender.id.in_(ids), AudioRender.status == RenderStatus.PROCESSING)
+                .values(status=RenderStatus.PENDING, next_attempt_at=None)
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("could not release %d claimed render(s)", len(ids))

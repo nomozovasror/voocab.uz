@@ -22,6 +22,8 @@ free; local file IO is offloaded the same way for consistency.
 """
 
 import hashlib
+import os
+import uuid
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol
@@ -120,11 +122,27 @@ def _s3_client() -> Any:
 
 class LocalStorage:
     """Dev backend: files under ``settings.media_root``, at the key the
-    caller derived. Served by the app's ``/media`` static mount."""
+    caller derived. Served by the app's ``/media`` static mount.
+
+    Also the backend of the Windows seed run, where ``media_root`` is an
+    absolute drive path (``D:\\voocab-media``): keys always use ``/``, which
+    ``pathlib`` joins correctly on Windows too.
+
+    ``put`` is atomic (temp file in the same directory, then ``os.replace``):
+    ``exists`` is the idempotency check, so a half-written file left by a killed
+    process would otherwise be "already stored" for ever, and a reader on the
+    other side of a share would see a truncated file."""
 
     def _root(self) -> Path:
         root = Path(settings.media_root)
-        root.mkdir(parents=True, exist_ok=True)
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except FileNotFoundError as exc:
+            # A drive or share that is not there (unmapped, asleep) is the
+            # world's fault: surface it as a plain OSError, which the queues
+            # treat as retryable -- FileNotFoundError means "this key points at
+            # nothing" and would fail the row for good.
+            raise OSError(f"media root {root} is not available: {exc}") from exc
         return root
 
     async def exists(self, key: str) -> bool:
@@ -139,7 +157,19 @@ class LocalStorage:
         def _write() -> None:
             path = self._root() / key
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
+            tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+            try:
+                tmp.write_bytes(data)
+                try:
+                    os.replace(tmp, path)
+                except OSError:
+                    # Windows refuses to replace a file another process has
+                    # open; if the key is there now somebody else stored the
+                    # same bytes, which is all `put` promises.
+                    if not path.exists():
+                        raise
+            finally:
+                tmp.unlink(missing_ok=True)
 
         await run_in_threadpool(_write)
 

@@ -1278,6 +1278,41 @@ below are the ones a later change can silently break.
   Maintenance never raises out of `asyncio.gather`. The seed script drains
   the same queue in-process (`tts.drain`) -- the 3060 has no worker -- so
   seeded and worker-made audio are the same rows under the same keys.
+- **`drain` is one synthesis stream with everything else overlapped.** Up to
+  `--concurrency` (default 8, `tts.MAX_CONCURRENCY` 12 = the DB pool) renders are
+  in flight, but every synthesis runs on ONE dedicated thread
+  (`_in_synth_thread`, a ContextVar the worker never sets) because Kokoro is not
+  safe concurrently; encoding, `storage.put` and the commit overlap it, so the
+  GPU never waits on an SMB/tunnel round trip. Claims are batches
+  (`claim_renders`, `SKIP LOCKED`, committed as `processing` before any work),
+  so a second drainer (the dev worker) never gets the same row; a claimed row
+  waits seconds, far inside `tts_stale_after_s`. Cancelling releases unresolved
+  claims to `pending` (`_release`, no attempt spent). Do not add a shared
+  `AsyncSession` across the tasks, and do not raise the cap without the pool.
+- **A word misaki cannot pronounce fails the render.** `KokoroSynth` runs
+  `pipeline.g2p` itself and checks the tokens (`unknown_words`) before
+  `generate_from_tokens`; Kokoro's own `unk=''` plus its swallowed espeak-load
+  failure would leave a silent gap. It sets `g2p.unk = UNKNOWN_MARK` so an
+  unknown half of a hyphenated compound survives the merge and is seen. This is
+  the render's own failure (`UnknownPronunciation`, spends an attempt); a
+  voice file that will not load is `InfrastructureError` (preloaded in
+  `_load_voice`). `seed_tts doctor` proves espeak works on the machine first.
+- **`LocalStorage.put` is atomic** (temp + `os.replace`): `exists` is the
+  idempotency check, so a half-written file after a kill would be "stored" for
+  ever. An unavailable media root (unmapped drive) is a plain `OSError`
+  (retryable), never `FileNotFoundError` (which fails the row for good).
+- **`verify_clips` has one whisper stream too** (single thread), `concurrency`
+  forms overlapping their storage reads and writes; each clip is one
+  `UPDATE ... WHERE status='cut'` on its own session (nothing ORM crosses
+  tasks), and `VerifyAborted` stops the run after 10 clips in a row that could
+  not be read/transcribed (a broken CUDA install must not walk the library).
+  `cut_clips(concurrency=N)` fetches/cuts N recordings at once but touches the
+  session from one task only. Defaults (1) keep the worker unchanged.
+- **Files are copied, rows are not.** When the seed runs on another machine its
+  rows say `ready` as soon as the file is written THERE; until the files are
+  copied to the serving machine the site gets no audio for them (treated as
+  none). `seed_tts check-files --what renders --requeue` finds and requeues any
+  that never arrived. See `scripts/SEED_TTS_WINDOWS.md`.
 - **Exposure and speak-miss tables exist and are written by the practice
   layer, not here** (`on_the_go_exposures`, `speak_misses`). An exposure is
   never an FSRS review: hearing a word is not recalling it. Both keep their
