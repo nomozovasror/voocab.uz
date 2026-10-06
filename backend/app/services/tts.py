@@ -182,6 +182,11 @@ def unknown_words(tokens: Iterable[Any]) -> list[str]:
     return bad
 
 
+#: Curly quotes and apostrophes, as the lexicon and its definitions sometimes
+#: carry them, mapped to the ASCII ones misaki's lexicon is keyed by.
+_PLAIN_QUOTES = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"'})
+
+
 class KokoroSynth:
     """The production :data:`Synth`: one ``KPipeline`` per language code (a
     British and an American front end), voice picked per call, each built on
@@ -261,6 +266,12 @@ class KokoroSynth:
 
     def __call__(self, text: str, voice: str) -> np.ndarray:
         lang_code = accents.lang_code_for_voice(voice)
+        # Typographic quotes become plain ones HERE, at synthesis, not in the
+        # render input: misaki tokenises `shouldn’t` into `should` + `n’t`
+        # and has no entry for the curly half, so the word failed outright.
+        # Normalising the input instead would change the key of every render
+        # that already holds one.
+        text = text.translate(_PLAIN_QUOTES)
         # One caller at a time: the pipelines share a model and hold torch state.
         with self._lock:
             pipeline = self._load(lang_code)

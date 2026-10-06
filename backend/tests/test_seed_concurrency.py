@@ -254,6 +254,25 @@ def test_a_word_misaki_cannot_pronounce_fails_the_render_instead_of_a_silent_gap
     assert pipeline.generated == 0  # no GPU time spent on it
 
 
+class _RecordingG2P(_CallableG2P):
+    def __init__(self, base: SimpleNamespace, tokens: list, seen: list[str]) -> None:
+        super().__init__(base, tokens)
+        self._seen = seen
+
+    def __call__(self, text: str):
+        self._seen.append(text)
+        return "", self._tokens
+
+
+def test_curly_quotes_reach_misaki_as_plain_ones() -> None:
+    seen: list[str] = []
+    pipeline = FakePipeline([_tok("shouldn't", "ʃˈʊdᵊnt")])
+    pipeline.g2p = _RecordingG2P(pipeline.g2p, pipeline._tokens, seen)
+    synth = tts.KokoroSynth(pipeline_factory=lambda lang, model: pipeline)
+    synth("shouldn’t “quote”", "bf_emma")
+    assert seen == ["shouldn't \"quote\""]
+
+
 def test_the_reason_says_when_the_espeak_fallback_is_missing() -> None:
     synth = _synth_with(FakePipeline([_tok("zork", None)], fallback=None))
     with pytest.raises(tts.UnknownPronunciation, match="not available"):
