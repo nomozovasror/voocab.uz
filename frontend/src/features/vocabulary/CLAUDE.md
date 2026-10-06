@@ -1037,7 +1037,10 @@ are the ones that are easy to undo by accident.
   two would write a wrong rejection into the schedule.
 - **The microphone opens only on a press** (the button, or Space when focus is
   not on a control — on a control Space already does its job). `speech.ts`
-  runs ONE recognition: `en-GB`, `maxAlternatives = 5`, `interimResults` off,
+  runs ONE recognition: `lang` follows the learner's accent setting
+  (`en-GB` British, `en-US` American -- `RECOGNITION_LANG`; the practice page
+  already holds `settings` and hands `accent` to `SpeakCard`, the server's value
+  being authoritative; British until it has loaded), `maxAlternatives = 5`, `interimResults` off,
   never continuous, never restarted by code, no grammar list (dead in every
   engine). The open state is drawn AND said ("Listening… say the word",
   `role="status"`).
@@ -1054,6 +1057,16 @@ are the ones that are easy to undo by accident.
 - **Settings still list `Speak` on browsers that cannot do it.** Settings are
   per ACCOUNT; a phone that cannot speak must not change what a laptop is
   offered. The card's fallback is the answer.
+
+### The accent (Settings -> Accent)
+
+`VocabularySettings.accent` (`british` | `american`, default British) picks the
+synthetic voice the server renders words and definitions in; a live recording
+keeps its speaker's own accent. The settings page writes it ALONE (absent from
+a `PUT` = unchanged, like `pronunciation`) with the same pill pattern as the
+exercise type. The client never picks a voice or a URL by accent: audio URLs
+arrive already resolved for the learner. Its one other use is the speak card's
+recognition language.
 
 ### The reveal
 

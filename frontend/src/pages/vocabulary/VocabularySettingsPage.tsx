@@ -7,9 +7,13 @@ import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
 import { vocabularyApi } from "@/features/vocabulary/api";
 import { AUTOMATIC_LABEL, EXERCISE_LABEL } from "@/features/vocabulary/status";
-import type { ExerciseType, VocabularySettings } from "@/features/vocabulary/types";
+import type { Accent, ExerciseType, VocabularySettings } from "@/features/vocabulary/types";
 
 const MINUTES_OPTIONS: VocabularySettings["daily_minutes"][] = [5, 10, 15, 20];
+const ACCENT_OPTIONS: { value: Accent; label: string }[] = [
+  { value: "british", label: "British" },
+  { value: "american", label: "American" },
+];
 const EXERCISE_TYPES: ExerciseType[] = [
   "recognise",
   "recall",
@@ -29,9 +33,9 @@ const EXERCISE_TYPES: ExerciseType[] = [
  * defaults to, say), so the source of truth after every write is what the
  * server sends back, not what was clicked.
  *
- * Pronunciation (stage 3) is the one control that is not part of the
- * triple: it is sent alone, and an absent `pronunciation` on a `PUT` means
- * "unchanged" on the server.
+ * Pronunciation and Accent (stage 3) are the controls that are not part of
+ * the triple: each is sent alone, and an absent `pronunciation` / `accent`
+ * on a `PUT` means "unchanged" on the server.
  *
  * `Listen` and `Speak` are in the manual list for every learner, on every
  * device. Settings follow the ACCOUNT, not this browser, so a phone that
@@ -185,6 +189,31 @@ export default function VocabularySettingsPage() {
             </span>
           </span>
         </label>
+      </section>
+
+      <section className="mt-4 rounded-xl border border-border px-4 py-3">
+        <p className="text-sm text-foreground">Accent</p>
+        <p className="text-xs text-muted-foreground">
+          The voice that reads words and definitions aloud, and the accent the
+          speaking exercise listens for. Real recordings keep their own
+          speaker&apos;s accent.
+        </p>
+        <div
+          role="radiogroup"
+          aria-label="Accent"
+          className="mt-3 flex flex-wrap gap-1.5"
+        >
+          {ACCENT_OPTIONS.map(({ value, label }) => (
+            <ExercisePill
+              key={value}
+              on={data.accent === value}
+              disabled={update.isPending}
+              onClick={() => patch({ accent: value })}
+            >
+              {label}
+            </ExercisePill>
+          ))}
+        </div>
       </section>
 
       <section className="mt-4 rounded-xl border border-border px-4 py-3">

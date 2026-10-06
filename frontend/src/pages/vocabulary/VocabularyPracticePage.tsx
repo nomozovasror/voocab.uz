@@ -548,6 +548,7 @@ export default function VocabularyPracticePage() {
           }}
           onUnsupported={() => setSpeakOff(true)}
           onMissContinue={continueAfterMiss}
+          accent={settings?.accent}
         />
       );
     }

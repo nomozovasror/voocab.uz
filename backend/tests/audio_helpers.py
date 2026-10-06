@@ -40,14 +40,16 @@ def tone(ms: int, freq: float = 440.0, amp: float = 0.1) -> np.ndarray:
 class FakeSynth:
     """A Kokoro stand-in: a tone 25 ms long per character of its input, with a
     quiet lead-in and tail (so trimming has something to trim). Records every
-    input it was asked to speak."""
+    input it was asked to speak, and the voice it was asked to speak it in."""
 
     def __init__(self, fail_on: str | None = None) -> None:
         self.calls: list[str] = []
+        self.voices: list[str] = []
         self.fail_on = fail_on
 
-    def __call__(self, text: str) -> np.ndarray:
+    def __call__(self, text: str, voice: str = "bf_emma") -> np.ndarray:
         self.calls.append(text)
+        self.voices.append(voice)
         if self.fail_on is not None and self.fail_on in text:
             raise RuntimeError("synthesis failed")
         body = tone(max(100, 25 * len(text)), amp=0.05)
@@ -258,6 +260,7 @@ async def make_lexeme(
     pos: str | None = None,
     definition: str = "a thing that exists",
     pronunciation: str | None = None,
+    pronunciation_us: str | None = None,
 ) -> tuple[Lexeme, LexemeSense]:
     """A lexeme and one sense. ``pos`` defaults to a unique tag so a real
     lemma (``record``) never collides with another test's row."""
@@ -270,6 +273,7 @@ async def make_lexeme(
             definition_en=definition,
             meaning_uz="x",
             pronunciation=pronunciation,
+            pronunciation_us=pronunciation_us,
         )
         session.add(sense)
         await session.commit()

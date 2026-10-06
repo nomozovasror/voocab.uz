@@ -17,6 +17,9 @@ from tests.audio_helpers import Created, make_lexeme, unique_word
 
 #: misaki's British phoneme alphabet (`misaki/en.py` GB_VOCAB) plus the space.
 GB_VOCAB = set("AIQWYabdfhijklmnpstuvwzðŋɑɒɔəɛɜɡɪɹʃʊʌʒʤʧˈˌːθᵊ")
+#: ... and its American one (`US_VOCAB`): `O` for /oʊ/ in place of `Q`, no `ː`,
+#: plus `æ ɾ ʔ ᵻ`.
+US_VOCAB = set("AIOWYbdfhijklmnpstuvwzæðŋɑɔəɛɜɡɪɹɾʃʊʌʒʤʧˈˌθᵊᵻʔ")
 
 
 @pytest.fixture
@@ -39,9 +42,50 @@ def test_every_phoneme_string_uses_misakis_alphabet_not_ipa() -> None:
     raw = json.loads(pron.MISAKI_PATH.read_text(encoding="utf-8"))
     extras = json.loads(pron.EXTRAS_PATH.read_text(encoding="utf-8"))
     strings = [v for entry in raw.values() for v in entry.values() if v]
-    strings += [item["ps"] for items in extras.values() for item in items]
+    strings += [item["ps"] for items in extras.values() for item in items if item.get("ps")]
     bad = {s: sorted(set(s) - GB_VOCAB) for s in strings if set(s) - GB_VOCAB}
     assert not bad, f"not misaki phonemes: {bad}"
+
+
+def test_every_american_phoneme_string_uses_misakis_american_alphabet() -> None:
+    raw = json.loads(pron.MISAKI_US_PATH.read_text(encoding="utf-8"))
+    extras = json.loads(pron.EXTRAS_PATH.read_text(encoding="utf-8"))
+    strings = [v for entry in raw.values() for v in entry.values() if v]
+    # The American extras are what the American voice is handed: the explicit
+    # `us` where an item has one, else the shared `ps` -- both must be in the
+    # AMERICAN alphabet (a British `Q` or `ː` would be mispronounced silently).
+    strings += [
+        item["us"] if "us" in item else item["ps"]
+        for items in extras.values() for item in items
+        if item.get("us", item.get("ps"))
+    ]
+    bad = {s: sorted(set(s) - US_VOCAB) for s in strings if set(s) - US_VOCAB}
+    assert not bad, f"not misaki American phonemes: {bad}"
+
+
+def test_the_american_table_is_misakis_790_pos_keyed_entries() -> None:
+    raw = json.loads(pron.MISAKI_US_PATH.read_text(encoding="utf-8"))
+    assert len(raw) == 790
+    assert all(isinstance(v, dict) and "DEFAULT" in v for v in raw.values())
+
+
+def test_the_two_accents_have_their_own_candidates() -> None:
+    assert {c.ps for c in pron.candidates("lead", "american")} == {"lˈid", "lˈɛd"}
+    assert {c.ps for c in pron.candidates("close", "american")} == {"klˈOs", "klˈOz"}
+    assert {c.ps for c in pron.candidates("close")} == {"klˈQs", "klˈQz"}  # default British
+    # the notes travel with the American strings too (the model chooses by them)
+    assert all(c.note for c in pron.candidates("bow", "american"))
+    # slough has a third, American-only reading
+    assert len(pron.candidates("slough", "american")) == 3
+    assert len(pron.candidates("slough", "british")) == 2
+
+
+def test_the_american_fallback_and_decided_pronunciation_are_the_american_ones() -> None:
+    assert pron.fallback_pronunciation("record", "v", "american") == "ɹəkˈɔɹd"
+    assert pron.fallback_pronunciation("record", "n", "american") == "ɹˈɛkəɹd"
+    assert pron.sense_pronunciation("record", "v", "ɹˈɛkəɹd", "american") == "ɹˈɛkəɹd"
+    assert pron.sense_pronunciation("record", "v", None, "american") == "ɹəkˈɔɹd"
+    assert pron.sense_pronunciation("table", "n", "x", "american") is None
 
 
 def test_the_words_the_brief_names_are_heteronyms_with_distinct_candidates() -> None:

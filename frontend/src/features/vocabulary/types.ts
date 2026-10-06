@@ -680,6 +680,10 @@ export interface PracticeLeechContext {
 /** `direction` dropped `"active"` on its own here — stage 1 offered it as a
  *  setting with nothing behind it yet. The spec's §2 makes `both` the only
  *  way to turn active practice on; there is no "active only". */
+/** The accent of the synthetic voice (and of the speak card's recogniser).
+ *  A live recording keeps its speaker's own accent whatever this says. */
+export type Accent = "british" | "american";
+
 export interface VocabularySettings {
   daily_minutes: 5 | 10 | 15 | 20;
   direction: "passive" | "both";
@@ -697,6 +701,10 @@ export interface VocabularySettings {
    *  The speaker button is there either way. Written from the settings page
    *  since stage 3; absent from a `PUT` body means "unchanged". */
   pronunciation: boolean;
+  /** Which TTS voice speaks words and definitions that are not a recording,
+   *  and which language the `speak` card listens in (`en-GB` / `en-US`).
+   *  Default `british`; absent from a `PUT` body means "unchanged". */
+  accent: Accent;
   /** How many words currently have an active card, regardless of whether
    *  `direction` is `both` right now. Only meaningful for the warning under
    *  the toggle: turning it off doesn't reset any of these — it pauses them

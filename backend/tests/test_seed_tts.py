@@ -53,11 +53,11 @@ async def test_saved_only_queues_just_the_words_somebody_saved(created: Created)
     keys = [tts.word_spec(w, None).key for w in (kept, other)]
     created.render_keys.extend(keys)
     async with async_session_factory() as session:
-        await seed_tts.enqueue_words(session, saved_only=True, limit=None, include_clipped=False)
+        await seed_tts.enqueue_words(session, saved_only=True, limit=None, accents_=["british"])
     assert await _row(keys[0]) is not None and await _row(keys[1]) is None
 
 
-async def test_a_word_with_a_verified_clip_gets_no_tts_unless_asked(created: Created) -> None:
+async def test_a_word_with_a_verified_clip_gets_tts_too_unless_skipped(created: Created) -> None:
     clipped, bare = unique_word(), unique_word()
     for lemma in (clipped, bare):
         lexeme, sense = await make_lexeme(created, lemma)
@@ -67,11 +67,40 @@ async def test_a_word_with_a_verified_clip_gets_no_tts_unless_asked(created: Cre
     keys = {w: tts.word_spec(w, None).key for w in (clipped, bare)}
     created.render_keys.extend(keys.values())
     async with async_session_factory() as session:
-        await seed_tts.enqueue_words(session, saved_only=True, limit=None, include_clipped=False)
-    assert await _row(keys[clipped]) is None and await _row(keys[bare]) is not None
+        await seed_tts.enqueue_words(
+            session, saved_only=True, limit=None, accents_=["british"], skip_clipped=True
+        )
+    assert await _row(keys[clipped]) is None and await _row(keys[bare]) is not None  # old rule
     async with async_session_factory() as session:
-        await seed_tts.enqueue_words(session, saved_only=True, limit=None, include_clipped=True)
-    assert await _row(keys[clipped]) is not None  # --all
+        await seed_tts.enqueue_words(session, saved_only=True, limit=None, accents_=["british"])
+    assert await _row(keys[clipped]) is not None  # decision 26: every word gets TTS
+
+
+async def test_accent_both_queues_each_voice_and_one_accent_only_its_own(created: Created) -> None:
+    lemma = unique_word()
+    lexeme, sense = await make_lexeme(created, lemma, definition=f"to {lemma} something")
+    await _saved(created, lexeme, sense)
+    gb_word, us_word = tts.word_spec(lemma, None, "british"), tts.word_spec(lemma, None, "american")
+    gb_def = tts.definition_spec(sense.definition_en, lemma, "british")
+    us_def = tts.definition_spec(sense.definition_en, lemma, "american")
+    keys = [gb_word.key, us_word.key, gb_def.key, us_def.key]
+    assert len(set(keys)) == 4 and us_word.voice == "af_heart" and gb_word.voice == "bf_emma"
+    created.render_keys.extend(keys)
+    async with async_session_factory() as session:
+        await seed_tts.enqueue_words(session, saved_only=True, limit=None, accents_=["american"])
+        await seed_tts.enqueue_definitions(session, saved_only=True, limit=None, accents_=["american"])
+    assert [bool(await _row(k)) for k in keys] == [False, True, False, True]
+    both = seed_tts.selected_accents(seed_tts._parse_args(["words"]))
+    assert both == ["british", "american"]  # the default is both
+    assert seed_tts.selected_accents(seed_tts._parse_args(["words", "--accent", "american"])) == ["american"]
+    async with async_session_factory() as session:
+        await seed_tts.enqueue_words(session, saved_only=True, limit=None, accents_=both)
+        await seed_tts.enqueue_definitions(session, saved_only=True, limit=None, accents_=both)
+    assert all([bool(await _row(k)) for k in keys])
+    # the row carries its own voice, and the drain speaks each in it
+    synth = FakeSynth()
+    await tts.drain(synth, keys=keys, storage=FakeStorage())
+    assert sorted(set(synth.voices)) == ["af_heart", "bf_emma"]
 
 
 async def test_heteronym_words_are_queued_with_their_pronunciation(created: Created) -> None:
@@ -80,7 +109,7 @@ async def test_heteronym_words_are_queued_with_their_pronunciation(created: Crea
     key = tts.word_spec("record", "ɹɪkˈɔːd").key
     created.render_keys.append(key)
     async with async_session_factory() as session:
-        await seed_tts.enqueue_words(session, saved_only=True, limit=None, include_clipped=False)
+        await seed_tts.enqueue_words(session, saved_only=True, limit=None, accents_=["british"])
     row = await _row(key)
     assert row is not None and row.input == "[record](/ɹɪkˈɔːd/)"
 
@@ -96,8 +125,8 @@ async def test_the_seed_drains_the_queue_in_process_and_writes_the_workers_rows(
     created.render_keys.extend([word.key, definition.key])
     storage, synth = FakeStorage(), FakeSynth()
     async with async_session_factory() as session:
-        await seed_tts.enqueue_words(session, saved_only=True, limit=None, include_clipped=False)
-        await seed_tts.enqueue_definitions(session, saved_only=True, limit=None)
+        await seed_tts.enqueue_words(session, saved_only=True, limit=None, accents_=["british"])
+        await seed_tts.enqueue_definitions(session, saved_only=True, limit=None, accents_=["british"])
     done = await tts.drain(synth, keys=[word.key, definition.key], storage=storage)
     assert done == 2
     for spec in (word, definition):
@@ -107,7 +136,7 @@ async def test_the_seed_drains_the_queue_in_process_and_writes_the_workers_rows(
         assert row.storage_key in storage.objects
     # Run again: nothing new to make.
     async with async_session_factory() as session:
-        await seed_tts.enqueue_words(session, saved_only=True, limit=None, include_clipped=False)
+        await seed_tts.enqueue_words(session, saved_only=True, limit=None, accents_=["british"])
     assert await tts.drain(synth, keys=[word.key, definition.key], storage=storage) == 0
 
 
@@ -120,7 +149,7 @@ async def test_items_for_words_in_rotation_are_queued_with_their_parts(created: 
     item = tts.item_spec(definition, word_spec_=word, clip_storage_key=None)
     created.render_keys.extend([definition.key, word.key, item.key])
     async with async_session_factory() as session:
-        await seed_tts.enqueue_items(session, limit=1)  # newest first: the one just saved
+        await seed_tts.enqueue_items(session, limit=1, accents_=["british"])  # newest first: the one just saved
     assert all([await _row(k) for k in (definition.key, word.key, item.key)])
     storage = FakeStorage()
     assert await tts.drain(FakeSynth(), keys=[definition.key, word.key, item.key], storage=storage) == 3

@@ -19,9 +19,11 @@
  *
  * Deliberately never `continuous`, never `interimResults`, never restarted by
  * code: the microphone opens when the learner presses it and closes when the
- * recogniser has one answer. `lang` is `en-GB` and `maxAlternatives` 5, per
- * the brief. `SpeechGrammarList` is not used — it is dead in every engine.
+ * recogniser has one answer. `lang` follows the learner's accent (`en-GB`
+ * British, `en-US` American) and `maxAlternatives` is 5, per the brief. `SpeechGrammarList` is not used — it is dead in every engine.
  */
+
+import type { Accent } from "@/features/vocabulary/types";
 
 export type SpeechOutcome =
   | { kind: "heard"; alternatives: string[] }
@@ -84,7 +86,13 @@ export interface Listening {
   abort: () => void;
 }
 
-export function listenOnce(): Listening {
+/** The recogniser's language for an accent. */
+export const RECOGNITION_LANG: Record<Accent, string> = {
+  british: "en-GB",
+  american: "en-US",
+};
+
+export function listenOnce(accent: Accent = "british"): Listening {
   const Ctor = ctor();
   if (!Ctor) {
     return {
@@ -95,7 +103,7 @@ export function listenOnce(): Listening {
   }
 
   const rec = new Ctor();
-  rec.lang = "en-GB";
+  rec.lang = RECOGNITION_LANG[accent];
   rec.maxAlternatives = 5;
   rec.interimResults = false;
   rec.continuous = false;

@@ -31,8 +31,8 @@ Usage (from the ``backend/`` directory), in this order::
 
     uv run python -m scripts.seed_tts clips                  # index + cut candidates
     uv run python -m scripts.seed_tts verify-clips           # faster-whisper, GPU
-    uv run python -m scripts.seed_tts words                  # TTS for words with no clip
-    uv run python -m scripts.seed_tts definitions            # TTS for every definition
+    uv run python -m scripts.seed_tts words                  # TTS for every word, both accents
+    uv run python -m scripts.seed_tts definitions            # TTS for every definition, both accents
     uv run python -m scripts.seed_tts items                  # optional: On the go files
 
 * ``clips`` -- index where every lexicon form is spoken in the transcripts
@@ -42,15 +42,25 @@ Usage (from the ``backend/`` directory), in this order::
   only if the word is heard. ``--model`` (default ``large-v3``; a smaller one,
   e.g. ``small.en``, is fine on a CPU dev machine), ``--device`` (default
   ``cuda``; ``cpu`` runs int8). Only ``verified`` clips are ever served.
-* ``words`` -- the word read by Kokoro (``bf_emma``), for every lexicon sense
-  whose word has NO verified clip (a clip, where there is one, is what the
-  learner hears; the brief says not to generate what exists). Run it AFTER
-  ``verify-clips``. ``--all`` also makes TTS for words that have a clip.
-  Heteronym senses are given their decided pronunciation
-  (``lexeme_senses.pronunciation``; see ``scripts/decide_heteronyms.py``).
+* ``words`` -- the word read by Kokoro, for EVERY lexicon sense, whether or not
+  its word has a verified clip (decision 26: a verified clip is what a learner
+  hears today, but a later "prefer the synthetic voice" option must need no
+  generation). ``--skip-clipped`` restores the old behaviour (only words
+  without a verified clip; run it AFTER ``verify-clips``). Heteronym senses
+  are given their decided pronunciation in the voice's own alphabet
+  (``lexeme_senses.pronunciation`` for British, ``pronunciation_us`` for
+  American; see ``scripts/decide_heteronyms.py``).
 * ``definitions`` -- the masked definition of every sense, the masks silences.
 * ``items`` -- the single On the go file per word in rotation (needs the
   parts; makes them inline if not ready).
+
+The two voices (decisions 22-26) -- British ``bf_emma`` and American
+``af_heart``, one table in :mod:`app.services.accents`. ``--accent
+british|american|both`` (default ``both``) on ``words``, ``definitions`` and
+``items`` chooses which are made; each voice is its own set of renders (the
+voice is in every key), so running one accent now and the other later is safe
+and nothing is made twice. The synthesiser holds one pipeline per voice sharing
+one model, so ``both`` costs one model load.
 
 Flags: ``--limit N`` stops after N items (a pilot); ``--saved-only`` restricts
 ``words``/``definitions`` to senses somebody has saved (the dev run: a few
@@ -72,6 +82,7 @@ import argparse
 import asyncio
 import io
 import logging
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -82,7 +93,8 @@ from app.core.database import AsyncSession, async_session_factory
 from app.models.audio_render import RenderKind
 from app.models.lexicon import Lexeme, LexemeSense
 from app.models.vocabulary import SavedWord
-from app.services import pronunciation, tts, word_audio, word_clips
+from app.services import tts, word_audio, word_clips
+from app.services.accents import ACCENTS, Accent
 from app.services.storage import MediaStorage
 
 logger = logging.getLogger("scripts.seed_tts")
@@ -111,50 +123,56 @@ async def _senses(
     return list((await session.exec(query)).all())
 
 
-async def enqueue_words(
-    session: AsyncSession, *, saved_only: bool, limit: int | None, include_clipped: bool
-) -> int:
-    """Queue the word render of each sense. Words with a verified clip are
-    skipped unless ``include_clipped``. Returns how many specs were offered
-    (new ones are ``pending``, the rest already existed)."""
-    senses = await _senses(session, saved_only=saved_only, limit=limit)
-    sources = await word_audio.word_sources(session, senses)
-    specs: dict[str, tts.RenderSpec] = {}
-    lexemes = {
+async def _lexemes(session: AsyncSession, senses: list[LexemeSense]) -> dict[uuid.UUID, Lexeme]:
+    if not senses:
+        return {}
+    return {
         lexeme.id: lexeme
         for lexeme in (
             await session.exec(select(Lexeme).where(Lexeme.id.in_({s.lexeme_id for s in senses})))
         ).all()
-    } if senses else {}
-    for sense in senses:
-        source = sources.get(sense.id)
-        if source is None:
-            continue
-        if source.spec is not None:
-            specs[source.spec.key] = source.spec
-        elif include_clipped:
-            lexeme = lexemes[sense.lexeme_id]
-            phonemes = pronunciation.sense_pronunciation(lexeme.lemma, lexeme.pos, sense.pronunciation)
-            spec = tts.word_spec(lexeme.lemma, phonemes)
+    }
+
+
+async def enqueue_words(
+    session: AsyncSession,
+    *,
+    saved_only: bool,
+    limit: int | None,
+    accents_: list[Accent],
+    skip_clipped: bool = False,
+) -> int:
+    """Queue the word render of each sense, in each accent's voice -- clip or no
+    clip (decision 26). ``skip_clipped`` restores the old rule: a word that
+    has a verified clip, and is not a heteronym, is left out. Returns how many
+    specs were offered (new ones are ``pending``, the rest already existed)."""
+    senses = await _senses(session, saved_only=saved_only, limit=limit)
+    lexemes = await _lexemes(session, senses)
+    specs: dict[str, tts.RenderSpec] = {}
+    for accent in accents_:
+        sources = await word_audio.word_sources(session, senses, accent=accent)
+        for sense in senses:
+            source = sources.get(sense.id)
+            if source is None:
+                continue
+            if source.clip is not None and skip_clipped:
+                continue
+            spec = word_audio.tts_word_spec(sense, lexemes[sense.lexeme_id], accent)
             specs[spec.key] = spec
     return await _enqueue(list(specs.values()))
 
 
 async def enqueue_definitions(
-    session: AsyncSession, *, saved_only: bool, limit: int | None
+    session: AsyncSession, *, saved_only: bool, limit: int | None, accents_: list[Accent]
 ) -> int:
     senses = await _senses(session, saved_only=saved_only, limit=limit)
-    lexemes = {
-        lexeme.id: lexeme
-        for lexeme in (
-            await session.exec(select(Lexeme).where(Lexeme.id.in_({s.lexeme_id for s in senses})))
-        ).all()
-    } if senses else {}
+    lexemes = await _lexemes(session, senses)
     specs: dict[str, tts.RenderSpec] = {}
-    for sense in senses:
-        spec = tts.definition_spec(sense.definition_en, lexemes[sense.lexeme_id].lemma)
-        if spec is not None:
-            specs[spec.key] = spec
+    for accent in accents_:
+        for sense in senses:
+            spec = tts.definition_spec(sense.definition_en, lexemes[sense.lexeme_id].lemma, accent)
+            if spec is not None:
+                specs[spec.key] = spec
     return await _enqueue(list(specs.values()))
 
 
@@ -166,8 +184,11 @@ async def _enqueue(specs: list[tts.RenderSpec]) -> int:
     return new
 
 
-async def enqueue_items(session: AsyncSession, *, limit: int | None) -> int:
-    """Queue the On the go file (and its parts) of every word in rotation."""
+async def enqueue_items(
+    session: AsyncSession, *, limit: int | None, accents_: list[Accent]
+) -> int:
+    """Queue the On the go file (and its parts) of every word in rotation, in
+    each accent's voice."""
     query = (
         select(SavedWord)
         .where(SavedWord.status.in_(("learning", "review")))
@@ -176,7 +197,8 @@ async def enqueue_items(session: AsyncSession, *, limit: int | None) -> int:
     if limit is not None:
         query = query.limit(limit)
     words = list((await session.exec(query)).all())
-    await word_audio.item_renders(session, words)
+    for accent in accents_:
+        await word_audio.item_renders(session, words, accent=accent)
     return len(words)
 
 
@@ -228,6 +250,11 @@ def make_transcriber(model_name: str, device: str) -> Callable[[bytes], str]:
     return transcribe
 
 
+def selected_accents(args: argparse.Namespace) -> list[Accent]:
+    """``--accent`` as a list: ``both`` (the default) is every accent we have."""
+    return list(ACCENTS) if args.accent == "both" else [args.accent]
+
+
 def _require_kokoro() -> None:
     if not tts.kokoro_available():
         raise SystemExit(
@@ -277,7 +304,7 @@ async def cmd_words(args: argparse.Namespace) -> None:
     async with async_session_factory() as session:
         await enqueue_words(
             session, saved_only=args.saved_only, limit=args.limit,
-            include_clipped=args.all,
+            accents_=selected_accents(args), skip_clipped=args.skip_clipped,
         )
     await run_renders([RenderKind.WORD], tts.KokoroSynth(device=args.device), limit=None)
 
@@ -288,14 +315,19 @@ async def cmd_definitions(args: argparse.Namespace) -> None:
         async with async_session_factory() as session:
             await tts.requeue_failed(session, kinds=[RenderKind.DEFINITION])
     async with async_session_factory() as session:
-        await enqueue_definitions(session, saved_only=args.saved_only, limit=args.limit)
+        await enqueue_definitions(
+            session, saved_only=args.saved_only, limit=args.limit,
+            accents_=selected_accents(args),
+        )
     await run_renders([RenderKind.DEFINITION], tts.KokoroSynth(device=args.device), limit=None)
 
 
 async def cmd_items(args: argparse.Namespace) -> None:
     _require_kokoro()
     async with async_session_factory() as session:
-        count = await enqueue_items(session, limit=args.limit)
+        count = await enqueue_items(
+            session, limit=args.limit, accents_=selected_accents(args)
+        )
     logger.info("%d word(s) in rotation queued", count)
     await run_renders(
         [RenderKind.WORD, RenderKind.DEFINITION, RenderKind.ITEM],
@@ -327,7 +359,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--all-candidates", action="store_true",
                    help="verify every cut clip, not only until a form's first verified one")
     for name, helptext in (
-        ("words", "TTS for words with no verified clip"),
+        ("words", "TTS for every word (clip or not)"),
         ("definitions", "TTS for every masked definition"),
         ("items", "On the go files for words in rotation"),
     ):
@@ -337,9 +369,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                        help="only senses somebody has saved (dev)")
         p.add_argument("--retry-failed", action="store_true",
                        help="put failed renders back to pending first")
+        p.add_argument("--accent", choices=[*ACCENTS, "both"], default="both",
+                       help="which voice(s) to make (default both)")
         if name == "words":
-            p.add_argument("--all", action="store_true",
-                           help="also TTS words that have a verified clip")
+            p.add_argument("--skip-clipped", action="store_true",
+                           help="leave out words that have a verified clip (the pre-accent rule)")
     return parser.parse_args(argv)
 
 

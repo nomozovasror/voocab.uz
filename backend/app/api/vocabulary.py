@@ -407,6 +407,7 @@ async def get_saved_word(
                 prefer_material_ids=await practice_service.learner_material_ids(
                     session, user.id
                 ),
+                accent=settings.accent,
             )
             audio = asdict(found_audio) if found_audio is not None else None
         except Exception:
@@ -770,6 +771,7 @@ async def get_vocabulary_settings(
         direction=settings.direction,
         exercise_types=settings.exercise_types,
         pronunciation=settings.pronunciation,
+        accent=settings.accent,
         active_in_progress=await practice_service.active_in_progress_count(
             session, user.id
         ),
@@ -787,12 +789,14 @@ async def put_vocabulary_settings(
         direction=data.direction,
         exercise_types=data.exercise_types,
         pronunciation=data.pronunciation,
+        accent=data.accent,
     )
     return VocabularySettingsOut(
         daily_minutes=settings.daily_minutes,
         direction=settings.direction,
         exercise_types=settings.exercise_types,
         pronunciation=settings.pronunciation,
+        accent=settings.accent,
         active_in_progress=await practice_service.active_in_progress_count(
             session, user.id
         ),

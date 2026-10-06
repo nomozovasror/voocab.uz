@@ -9,6 +9,7 @@ import { playClip, stopAudio } from "@/features/vocabulary/audio";
 import { listenOnce, type Listening } from "@/features/vocabulary/speech";
 import { SpeakerButton } from "@/features/vocabulary/components/SpeakerButton";
 import type {
+  Accent,
   AudioOut,
   PracticeSpeakPrompt,
 } from "@/features/vocabulary/types";
@@ -82,6 +83,7 @@ export function SpeakCard({
   onGiveUp,
   onUnsupported,
   onMissContinue,
+  accent = "british",
 }: {
   prompt: PracticeSpeakPrompt;
   wordId: string;
@@ -93,6 +95,8 @@ export function SpeakCard({
   onUnsupported: () => void;
   /** After three misses: move on without recording anything. */
   onMissContinue: () => void;
+  /** The learner's accent setting: the recogniser listens for it. */
+  accent?: Accent;
 }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [miss, setMiss] = useState<{ answer: string | null; audio: AudioOut | null } | null>(null);
@@ -124,7 +128,7 @@ export function SpeakCard({
       return;
     // The definition must not be in the room while the microphone is open.
     stopAudio();
-    const l = listenOnce();
+    const l = listenOnce(accent);
     listening.current = l;
     setPhase("listening");
     const outcome = await l.result;

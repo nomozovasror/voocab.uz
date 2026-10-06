@@ -2,150 +2,184 @@
   "lead": [
     {
       "ps": "lˈiːd",
+      "us": "lˈid",
       "note": "lead: to guide, go in front of, or be in charge; the front position; a clue; said like 'leed'"
     },
     {
       "ps": "lˈɛd",
+      "us": "lˈɛd",
       "note": "lead the metal (a heavy grey metal; the graphite 'lead' of a pencil), said like 'led'"
     }
   ],
   "row": [
     {
       "ps": "ɹˈQ",
+      "us": "ɹˈO",
       "note": "row: a line of things side by side; to propel a boat with oars, rhymes with 'go'"
     },
     {
       "ps": "ɹˈW",
+      "us": "ɹˈW",
       "note": "row a noisy quarrel or argument, rhymes with 'cow'"
     }
   ],
   "does": [
     {
       "ps": "dˈʌz",
+      "us": "dˈʌz",
       "note": "does: the verb 'do' in the third person singular, rhymes with 'buzz'"
     },
     {
       "ps": "dˈQz",
+      "us": "dˈOz",
       "note": "does, the plural of 'doe': female deer, rabbits or hares, rhymes with 'goes'"
     }
   ],
   "sewer": [
     {
       "ps": "sˈuːə",
+      "us": "sˈuəɹ",
       "note": "sewer: an underground channel that carries waste water, said like 'SOO-er'"
     },
     {
       "ps": "sˈQə",
+      "us": "sˈOəɹ",
       "note": "sewer as 'one who sews', said like 'so-er'"
     }
   ],
   "lower": [
     {
       "ps": "lˈQə",
+      "us": "lˈOəɹ",
       "note": "lower: less high; to let down or reduce, rhymes with 'mower'"
     },
     {
       "ps": "lˈWə",
+      "us": "lˈWəɹ",
       "note": "lower: to frown or look threatening (of the sky or a person), rhymes with 'flower'"
     }
   ],
   "slough": [
     {
       "ps": "slˈW",
+      "us": "slˈW",
       "note": "slough: a swamp or muddy hollow; a state of despair, rhymes with 'cow'"
     },
     {
       "ps": "slˈʌf",
+      "us": "slˈʌf",
       "note": "slough: to shed a layer of skin; to cast something off"
+    },
+    {
+      "us": "slˈu",
+      "note": "slough: a swamp or muddy hollow, said like 'slew'"
     }
   ],
   "polish": [
     {
       "ps": "pˈɒlɪʃ",
+      "us": "pˈɑlɪʃ",
       "note": "polish: to rub until smooth and shiny; a substance for shining; refinement"
     },
     {
       "ps": "pˈQlɪʃ",
+      "us": "pˈOlɪʃ",
       "note": "Polish: of Poland, its people or language, said like 'poh-lish'"
     }
   ],
   "bass": [
     {
       "ps": "bˈas",
+      "us": "bˈæs",
       "note": "bass the fish, rhymes with 'mass'"
     },
     {
       "ps": "bˈAs",
+      "us": "bˈAs",
       "note": "bass: low in pitch; the low-pitched instrument or voice, said like 'base'"
     }
   ],
   "tear": [
     {
       "ps": "tˈɛː",
+      "us": "tˈɛɹ",
       "note": "tear: to rip or pull apart; a rip or hole, rhymes with 'air'"
     },
     {
       "ps": "tˈɪə",
+      "us": "tˈɪɹ",
       "note": "tear: a drop of liquid from the eye, rhymes with 'ear'"
     }
   ],
   "wound": [
     {
       "ps": "wˈuːnd",
+      "us": "wˈund",
       "note": "wound: an injury to the body; to injure, said like 'woond'"
     },
     {
       "ps": "wˈWnd",
+      "us": "wˈWnd",
       "note": "wound: past tense of 'wind' (turned or twisted), rhymes with 'found'"
     }
   ],
   "dove": [
     {
       "ps": "dˈʌv",
+      "us": "dˈʌv",
       "note": "dove: the bird, rhymes with 'love'"
     },
     {
       "ps": "dˈQv",
+      "us": "dˈOv",
       "note": "dove: American past tense of 'dive', rhymes with 'stove'"
     }
   ],
   "bow": [
     {
       "ps": "bˈQ",
+      "us": "bˈO",
       "note": "bow: the weapon for arrows; a knot with loops; the stick for a violin, rhymes with 'go'"
     },
     {
       "ps": "bˈW",
+      "us": "bˈW",
       "note": "bow: to bend forward from the waist; the front of a ship, rhymes with 'now'"
     }
   ],
   "sow": [
     {
       "ps": "sˈQ",
+      "us": "sˈO",
       "note": "sow: to plant seeds, rhymes with 'go'"
     },
     {
       "ps": "sˈW",
+      "us": "sˈW",
       "note": "sow: an adult female pig, rhymes with 'cow'"
     }
   ],
   "minute": [
     {
       "ps": "mˈɪnɪt",
+      "us": "mˈɪnət",
       "note": "minute: a unit of time, 60 seconds; a short record of a meeting"
     },
     {
       "ps": "mInjˈuːt",
+      "us": "mInˈut",
       "note": "minute: extremely small, said like 'my-NEWT'"
     }
   ],
   "close": [
     {
       "ps": "klˈQs",
+      "us": "klˈOs",
       "note": "close: near, in space or time; a closed-in place, rhymes with 'dose'"
     },
     {
       "ps": "klˈQz",
+      "us": "klˈOz",
       "note": "close: to shut; to end, rhymes with 'nose'"
     }
   ]

@@ -331,7 +331,7 @@ class LexemeSense(SQLModel, table=True):
     #: has never run against is simply `false`, never a guess.
     needs_letter_hint: bool = Field(default=False, index=True)
 
-    #: How this sense is SPOKEN, in misaki's British phoneme alphabet
+    #: How this sense is SPOKEN by the BRITISH voice, in misaki's British phoneme alphabet
     #: (`ɹˈɛkɔːd`, `klˈQs` -- not IPA) -- set ONLY for a heteronym's senses
     #: (`record` the noun and `record` the verb are different words to the
     #: ear). Null for every other sense, which the TTS voice reads from plain
@@ -340,6 +340,12 @@ class LexemeSense(SQLModel, table=True):
     #: `app.services.pronunciation` for why a sense without a decision still
     #: gets a fallback and what it is.
     pronunciation: str | None = Field(default=None, max_length=120)
+    #: The same decision for the AMERICAN voice, in misaki's American alphabet
+    #: (`ɹˈɛkəɹd`, `klˈOs` -- `O` /oʊ/ where British has `Q`). Its own column
+    #: because a phoneme string is only right for the accent it was chosen in
+    #: (decision 25); written by `scripts/decide_heteronyms.py apply
+    #: --accent american`. Null means the same as for `pronunciation`.
+    pronunciation_us: str | None = Field(default=None, max_length=120)
 
     #: Who last cleared this sense in Studio's admin review tab (P5), and
     #: when -- null means "never approved", which is a different fact from

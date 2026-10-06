@@ -288,9 +288,9 @@ export const vocabularyApi = {
    *  value and leaving the other two for the server to guess at. */
   updateSettings: (
     settings: Pick<VocabularySettings, "daily_minutes" | "direction" | "exercise_types"> &
-      // Optional: absent means unchanged, so only the Pronunciation control
-      // sends it.
-      Partial<Pick<VocabularySettings, "pronunciation">>,
+      // Optional: absent means unchanged, so only the Pronunciation and
+      // Accent controls send them.
+      Partial<Pick<VocabularySettings, "pronunciation" | "accent">>,
   ) =>
     api.put<VocabularySettings>("/api/vocabulary/settings", {
       json: settings,

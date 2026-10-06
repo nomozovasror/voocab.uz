@@ -25,6 +25,15 @@ dict-valued entries. Re-run `scripts/decide_heteronyms.py decide`: a changed
 candidate set makes old decisions "stale" (reported by `apply`, never
 written).
 
+## `misaki_us_pos_entries.json` -- vendored, do not edit
+
+The same extract from misaki's **American** gold lexicon,
+`misaki/data/us_gold.json` (0.9.4, **Apache-2.0**, the same credit as above):
+the 790 dict-valued (part-of-speech-keyed) entries. Its alphabet differs from
+the British one: `O` (/oʊ/) where British has `Q`, no `ː`, and `æ ɾ ᵻ ʔ`.
+`tests/test_heteronyms.py` checks each table against its own alphabet. Refresh
+the same way as the British file.
+
 ## `heteronym_extras.json` -- hand-written
 
 Words that differ WITHIN one part of speech, which a POS-keyed table cannot
@@ -32,9 +41,11 @@ hold: `lead` (the metal), `row` (the quarrel), `does` (the deer), `sewer`,
 `lower`, `slough`, `polish` -- plus plain-English **notes** on the variants
 misaki already has (`bow`, `tear`, `wound`, `close`, `minute`, `bass`, `sow`,
 `dove`). The notes are what the model reads when it chooses; a string like
-`klˈQs` means nothing to it without one. Entries use misaki phonemes
-(`tests/test_heteronyms.py` checks every string against misaki's British
-alphabet).
+`klˈQs` means nothing to it without one. Entries use misaki phonemes. An item is `{"ps": <British>, "us":
+<American>, "note": ...}`: `ps` is checked against the British alphabet and
+`us` against the American one (`tests/test_heteronyms.py`); no `us` means the
+same string serves both, `"us": null` leaves it out of the American set, and an
+item with no `ps` is American-only (`slough` /sluː/).
 
 ## `heteronym_decisions.jsonl` -- the replayable log
 
@@ -44,3 +55,7 @@ for a sense with none) -- never a database id -- so it replays onto any
 database: `scripts/decide_heteronyms.py apply --confirm-db <db>` writes
 `lexeme_senses.pronunciation` from it with no model call. A later line for the
 same sense wins. Produced with `gemini-3.8-flash`, one request per lemma.
+
+`heteronym_decisions_us.jsonl` is the same log for the American voice
+(`--accent american`; `apply` writes `lexeme_senses.pronunciation_us`), in the
+American alphabet.

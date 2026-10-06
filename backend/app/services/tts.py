@@ -2,8 +2,8 @@
 single On the go file per word.
 
 Everything the learner hears that is NOT cut from a recording is made here, by
-one voice -- Kokoro-82M, British English, ``bf_emma`` -- and always OUTSIDE a
-request. A request that needs audio that does not exist only writes a row into
+Kokoro-82M in the voice of the learner's accent (:mod:`app.services.accents`:
+British ``bf_emma``, American ``af_heart``) -- and always OUTSIDE a request. A request that needs audio that does not exist only writes a row into
 ``audio_renders`` (:func:`enqueue`); the worker (``app.worker``) or the seed
 script (``scripts/seed_tts.py``) claims it, synthesises, stores, marks it
 ``ready``. The two run the same functions, so the same input gives the same
@@ -14,11 +14,15 @@ places: a mismatch would be heard at once", brief §2).
 
 ``audio_renders.key`` is the SHA-256 of the INPUT (:func:`render_key`): for a
 word, the exact synthesis string + voice + model; for a definition, the masked
-text + voice + model; for an item, the parts it is composed of. Content
+text + voice + model; for an item, the parts it is composed of + voice + model.
+The VOICE is in every key, so an American render never collides with, or
+replaces, a British one -- the two accents are two sets of rows and files, and
+an item (whose word may be a shared clip) still differs by accent because its
+definition is spoken in the voice. Content
 addressing the input rather than the output is what lets a row exist, and be
 looked up, before the audio does. Consequences worth stating:
 
-* One word is synthesised once in the whole system, whoever asks.
+* One word is synthesised once per voice in the whole system, whoever asks.
 * A changed definition (the lexicon corrects one) is a NEW key, hence a new
   render; the old file is simply no longer referenced.
 * The synthesis string for a heteronym sense is ``[word](/phonemes/)``, so a
@@ -75,16 +79,17 @@ from sqlmodel import select
 from app.core.config import settings
 from app.core.database import AsyncSession, async_session_factory
 from app.models.audio_render import AudioRender, RenderKind, RenderStatus
-from app.services import audio_pcm
+from app.services import accents, audio_pcm
 from app.services.infra_errors import InfrastructureError, guarded
 from app.services.storage import MediaStorage, get_storage
 
 logger = logging.getLogger(__name__)
 
-VOICE = "bf_emma"
+#: The default accent's voice. Every spec function takes an ``accent`` (default
+#: British) and gets its voice from :mod:`app.services.accents`; this name is
+#: what a render row written before accents existed carries.
+VOICE = accents.voice_for(accents.DEFAULT_ACCENT)
 MODEL = "hexgrad/Kokoro-82M"
-#: Kokoro's language code for British English.
-LANG_CODE = "b"
 
 #: Decision 12: definition, three seconds to recall, the word, then a beat.
 ITEM_PAUSE_MS = 3000
@@ -105,9 +110,11 @@ TTS_RETRY_BACKOFF_MAX_S = 3600.0
 _EDGE_KEEP_MS = 60
 _EDGE_THRESHOLD_DBFS = -45.0
 
-#: text -> float32 mono samples at 24 kHz. Synchronous (it is the model); the
-#: callers run it in a thread. Kokoro in production, a fake in tests.
-Synth = Callable[[str], np.ndarray]
+#: (text, voice) -> float32 mono samples at 24 kHz. Synchronous (it is the
+#: model); the callers run it in a thread. Kokoro in production, a fake in
+#: tests. The voice is the render row's own, so one synthesiser serves both
+#: accents.
+Synth = Callable[[str, str], np.ndarray]
 
 _MASK_RUN = re.compile(r"(?:\s*_{3,}\s*)+")
 
@@ -121,36 +128,50 @@ def kokoro_available() -> bool:
 
 
 class KokoroSynth:
-    """The production :data:`Synth`: ``KPipeline(lang_code='b')``, voice
-    ``bf_emma``, loaded on first use and then kept (it is ~350 MB; the worker
-    must not pay that per word). ``device`` is ``None`` for torch's own choice
-    (CPU in the worker image), ``"cuda"`` on the seed machine."""
+    """The production :data:`Synth`: one ``KPipeline`` per language code (a
+    British and an American front end), voice picked per call, each built on
+    first use and then kept. ``device`` is ``None`` for torch's own choice (CPU
+    in the worker image), ``"cuda"`` on the seed machine.
+
+    The pipelines SHARE ONE ``KModel`` (~330 MB of weights): the language code
+    only selects the grapheme-to-phoneme front end (misaki's gb or us
+    lexicon), the network is the same. The first pipeline loads the model and
+    the next ones are handed it (``KPipeline(model=<KModel>)``), so serving
+    both accents costs one model, not two. The voices themselves are small
+    (~0.5 MB each) and load when first asked for."""
 
     def __init__(self, device: str | None = None) -> None:
         self._device = device
-        self._pipeline: Any = None
+        self._pipelines: dict[str, Any] = {}
         self._lock = threading.Lock()
 
-    def _load(self) -> Any:
-        if self._pipeline is None:
+    def _load(self, lang_code: str) -> Any:
+        pipeline = self._pipelines.get(lang_code)
+        if pipeline is None:
             try:
                 from kokoro import KPipeline  # lazy: the `tts` extra only
 
-                self._pipeline = KPipeline(
-                    lang_code=LANG_CODE, repo_id=MODEL, device=self._device
+                shared = next(iter(self._pipelines.values()), None)
+                pipeline = KPipeline(
+                    lang_code=lang_code,
+                    repo_id=MODEL,
+                    model=shared.model if shared is not None else True,
+                    device=self._device,
                 )
             except Exception as exc:  # noqa: BLE001 - classified, not swallowed
                 # The model not loading is the machine's fault, not the word's:
                 # no render may spend an attempt on it (`process_render`).
                 raise InfrastructureError(f"Kokoro failed to load: {exc}") from exc
-        return self._pipeline
+            self._pipelines[lang_code] = pipeline
+        return pipeline
 
-    def __call__(self, text: str) -> np.ndarray:
-        # One pipeline, one caller at a time: it holds torch state.
+    def __call__(self, text: str, voice: str) -> np.ndarray:
+        lang_code = accents.lang_code_for_voice(voice)
+        # One caller at a time: the pipelines share a model and hold torch state.
         with self._lock:
-            pipeline = self._load()
+            pipeline = self._load(lang_code)
             chunks: list[np.ndarray] = []
-            for result in pipeline(text, voice=VOICE, speed=1.0):
+            for result in pipeline(text, voice=voice, speed=1.0):
                 audio = result.audio
                 if audio is not None:
                     chunks.append(audio.detach().cpu().numpy().reshape(-1))
@@ -214,18 +235,29 @@ def masked_definition(definition: str, lemma: str) -> str:
     return masked.strip()
 
 
-def word_spec(lemma: str, pronunciation: str | None) -> RenderSpec:
+def word_spec(
+    lemma: str, pronunciation: str | None, accent: accents.Accent = accents.DEFAULT_ACCENT
+) -> RenderSpec:
+    """The render of a word in ``accent``'s voice. ``pronunciation`` is the
+    sense's phonemes IN THAT ACCENT's alphabet (:func:`app.services
+    .pronunciation.sense_pronunciation`)."""
     text = word_input(lemma, pronunciation)
-    return RenderSpec(RenderKind.WORD, text, render_key(RenderKind.WORD, text))
+    voice = accents.voice_for(accent)
+    return RenderSpec(RenderKind.WORD, text, render_key(RenderKind.WORD, text, voice), voice)
 
 
-def definition_spec(definition: str, lemma: str) -> RenderSpec | None:
+def definition_spec(
+    definition: str, lemma: str, accent: accents.Accent = accents.DEFAULT_ACCENT
+) -> RenderSpec | None:
     """The render for a sense's masked definition, or ``None`` when there is
     no definition to speak."""
     text = masked_definition(definition, lemma)
     if not re.search(r"[A-Za-z0-9]", _MASK_RUN.sub(" ", text)):
         return None
-    return RenderSpec(RenderKind.DEFINITION, text, render_key(RenderKind.DEFINITION, text))
+    voice = accents.voice_for(accent)
+    return RenderSpec(
+        RenderKind.DEFINITION, text, render_key(RenderKind.DEFINITION, text, voice), voice
+    )
 
 
 def item_spec(
@@ -233,7 +265,9 @@ def item_spec(
 ) -> RenderSpec:
     """The render for one On the go file. Exactly one of ``word_spec_`` (the
     word is TTS) and ``clip_storage_key`` (the word is a verified clip) is
-    given. The input names the parts; see the module docstring."""
+    given. The input names the parts; see the module docstring. The item is in
+    the voice of its ``definition`` (the word, if TTS, is the same voice by
+    construction), so a clip-worded item still has one key per accent."""
     if (word_spec_ is None) == (clip_storage_key is None):
         raise ValueError("an item's word is either TTS or a clip")
     word_part: dict[str, str]
@@ -253,7 +287,12 @@ def item_spec(
         separators=(",", ":"),
         ensure_ascii=False,
     )
-    return RenderSpec(RenderKind.ITEM, text, render_key(RenderKind.ITEM, text))
+    if word_spec_ is not None and word_spec_.voice != definition.voice:
+        raise ValueError("an item's definition and word are in one voice")
+    return RenderSpec(
+        RenderKind.ITEM, text, render_key(RenderKind.ITEM, text, definition.voice),
+        definition.voice,
+    )
 
 
 # --- Synthesis ------------------------------------------------------------------
@@ -295,11 +334,11 @@ def split_masked(masked: str) -> list[str | None]:
     return out
 
 
-def synthesise_word(synth: Synth, text: str) -> np.ndarray:
-    return audio_pcm.normalise_rms(trim_edges(synth(text)))
+def synthesise_word(synth: Synth, text: str, voice: str = VOICE) -> np.ndarray:
+    return audio_pcm.normalise_rms(trim_edges(synth(text, voice)))
 
 
-def synthesise_definition(synth: Synth, masked: str) -> np.ndarray:
+def synthesise_definition(synth: Synth, masked: str, voice: str = VOICE) -> np.ndarray:
     """The masked definition spoken, each mask a silence of
     :data:`MASK_PAUSE_MS`."""
     parts: list[np.ndarray] = []
@@ -307,7 +346,7 @@ def synthesise_definition(synth: Synth, masked: str) -> np.ndarray:
         if piece is None:
             parts.append(audio_pcm.silence(MASK_PAUSE_MS))
         else:
-            parts.append(trim_edges(synth(piece)))
+            parts.append(trim_edges(synth(piece, voice)))
     return audio_pcm.normalise_rms(audio_pcm.concat(*parts))
 
 
@@ -560,9 +599,9 @@ async def _tts_part(
 
 def _synthesise(spec: RenderSpec, synth: Synth) -> np.ndarray:
     if spec.kind == RenderKind.WORD:
-        return synthesise_word(synth, spec.input)
+        return synthesise_word(synth, spec.input, spec.voice)
     if spec.kind == RenderKind.DEFINITION:
-        return synthesise_definition(synth, spec.input)
+        return synthesise_definition(synth, spec.input, spec.voice)
     raise ValueError(f"{spec.kind} is not synthesised directly")
 
 

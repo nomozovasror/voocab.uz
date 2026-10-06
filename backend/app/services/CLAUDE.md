@@ -1141,8 +1141,8 @@ below are the ones a later change can silently break.
 - **The resolution order is a rule, not a preference**: a heteronym is always
   TTS with its sense's phonemes -> else a VERIFIED clip of the exact form (the
   learner's own listening materials first, then the longest word) -> else the
-  TTS render. `source` on the wire says which, because only a clip has a
-  context press. Resolve through `word_sources`/`word_audio_many`; a list
+  TTS render (in the learner's accent, below). `source` on the wire says which,
+  because only a clip has a context press. Resolve through `word_sources`/`word_audio_many`; a list
   endpoint calling `word_audio` per row is the N+1 the `*_many` functions
   exist to prevent.
 - **Only `verified` clips are ever served, and only while they are still
@@ -1182,12 +1182,19 @@ below are the ones a later change can silently break.
   stress is ignored -- misaki's table also holds stress-only variants (`be`)
   that are NOT heteronyms. Its data is `app/data/tts/` (see the README there),
   in **misaki's phoneme alphabet, not IPA**; `tests/test_heteronyms.py`
-  checks every string against misaki's alphabet.
+  checks every string against misaki's alphabet -- the British one for the
+  British table and extras' `ps`, the AMERICAN one (`O` not `Q`, no `ː`, plus
+  `æ ɾ ᵻ ʔ`) for `misaki_us_pos_entries.json` and the extras' `us`. Heteronym-
+  ness is per accent (`is_heteronym(lemma, accent)`); the extras items are
+  `{ps (British), us (American), note}`.
 - **Which pronunciation a sense takes is decided once and kept in the repo.**
   `scripts/decide_heteronyms.py` asks a model per lemma and appends to
   `heteronym_decisions.jsonl`, keyed by lemma + pos + synset (or definition)
   and never by a database id, so the log replays onto any database
-  (`apply` writes `lexeme_senses.pronunciation`). A heteronym sense with no
+  (`apply` writes `lexeme_senses.pronunciation`; `--accent american` uses
+  `heteronym_decisions_us.jsonl` and writes `pronunciation_us` -- a phoneme
+  string is only right in its own alphabet, so the two accents never share a
+  log or a column). A heteronym sense with no
   decision is NOT guessed into the column: serving falls back to misaki's own
   entry for the part of speech (`DEFAULT` if none) and logs it
   (`pronunciation.sense_pronunciation`). A wrong pronunciation is the one
@@ -1201,9 +1208,25 @@ below are the ones a later change can silently break.
   old row. Storage keys are `tts/{key}.m4a`, `renders/{key}.m4a` (items) and
   `clips/{sha256 of the bytes}.m4a`. Bump `KEY_VERSION` to re-render
   everything after changing trimming, levelling or composition.
-- **The voice is `bf_emma` of Kokoro-82M, `lang_code='b'`, everywhere.** A
+- **The accent is the learner's, and it only picks the voice.**
+  `vocabulary_settings.accent` (`british` default | `american`;
+  `app/services/accents.py` is THE table: British `bf_emma`/`'b'`, American
+  `af_heart`/`'a'`). Every `word_audio` function, `tts.word_spec`,
+  `definition_spec` and the item path take `accent` (default British) and every
+  caller passes `settings.accent` (practice session build -- one settings read
+  -- the reveal, the speak-check reveal, the word page, On the go). The VOICE is
+  inside every render key (word, definition AND item -- an item with a clip
+  word still differs by its definition's voice), so accents never collide and
+  a render row carries the voice the worker must use. A verified clip is
+  heard by everyone and keeps its speaker's accent (decision 23); accent
+  never changes clip-vs-TTS, and a heteronym is never a clip in either accent.
+  The accent also chooses `pronunciation` vs `pronunciation_us`
+  (`word_audio.decided_pronunciation`) and misaki's fallback table.
+- **The voices: Kokoro-82M `bf_emma` (British) and `af_heart` (American).** A
   heteronym sense is spoken from `[word](/phonemes/)`, anything else from the
-  lemma as plain text. Kokoro is imported ONLY inside `KokoroSynth._load`; on
+  lemma as plain text. Kokoro is imported ONLY inside `KokoroSynth._load` (one `KPipeline` per `lang_code`, all sharing ONE `KModel`
+  -- later pipelines are built with `model=<the first's KModel>`; the `Synth`
+  signature is `(text, voice)`); on
   macOS its `espeakng-loader` wheel kills the interpreter, so never import it
   at module level and never from a test -- tests inject a fake `Synth`. It
   lives in the worker image only (`ARG EXTRAS=tts`; weights baked in at build,
@@ -1262,8 +1285,11 @@ below are the ones a later change can silently break.
   and `lemma` is copied onto the row (default `""` for a writer that does not
   set it), like `vocabulary_review_logs`.
 - **Seed order matters**: `clips` -> `verify-clips` -> `words` -> `definitions`
-  (-> `items`). `words` skips senses that already have a verified clip (the
-  brief: do not generate what exists), so it must run after verification.
+  (-> `items`). `words`, `definitions` and `items` take `--accent
+  british|american|both` (default both). `words` makes TTS for EVERY sense,
+  clip or not (decision 26: a later "prefer the synthetic voice" option then
+  needs no generation); `--skip-clipped` restores the old rule, under which it
+  must run after verification.
 
 ## Vocabulary practice (stage 3): the third rung, `listen`, `speak`, On the go
 

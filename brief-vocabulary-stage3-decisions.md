@@ -202,6 +202,7 @@ TTS; clips are shared).
     (British, Australian, …); the accent choice only selects which TTS voice
     fills in where there is no verified clip. The brief's main rule stands.
 24. **Where it is chosen:** Settings → "Accent: British / American".
+    Speak recognition follows the accent (`en-GB` / `en-US`).
 25. **Heteronyms per accent.** An American table from misaki's `us_gold`
     POS-keyed entries (vendored like the British one), plus a Gemini pass
     choosing per sense, kept beside the British decisions.

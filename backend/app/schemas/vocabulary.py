@@ -25,6 +25,8 @@ from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.services.accents import Accent
+
 #: Rebuilt on almost every request by the practice endpoints, so named once
 #: rather than repeated as a bare ``Literal`` in five schemas that would
 #: then have to be kept in step by hand.
@@ -726,6 +728,9 @@ class VocabularySettingsOut(BaseModel):
     #: Whether a word's audio plays by itself as an answer is revealed (the
     #: speaker button is there either way). Default on.
     pronunciation: bool
+    #: The accent of the synthetic voice (``british`` default, ``american``).
+    #: A live recording keeps its speaker's accent regardless.
+    accent: Accent = "british"
     #: How many of the learner's active cards have actually started and
     #: are not already retired -- shown beside the direction toggle so
     #: switching it to ``passive`` is an informed choice: "N words are
@@ -755,6 +760,9 @@ class VocabularySettingsIn(BaseModel):
     #: fields above and must not flip this one, and only the Pronunciation
     #: control sends it.
     pronunciation: bool | None = None
+    #: Absent (or null) = unchanged, like ``pronunciation``: only the
+    #: Accent control sends it. Anything but ``british`` / ``american`` is a 422.
+    accent: Accent | None = None
 
 
 # --- "This translation is wrong" (P4) ---------------------------------------

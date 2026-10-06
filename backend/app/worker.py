@@ -76,6 +76,7 @@ from app.core.database import AsyncSession, async_session_factory
 from app.models.audio_blob import AudioBlob, TranscriptStatus
 from app.models.audio_render import AudioRender, RenderStatus
 from app.models.lexicon import Lexeme
+from app.services import accents
 from app.services import difficulty as difficulty_service
 from app.services import lexicon_enrich as lexicon_enrich_service
 from app.services import lexicon_hints as lexicon_hints_service
@@ -508,8 +509,9 @@ async def _render_loop() -> None:
 
     synth = tts_service.KokoroSynth()
     logger.info(
-        "text to speech polling every %.1fs (voice %s, max_attempts=%d)",
-        interval, tts_service.VOICE, settings.tts_max_attempts,
+        "text to speech polling every %.1fs (voices %s, max_attempts=%d)",
+        interval, ", ".join(a.voice for a in accents.ACCENTS.values()),
+        settings.tts_max_attempts,
     )
     failures = 0
     last_maintenance = float("-inf")

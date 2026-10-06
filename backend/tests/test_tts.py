@@ -398,7 +398,7 @@ async def test_a_model_that_will_not_load_spends_no_attempts(created: Created) -
     created.render_keys.append(spec.key)
     await tts.enqueue([spec])
 
-    def not_loaded(text: str) -> np.ndarray:
+    def not_loaded(text: str, voice: str) -> np.ndarray:
         raise InfrastructureError("Kokoro failed to load: no weights")
 
     row = await _make(spec, not_loaded, FakeStorage(), max_attempts=1)

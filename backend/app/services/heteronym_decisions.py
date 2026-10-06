@@ -10,6 +10,16 @@ lemma in the lexicon one model request chooses ONE of the lemma's candidate
 pronunciations (:mod:`app.services.pronunciation`), given the sense's
 definition and part of speech.
 
+## One log per accent
+
+Each accent has its OWN log and its own column, because a phoneme string
+belongs to its alphabet (decision 25): British in
+``heteronym_decisions.jsonl`` -> ``LexemeSense.pronunciation``, American in
+``heteronym_decisions_us.jsonl`` -> ``LexemeSense.pronunciation_us``. The two
+are decided separately (the candidates, and sometimes which senses are even
+heteronyms, differ) and keyed identically; every function here takes the
+``accent``.
+
 ## The decisions log
 
 ``app/data/tts/heteronym_decisions.jsonl``, append-only, one JSON object per
@@ -34,7 +44,7 @@ is different. A sense is keyed by what is the same everywhere:
 
 ## Applying
 
-:func:`apply` writes ``LexemeSense.pronunciation`` for every heteronym sense
+:func:`apply` writes the accent's column for every heteronym sense
 the log answers, and ONLY those. A heteronym sense with no decision is left
 NULL, and at serving time falls back to misaki's own entry for its part of
 speech (``DEFAULT`` if none) and is logged -- see
@@ -58,10 +68,15 @@ from app.core.database import AsyncSession
 from app.models.lexicon import Lexeme, LexemeSense
 from app.services import lexicon_enrich as le
 from app.services import pronunciation
+from app.services.accents import DEFAULT_ACCENT, Accent
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_LOG = pronunciation.DATA_DIR / "heteronym_decisions.jsonl"
+LOG_PATHS: dict[Accent, Path] = {
+    "british": DEFAULT_LOG,
+    "american": pronunciation.DATA_DIR / "heteronym_decisions_us.jsonl",
+}
 DEFAULT_MODEL = le.MODEL_MAIN
 
 SenseKey = tuple[str, str, str, str]
@@ -94,6 +109,10 @@ class DecisionLog:
                     record.get("definition", ""),
                 )
                 self.decisions[key] = record["ps"]
+
+    @classmethod
+    def for_accent(cls, accent: Accent) -> "DecisionLog":
+        return cls(LOG_PATHS[accent])
 
     def put(
         self, lemma: str, pos: str, synset: str | None, definition: str,
@@ -134,10 +153,13 @@ class SenseRow:
     definition: str
 
 
-async def heteronym_senses(session: AsyncSession) -> list[SenseRow]:
-    """Every sense (with a definition) of every heteronym lemma in the lexicon.
-    Proper nouns are not vocabulary and are left out."""
-    lemmas = pronunciation.heteronym_lemmas()
+async def heteronym_senses(
+    session: AsyncSession, accent: Accent = DEFAULT_ACCENT
+) -> list[SenseRow]:
+    """Every sense (with a definition) of every lemma that is a heteronym in
+    ``accent`` in the lexicon. Proper nouns are not vocabulary and are left
+    out."""
+    lemmas = pronunciation.heteronym_lemmas(accent)
     rows = (
         await session.execute(
             select(
@@ -157,12 +179,12 @@ async def heteronym_senses(session: AsyncSession) -> list[SenseRow]:
 
 
 PROMPT = """You decide how an English word is PRONOUNCED in a given meaning, for \
-a British English text-to-speech voice used in an English-learning app.
+a {accent} English text-to-speech voice used in an English-learning app.
 
 Below is one word with its possible pronunciations, numbered, in approximate IPA \
-(British), each with a note on what it is used for where we have one. Then come \
+({accent}), each with a note on what it is used for where we have one. Then come \
 numbered senses of the word, each with its part of speech and definition. For \
-EVERY sense choose the number of the pronunciation a British speaker uses for the \
+EVERY sense choose the number of the pronunciation a {accent} speaker uses for the \
 word in THAT meaning. Decide by the meaning and the definition, not by which \
 pronunciation is more common. If no listed pronunciation fits a sense, answer 0.
 
@@ -183,6 +205,7 @@ def render_prompt(
     lemma: str,
     candidates: tuple[pronunciation.Candidate, ...],
     senses: list[tuple[str, str, str]],
+    accent: Accent = DEFAULT_ACCENT,
 ) -> str:
     """The request for one lemma. ``senses`` are ``(key, pos, definition)``."""
     lines = []
@@ -194,7 +217,10 @@ def render_prompt(
         f'{key}: ({pos or "no part of speech"}) {definition}'
         for key, pos, definition in senses
     ]
-    return PROMPT.format(lemma=lemma, candidates="\n".join(lines), senses="\n".join(sense_lines))
+    return PROMPT.format(
+        accent=accent.capitalize(), lemma=lemma,
+        candidates="\n".join(lines), senses="\n".join(sense_lines),
+    )
 
 
 def parse_choices(reply: dict[str, Any] | None, keys: list[str], size: int) -> dict[str, int]:
@@ -232,6 +258,7 @@ async def decide(
     model: str = DEFAULT_MODEL,
     concurrency: int = 6,
     limit: int | None = None,
+    accent: Accent = DEFAULT_ACCENT,
 ) -> DecideReport:
     """Ask the model for every sense the log cannot already answer: one
     request per lemma, covering all its undecided senses. Appends each answer
@@ -249,12 +276,13 @@ async def decide(
     semaphore = asyncio.Semaphore(concurrency)
 
     async def one(lemma: str) -> None:
-        candidates = pronunciation.candidates(lemma)
+        candidates = pronunciation.candidates(lemma, accent)
         pairs = by_lemma[lemma]
         keys = [f"s{i}" for i in range(1, len(pairs) + 1)]
         prompt = render_prompt(
             lemma, candidates,
             [(k, row.pos, row.definition) for k, row in zip(keys, pairs)],
+            accent,
         )
         async with semaphore:
             reply = await gemini.ask(model, prompt, step="heteronym", max_tokens=2048)
@@ -283,32 +311,35 @@ class ApplyReport:
     stale: list[str] = field(default_factory=list)
 
 
-async def apply(session: AsyncSession, log: DecisionLog) -> ApplyReport:
-    """Write ``LexemeSense.pronunciation`` from the log for every heteronym
-    sense it answers (module docstring). A logged answer that is not one of
+async def apply(
+    session: AsyncSession, log: DecisionLog, accent: Accent = DEFAULT_ACCENT
+) -> ApplyReport:
+    """Write the accent's column (``pronunciation`` / ``pronunciation_us``)
+    from the log for every heteronym sense it answers (module docstring). A logged answer that is not one of
     the lemma's CURRENT candidates (the extras table changed under it) is
     reported and not written. Commits."""
     report = ApplyReport()
+    column = "pronunciation_us" if accent == "american" else "pronunciation"
     current = dict(
         (
-            await session.execute(select(LexemeSense.id, LexemeSense.pronunciation))
+            await session.execute(select(LexemeSense.id, getattr(LexemeSense, column)))
         ).all()
     )
-    for row in await heteronym_senses(session):
+    for row in await heteronym_senses(session, accent):
         report.heteronym_senses += 1
         ps = log.get(row.lemma, row.pos, row.synset, row.definition)
         label = f"{row.lemma} ({row.pos})"
         if ps is None:
             report.undecided.append(label)
             continue
-        if ps not in {c.ps for c in pronunciation.candidates(row.lemma)}:
+        if ps not in {c.ps for c in pronunciation.candidates(row.lemma, accent)}:
             report.stale.append(f"{label}: {ps}")
             continue
         if current.get(row.sense_id) == ps:
             report.unchanged += 1
             continue
         await session.execute(
-            update(LexemeSense).where(LexemeSense.id == row.sense_id).values(pronunciation=ps)
+            update(LexemeSense).where(LexemeSense.id == row.sense_id).values({column: ps})
         )
         report.written += 1
     await session.commit()

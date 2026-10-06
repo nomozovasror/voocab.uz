@@ -27,6 +27,7 @@ from app.models.user import User
 from app.models.vocabulary import SavedWord
 from app.models.word_audio_log import OnTheGoExposure
 from app.services import practice, tts, word_audio
+from app.services.accents import DEFAULT_ACCENT, Accent
 
 
 async def in_rotation(session: AsyncSession, user_id: uuid.UUID) -> list[SavedWord]:
@@ -63,6 +64,9 @@ async def item_list(
     numbers instead of being "preparing" for ever.
     """
     words = await in_rotation(session, user.id)
+    # The learner's own accent, read once: every word's definition and (TTS)
+    # word is in that voice.
+    accent = (await practice.get_settings(session, user.id)).accent
     senses = {
         sense.id: sense
         for sense in (
@@ -77,17 +81,19 @@ async def item_list(
         word
         for word in words
         if word.lexeme_sense_id in senses
-        and tts.definition_spec(senses[word.lexeme_sense_id].definition_en, word.lemma)
+        and tts.definition_spec(
+            senses[word.lexeme_sense_id].definition_en, word.lemma, accent
+        )
         is not None
     ]
     material_ids = await practice.learner_material_ids(session, user.id)
     renders = await word_audio.item_renders(
-        session, playable, prefer_material_ids=material_ids
+        session, playable, prefer_material_ids=material_ids, accent=accent
     )
     ready = [(word, renders[word.id]) for word in playable if renders.get(word.id)]
     waiting = [word for word in playable if not renders.get(word.id)]
     failed = await _failed_words(
-        session, waiting, senses, prefer_material_ids=material_ids
+        session, waiting, senses, prefer_material_ids=material_ids, accent=accent
     )
     return ready, len(waiting) - len(failed)
 
@@ -98,6 +104,7 @@ async def _failed_words(
     senses: dict[uuid.UUID, LexemeSense],
     *,
     prefer_material_ids: frozenset[uuid.UUID],
+    accent: Accent = DEFAULT_ACCENT,
 ) -> set[uuid.UUID]:
     """The words whose item, or one of the parts it is made of (definition,
     word), has a ``failed`` render. Such a word is not "being prepared": a
@@ -121,7 +128,8 @@ async def _failed_words(
         ).all()
     }
     sources = await word_audio.word_sources(
-        session, wanted, lexemes=lexemes, prefer_material_ids=prefer_material_ids
+        session, wanted, lexemes=lexemes, prefer_material_ids=prefer_material_ids,
+        accent=accent,
     )
     keys_of: dict[uuid.UUID, list[str]] = {}
     for word in words:
@@ -129,7 +137,7 @@ async def _failed_words(
         lexeme = lexemes.get(sense.lexeme_id)
         if lexeme is None or sense.id not in sources:
             continue
-        definition = tts.definition_spec(sense.definition_en, lexeme.lemma)
+        definition = tts.definition_spec(sense.definition_en, lexeme.lemma, accent)
         if definition is None:
             continue
         source = sources[sense.id]

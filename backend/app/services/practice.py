@@ -106,6 +106,7 @@ from app.services import distractors
 from app.services import materials as materials_service
 from app.services import mistakes
 from app.services import speech_match, word_audio, word_lists
+from app.services.accents import Accent
 from app.services.answers import normalize_answer
 
 logger = logging.getLogger("app.services.practice")
@@ -1841,13 +1842,14 @@ async def update_settings(
     direction: Literal["passive", "both"],
     exercise_types: list[str] | None,
     pronunciation: bool | None = None,
+    accent: Accent | None = None,
 ) -> VocabularySettings:
     """Stage 2's settings screen, all three fields at once -- a PUT rather
     than three separate setters, because the screen shows them together and
-    saves them together. ``pronunciation`` (stage 3) is the exception that
-    proves the rule: ``None`` leaves it as it was, so a save of the other
-    three can never flip a toggle the caller did not mention (a new row
-    starts at the column's default, on)."""
+    saves them together. ``pronunciation`` and ``accent`` (stage 3) are the
+    exceptions that prove the rule: ``None`` leaves them as they were, so a
+    save of the other three can never flip a choice the caller did not
+    mention (a new row starts at the columns' defaults: on, British)."""
     row = await session.get(VocabularySettings, user_id)
     if row is None:
         row = VocabularySettings(user_id=user_id)
@@ -1856,6 +1858,8 @@ async def update_settings(
     row.exercise_types = exercise_types
     if pronunciation is not None:
         row.pronunciation = pronunciation
+    if accent is not None:
+        row.accent = accent
     session.add(row)
     await session.commit()
     await session.refresh(row)
@@ -2346,12 +2350,13 @@ async def build_session(
         try:
             if speak:
                 definition_urls = await word_audio.definition_audio_urls(
-                    session, audio_senses
+                    session, audio_senses, accent=settings.accent
                 )
             else:
                 audio_by_sense = await word_audio.word_audio_many(
                     session, audio_senses,
                     prefer_material_ids=await learner_material_ids(session, user.id),
+                    accent=settings.accent,
                 )
         except Exception:
             logger.warning(
@@ -3012,6 +3017,7 @@ async def record_answer(
             audio = await word_audio.word_audio(
                 session, sense,
                 prefer_material_ids=await learner_material_ids(session, user.id),
+                accent=(await get_settings(session, user.id)).accent,
             )
         except Exception:
             logger.warning("word audio unavailable for reveal", exc_info=True)
@@ -3150,6 +3156,7 @@ async def speak_check(
             audio = await word_audio.word_audio(
                 session, sense,
                 prefer_material_ids=await learner_material_ids(session, user.id),
+                accent=(await get_settings(session, user.id)).accent,
             )
         except Exception:
             logger.warning("word audio unavailable for speak reveal", exc_info=True)
