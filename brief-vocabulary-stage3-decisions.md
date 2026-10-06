@@ -189,3 +189,23 @@ ready yet" — the server has already queued it.
   `word_offset_ms` is where the word starts inside the item file.
 - `POST /vocabulary/on-the-go/exposures` `{ word_id }` → 204. Sent once per
   item, when playback passes `word_offset_ms`.
+
+## Addendum (2026-10-07): the learner chooses the accent
+
+Agreed with the owner after the seed estimate (two accents cost ~0.55 GB more
+TTS; clips are shared).
+
+22. **Two TTS accents.** British `bf_emma` (`lang_code='b'`) and American
+    `af_heart` (`lang_code='a'`, the highest-graded voice in Kokoro's own
+    table). Default British — the brief's choice.
+23. **Live clips first for everyone.** A recording keeps its speaker's accent
+    (British, Australian, …); the accent choice only selects which TTS voice
+    fills in where there is no verified clip. The brief's main rule stands.
+24. **Where it is chosen:** Settings → "Accent: British / American".
+25. **Heteronyms per accent.** An American table from misaki's `us_gold`
+    POS-keyed entries (vendored like the British one), plus a Gemini pass
+    choosing per sense, kept beside the British decisions.
+26. **Every word gets TTS, clip or not.** `seed_tts words` no longer skips
+    words that have a verified clip, so a later "prefer the synthetic voice
+    over live recordings" setting (owner: a future option, not built now)
+    needs no generation.
