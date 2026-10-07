@@ -1350,8 +1350,9 @@ below are the ones a later change can silently break.
   the source is mounted read-only (e.g. `CALD_SOURCE_DIR=/cald`), and the
   private index (`app/data/private/cald/`, from the bind-mounted backend dir)
   must be readable there too -- both or nothing (one log line). Never a host
-  path in a committed file. `cald_recordings_workers` (2) sizes the sweep's
-  process pool.
+  path in a committed file: the mount and the variable live in a local,
+  gitignored `docker-compose.override.yml` (compose merges it on its own).
+  `cald_recordings_workers` (2) sizes the sweep's process pool.
 - **`recordings --check-files [--confirm-db NAME]`** lists the stored
   recordings the CONFIGURED storage does not hold and, with `--confirm-db`,
   deletes those rows (serving falls back to Kokoro; the import puts them

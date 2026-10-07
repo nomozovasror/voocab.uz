@@ -58,3 +58,6 @@ seed/work/
 # so running one from the repo root leaves an empty catalogue.db there. That
 # is a mis-run to notice, not a file to commit.
 catalogue.db
+
+# Machine-specific compose additions (e.g. the dictionary source mount).
+docker-compose.override.yml
