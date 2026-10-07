@@ -45,7 +45,7 @@ from app.core.security import (
     decode_oidc_tx_token,
     decode_refresh_token,
 )
-from app.models.user import User
+from app.models.user import User, is_system_account
 from app.services import telegram_oidc
 from app.services.auth import get_or_create_user_from_telegram
 
@@ -248,7 +248,7 @@ async def refresh(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
 
     user = await session.get(User, user_id)
-    if user is None:
+    if user is None or is_system_account(user):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
 
     response = Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -1268,6 +1268,71 @@ line is `scripts/cald.py`.
   database before `apply`, and `restore --all` before downgrading the
   migration.
 
+## AI-assisted review of flagged senses (`lexicon_ai_review.py`, `scripts/lexicon_ai_review.py`)
+
+2,619 `needs_review` senses are more than a person can read, so Claude reviews
+them in batches (agreed 2026-10-07; pilot of 100 first). The module docstring
+has the reasoning; the rules a later change can silently break:
+
+- **Exports and reports are private.** Batches hold definitions: they live
+  ONLY in `app/data/private/review/` (gitignored; the repo is public).
+  `export` writes `<tag>_NNN.jsonl`, `<tag>_manifest.json` and
+  `REVIEW_RUBRIC.md` there -- the rubric (a constant in the module, no
+  dictionary text) is the reviewing agents' instruction sheet and the
+  decision schema's documentation. Tests use invented senses.
+- **A decision may change only** `cefr`, `meaning_uz` / `meaning_uz_alt` and
+  (behind `--allow-material-fixes`) a material row's pos/sense link. Never a
+  definition: it is not an accepted key. Unknown keys are rejected so a typo
+  is not a silent no-op. Unsure -> `human`: nothing changes, the sense stays
+  flagged and `LexemeSense.review_note` carries "Claude review (conf): note"
+  (shown on Studio's row, `ReviewRowOut.review_note`).
+- **Writes go through `lexicon_review.approve` / `fix_and_approve`** (they
+  gained `commit=False`, and `fix_and_approve` a `meaning_uz_alt`), so a
+  decision is exactly what Studio's button does: reasons kept as history,
+  lexeme CEFR kept in step, `cefr_source` -> `ours` when a dictionary level is
+  changed -- and `approved_at` set, which LOCKS the sense against
+  `scripts/cald.py apply`/`restore` (`tests/test_lexicon_ai_review.py` proves
+  it against `lexicon_cald.apply_plans`).
+- **The approver is a system account** (`models.user.REVIEW_BOT_EMAIL`,
+  display name "Claude review"), created by `apply` (never a dry run),
+  idempotently. Inert: no password, no `auth_identities`, not admin, and
+  `is_system_account` makes `get_current_user` and `/auth/refresh` refuse it
+  even for a minted token. Studio shows `approved_by_name`.
+- **Refuse rather than guess.** Rejected: not `needs_review` anymore ("already
+  decided" -- a re-run is idempotent), approved by a person, `low` confidence
+  outside `human`, and **a sense with an open learner report** (approving
+  closes it; a learner is owed a person's answer -- only `human`, report
+  stays open). Invalid decisions are skipped and listed; valid ones apply.
+- **One transaction per run; every decision logged.** `lexicon_ai_reviews`
+  keeps BEFORE and AFTER snapshots (sense fields, lexeme CEFR, moved rows).
+  `undo` reverts a decision only if the sense still equals AFTER and (for an
+  approval) is still approved by the account -- a person's later edit wins and
+  is reported. The log row survives (`undone_at`); the sense can be decided
+  again. `status` prints reason x outcome (`--list OUTCOME` names the senses).
+- **Material fixes are off by default.** Studio has no action on a material
+  row; the only existing mechanisms are pointer writes (`lexicon_enrich
+  .apply_work`'s re-pointing, `link_row`). Two kinds only: `relink_sense`
+  (another sense of the SAME lexeme) and `relink_lexeme` (an EXISTING lexeme
+  of the same lemma; the row takes its pos). Nothing is created or deleted; a
+  row's level follows `link_row`'s dictionary-level rule; undo needs every
+  moved row to be as the run left it.
+- **Where `lemma_merge` is recorded:** nowhere as such (the build script's
+  merge map is in memory). The export derives it: the lexeme's material rows
+  whose written `lemma` differs from the headword, with surfaces and whether
+  that form has a lexeme of its own.
+- **`export` is read only** (the connection is `READ ONLY`) and works on a
+  database not yet migrated to `review_note` (the pilot was exported from one);
+  `apply`/`undo`/`status` need the migration (`b1c4e7a09d52`).
+  `lexicon_enrich` does not skip an approved sense by `approved_at` alone (only
+  a `cald`/`human` definition source): a later re-enrichment of a
+  non-dictionary sense can still re-translate it -- unchanged by this work.
+- **Commands** (from `backend/`): `export [--reason R] [--sample N --seed S]
+  [--exclude-file F] [--batch-size 150] [--tag T]`; `apply --decisions F
+  [--confirm-db NAME] [--allow-material-fixes]` (dry run without
+  `--confirm-db`); `undo (--all | --ids ...) [--confirm-db NAME]`; `status`.
+  `--exclude-file` reads a JSONL's own `sense_id` per line (a batch names other
+  senses of the lexeme; they are not excluded).
+
 ## The audio layer: a word is a recording or TTS (vocabulary stage 3)
 
 What a learner hears for a word is made in advance, never inside a request.

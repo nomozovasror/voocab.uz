@@ -26,7 +26,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import Column, DateTime, ForeignKey, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import ARRAY, TEXT
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TEXT
 from sqlalchemy.dialects.postgresql import UUID as SA_UUID
 from sqlmodel import Field, SQLModel
 
@@ -433,6 +433,12 @@ class LexemeSense(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True, index=True),
     )
 
+    #: A note for the human who reviews this sense next: why the AI-assisted
+    #: review (`app.services.lexicon_ai_review`) left it flagged instead of
+    #: deciding. Empty for every other sense. Shown on Studio's review row;
+    #: never read by learners and never a reason on its own.
+    review_note: str = Field(default="", max_length=500)
+
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(DateTime(timezone=True), nullable=False),
@@ -502,4 +508,47 @@ class TranslationReport(SQLModel, table=True):
     )
     resolved_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+
+
+class LexiconAiReview(SQLModel, table=True):
+    """One decision of the AI-assisted lexicon review, with everything needed
+    to take it back (`scripts/lexicon_ai_review.py undo`).
+
+    ``before`` / ``after`` are snapshots of the fields the review may change
+    (sense CEFR, Uzbek pair, approval, note, the lexeme's denormalised CEFR):
+    ``before`` is what undo puts back, ``after`` is what undo requires to
+    still be true -- a sense a person has touched since is left alone.
+    ``material_fixes`` lists the material-row link changes, each with its own
+    before/after. A row is kept after an undo (``undone_at``), so the history
+    of what the reviewer did survives it; ``ON DELETE CASCADE`` with the
+    sense, like a recording.
+    """
+
+    __tablename__ = "lexicon_ai_reviews"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    sense_id: uuid.UUID = Field(
+        sa_column=Column(
+            SA_UUID(as_uuid=True),
+            ForeignKey("lexeme_senses.id", ondelete="CASCADE"),
+            nullable=False, index=True,
+        ),
+    )
+    run_id: str = Field(max_length=32, index=True)
+    #: ``approve`` | ``fix`` | ``human`` (`lexicon_ai_review.ACTIONS`).
+    action: str = Field(max_length=8)
+    confidence: str = Field(max_length=8)
+    note: str = Field(default="", sa_column=Column(TEXT, nullable=False, server_default=""))
+    before: dict = Field(sa_column=Column(JSONB, nullable=False))
+    after: dict = Field(sa_column=Column(JSONB, nullable=False))
+    material_fixes: list = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False, server_default="[]"),
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    undone_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True),
     )

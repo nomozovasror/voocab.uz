@@ -49,6 +49,7 @@ def _row_out(
     lookups: int = 0,
     saves: int = 0,
     material_count: int = 0,
+    approved_by_name: str | None = None,
 ) -> ReviewRowOut:
     return ReviewRowOut(
         sense_id=sense.id,
@@ -68,7 +69,9 @@ def _row_out(
         needs_review=sense.needs_review,
         provisional=sense.provisional,
         approved_by=sense.approved_by,
+        approved_by_name=approved_by_name,
         approved_at=sense.approved_at,
+        review_note=sense.review_note,
         material_example_count=example_count,
         report_count=report_count,
         report_notes=report_notes or [],
@@ -116,6 +119,9 @@ async def get_review_queue(
     counts = await lexicon_review.reason_counts(session)
     core_pending = await lexicon_review.core_pending_count(session)
     reported_pending = await lexicon_review.reported_count(session)
+    names = await lexicon_review.approver_names(
+        session, [sense.approved_by for sense, *_ in rows]
+    )
     return ReviewQueueOut(
         total=total,
         reason_counts=counts,
@@ -126,6 +132,7 @@ async def get_review_queue(
                 sense, lexeme, n, reports, notes,
                 attempters=attempters, lookups=lookups, saves=saves,
                 material_count=material_count,
+                approved_by_name=names.get(sense.approved_by),
             )
             for sense, lexeme, n, reports, notes, attempters, lookups, saves, material_count
             in rows
@@ -167,10 +174,12 @@ async def approve_review_row(
     attempters, lookups, saves, material_count = await lexicon_review.exposure_for(
         session, sense_id
     )
+    names = await lexicon_review.approver_names(session, [sense.approved_by])
     return _row_out(
         sense, lexeme, example_count,
         attempters=attempters, lookups=lookups, saves=saves,
         material_count=material_count,
+        approved_by_name=names.get(sense.approved_by),
     )
 
 
@@ -202,10 +211,12 @@ async def fix_review_row(
     attempters, lookups, saves, material_count = await lexicon_review.exposure_for(
         session, sense_id
     )
+    names = await lexicon_review.approver_names(session, [sense.approved_by])
     return _row_out(
         sense, lexeme, example_count,
         attempters=attempters, lookups=lookups, saves=saves,
         material_count=material_count,
+        approved_by_name=names.get(sense.approved_by),
     )
 
 

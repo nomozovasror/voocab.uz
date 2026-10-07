@@ -8,7 +8,7 @@ from fastapi import Cookie, Depends, HTTPException, status
 
 from app.core.database import AsyncSession, get_session
 from app.core.security import ACCESS_COOKIE, decode_access_token
-from app.models.user import User
+from app.models.user import User, is_system_account
 
 _CREDENTIALS_EXC = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -31,7 +31,9 @@ async def get_current_user(
         raise _CREDENTIALS_EXC
 
     user = await session.get(User, user_id)
-    if user is None:
+    # The lexicon review's system account has no way to log in; refusing it
+    # here as well means a forged or leaked token for it still opens nothing.
+    if user is None or is_system_account(user):
         raise _CREDENTIALS_EXC
     return user
 

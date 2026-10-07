@@ -49,7 +49,14 @@ class ReviewRowOut(BaseModel):
     needs_review: bool
     provisional: bool
     approved_by: uuid.UUID | None
+    #: Who that was, by display name -- "Claude review" for a decision of the
+    #: AI-assisted review (`lexicon_ai_review`), so a person can tell which
+    #: approvals to look at again.
+    approved_by_name: str | None = None
     approved_at: datetime | None
+    #: Why the AI-assisted review left this sense for a person (empty if it
+    #: did not) -- the review row shows it beside the reasons.
+    review_note: str = ""
     #: How many `material_vocabulary` rows use this sense -- what the "peek
     #: sentences" link is offered on (zero means nothing to show).
     material_example_count: int

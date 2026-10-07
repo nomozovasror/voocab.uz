@@ -83,6 +83,7 @@ from app.core.database import AsyncSession
 from app.models.attempt import Attempt, AttemptStatus
 from app.models.lexicon import REVIEW_REASONS, Lexeme, LexemeSense, TranslationReport
 from app.models.material import Material
+from app.models.user import User
 from app.models.vocabulary import LookupEvent, MaterialVocabulary, SavedWord
 
 #: Independent of any other module's notion of a level -- a sense's `cefr`
@@ -437,19 +438,30 @@ async def _close_open_reports(session: AsyncSession, sense_id: uuid.UUID) -> Non
         session.add(report)
 
 
+async def _finish(session: AsyncSession, sense: LexemeSense, commit: bool) -> LexemeSense:
+    """Commit and refresh, or -- for a caller that owns the transaction
+    (`lexicon_ai_review.apply`: one transaction per run) -- only flush."""
+    if commit:
+        await session.commit()
+        await session.refresh(sense)
+    else:
+        await session.flush()
+    return sense
+
+
 async def approve(
-    session: AsyncSession, sense: LexemeSense, *, admin_id: uuid.UUID
+    session: AsyncSession, sense: LexemeSense, *, admin_id: uuid.UUID,
+    commit: bool = True,
 ) -> LexemeSense:
     """Clears `needs_review` -- the reasons stay, as the audit trail of what
-    was once flagged -- and stamps who signed off on it, when."""
+    was once flagged -- and stamps who signed off on it, when. ``commit=False``
+    leaves the commit to a caller that owns the transaction."""
     sense.needs_review = False
     sense.approved_by = admin_id
     sense.approved_at = datetime.now(timezone.utc)
     session.add(sense)
     await _close_open_reports(session, sense.id)
-    await session.commit()
-    await session.refresh(sense)
-    return sense
+    return await _finish(session, sense, commit)
 
 
 async def fix_and_approve(
@@ -460,8 +472,10 @@ async def fix_and_approve(
     meaning_uz: str | None,
     definition_en: str | None,
     cefr: str | None,
+    meaning_uz_alt: str | None = None,
+    commit: bool = True,
 ) -> LexemeSense:
-    """Edits whichever of the three fields were sent, then approves in the
+    """Edits whichever of the fields were sent, then approves in the
     same transaction -- Studio's "Fix" is one action, not an edit followed
     by a second click.
 
@@ -481,9 +495,16 @@ async def fix_and_approve(
     ``cald``-graded level the reviewer changed becomes ``cefr_source =
     'ours'`` (``cald_cefr`` still says what the dictionary has), so nothing
     later mistakes the reviewer's grade for the dictionary's.
+
+    ``meaning_uz_alt`` (the other translator's candidate) is not on Studio's
+    form; the AI-assisted review (`lexicon_ai_review`) replaces the pair as a
+    pair and passes it, with ``commit=False`` so a whole run is one
+    transaction. ``None`` leaves a field alone; ``""`` empties it.
     """
     if meaning_uz is not None:
         sense.meaning_uz = meaning_uz
+    if meaning_uz_alt is not None:
+        sense.meaning_uz_alt = meaning_uz_alt
     if definition_en is not None:
         if (sense.definition_source == "cald"
                 and definition_en.strip() != sense.definition_en.strip()):
@@ -504,6 +525,18 @@ async def fix_and_approve(
     sense.approved_at = datetime.now(timezone.utc)
     session.add(sense)
     await _close_open_reports(session, sense.id)
-    await session.commit()
-    await session.refresh(sense)
-    return sense
+    return await _finish(session, sense, commit)
+
+
+async def approver_names(
+    session: AsyncSession, user_ids: list[uuid.UUID | None]
+) -> dict[uuid.UUID, str]:
+    """Display names of whoever approved the given senses, one query -- so a
+    row can say "Claude review" rather than an id."""
+    wanted = {user_id for user_id in user_ids if user_id is not None}
+    if not wanted:
+        return {}
+    rows = (await session.exec(
+        select(User.id, User.display_name).where(User.id.in_(wanted))
+    )).all()
+    return {user_id: name for user_id, name in rows}

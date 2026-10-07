@@ -13,7 +13,7 @@ from app.models.audio_segment import AudioSegment
 from app.models.auth_identity import AuthIdentity
 from app.models.collection import Collection, CollectionItem
 from app.models.image_blob import ImageBlob
-from app.models.lexicon import Lexeme, LexemeSense, TranslationReport
+from app.models.lexicon import Lexeme, LexemeSense, LexiconAiReview, TranslationReport
 from app.models.material import Material
 from app.models.material_difficulty import MaterialDifficulty
 from app.models.part import Part
@@ -65,6 +65,7 @@ __all__ = [
     "VocabularySettings",
     "Lexeme",
     "LexemeSense",
+    "LexiconAiReview",
     "TranslationReport",
     "WordList",
     "WordListEntry",
