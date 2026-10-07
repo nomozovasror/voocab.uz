@@ -7,23 +7,31 @@ what :mod:`app.services.tts` has already made and, for what does not exist,
 **queues it and answers ``None``** (the work is the worker's; a request never
 waits on a model).
 
-## Every word is TTS
+## A word is a recording, or TTS
 
 Live clips cut from listening recordings were tried and dropped (2026-10-07:
 the owner listened -- fragments of neighbouring words, the emotion and pitch of
-the sentence). A word is the Kokoro render in the learner's ACCENT; if that
-render is ready it is served, otherwise it is **enqueued** and the answer is
-``None``.
+the sentence). What replaced them is the dictionary's own recording OF THE
+WORD, imported ahead of time (:mod:`app.services.word_recordings`).
+
+The learner chooses (``vocabulary_settings.word_voice``): ``recorded``
+(default) -- the recording for their accent where the sense has one, else
+Kokoro -- or ``synthetic`` -- always Kokoro. A recording is one indexed row
+(``word_recordings``: sense + accent), so the whole list is ONE query and the
+senses it answers never touch the render queue. The Kokoro render in the
+learner's ACCENT is served if ready, otherwise **enqueued** and the answer is
+``None``. Definitions are always Kokoro.
 
 ## The accent (decisions 22-26)
 
 Every function takes the learner's ``accent`` (``settings.accent``, default
-British) and it decides exactly two things: which Kokoro VOICE a render is in
-(the voice is in the render key, so each accent has its own rows and files, for
-words and definitions alike) and which stored heteronym choice is used
-(``LexemeSense.pronunciation`` British, ``pronunciation_us`` American -- a
-phoneme string belongs to its alphabet). A heteronym's sense carries its own
-phonemes, so its two senses are two renders.
+British) and it decides three things: which RECORDING a ``recorded`` learner
+hears (British the ``uk`` one, American the ``us`` one), which Kokoro VOICE a
+render is in (the voice is in the render key, so each accent has its own rows
+and files, for words and definitions alike) and which stored heteronym choice
+is used (``LexemeSense.pronunciation`` British, ``pronunciation_us`` American
+-- a phoneme string belongs to its alphabet). A heteronym's sense carries its
+own phonemes, so its two senses are two renders.
 
 ## Works from a SENSE, not a saved word
 
@@ -57,8 +65,9 @@ from sqlmodel import select
 from app.core.database import AsyncSession
 from app.models.audio_render import AudioRender, RenderStatus
 from app.models.lexicon import Lexeme, LexemeSense
+from app.models.word_recording import WordRecording
 from app.services import pronunciation, tts
-from app.services.accents import DEFAULT_ACCENT, Accent
+from app.services.accents import DEFAULT_ACCENT, DEFAULT_WORD_VOICE, Accent, WordVoice
 from app.services.storage import get_storage
 
 
@@ -119,6 +128,22 @@ async def _enqueue_missing(
         await tts.enqueue(missing.values())
 
 
+async def _recordings(
+    session: AsyncSession, sense_ids: Iterable[uuid.UUID], accent: Accent
+) -> dict[uuid.UUID, str]:
+    """``{sense id: storage key}`` of the human recordings in ``accent`` -- one
+    query for any number of senses."""
+    wanted = list(set(sense_ids))
+    if not wanted:
+        return {}
+    rows = await session.exec(
+        select(WordRecording.lexeme_sense_id, WordRecording.storage_key).where(
+            WordRecording.lexeme_sense_id.in_(wanted), WordRecording.accent == accent
+        )
+    )
+    return {sense_id: key for sense_id, key in rows.all()}
+
+
 def _ready(row: AudioRender | None) -> bool:
     return (
         row is not None and row.status == RenderStatus.READY and bool(row.storage_key)
@@ -131,19 +156,34 @@ async def word_audio_many(
     *,
     lexemes: dict[uuid.UUID, Lexeme] | None = None,
     accent: Accent = DEFAULT_ACCENT,
+    word_voice: WordVoice = DEFAULT_WORD_VOICE,
 ) -> dict[uuid.UUID, AudioOut | None]:
     """The word audio for every sense in one go: ``{sense id: AudioOut | None}``.
     ``None`` = not ready yet, and already queued (a sense whose lexeme cannot
-    be found is simply absent)."""
+    be found is simply absent).
+
+    ``word_voice == 'recorded'``: a sense with a human recording in ``accent``
+    is answered by it, immediately; every other sense takes the TTS path below
+    exactly as under ``'synthetic'`` -- nothing is queued for a word a person
+    already said."""
     storage = get_storage()
+    recorded = (
+        await _recordings(session, (s.id for s in senses), accent)
+        if word_voice == "recorded"
+        else {}
+    )
+    out: dict[uuid.UUID, AudioOut | None] = {
+        sense_id: AudioOut(url=await storage.url(key)) for sense_id, key in recorded.items()
+    }
     specs = {
         sense.id: tts_word_spec(sense, lexeme, accent)
-        for sense, lexeme in await _pairs(session, senses, lexemes)
+        for sense, lexeme in await _pairs(
+            session, [s for s in senses if s.id not in recorded], lexemes
+        )
     }
     rows = await _render_rows(session, (spec.key for spec in specs.values()))
     await _enqueue_missing(rows, specs.values())
 
-    out: dict[uuid.UUID, AudioOut | None] = {}
     for sense_id, spec in specs.items():
         row = rows.get(spec.key)
         out[sense_id] = (
@@ -160,6 +200,7 @@ async def word_audio(
     lexeme: Lexeme | None = None,
     *,
     accent: Accent = DEFAULT_ACCENT,
+    word_voice: WordVoice = DEFAULT_WORD_VOICE,
 ) -> AudioOut | None:
     """The audio for one sense's word, or ``None`` if it is not ready (it is
     then queued)."""
@@ -168,6 +209,7 @@ async def word_audio(
         [sense],
         lexemes={lexeme.id: lexeme} if lexeme is not None else None,
         accent=accent,
+        word_voice=word_voice,
     )
     return result.get(sense.id)
 

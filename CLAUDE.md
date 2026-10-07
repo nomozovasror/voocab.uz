@@ -30,7 +30,8 @@ area:**
   backend!`); **not** the server entrypoint.
 - `backend/app/worker.py` — four background loops: transcription, the
   difficulty projection refresh, lexicon enrichment, and TTS/On-the-go renders
-  (every vocabulary word is Kokoro TTS; live clips were dropped).
+  (a vocabulary word is a dictionary recording or Kokoro TTS, the learner's
+  choice; definitions are always TTS; live clips were dropped).
 - `frontend/` — **React 19 + Vite + Tailwind 4** SPA, React Router 7 and
   TanStack Query. Design notes in `frontend/docs/`.
 - `docker-compose.yml` — `db` (postgres:18, port 5432, db/user/pass

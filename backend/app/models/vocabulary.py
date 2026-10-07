@@ -995,6 +995,14 @@ class VocabularySettings(SQLModel, table=True):
         default="british",
         sa_column=Column(String(16), nullable=False, server_default="british"),
     )
+    #: Who says a word: ``recorded`` (default -- the dictionary's human
+    #: recording for the learner's accent where there is one, else Kokoro) or
+    #: ``synthetic`` (always Kokoro). See :mod:`app.services.accents` and
+    #: :mod:`app.services.word_recordings`. Definitions are always Kokoro.
+    word_voice: str = Field(
+        default="recorded",
+        sa_column=Column(String(16), nullable=False, server_default="recorded"),
+    )
     #: On the go: which part of an item plays first -- ``meaning_first`` (the
     #: masked definition, then the word; the default) or ``word_first``. Set on
     #: the On the go screen itself; the client sequences the two files.

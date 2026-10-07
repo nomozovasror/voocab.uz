@@ -8,12 +8,16 @@ import { getErrorMessage } from "@/lib/api";
 import { vocabularyApi } from "@/features/vocabulary/api";
 import { OptionPill } from "@/features/vocabulary/components/OptionPill";
 import { AUTOMATIC_LABEL, EXERCISE_LABEL } from "@/features/vocabulary/status";
-import type { Accent, ExerciseType, VocabularySettings } from "@/features/vocabulary/types";
+import type { Accent, ExerciseType, VocabularySettings, WordVoice } from "@/features/vocabulary/types";
 
 const MINUTES_OPTIONS: VocabularySettings["daily_minutes"][] = [5, 10, 15, 20];
 const ACCENT_OPTIONS: { value: Accent; label: string }[] = [
   { value: "british", label: "British" },
   { value: "american", label: "American" },
+];
+const WORD_VOICE_OPTIONS: { value: WordVoice; label: string }[] = [
+  { value: "recorded", label: "Recorded" },
+  { value: "synthetic", label: "Synthetic" },
 ];
 const EXERCISE_TYPES: ExerciseType[] = [
   "recognise",
@@ -34,9 +38,9 @@ const EXERCISE_TYPES: ExerciseType[] = [
  * defaults to, say), so the source of truth after every write is what the
  * server sends back, not what was clicked.
  *
- * Pronunciation and Accent (stage 3) are the controls that are not part of
- * the triple: each is sent alone, and an absent `pronunciation` / `accent`
- * on a `PUT` means "unchanged" on the server.
+ * Pronunciation, Accent and Word audio (stage 3) are the controls that are
+ * not part of the triple: each is sent alone, and an absent `pronunciation` /
+ * `accent` / `word_voice` on a `PUT` means "unchanged" on the server.
  *
  * `Listen` and `Speak` are in the manual list for every learner, on every
  * device. Settings follow the ACCOUNT, not this browser, so a phone that
@@ -195,9 +199,8 @@ export default function VocabularySettingsPage() {
       <section className="mt-4 rounded-xl border border-border px-4 py-3">
         <p className="text-sm text-foreground">Accent</p>
         <p className="text-xs text-muted-foreground">
-          The voice that reads words and definitions aloud, and the accent the
-          speaking exercise listens for. Real recordings keep their own
-          speaker&apos;s accent.
+          The voice that reads definitions aloud, the recording played for a
+          word, and the accent the speaking exercise listens for.
         </p>
         <div
           role="radiogroup"
@@ -210,6 +213,31 @@ export default function VocabularySettingsPage() {
               on={data.accent === value}
               disabled={update.isPending}
               onClick={() => patch({ accent: value })}
+            >
+              {label}
+            </OptionPill>
+          ))}
+        </div>
+      </section>
+
+      <section className="mt-4 rounded-xl border border-border px-4 py-3">
+        <p className="text-sm text-foreground">Word audio</p>
+        <p className="text-xs text-muted-foreground">
+          Recorded plays a person saying the word, in the accent above, where
+          the dictionary has a recording; otherwise, and with Synthetic, the
+          computer voice. Definitions are always the computer voice.
+        </p>
+        <div
+          role="radiogroup"
+          aria-label="Word audio"
+          className="mt-3 flex flex-wrap gap-1.5"
+        >
+          {WORD_VOICE_OPTIONS.map(({ value, label }) => (
+            <OptionPill
+              key={value}
+              on={data.word_voice === value}
+              disabled={update.isPending}
+              onClick={() => patch({ word_voice: value })}
             >
               {label}
             </OptionPill>

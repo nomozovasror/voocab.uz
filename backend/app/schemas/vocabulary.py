@@ -25,7 +25,7 @@ from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.services.accents import Accent
+from app.services.accents import Accent, WordVoice
 
 #: Rebuilt on almost every request by the practice endpoints, so named once
 #: rather than repeated as a bare ``Literal`` in five schemas that would
@@ -726,9 +726,12 @@ class VocabularySettingsOut(BaseModel):
     #: Whether a word's audio plays by itself as an answer is revealed (the
     #: speaker button is there either way). Default on.
     pronunciation: bool
-    #: The accent of the synthetic voice (``british`` default, ``american``).
-    #: A live recording keeps its speaker's accent regardless.
+    #: The accent of the voice: the Kokoro voice, and which of the two human
+    #: recordings (British / American) a word is spoken by (``british`` default).
     accent: Accent = "british"
+    #: Who says a word: the dictionary's human recording where it has one
+    #: (``recorded``, default) or always the synthetic voice (``synthetic``).
+    word_voice: WordVoice = "recorded"
     #: On the go: which part of an item plays first, and the seconds between the
     #: two (the gap between words is fixed).
     on_the_go_order: OnTheGoOrder = "meaning_first"
@@ -771,6 +774,9 @@ class VocabularySettingsIn(BaseModel):
     #: Absent (or null) = unchanged, like ``pronunciation``: only the
     #: Accent control sends it. Anything but ``british`` / ``american`` is a 422.
     accent: Accent | None = None
+    #: Absent (or null) = unchanged, like ``accent``: only the Word audio
+    #: control sends it. Anything but ``recorded`` / ``synthetic`` is a 422.
+    word_voice: WordVoice | None = None
     #: Absent (or null) = unchanged: only the On the go screen sends these two,
     #: and a save from the settings screen must not flip them.
     on_the_go_order: OnTheGoOrder | None = None

@@ -106,7 +106,7 @@ from app.services import distractors
 from app.services import materials as materials_service
 from app.services import mistakes
 from app.services import speech_match, word_audio, word_lists
-from app.services.accents import Accent
+from app.services.accents import Accent, WordVoice
 from app.services.answers import normalize_answer
 
 logger = logging.getLogger("app.services.practice")
@@ -1831,6 +1831,7 @@ async def update_settings(
     exercise_types: list[str] | None | _Unset = UNSET,
     pronunciation: bool | None = None,
     accent: Accent | None = None,
+    word_voice: WordVoice | None = None,
     on_the_go_order: Literal["meaning_first", "word_first"] | None = None,
     on_the_go_pause_s: int | None = None,
 ) -> VocabularySettings:
@@ -1852,6 +1853,8 @@ async def update_settings(
         row.pronunciation = pronunciation
     if accent is not None:
         row.accent = accent
+    if word_voice is not None:
+        row.word_voice = word_voice
     if on_the_go_order is not None:
         row.on_the_go_order = on_the_go_order
     if on_the_go_pause_s is not None:
@@ -2350,7 +2353,8 @@ async def build_session(
                 )
             else:
                 audio_by_sense = await word_audio.word_audio_many(
-                    session, audio_senses, accent=settings.accent
+                    session, audio_senses, accent=settings.accent,
+                    word_voice=settings.word_voice,  # type: ignore[arg-type]
                 )
         except Exception:
             logger.warning(
@@ -3008,9 +3012,10 @@ async def record_answer(
     audio: word_audio.AudioOut | None = None
     if sense is not None:
         try:
+            learner = await get_settings(session, user.id)
             audio = await word_audio.word_audio(
-                session, sense,
-                accent=(await get_settings(session, user.id)).accent,
+                session, sense, accent=learner.accent,
+                word_voice=learner.word_voice,  # type: ignore[arg-type]
             )
         except Exception:
             logger.warning("word audio unavailable for reveal", exc_info=True)
@@ -3146,9 +3151,10 @@ async def speak_check(
     audio: word_audio.AudioOut | None = None
     if sense is not None:
         try:
+            learner = await get_settings(session, user.id)
             audio = await word_audio.word_audio(
-                session, sense,
-                accent=(await get_settings(session, user.id)).accent,
+                session, sense, accent=learner.accent,
+                word_voice=learner.word_voice,  # type: ignore[arg-type]
             )
         except Exception:
             logger.warning("word audio unavailable for speak reveal", exc_info=True)

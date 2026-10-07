@@ -152,6 +152,13 @@ class Settings(BaseSettings):
     cald_sweep_interval_s: float = 1800.0
     cald_sweep_batch: int = 25
     cald_sweep_max_tries: int = 3
+    # The CALD source directory (the one `scripts/cald.py index --source`
+    # read: `data/entries.json`, `media/audio/*.mp3`). With it, the hook also
+    # attaches the human recordings of the senses it finished
+    # (`app.services.word_recordings.attach_for_lexemes`); empty = no
+    # recordings for new senses (ONE log line), they are spoken by the
+    # synthetic voice. Never inside the repository.
+    cald_source_dir: str = ""
 
     # --- Text to speech (vocabulary stage 3: app/worker.py's render loop;
     # app/services/tts.py) ---

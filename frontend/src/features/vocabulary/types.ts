@@ -675,9 +675,15 @@ export interface PracticeLeechContext {
 /** `direction` dropped `"active"` on its own here — stage 1 offered it as a
  *  setting with nothing behind it yet. The spec's §2 makes `both` the only
  *  way to turn active practice on; there is no "active only". */
-/** The accent of the synthetic voice (and of the speak card's recogniser).
- *  A live recording keeps its speaker's own accent whatever this says. */
+/** The accent of the voice (and of the speak card's recogniser): which Kokoro
+ *  voice speaks, and which of the dictionary's two human recordings of a word
+ *  (British / American) is played. */
 export type Accent = "british" | "american";
+
+/** Who says a word: the dictionary's human recording where it has one for the
+ *  accent (`recorded`, the default), or always the synthetic voice
+ *  (`synthetic`). Definitions are always synthetic. */
+export type WordVoice = "recorded" | "synthetic";
 
 /** What plays first within an On the go item. */
 export type OnTheGoOrder = "meaning_first" | "word_first";
@@ -699,10 +705,15 @@ export interface VocabularySettings {
    *  The speaker button is there either way. Written from the settings page
    *  since stage 3; absent from a `PUT` body means "unchanged". */
   pronunciation: boolean;
-  /** Which TTS voice speaks words and definitions that are not a recording,
-   *  and which language the `speak` card listens in (`en-GB` / `en-US`).
-   *  Default `british`; absent from a `PUT` body means "unchanged". */
+  /** Which TTS voice speaks definitions (and words that are not a
+   *  recording), which recording is played, and which language the `speak`
+   *  card listens in (`en-GB` / `en-US`). Default `british`; absent from a
+   *  `PUT` body means "unchanged". */
   accent: Accent;
+  /** Whether a word is spoken by a human recording (where there is one) or
+   *  the synthetic voice. Default `recorded`; absent from a `PUT` = unchanged.
+   *  The client never resolves it: audio URLs arrive already chosen. */
+  word_voice: WordVoice;
   /** On the go: which part of an item plays first, and the seconds of silence
    *  between the two (1..10). Set on the On the go screen itself; absent from a
    *  `PUT` body means "unchanged". */

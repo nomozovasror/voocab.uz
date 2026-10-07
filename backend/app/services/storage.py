@@ -84,6 +84,14 @@ def image_storage_key(sha256: str, mime_type: str) -> str:
     return f"images/{sha256}{ext}"
 
 
+def recording_storage_key(sha256: str) -> str:
+    """The content-addressed key of a normalised human word recording
+    (:mod:`app.services.word_recordings`): always m4a, always under ``rec/`` --
+    its own prefix, so a lifecycle rule or a bucket listing can tell the
+    dictionary's recordings from our own TTS (``tts/``) and from uploads."""
+    return f"rec/{sha256}.m4a"
+
+
 class MediaStorage(Protocol):
     """Storage backend for content-addressed blobs — audio or image alike.
     The key carries the prefix, so nothing below this line knows or needs to

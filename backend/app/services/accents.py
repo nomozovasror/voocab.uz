@@ -17,6 +17,15 @@ from typing import Literal
 Accent = Literal["british", "american"]
 DEFAULT_ACCENT: Accent = "british"
 
+#: Who SAYS a word: ``recorded`` -- a person, the dictionary's own recording
+#: where one exists for the learner's accent (:mod:`app.services
+#: .word_recordings`) -- or ``synthetic`` -- always the Kokoro voice. The
+#: learner's choice (``vocabulary_settings.word_voice``), and the default is
+#: ``recorded``: a recording is a human saying the word, and Kokoro is what
+#: fills in where there is none. Definitions are always Kokoro.
+WordVoice = Literal["recorded", "synthetic"]
+DEFAULT_WORD_VOICE: WordVoice = "recorded"
+
 
 @dataclass(frozen=True)
 class AccentVoice:

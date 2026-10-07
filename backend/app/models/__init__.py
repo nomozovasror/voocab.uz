@@ -35,6 +35,7 @@ from app.models.vocabulary import (
 )
 from app.models.word_audio_log import OnTheGoExposure, SpeakMiss
 from app.models.word_list import UserWordList, WordList, WordListEntry
+from app.models.word_recording import WordRecording
 
 __all__ = [
     "User",
@@ -71,4 +72,5 @@ __all__ = [
     "AudioRender",
     "OnTheGoExposure",
     "SpeakMiss",
+    "WordRecording",
 ]

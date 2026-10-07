@@ -17,6 +17,10 @@ and the rules agreed with the owner. Run from ``backend/``::
     uv run python -m scripts.cald masking-report
     uv run python -m scripts.cald backup
 
+    # phase 2b: human word recordings (dry run unless --confirm-db)
+    uv run python -m scripts.cald recordings [--source <dir>] [--limit N] [--lemma w ...]
+    uv run python -m scripts.cald recordings --confirm-db <dbname> [--workers 4]
+
     # phase 1: the 100-sense pilot (kept: its review page and dump)
     uv run python -m scripts.cald map --sample 100 --seed 7
     uv run python -m scripts.cald translate --sample 100 [--v2 --judge-model M ...]
@@ -1292,6 +1296,100 @@ async def cmd_apply(confirm_db: str | None, judge: str, out_dir: Path = PRIVATE_
     print(f"needs_letter_hint recomputed ({len(lexemes)} lexemes touched)")
 
 
+async def cmd_recordings(confirm_db: str | None, source: Path | None, limit: int | None,
+                         lemmas: list[str] | None, workers: int, sample: int,
+                         out_dir: Path = PRIVATE_DIR) -> None:
+    """Which recording each sense takes (:mod:`app.services.word_recordings`
+    has the rules), and -- with ``--confirm-db NAME``, which must be the
+    database ``DATABASE_URL`` points at -- the import: decode, trim, level,
+    encode, ``storage.put``, one row per (sense, accent). Without it: a read
+    only dry run that normalises a sample of the files to estimate the size.
+    Resumable (a row already holding the planned file is skipped) and
+    idempotent. The report goes to the private directory."""
+    from app.core.config import settings
+    from app.core.database import async_session_factory
+    from app.services import word_recordings as wr
+
+    data = load_index_data(out_dir)
+    source_dir = (source or Path(settings.cald_source_dir or data["source"])).expanduser()
+    index = CaldIndex(data)
+    del data
+    if not (source_dir / "media" / "audio").is_dir():
+        raise SystemExit(f"{source_dir} has no media/audio -- pass --source <dir>")
+    database = _database_name()
+    if confirm_db and confirm_db != database:
+        raise SystemExit(f"--confirm-db {confirm_db!r} is not the database DATABASE_URL points at "
+                         f"({database!r}); nothing written")
+    async with readonly_connection() as conn:
+        senses = await wr.load_senses(conn, lemmas=lemmas)
+        existing = await wr.load_existing(conn)
+    decided = wr.plan(index, senses, existing, source_dir=source_dir)
+    full_todo = len(decided.todo)
+    if limit is not None:
+        decided = wr.restrict(decided, senses, limit)
+    storage = "R2" if settings.use_r2 else f"local {settings.media_root!r}"
+    print(f"database {database!r}: {'IMPORT' if confirm_db else 'dry run (read only)'}; "
+          f"storage {storage}; source {source_dir}")
+    report: dict = {
+        "database": database, "storage": storage, "source": str(source_dir),
+        "at": datetime.now(timezone.utc).isoformat(), "mode": "import" if confirm_db else "dry-run",
+        "senses": decided.senses,
+        "coverage": {accent: {
+            "with_recording": decided.covered(accent),
+            "pct": round(100 * decided.covered(accent) / max(1, decided.senses), 1),
+            "by_basis": dict(Counter(p.basis for (_, a), p in decided.picks.items() if a == accent)),
+            "unique_files": len({p.path for (_, a), p in decided.picks.items() if a == accent}),
+        } for accent in wr.ACCENT_NAMES},
+        "fallbacks": {reason: dict(per) for reason, per in sorted(decided.fallbacks.items())},
+        "fallback_examples": decided.examples,
+        "already_imported": decided.already,
+        "todo": {"files": len(decided.todo), "files_before_limit": full_todo,
+                 "rows": sum(len(r) for r in decided.todo.values())},
+    }
+    for accent in wr.ACCENT_NAMES:
+        c = report["coverage"][accent]
+        print(f"  {accent:9s} {c['with_recording']:6d} of {decided.senses} senses ({c['pct']}%) "
+              f"| {c['unique_files']} files | {c['by_basis']}")
+    print("  spoken by Kokoro instead, by reason (british / american):")
+    for reason, per in sorted(decided.fallbacks.items()):
+        print(f"    {reason:34s} {per.get('british', 0):6d} / {per.get('american', 0):6d}")
+    print(f"  already in the table: {decided.already}; still to import: "
+          f"{report['todo']['rows']} rows from {report['todo']['files']} files")
+    if not confirm_db:
+        report["estimate"] = await wr.estimate(decided.todo, source_dir, sample=sample)
+        print(f"  estimate (from {report['estimate']['sampled']} files normalised): "
+              f"{report['estimate']['estimated_mb']} MB of m4a")
+        print("nothing written; pass --confirm-db <name> to write")
+    else:
+        def progress(done: int, total: int) -> None:
+            print(f"\r  {done}/{total} files", end="", flush=True)
+
+        stats = await wr.run_import(async_session_factory, decided.todo, source_dir,
+                                    workers=workers, progress=progress)
+        print()
+        levels = list(stats.measured.values())
+        report["imported"] = {
+            "files": stats.files, "rows": stats.rows, "mb": round(stats.bytes / 1e6, 2),
+            "failed": stats.failed,
+            "duration_ms": {"min": min((m[0] for m in levels), default=0),
+                            "max": max((m[0] for m in levels), default=0),
+                            "mean": round(sum(m[0] for m in levels) / max(1, len(levels)))},
+            "rms_in_dbfs": {"min": round(min((m[1] for m in levels), default=0), 1),
+                            "max": round(max((m[1] for m in levels), default=0), 1)},
+            "rms_out_dbfs": {"min": round(min((m[2] for m in levels), default=0), 1),
+                             "max": round(max((m[2] for m in levels), default=0), 1)},
+        }
+        print(f"  imported {stats.rows} rows, {stats.files} files, {report['imported']['mb']} MB; "
+              f"{len(stats.failed)} files failed")
+        print(f"  durations {report['imported']['duration_ms']}; level in "
+              f"{report['imported']['rms_in_dbfs']} -> out {report['imported']['rms_out_dbfs']} dBFS")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    path = out_dir / f"recordings_{report['mode']}_{database}_{stamp}.json"
+    path.write_text(json.dumps(report, indent=1, ensure_ascii=False))
+    print(f"report: {path}")
+
+
 async def cmd_restore(sense_ids: list[str] | None, confirm_db: str | None) -> None:
     from sqlalchemy import text
 
@@ -1478,6 +1576,15 @@ async def main() -> None:
     rv = sub.add_parser("review-export")
     rv.add_argument("--out", type=Path, default=REVIEW_PATH)
     sub.add_parser("backup")
+    rc = sub.add_parser("recordings", help="human word recordings: dry run unless --confirm-db")
+    rc.add_argument("--confirm-db")
+    rc.add_argument("--source", type=Path,
+                    help="the CALD source directory (default: settings, else the index's own)")
+    rc.add_argument("--limit", type=int, help="only the first N lexemes with something to import")
+    rc.add_argument("--lemma", dest="lemmas", action="append",
+                    help="only this lemma (repeatable); a trial on chosen words")
+    rc.add_argument("--workers", type=int, default=4, help="processes for decode/encode (<=1: one thread)")
+    rc.add_argument("--sample", type=int, default=60, help="dry run: files to normalise for the size estimate")
     args = parser.parse_args()
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     if args.cmd == "index":
@@ -1527,6 +1634,9 @@ async def main() -> None:
         cmd_review_export(args.out)
     elif args.cmd == "backup":
         cmd_backup()
+    elif args.cmd == "recordings":
+        await cmd_recordings(args.confirm_db, args.source, args.limit, args.lemmas, args.workers,
+                             args.sample)
 
 
 if __name__ == "__main__":

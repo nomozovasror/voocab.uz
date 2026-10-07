@@ -170,8 +170,9 @@ USAGE_FILE = "usage.jsonl"
 
 #: 4: the source's entry/block-level ``pron`` (with ``ipa_variants``), a
 #: phrasal verb's ``base_pron`` and a sense's own ``pron`` are kept per block
-#: -- heteronyms (`record` noun/verb) differ by block. Phase 2b reads them;
-#: nothing imports audio yet.
+#: -- heteronyms (`record` noun/verb) differ by block. Phase 2b reads them
+#: (:mod:`app.services.word_recordings`; the transcription is never stored
+#: outside this private index).
 INDEX_VERSION = 4
 CEFR_LEVELS = ("A1", "A2", "B1", "B2", "C1", "C2")
 
@@ -793,8 +794,9 @@ class CaldIndex:
 
     def __init__(self, data: dict) -> None:
         # `data` is NOT kept: everything the matcher reads is derived below,
-        # and holding the raw dict (with its `pron` table, which nothing here
-        # reads) would keep what the caller dropped alive.
+        # and holding the raw dict (with its `pron` table, which only the
+        # undefined headwords' share of is read) would keep what the caller
+        # dropped alive.
         self.blocks: dict[str, dict] = {}
         self.senses: dict[str, tuple[dict, dict]] = {}
         self.by_form: dict[str, list[dict]] = defaultdict(list)
@@ -805,6 +807,13 @@ class CaldIndex:
         #: noun plural / verb form -> the block it inflects
         self.by_inflection: dict[str, list[dict]] = defaultdict(list)
         self.undefined: dict[str, list[str]] = data.get("undefined", {})
+        #: The recordings of the headwords CALD lists but never defines
+        #: (`abandonment`: examples only), ``{headword: [{"classes", "pron"}]}``
+        #: -- only those: the rest of the `pron` table is not kept (a defined
+        #: headword's recording is on its blocks). Phase 2b's audio reads it.
+        self.undefined_pron: dict[str, list[dict]] = {
+            hw: entries for hw, entries in (data.get("pron") or {}).items()
+            if hw in self.undefined}
         #: normalised phrase -> blocks whose headword is that phrase
         self.by_phrase: dict[str, list[dict]] = defaultdict(list)
         #: normalised phrase -> (block, sense) for `phrase` senses
@@ -3091,6 +3100,14 @@ async def _map_and_apply(index: CaldIndex, log: DecisionLog, items: list[dict], 
         async with session_factory() as session:
             await recompute_letter_hints(session, {uuid.UUID(i["lexeme_id"]) for i in items})
     counts.update({f"plan:{k}": v for k, v in Counter(p.decision for p in plans).items()})
+    # The senses just finished may now have a CALD block to be spoken by:
+    # attach their recordings while the index is in hand. An enhancement of
+    # the pass, never a reason for it to fail (`attach_for_lexemes` does not
+    # raise; without `settings.cald_source_dir` it logs once and does nothing).
+    from app.services import word_recordings
+
+    counts.update(await word_recordings.attach_for_lexemes(
+        index, {uuid.UUID(i["lexeme_id"]) for i in items}, session_factory=session_factory))
     return counts
 
 

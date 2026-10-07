@@ -1065,15 +1065,22 @@ are the ones that are easy to undo by accident.
   per ACCOUNT; a phone that cannot speak must not change what a laptop is
   offered. The card's fallback is the answer.
 
-### The accent (Settings -> Accent)
+### The accent and the word audio (Settings -> Accent, Word audio)
 
-`VocabularySettings.accent` (`british` | `american`, default British) picks the
-synthetic voice the server renders words and definitions in; a live recording
-keeps its speaker's own accent. The settings page writes it ALONE (absent from
-a `PUT` = unchanged, like `pronunciation`) with the same pill pattern as the
-exercise type. The client never picks a voice or a URL by accent: audio URLs
-arrive already resolved for the learner. Its one other use is the speak card's
-recognition language.
+`VocabularySettings.accent` (`british` | `american`, default British) picks
+the synthetic voice the server renders DEFINITIONS (and any word without a
+recording) in, which of the dictionary's two human recordings of a word is
+played, and the speak card's recognition language.
+`VocabularySettings.word_voice` (`recorded` | `synthetic`, default
+`recorded`) says who says a WORD: Cambridge's human recording where the
+server has one for the accent, else the synthetic voice; `synthetic` is
+always the synthetic voice. Settings has a pill pair for each ("Accent",
+"Word audio"), both the `OptionPill` pattern of the exercise type, each
+written ALONE (absent from a `PUT` = unchanged, like `pronunciation`). The
+client never picks a voice, a recording or a URL: audio URLs arrive already
+resolved for the learner, the reveal, `listen`, `speak`, the word page and On
+the go alike -- there is no client-side branch on `word_voice`. Changing it
+does not need a refetch of anything but the next session or On the go list.
 
 ### The reveal
 

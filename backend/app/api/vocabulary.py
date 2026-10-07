@@ -403,7 +403,7 @@ async def get_saved_word(
     if sense is not None:
         try:
             found_audio = await word_audio_service.word_audio(
-                session, sense, accent=settings.accent,
+                session, sense, accent=settings.accent, word_voice=settings.word_voice,
             )
             audio = asdict(found_audio) if found_audio is not None else None
         except Exception:
@@ -770,6 +770,7 @@ async def get_vocabulary_settings(
         exercise_types=settings.exercise_types,
         pronunciation=settings.pronunciation,
         accent=settings.accent,
+        word_voice=settings.word_voice,  # type: ignore[arg-type]
         on_the_go_order=settings.on_the_go_order,  # type: ignore[arg-type]
         on_the_go_pause_s=settings.on_the_go_pause_s,
         active_in_progress=await practice_service.active_in_progress_count(
@@ -795,6 +796,7 @@ async def put_vocabulary_settings(
         ),
         pronunciation=data.pronunciation,
         accent=data.accent,
+        word_voice=data.word_voice,
         on_the_go_order=data.on_the_go_order,
         on_the_go_pause_s=data.on_the_go_pause_s,
     )
@@ -804,6 +806,7 @@ async def put_vocabulary_settings(
         exercise_types=settings.exercise_types,
         pronunciation=settings.pronunciation,
         accent=settings.accent,
+        word_voice=settings.word_voice,  # type: ignore[arg-type]
         on_the_go_order=settings.on_the_go_order,  # type: ignore[arg-type]
         on_the_go_pause_s=settings.on_the_go_pause_s,
         active_in_progress=await practice_service.active_in_progress_count(

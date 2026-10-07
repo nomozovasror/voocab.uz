@@ -78,9 +78,11 @@ async def item_list(session: AsyncSession, user: User) -> tuple[list[Item], int]
     word heard here is made once, however often it is asked for.
     """
     words = await in_rotation(session, user.id)
-    # The learner's own accent, read once: every word and definition is in that
-    # voice.
-    accent = (await practice.get_settings(session, user.id)).accent
+    # The learner's own accent and word voice, read once: every definition is
+    # in the accent's Kokoro voice, and every word is that accent's recording
+    # (or, under `synthetic` / with none, its Kokoro voice).
+    learner = await practice.get_settings(session, user.id)
+    accent = learner.accent
     senses = {
         sense.id: sense
         for sense in (
@@ -115,7 +117,8 @@ async def item_list(session: AsyncSession, user: User) -> tuple[list[Item], int]
     ]
     wanted = [senses[word.lexeme_sense_id] for word in playable]
     word_urls = await word_audio.word_audio_many(
-        session, wanted, lexemes=lexemes, accent=accent
+        session, wanted, lexemes=lexemes, accent=accent,
+        word_voice=learner.word_voice,  # type: ignore[arg-type]
     )
     definition_urls = await word_audio.definition_audio_urls(
         session, wanted, lexemes=lexemes, accent=accent

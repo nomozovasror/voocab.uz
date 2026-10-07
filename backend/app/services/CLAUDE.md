@@ -1250,23 +1250,82 @@ line is `scripts/cald.py`.
   run printing the summary) and `apply --confirm-db <name>` (writes; refuses
   unless `<name>` is the database `DATABASE_URL` points at). `restore --all |
   --sense-id <uuid> ... --confirm-db <name>` undoes it (never a locked
-  sense). Model commands stop at
+  sense). `recordings [--confirm-db <name>]` (phase 2b, "The audio layer"
+  below): the human word recordings -- the index's per-block `pron` is read
+  from the index file; the source directory must be on the machine. Model commands stop at
   `--budget` (USD, CALD total in `usage.jsonl`, default 25). Back up the
   database before `apply`, and `restore --all` before downgrading the
   migration.
 
-## The audio layer: every word is TTS (vocabulary stage 3)
+## The audio layer: a word is a recording or TTS (vocabulary stage 3)
 
 What a learner hears for a word is made in advance, never inside a request.
 `word_audio.py` is the one door the rest of the app uses; `tts.py`,
-`pronunciation.py` and `audio_pcm.py` are what stands behind it. **Live clips
-cut from recordings were dropped on 2026-10-07** (the owner heard fragments of
-neighbouring words and the sentence's emotion and pitch): there is no
-`word_clips`, no clip worker loop, no `clips`/`verify-clips` seed step, and
-`AudioOut` is `{url}` only. Do not reintroduce a second source of word audio
-without the owner.
+`pronunciation.py`, `audio_pcm.py` and `word_recordings.py` are what stands
+behind it. **Live clips cut from listening recordings were dropped on
+2026-10-07** (the owner heard fragments of neighbouring words and the
+sentence's emotion and pitch): there is no `word_clips`, no clip worker loop,
+no `clips`/`verify-clips` seed step, and `AudioOut` is `{url}` only. What came
+back, agreed with the owner, is the dictionary's own recording OF THE WORD
+(next bullet); do not add a third source of word audio without the owner.
+Definitions are ALWAYS Kokoro.
 Design decisions are in `brief-vocabulary-stage3-decisions.md`; the rules
 below are the ones a later change can silently break.
+
+- **The learner chooses who says a word** (`vocabulary_settings.word_voice`:
+  `recorded` default | `synthetic`; `accents.WordVoice`, optional on `PUT`,
+  absent = unchanged). `recorded` + a row in `word_recordings` for (sense,
+  accent) -> that file's URL, immediately, nothing queued; anything else ->
+  the TTS path exactly as before. Every caller passes both `accent` and
+  `word_voice` from ONE settings read (session build, the reveal, the speak
+  reveal, the word page, On the go). `word_audio_many` asks the table ONCE
+  (`WHERE lexeme_sense_id IN (...) AND accent = :a`; `test_a_list_is_resolved
+  _without_a_query_per_word`) and builds TTS specs only for the senses that
+  have no recording.
+- **`word_recordings` is per (sense, accent)** -- UNIQUE, `ON DELETE CASCADE`
+  with its sense -- not per CALD block: resolution is one indexed lookup on
+  the learner's own sense ids, and the block decision (below) is made ONCE, at
+  import. Columns: `accent` (OUR `british`/`american`, not the source's
+  `uk`/`us`), `storage_key` (`rec/<sha256>.m4a`, the hash of the normalised
+  bytes: senses on one block share one file), `duration_ms`, `source_file`
+  (the file name, what makes the import resumable and lets a changed ref
+  replace the row), `basis` (`ref`|`pos`), `created_at`. **No transcription is
+  stored**: it stays in the private index.
+- **Which recording a sense takes** (`word_recordings.plan_sense`; the
+  docstring has the reasoning). A sense WITH `cald_ref` takes the recording of
+  THE BLOCK its ref points into (heteronyms are right by construction: `record`
+  n and v are two files). Without one, and the lexeme matched a headword
+  (`exact`/`variant`, or a headword CALD lists without defining): a lemma that
+  is NOT a heteronym in either accent takes the first block of its pos with a
+  recording; a heteronym is Kokoro with our decided phonemes. No headword:
+  Kokoro. A block's recording is of its OWN headword, so `speaks()` refuses a
+  ref into another word's block (`went` -> `go`, a plural -> its singular, a
+  phrase sense inside `account`'s page, `amount to sth`): Kokoro, reason
+  `block-is-another-word`. A sense's own `pron` (a weak form, an abbreviation spoken
+  as its full word) is NEVER used: it is another word. A missing accent
+  falls back for that accent only.
+- **Recordings are normalised like a TTS render** (`word_recordings.normalise`:
+  decode -> `tts.trim_edges` -> `audio_pcm.normalise_rms` -> `encode_m4a`; 24
+  kHz mono AAC): the source mixes 16 and 44.1 kHz at unrelated levels, and On
+  the go plays a recording and a synthetic definition back to back. Stored
+  through `storage` under `rec/` (own prefix). Bump nothing: a change of
+  trimming/levelling means re-running the import with the table emptied.
+- **The import** is `scripts/cald.py recordings` (dry run by default;
+  `--confirm-db NAME` must be the database `DATABASE_URL` names;
+  `--limit N` lexemes with work, `--lemma w` repeatable, `--workers`). A
+  window of 64 source files at a time goes through a process pool (CPU), then
+  `storage.put`, then ONE upsert-and-commit per window, so a kill loses one
+  window and the re-run (`plan` skips a row already holding the planned
+  `source_file`) resumes. Failures are results (`UNDECODABLE`), not crashes.
+  The report (coverage per accent, fallbacks by reason with example lemmas,
+  levels and durations) goes to `app/data/private/cald/recordings_*.json`.
+  Never write the real media root from a trial: set `MEDIA_ROOT`.
+- **New senses** (`lexicon_cald._map_and_apply` -> `word_recordings
+  .attach_for_lexemes`): after the CALD hook/sweep applies a pass it attaches
+  the recordings of those lexemes' senses -- only when `settings
+  .cald_source_dir` names the source directory (empty = ONE log line, nothing
+  attached, they are spoken by Kokoro until `recordings` is run). It never
+  raises into the hook.
 
 - **A request only reads and enqueues.** `word_audio` answers a URL or `None`
   ("not ready, and already queued"); synthesis happens in the worker (`app/worker.py`:
@@ -1316,7 +1375,8 @@ below are the ones a later change can silently break.
   whole system. A corrected definition or a newly decided pronunciation is a NEW key and a new render -- never an edit of
   an old row. Storage keys are `tts/{key}.m4a`. Bump `KEY_VERSION` to re-render
   everything after changing trimming or levelling.
-- **The accent is the learner's, and it only picks the voice.**
+- **The accent is the learner's: it picks the Kokoro voice and, under
+  `recorded`, which of the two recordings plays.**
   `vocabulary_settings.accent` (`british` default | `american`;
   `app/services/accents.py` is THE table: British `bf_emma`/`'b'`, American
   `af_heart`/`'a'`). Every `word_audio` function, `tts.word_spec`,
@@ -1353,7 +1413,8 @@ below are the ones a later change can silently break.
   under `media/renders/` are orphans removed by hand.
 - **Levelling is capped.** `normalise_rms` never amplifies by more than
   `MAX_GAIN_DB` (+20): near-silence brought to -20 dBFS is hiss.
-- **Everything stored is 24 kHz mono AAC in MP4, faststart** (`audio_pcm`):
+- **Everything stored is 24 kHz mono AAC in MP4, faststart** (`audio_pcm`; the
+  recordings too):
   Kokoro's native rate, small files, `moov` first so the browser can start
   playing. FFmpeg's native `aac` encoder only (always compiled in); PyAV is a
   main dependency and there is no `ffmpeg` binary anywhere.  `audio_pcm.decode` reads a stored render back (the seed doctor's
