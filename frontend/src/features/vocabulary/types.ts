@@ -679,6 +679,9 @@ export interface PracticeLeechContext {
  *  A live recording keeps its speaker's own accent whatever this says. */
 export type Accent = "british" | "american";
 
+/** What plays first within an On the go item. */
+export type OnTheGoOrder = "meaning_first" | "word_first";
+
 export interface VocabularySettings {
   daily_minutes: 5 | 10 | 15 | 20;
   direction: "passive" | "both";
@@ -700,6 +703,11 @@ export interface VocabularySettings {
    *  and which language the `speak` card listens in (`en-GB` / `en-US`).
    *  Default `british`; absent from a `PUT` body means "unchanged". */
   accent: Accent;
+  /** On the go: which part of an item plays first, and the seconds of silence
+   *  between the two (1..10). Set on the On the go screen itself; absent from a
+   *  `PUT` body means "unchanged". */
+  on_the_go_order: OnTheGoOrder;
+  on_the_go_pause_s: number;
   /** How many words currently have an active card, regardless of whether
    *  `direction` is `both` right now. Only meaningful for the warning under
    *  the toggle: turning it off doesn't reset any of these — it pauses them
@@ -791,18 +799,18 @@ export interface SpeakCheckResult {
   audio: AudioOut | null;
 }
 
-/** One item of "On the go": a single rendered file (definition, a pause, the
- *  word, a short tail). `word_offset_ms` is where the WORD starts inside it —
- *  the moment an exposure counts. The word itself is never on the wire. */
+/** One item of "On the go": TWO files, played one after the other by the
+ *  client in the learner's order — the word's own audio (the learner's accent,
+ *  what the reveal plays) and the sense's masked definition. The word's text is
+ *  never on the wire. */
 export interface OnTheGoItem {
   word_id: string;
-  url: string;
-  duration_ms: number;
-  word_offset_ms: number;
+  word_url: string;
+  definition_url: string;
 }
 
 export interface OnTheGoList {
   items: OnTheGoItem[];
-  /** Words in rotation whose file is not rendered yet — already queued. */
+  /** Words in rotation with a part not rendered yet — already queued. */
   preparing: number;
 }

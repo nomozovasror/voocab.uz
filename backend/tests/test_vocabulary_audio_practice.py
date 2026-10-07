@@ -522,18 +522,18 @@ async def test_word_page_has_top_level_audio(created: Created) -> None:
 
 
 async def _ready_item(created: Created, word: SavedWord) -> None:
-    lexeme_sense = DEFINITION
-    definition = tts.definition_spec(lexeme_sense, word.lemma)
-    item = tts.item_spec(definition, tts.word_spec(word.lemma, None))
-    created.render_keys.extend([definition.key, item.key, tts.word_spec(word.lemma, None).key])
+    """Both parts of the word's item ready: its own render and its definition's."""
+    specs = [tts.definition_spec(DEFINITION, word.lemma), tts.word_spec(word.lemma, None)]
+    created.render_keys.extend(spec.key for spec in specs)
     async with async_session_factory() as session:
-        await tts.enqueue([item])
-        await session.execute(
-            update(AudioRender).where(AudioRender.key == item.key).values(
-                status=RenderStatus.READY, storage_key=tts.storage_key_for(item.kind, item.key),
-                duration_ms=9000, word_offset_ms=4200,
+        await tts.enqueue(specs)
+        for spec in specs:
+            await session.execute(
+                update(AudioRender).where(AudioRender.key == spec.key).values(
+                    status=RenderStatus.READY, storage_key=tts.storage_key_for(spec.kind, spec.key),
+                    duration_ms=2500,
+                )
             )
-        )
         await session.commit()
 
 
@@ -544,23 +544,62 @@ async def test_on_the_go_lists_ready_items_newest_first_and_counts_the_rest(
     old = await _word(created, user, level="recognise", due=False, created_at=NOW - timedelta(days=3))
     new = await _word(created, user, level="recognise", due=False, created_at=NOW - timedelta(days=1))
     pending = await _word(created, user, level="recognise", due=False, created_at=NOW - timedelta(days=2))
+    # A definition of its own: the masked text is the render's key, so words that
+    # share a definition share its audio.
+    half = await _word(created, user, level="recognise", due=False,
+                       definition="a different thing entirely, spoken alone",
+                       created_at=NOW - timedelta(days=4))
     for excluded in ("known", "suspended", "leech"):
         await _word(created, user, due=False, status=excluded)
     for word in (old, new):
         await _ready_item(created, word)
+    # One part ready is not an item: it is still being prepared.
+    await _ready_audio(created, half.lemma)
     cookies = {"access_token": create_access_token(str(user.id))}
     async with _client() as client:
         data = (await client.get("/api/vocabulary/on-the-go", cookies=cookies)).json()
     assert [i["word_id"] for i in data["items"]] == [str(new.id), str(old.id)]
-    assert data["preparing"] == 1 and str(pending.id) not in str(data["items"])
-    assert data["items"][0]["duration_ms"] == 9000 and data["items"][0]["word_offset_ms"] == 4200
-    assert set(data["items"][0]) == {"word_id", "url", "duration_ms", "word_offset_ms"}
+    assert data["preparing"] == 2
+    assert str(pending.id) not in str(data["items"]) and str(half.id) not in str(data["items"])
+    first = data["items"][0]
+    assert set(first) == {"word_id", "word_url", "definition_url"}
+    word_key = tts.word_spec(new.lemma, None).key
+    definition_key = tts.definition_spec(DEFINITION, new.lemma).key
+    assert first["word_url"].endswith(f"/tts/{word_key}.m4a")
+    assert first["definition_url"].endswith(f"/tts/{definition_key}.m4a")
+    # The word's text is never on the wire.
+    assert new.lemma not in str(data)
     # It is independent of the queue: nothing is due, the list is still there.
     async with async_session_factory() as session:
-        # The pending word's item (and its parts) were queued by the request.
-        item = tts.item_spec(tts.definition_spec(DEFINITION, pending.lemma), tts.word_spec(pending.lemma, None))
-        created.render_keys.append(item.key)
-        assert (await session.exec(select(AudioRender).where(AudioRender.key == item.key))).first()
+        # The pending word's parts were queued by the request; no item row exists.
+        for spec in (tts.definition_spec(DEFINITION, pending.lemma), tts.word_spec(pending.lemma, None)):
+            created.render_keys.append(spec.key)
+            assert (await session.exec(select(AudioRender).where(AudioRender.key == spec.key))).first()
+        assert not (await session.exec(select(AudioRender).where(AudioRender.kind == "item"))).first()
+
+
+async def test_on_the_go_order_and_pause_are_optional_on_put_and_validated(
+    created: Created,
+) -> None:
+    user = await make_user(created)
+    cookies = {"access_token": create_access_token(str(user.id))}
+    body = {"daily_minutes": 10, "direction": "passive", "exercise_types": None}
+    async with _client() as client:
+        got = (await client.get("/api/vocabulary/settings", cookies=cookies)).json()
+        assert (got["on_the_go_order"], got["on_the_go_pause_s"]) == ("meaning_first", 3)
+        r = await client.put("/api/vocabulary/settings", cookies=cookies,
+                             json={**body, "on_the_go_order": "word_first", "on_the_go_pause_s": 7})
+        assert (r.json()["on_the_go_order"], r.json()["on_the_go_pause_s"]) == ("word_first", 7)
+        # Absent = unchanged: the settings screen's own save must not flip them.
+        r = await client.put("/api/vocabulary/settings", cookies=cookies, json={**body, "daily_minutes": 15})
+        assert (r.json()["on_the_go_order"], r.json()["on_the_go_pause_s"]) == ("word_first", 7)
+        r = await client.put("/api/vocabulary/settings", cookies=cookies, json={**body, "on_the_go_pause_s": 1})
+        assert r.json()["on_the_go_pause_s"] == 1 and r.json()["on_the_go_order"] == "word_first"
+        for bad in ({"on_the_go_pause_s": 0}, {"on_the_go_pause_s": 11}, {"on_the_go_order": "random"}):
+            assert (await client.put("/api/vocabulary/settings", cookies=cookies,
+                                     json={**body, **bad})).status_code == 422
+        got = (await client.get("/api/vocabulary/settings", cookies=cookies)).json()
+        assert (got["on_the_go_order"], got["on_the_go_pause_s"]) == ("word_first", 1)
 
 
 async def test_exposures_are_owner_only_and_never_touch_fsrs(created: Created) -> None:
@@ -759,24 +798,27 @@ async def test_old_misses_do_not_count_and_rows_are_capped(created: Created) -> 
 
 async def test_on_the_go_preparing_ignores_failed_renders(created: Created) -> None:
     user = await make_user(created)
-    failed_item = await _word(created, user, level="recognise", due=False)
-    failed_part = await _word(created, user, level="recognise", due=False)
-    waiting = await _word(created, user, level="recognise", due=False)
+    # Distinct definitions: one masked text is one render, shared by its words.
+    texts = {name: f"{name} thing that people do on every single ordinary day"
+             for name in ("first", "second", "third")}
+    failed_definition = await _word(created, user, level="recognise", due=False, definition=texts["first"])
+    failed_word = await _word(created, user, level="recognise", due=False, definition=texts["second"])
+    waiting = await _word(created, user, level="recognise", due=False, definition=texts["third"])
     cookies = {"access_token": create_access_token(str(user.id))}
     async with _client() as client:  # queues all three words' renders
         first = (await client.get("/api/vocabulary/on-the-go", cookies=cookies)).json()
         assert first["preparing"] == 3 and first["items"] == []
-        for word in (failed_item, failed_part, waiting):
-            definition = tts.definition_spec(DEFINITION, word.lemma)
-            spoken = tts.word_spec(word.lemma, None)
-            item = tts.item_spec(definition, spoken)
-            created.render_keys.extend([definition.key, spoken.key, item.key])
-        key_item = tts.item_spec(
-            tts.definition_spec(DEFINITION, failed_item.lemma), tts.word_spec(failed_item.lemma, None)).key
-        key_part = tts.word_spec(failed_part.lemma, None).key
+        for word, text in zip((failed_definition, failed_word, waiting), texts.values()):
+            created.render_keys.extend([
+                tts.definition_spec(text, word.lemma).key, tts.word_spec(word.lemma, None).key
+            ])
+        failed_keys = [
+            tts.definition_spec(texts["first"], failed_definition.lemma).key,
+            tts.word_spec(failed_word.lemma, None).key,
+        ]
         async with async_session_factory() as session:
             await session.execute(
-                update(AudioRender).where(AudioRender.key.in_([key_item, key_part]))
+                update(AudioRender).where(AudioRender.key.in_(failed_keys))
                 .values(status=RenderStatus.FAILED)
             )
             await session.commit()

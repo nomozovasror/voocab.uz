@@ -1,5 +1,5 @@
-"""Offline bulk audio for vocabulary: Kokoro TTS for every word, definition and
-On the go item (stage 3 of the vocabulary brief).
+"""Offline bulk audio for vocabulary: Kokoro TTS for every word and definition
+(stage 3 of the vocabulary brief).
 
 NOT part of the API or the worker -- a standalone script the owner runs by
 hand on a machine with a GPU (the RTX 3060, Windows), the same contract as
@@ -26,7 +26,7 @@ sync with the matching wheel index, one line::
 
 (Kokoro and misaki's espeak loader do not run on macOS at all -- the
 ``espeakng-loader`` wheel kills the interpreter -- so on the Mac this script's
-``words``/``definitions``/``items`` refuse to start. Docker/Linux is where
+``words``/``definitions`` refuse to start. Docker/Linux is where
 Kokoro runs on the dev machine.)
 
 Usage (from the ``backend/`` directory), in this order::
@@ -34,7 +34,6 @@ Usage (from the ``backend/`` directory), in this order::
     uv run python -m scripts.seed_tts doctor                 # preflight: PASS/FAIL list
     uv run python -m scripts.seed_tts words                  # TTS for every word, both accents
     uv run python -m scripts.seed_tts definitions            # TTS for every definition, both accents
-    uv run python -m scripts.seed_tts items                  # optional: On the go files
     uv run python -m scripts.seed_tts check-files            # which rows point at a missing file
 
 * ``doctor`` -- see :mod:`scripts.seed_tts_doctor`. Exit status 1 on any FAIL.
@@ -44,16 +43,16 @@ Usage (from the ``backend/`` directory), in this order::
   own alphabet (``lexeme_senses.pronunciation`` for British,
   ``pronunciation_us`` for American; see ``scripts/decide_heteronyms.py``).
 * ``definitions`` -- the masked definition of every sense, the masks silences.
-* ``items`` -- the single On the go file per word in rotation (needs the
-  parts; makes them inline if not ready).
+  On the go plays exactly these two renders (the word, the definition) one
+  after the other, so there is nothing else to make for it.
 * ``check-files`` -- every ``ready`` render whose file is not in the
   configured storage. ``--requeue`` puts such renders back to ``pending``. The check to run on
   the machine that serves the files, after they were copied there.
 
 The two voices (decisions 22-26) -- British ``bf_emma`` and American
 ``af_heart``, one table in :mod:`app.services.accents`. ``--accent
-british|american|both`` (default ``both``) on ``words``, ``definitions`` and
-``items`` chooses which are made; each voice is its own set of renders (the
+british|american|both`` (default ``both``) on ``words`` and ``definitions``
+chooses which are made; each voice is its own set of renders (the
 voice is in every key), so running one accent now and the other later is safe
 and nothing is made twice. The synthesiser holds one pipeline per voice sharing
 one model, so ``both`` costs one model load.
@@ -303,24 +302,6 @@ async def _enqueue(specs: list[tts.RenderSpec]) -> int:
     return new
 
 
-async def enqueue_items(
-    session: AsyncSession, *, limit: int | None, accents_: list[Accent]
-) -> int:
-    """Queue the On the go file (and its parts) of every word in rotation, in
-    each accent's voice."""
-    query = (
-        select(SavedWord)
-        .where(SavedWord.status.in_(("learning", "review")))
-        .order_by(SavedWord.created_at.desc())
-    )
-    if limit is not None:
-        query = query.limit(limit)
-    words = list((await session.exec(query)).all())
-    for accent in accents_:
-        await word_audio.item_renders(session, words, accent=accent)
-    return len(words)
-
-
 # --- Running ---------------------------------------------------------------------
 
 
@@ -444,22 +425,6 @@ async def cmd_definitions(args: argparse.Namespace) -> None:
     )
 
 
-async def cmd_items(args: argparse.Namespace) -> None:
-    _require_kokoro()
-    device = resolve_device(args.device)
-    async with async_session_factory() as session:
-        count = await enqueue_items(
-            session, limit=args.limit, accents_=selected_accents(args)
-        )
-    logger.info("%d word(s) in rotation queued", count)
-    await run_renders(
-        [RenderKind.WORD, RenderKind.DEFINITION, RenderKind.ITEM],
-        tts.KokoroSynth(device=device),
-        limit=None,
-        concurrency=args.concurrency,
-    )
-
-
 # --- check-files -----------------------------------------------------------------
 
 
@@ -534,8 +499,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m scripts.seed_tts",
         description=(
-            "Offline bulk audio for vocabulary: Kokoro TTS for every word, "
-            "definition and On the go item. Meant to be run by hand on a "
+            "Offline bulk audio for vocabulary: Kokoro TTS for every word "
+            "and definition. Meant to be run by hand on a "
             "GPU machine; see the module docstring."
         ),
     )
@@ -559,7 +524,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     for name, helptext in (
         ("words", "TTS for every word"),
         ("definitions", "TTS for every masked definition"),
-        ("items", "On the go files for words in rotation"),
     ):
         p = sub.add_parser(name, help=helptext)
         common(p)
@@ -589,7 +553,6 @@ def main(argv: list[str] | None = None) -> None:
         "doctor": cmd_doctor,
         "words": cmd_words,
         "definitions": cmd_definitions,
-        "items": cmd_items,
         "check-files": cmd_check_files,
     }[args.command]
     try:

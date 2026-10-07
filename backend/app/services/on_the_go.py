@@ -1,7 +1,10 @@
-"""On the go: the words in rotation as files to listen to, and the log of
+"""On the go: the words in rotation as audio to listen to, and the log of
 having heard them (vocabulary stage 3, decisions 11-14).
 
-Nothing here is practice. The list is **independent of the daily queue** -- it
+Nothing here is practice, and nothing here is composed: an item is two files
+(the word, the masked definition) that the CLIENT plays in the learner's order
+with the learner's pause, so what is stored for it is only those two renders
+(2026-10-07, superseding decision 13). The list is **independent of the daily queue** -- it
 is simply the learner's words in rotation, newest first, so what they saved
 this morning is what they hear on the walk home -- and playing it writes only
 ``on_the_go_exposures``, never a card: hearing a word is not recalling it, and
@@ -17,6 +20,7 @@ in -- a word is worth hearing before it is worth being asked.
 """
 
 import uuid
+from typing import NamedTuple
 
 from sqlmodel import select
 
@@ -46,26 +50,36 @@ async def in_rotation(session: AsyncSession, user_id: uuid.UUID) -> list[SavedWo
     return list(rows.all())
 
 
-async def item_list(
-    session: AsyncSession, user: User
-) -> tuple[list[tuple[SavedWord, word_audio.ItemAudio]], int]:
+class Item(NamedTuple):
+    """One word in the On the go list: the word's own audio and its sense's
+    masked definition, as two files the client plays in the learner's order."""
+
+    word: SavedWord
+    word_url: str
+    definition_url: str
+
+
+async def item_list(session: AsyncSession, user: User) -> tuple[list[Item], int]:
     """``(ready items in order, how many are still being prepared)``.
 
-    Only items whose render is READY are listed -- a half-made file is no use
-    in a pocket -- and everything else that is still being made counts towards
-    ``preparing``;
-    :func:`app.services.word_audio.item_renders` has already queued it. A word
-    whose render has ``failed`` is in neither number (:func:`_failed_words`).
-    All words go through ONE ``item_renders`` call: its queries are per table, not
-    per word.
+    An item is listed only when BOTH its audios are ready -- half of a pair is
+    no use in a pocket, and the client cannot know which half it may skip.
+    Anything else that is still being made counts towards ``preparing``; the
+    two ``*_many`` calls have already queued it. A word with a ``failed`` part
+    is in neither number (:func:`_failed_words`). All words go through ONE call
+    per part: the queries are per table, not per word.
 
     A word whose sense has nothing speakable as a definition can never have an
     item (``tts.definition_spec`` is ``None``), so it is left out of both
     numbers instead of being "preparing" for ever.
+
+    The audios are the very ones the rest of the app plays -- the word in the
+    learner's accent (what the reveal plays) and the masked definition -- so a
+    word heard here is made once, however often it is asked for.
     """
     words = await in_rotation(session, user.id)
-    # The learner's own accent, read once: every word's definition and (TTS)
-    # word is in that voice.
+    # The learner's own accent, read once: every word and definition is in that
+    # voice.
     accent = (await practice.get_settings(session, user.id)).accent
     senses = {
         sense.id: sense
@@ -77,19 +91,45 @@ async def item_list(
             )
         ).all()
     } if words else {}
+    lexemes = {
+        lexeme.id: lexeme
+        for lexeme in (
+            await session.exec(
+                select(Lexeme).where(
+                    Lexeme.id.in_({s.lexeme_id for s in senses.values()})
+                )
+            )
+        ).all()
+    } if senses else {}
     playable = [
         word
         for word in words
         if word.lexeme_sense_id in senses
+        and senses[word.lexeme_sense_id].lexeme_id in lexemes
         and tts.definition_spec(
-            senses[word.lexeme_sense_id].definition_en, word.lemma, accent
+            senses[word.lexeme_sense_id].definition_en,
+            lexemes[senses[word.lexeme_sense_id].lexeme_id].lemma,
+            accent,
         )
         is not None
     ]
-    renders = await word_audio.item_renders(session, playable, accent=accent)
-    ready = [(word, renders[word.id]) for word in playable if renders.get(word.id)]
-    waiting = [word for word in playable if not renders.get(word.id)]
-    failed = await _failed_words(session, waiting, senses, accent=accent)
+    wanted = [senses[word.lexeme_sense_id] for word in playable]
+    word_urls = await word_audio.word_audio_many(
+        session, wanted, lexemes=lexemes, accent=accent
+    )
+    definition_urls = await word_audio.definition_audio_urls(
+        session, wanted, lexemes=lexemes, accent=accent
+    )
+    ready: list[Item] = []
+    waiting: list[SavedWord] = []
+    for word in playable:
+        audio = word_urls.get(word.lexeme_sense_id)
+        definition_url = definition_urls.get(word.lexeme_sense_id)
+        if audio is not None and definition_url is not None:
+            ready.append(Item(word, audio.url, definition_url))
+        else:
+            waiting.append(word)
+    failed = await _failed_words(session, waiting, senses, lexemes, accent=accent)
     return ready, len(waiting) - len(failed)
 
 
@@ -97,42 +137,30 @@ async def _failed_words(
     session: AsyncSession,
     words: list[SavedWord],
     senses: dict[uuid.UUID, LexemeSense],
+    lexemes: dict[uuid.UUID, Lexeme],
     *,
     accent: Accent = DEFAULT_ACCENT,
 ) -> set[uuid.UUID]:
-    """The words whose item, or one of the parts it is made of (definition,
-    word), has a ``failed`` render. Such a word is not "being prepared": a
-    failed render waits for an operator's requeue (or the age-based one), and
-    counting it in ``preparing`` would keep the client's "preparing N" up for
-    ever. A word whose parts are merely ``pending``/``processing`` -- or not
-    enqueued yet -- is not in the set.
+    """The words with a ``failed`` render among the two parts of their item
+    (definition, word). Such a word is not "being prepared": a failed render
+    waits for an operator's requeue (or the age-based one), and counting it in
+    ``preparing`` would keep the client's "preparing N" up for ever. A word
+    whose parts are merely ``pending``/``processing`` is not in the set.
 
     The keys are re-derived with the same public helpers
-    :func:`app.services.word_audio.item_renders` uses, so they are the same
+    :func:`app.services.word_audio.word_audio_many` uses, so they are the same
     keys; only unready words are looked at."""
     if not words:
         return set()
-    wanted = [senses[word.lexeme_sense_id] for word in words]
-    lexemes = {
-        lexeme.id: lexeme
-        for lexeme in (
-            await session.exec(
-                select(Lexeme).where(Lexeme.id.in_({s.lexeme_id for s in wanted}))
-            )
-        ).all()
-    }
     keys_of: dict[uuid.UUID, list[str]] = {}
     for word in words:
         sense = senses[word.lexeme_sense_id]
-        lexeme = lexemes.get(sense.lexeme_id)
-        if lexeme is None:
-            continue
+        lexeme = lexemes[sense.lexeme_id]
         definition = tts.definition_spec(sense.definition_en, lexeme.lemma, accent)
         if definition is None:
             continue
-        word_spec = word_audio.tts_word_spec(sense, lexeme, accent)
         keys_of[word.id] = [
-            definition.key, word_spec.key, tts.item_spec(definition, word_spec).key
+            definition.key, word_audio.tts_word_spec(sense, lexeme, accent).key
         ]
     all_keys = {key for keys in keys_of.values() for key in keys}
     if not all_keys:

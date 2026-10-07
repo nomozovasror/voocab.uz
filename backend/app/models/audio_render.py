@@ -11,12 +11,11 @@ class RenderKind(enum.StrEnum):
 
     ``word`` -- the word spoken by the TTS voice. ``definition`` -- a sense's
     definition, as recall would show it (the headword masked), the masks
-    spoken as silence. ``item`` -- one On the go file: definition, a pause,
-    the word, a pause."""
+    spoken as silence. (``item`` -- one composed On the go file -- existed until
+    2026-10-07; the client sequences the two parts now.)"""
 
     WORD = "word"
     DEFINITION = "definition"
-    ITEM = "item"
 
 
 class RenderStatus(enum.StrEnum):
@@ -37,18 +36,13 @@ class AudioRender(SQLModel, table=True):
 
     ``key`` is the content address of the INPUT, not of the output (the output
     does not exist when the row is first written): a SHA-256 over the exact
-    synthesis input, voice and model for ``word``/``definition``, and over the
-    parts for ``item`` (see :mod:`app.services.tts`). One word is therefore
+    synthesis input, voice and model (see :mod:`app.services.tts`). One word is therefore
     synthesised once in the whole system, a changed definition is a new row
     and never an edit of an old one, and the seed script on the GPU machine and
     the production worker write to the same keys. ``input`` is that exact
     text -- what was hashed -- so a row can be read and re-derived by hand.
 
-    ``storage_key`` (``tts/...`` for words and definitions, ``renders/...`` for
-    items) is the output once ``ready``. ``word_offset_ms`` is set for items
-    only: where, inside the file, the word begins -- the moment the client
-    counts as "the word was played" for the exposure log, and the one thing it
-    must not read off the lock screen.
+    ``storage_key`` (``tts/...``) is the output once ``ready``.
 
     ``updated_at`` is the heartbeat the queue's recovery reads: a
     ``processing`` row not touched for ``tts_stale_after_s`` was left by a
@@ -69,7 +63,6 @@ class AudioRender(SQLModel, table=True):
     error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     storage_key: str | None = Field(default=None)
     duration_ms: int | None = Field(default=None)
-    word_offset_ms: int | None = Field(default=None)
     #: A ``pending`` row is not claimable before this: a failure's back-off, so
     #: a systemic fault (storage down, a model that will not load) walks the
     #: queue once per back-off instead of burning every row's attempts in

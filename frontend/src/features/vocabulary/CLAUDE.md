@@ -1089,37 +1089,51 @@ Entry: a row on the vocabulary home, named exactly "On the go" — never
 "Blinkers" (an English horse's eye-shade) and never "Listen" (that is an
 exercise).
 
-- **One `<audio>`, items back to back, no `setTimeout`.** The three-second
-  pause is baked into each file by the server. A timer between clips dies
-  when an iPhone locks; the audio element does not. `src` is set imperatively
-  in the same call stack as `ended` (or the headphone's "next"), never via a
-  render. **"Playing" is the learner's INTENT, never `el.paused`**: `pause`
-  fires before `ended`, so `paused` is already true when an item ends and
-  chaining from it stops the list after item 1. `ended` and an error continue
-  under the intent (`next(autoplay)`); Next/Previous and headphone keys keep
-  it; `pause` at `el.ended` is ignored by the button state. Starting it also
-  stops any shared practice clip. Leaving the page pauses it through a callback ref (an effect's
-  cleanup runs after the ref is cleared, and a detached playing element keeps
-  playing).
+- **The client sequences two files per item.** The word's own audio
+  (`word_url`, the learner's accent, what the reveal plays) and the definition's
+  (`definition_url`, masked as in recall). Until 2026-10-07 the server baked one
+  file per item; the owner rejected that (no reversing, no re-timing). Order
+  (`Meaning first` / `Word first` pills) and pause (`Pause: 3 s`, - / +, 1..10)
+  are on the On the go screen above the player and saved to the account through
+  `PUT /vocabulary/settings` (optimistic; the server's answer wins, but only the
+  last of a burst of clicks may overwrite). The item is laid out as segments
+  WHEN IT STARTS, so a change applies from the next item. The gap after each
+  item is a fixed 1.5 s.
+- **Every `src` goes through `mediaUrl()`** -- the server sends `/media/...`
+  paths on the API origin. (The silences are Blob URLs and are not passed
+  through it.)
+- **One `<audio>`, segments back to back, NO `setTimeout`.** The pause and the
+  gap are silence played on the SAME element (`silence.ts`: a WAV of exactly N
+  seconds, 8 kHz mono 8-bit, built once per length as a Blob URL), so the
+  element is "playing" through them and background tabs and locked Android
+  screens keep going; a timer is throttled or frozen there. `src` is set
+  imperatively in the same call stack as `ended` (or the headphone's "next"),
+  never via a render. **"Playing" is the learner's INTENT, never `el.paused`**:
+  `pause` fires before `ended`, so `paused` is already true when a segment
+  ends and chaining from it stops the list. `ended` and an error continue under
+  the intent; Next/Previous and headphone keys keep it; `pause` at `el.ended` is
+  ignored by the button state. Starting it also stops any shared practice clip.
+  Leaving the page pauses it through a callback ref (an effect's cleanup runs
+  after the ref is cleared, and a detached playing element keeps playing) and
+  releases the Blob URLs. A speech file that errors takes its item with it; a
+  silence that errors is passed over.
 - **The word is never on the screen or in the metadata**; the wire does not
   carry it. Lock-screen title is `On the go · 3 / 40`, artist `voocab`.
 - **Media Session**: play, pause, nexttrack, previoustrack, and
   `playbackState` kept in step with the element's own events.
-- **Exposure**: `POST /on-the-go/exposures` once per item per pass, when
-  `currentTime * 1000 >= word_offset_ms`; Previous and replays cannot count a
-  hearing twice; Start again begins a new pass. Never FSRS: listening is not
-  recalling.
+- **Exposure**: `POST /on-the-go/exposures` once per item per pass, when the
+  WORD segment has finished (`ended`, whichever order); skipping before it
+  ends logs nothing; Previous and replays cannot count a hearing twice; Start
+  again begins a new pass. Never FSRS: listening is not recalling.
 - Plays the list once, then "That's all" and Start again. `preparing > 0`
-  adds a quiet "N more words are being prepared". A file that errors is
-  skipped. Empty list: "No words in rotation yet."
-- **Real-iPhone lock-screen test is PENDING and is the owner's.** Check, with
-  the phone locked: (1) it keeps going from file to file without a tap;
-  (2) the lock-screen shows `On the go · N / M` and never the word; (3)
-  headphone/lock-screen play, pause, next and previous all act; (4) the
-  3-second pause is audible in the file and nothing else interrupts it;
-  (5) the exposure POSTs still arrive while locked (Network tab on a
-  connected Mac, or the server log) — `timeupdate` while backgrounded is the
-  least certain part. Also the `speak` microphone card in iOS Safari.
+  adds a quiet "N more words are being prepared". Empty list: "No words in
+  rotation yet."
+- **Real-phone lock-screen test is PENDING and is the owner's.** iPhone
+  lock-screen playback is for a native app; what the web must still do: (1) a
+  locked Android phone / background tab goes on from segment to segment through
+  the pauses; (2) the lock screen shows `On the go · N / M`, never the word;
+  (3) headphone play, pause, next and previous act; (4) the exposure POSTs
+  arrive when the word ends. Also the `speak` microphone card in iOS Safari.
 
 ## Browse: reading the list, not practising it
 

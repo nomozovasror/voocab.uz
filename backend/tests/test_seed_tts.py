@@ -118,23 +118,6 @@ async def test_the_seed_drains_the_queue_in_process_and_writes_the_workers_rows(
     assert await tts.drain(synth, keys=[word.key, definition.key], storage=storage) == 0
 
 
-async def test_items_for_words_in_rotation_are_queued_with_their_parts(created: Created) -> None:
-    lemma = unique_word()
-    lexeme, sense = await make_lexeme(created, lemma, definition=f"to {lemma} something")
-    await _saved(created, lexeme, sense)
-    definition = tts.definition_spec(sense.definition_en, lemma)
-    word = tts.word_spec(lemma, None)
-    item = tts.item_spec(definition, word)
-    created.render_keys.extend([definition.key, word.key, item.key])
-    async with async_session_factory() as session:
-        await seed_tts.enqueue_items(session, limit=1, accents_=["british"])  # newest first: the one just saved
-    assert all([await _row(k) for k in (definition.key, word.key, item.key)])
-    storage = FakeStorage()
-    assert await tts.drain(FakeSynth(), keys=[definition.key, word.key, item.key], storage=storage) == 3
-    ready = await _row(item.key)
-    assert ready.status == RenderStatus.READY and ready.word_offset_ms > tts.ITEM_PAUSE_MS
-
-
 # --- the worker's audio steps ----------------------------------------------------
 
 

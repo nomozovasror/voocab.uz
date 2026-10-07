@@ -1,5 +1,5 @@
 """What a learner hears for a word (`app.services.word_audio`): the TTS
-render, heteronym phonemes, enqueueing, and the On the go item."""
+render, heteronym phonemes, enqueueing, and the On the go item list."""
 
 
 import pytest
@@ -9,9 +9,10 @@ from sqlmodel import select
 from app.core.database import async_session_factory
 from app.models.audio_render import AudioRender, RenderStatus
 from app.models.lexicon import LexemeSense
+from app.models.user import User
 from app.models.vocabulary import SavedWord
 from app.models.word_audio_log import OnTheGoExposure, SpeakMiss
-from app.services import pronunciation, tts, word_audio
+from app.services import on_the_go, pronunciation, tts, word_audio
 from tests.audio_helpers import (
     Created,
     make_lexeme,
@@ -32,7 +33,7 @@ async def _render_rows(*keys: str) -> list[AudioRender]:
         return list((await session.exec(select(AudioRender).where(AudioRender.key.in_(keys)))).all())
 
 
-async def _mark_ready(spec: tts.RenderSpec, *, duration_ms: int = 700, offset: int | None = None) -> None:
+async def _mark_ready(spec: tts.RenderSpec, *, duration_ms: int = 700) -> None:
     async with async_session_factory() as session:
         await tts.enqueue([spec])
         await session.execute(
@@ -42,7 +43,6 @@ async def _mark_ready(spec: tts.RenderSpec, *, duration_ms: int = 700, offset: i
                 status=RenderStatus.READY,
                 storage_key=tts.storage_key_for(spec.kind, spec.key),
                 duration_ms=duration_ms,
-                word_offset_ms=offset,
             )
         )
         await session.commit()
@@ -210,69 +210,56 @@ async def _saved_word(created: Created, lexeme, sense) -> SavedWord:
     return word
 
 
-async def test_an_item_queues_its_parts_first_and_is_served_once_ready(created: Created) -> None:
+async def test_an_item_is_listed_only_when_both_parts_are_ready(created: Created) -> None:
     lemma = unique_word()
     lexeme, sense = await make_lexeme(created, lemma, definition=f"to {lemma} something completely")
     saved = await _saved_word(created, lexeme, sense)
     definition = tts.definition_spec(sense.definition_en, lemma)
     word = tts.word_spec(lemma, None)
-    item = tts.item_spec(definition, word)
-    created.render_keys.extend([definition.key, word.key, item.key])
-    async with async_session_factory() as session:
-        assert await word_audio.item_render(session, saved) is None
-    rows = {r.kind: r for r in await _render_rows(definition.key, word.key, item.key)}
-    assert set(rows) == {"definition", "word", "item"}
+    created.render_keys.extend([definition.key, word.key])
+
+    async def listed() -> tuple[list[on_the_go.Item], int]:
+        async with async_session_factory() as session:
+            return await on_the_go.item_list(session, await session.get(User, saved.user_id))
+
+    assert await listed() == ([], 1)  # both parts queued by the request
+    rows = {r.kind: r for r in await _render_rows(definition.key, word.key)}
+    assert set(rows) == {"definition", "word"}  # no composed item any more
     assert all(r.status == RenderStatus.PENDING for r in rows.values())
-    await _mark_ready(item, duration_ms=9000, offset=4200)
-    async with async_session_factory() as session:
-        result = await word_audio.item_render(session, saved)
-    assert result == (f"/media/renders/{item.key}.m4a", 9000, 4200)
-    assert (result.url, result.duration_ms, result.word_offset_ms) == tuple(result)
+    await _mark_ready(word)
+    assert await listed() == ([], 1)  # half a pair is still being prepared
+    await _mark_ready(definition)
+    items, preparing = await listed()
+    assert preparing == 0 and len(items) == 1
+    assert items[0].word.id == saved.id
+    assert items[0].word_url == f"/media/tts/{word.key}.m4a"
+    assert items[0].definition_url == f"/media/tts/{definition.key}.m4a"
 
 
-async def test_a_changed_definition_is_a_new_item(created: Created) -> None:
+async def test_a_changed_definition_is_a_new_definition_render(created: Created) -> None:
     lemma = unique_word()
     lexeme, sense = await make_lexeme(created, lemma, definition=f"to {lemma} something")
     saved = await _saved_word(created, lexeme, sense)
-    old = tts.item_spec(
-        tts.definition_spec(sense.definition_en, lemma), tts.word_spec(lemma, None),
-    )
-    await _mark_ready(old, duration_ms=8000, offset=4000)
-    created.render_keys.extend(
-        [old.key, tts.word_spec(lemma, None).key, tts.definition_spec(sense.definition_en, lemma).key]
-    )
+    old = tts.definition_spec(sense.definition_en, lemma)
+    word = tts.word_spec(lemma, None)
+    await _mark_ready(old)
+    await _mark_ready(word)
+    new_text = f"to give up {lemma} entirely"
+    new = tts.definition_spec(new_text, lemma)
+    created.render_keys.extend([old.key, word.key, new.key])
+
+    async def listed() -> tuple[list[on_the_go.Item], int]:
+        async with async_session_factory() as session:
+            return await on_the_go.item_list(session, await session.get(User, saved.user_id))
+
+    assert len((await listed())[0]) == 1
     async with async_session_factory() as session:
-        assert (await word_audio.item_render(session, saved)).duration_ms == 8000
         await session.execute(
-            update(LexemeSense)
-            .where(LexemeSense.id == sense.id)
-            .values(definition_en=f"to give up {lemma} entirely")
+            update(LexemeSense).where(LexemeSense.id == sense.id).values(definition_en=new_text)
         )
         await session.commit()
-        assert await word_audio.item_render(session, saved) is None  # new key, queued
-    new = tts.item_spec(
-        tts.definition_spec(f"to give up {lemma} entirely", lemma), tts.word_spec(lemma, None),
-    )
-    created.render_keys.extend([new.key, tts.definition_spec(f"to give up {lemma} entirely", lemma).key])
+    assert await listed() == ([], 1)  # a new key, queued; the old file is not referenced
     assert new.key != old.key and await _render_rows(new.key)
-
-
-async def test_the_batch_item_variant_covers_every_saved_word_without_one_query_each(
-    created: Created,
-) -> None:
-    saved: list[SavedWord] = []
-    for _ in range(3):
-        lemma = unique_word()
-        lexeme, sense = await make_lexeme(created, lemma, definition=f"to {lemma} something")
-        saved.append(await _saved_word(created, lexeme, sense))
-        definition = tts.definition_spec(sense.definition_en, lemma)
-        created.render_keys.extend(
-            [definition.key, tts.word_spec(lemma, None).key,
-             tts.item_spec(definition, tts.word_spec(lemma, None)).key]
-        )
-    async with async_session_factory() as session:
-        result = await word_audio.item_renders(session, saved)
-    assert set(result) == {w.id for w in saved} and all(v is None for v in result.values())
 
 
 async def test_forgetting_a_word_keeps_its_exposure_and_speak_miss_history(

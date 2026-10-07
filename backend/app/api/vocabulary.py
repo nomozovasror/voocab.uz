@@ -725,20 +725,22 @@ async def practice_speak_check(
 
 @router.get("/vocabulary/on-the-go", response_model=OnTheGoOut)
 async def on_the_go(user: CurrentUser, session: SessionDep) -> OnTheGoOut:
-    """The learner's words in rotation as rendered files, newest first --
-    independent of the daily queue. Only ready renders are listed;
-    ``preparing`` counts the rest, which are already queued. The word itself is
-    never on the wire (only the audio, and where the word starts inside it):
+    """The learner's words in rotation, newest first -- independent of the
+    daily queue -- each as TWO audios the client plays in the learner's order
+    (``on_the_go_order``) with their pause: the word's own and its masked
+    definition's. Only words with both ready are listed; ``preparing`` counts
+    the rest, which are already queued. The word's text is never on the wire:
     the lock screen and the network tab must not show the answer during the
     pause."""
     ready, preparing = await on_the_go_service.item_list(session, user)
     return OnTheGoOut(
         items=[
             OnTheGoItemOut(
-                word_id=word.id, url=item.url, duration_ms=item.duration_ms,
-                word_offset_ms=item.word_offset_ms,
+                word_id=item.word.id,
+                word_url=item.word_url,
+                definition_url=item.definition_url,
             )
-            for word, item in ready
+            for item in ready
         ],
         preparing=preparing,
     )
@@ -750,7 +752,7 @@ async def on_the_go(user: CurrentUser, session: SessionDep) -> OnTheGoOut:
 async def on_the_go_exposure(
     data: OnTheGoExposureIn, user: CurrentUser, session: SessionDep
 ) -> None:
-    """The WORD part of an item played: one row in the exposure log and
+    """The WORD part of an item finished playing: one row in the exposure log and
     nothing else -- hearing a word is not recalling it, so no FSRS card is
     touched (decision 14). 404 for a word that is not the caller's."""
     if not await on_the_go_service.record_exposure(session, user, data.word_id):
@@ -768,6 +770,8 @@ async def get_vocabulary_settings(
         exercise_types=settings.exercise_types,
         pronunciation=settings.pronunciation,
         accent=settings.accent,
+        on_the_go_order=settings.on_the_go_order,  # type: ignore[arg-type]
+        on_the_go_pause_s=settings.on_the_go_pause_s,
         active_in_progress=await practice_service.active_in_progress_count(
             session, user.id
         ),
@@ -786,6 +790,8 @@ async def put_vocabulary_settings(
         exercise_types=data.exercise_types,
         pronunciation=data.pronunciation,
         accent=data.accent,
+        on_the_go_order=data.on_the_go_order,
+        on_the_go_pause_s=data.on_the_go_pause_s,
     )
     return VocabularySettingsOut(
         daily_minutes=settings.daily_minutes,
@@ -793,6 +799,8 @@ async def put_vocabulary_settings(
         exercise_types=settings.exercise_types,
         pronunciation=settings.pronunciation,
         accent=settings.accent,
+        on_the_go_order=settings.on_the_go_order,  # type: ignore[arg-type]
+        on_the_go_pause_s=settings.on_the_go_pause_s,
         active_in_progress=await practice_service.active_in_progress_count(
             session, user.id
         ),

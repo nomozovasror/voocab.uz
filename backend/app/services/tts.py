@@ -1,5 +1,4 @@
-"""Text to speech, and the queue that makes it: words, definitions, and the
-single On the go file per word.
+"""Text to speech, and the queue that makes it: words and definitions.
 
 Everything the learner hears for a word is made here, by Kokoro-82M in the
 voice of the learner's accent (:mod:`app.services.accents`: British
@@ -15,10 +14,9 @@ places: a mismatch would be heard at once", brief §2).
 
 ``audio_renders.key`` is the SHA-256 of the INPUT (:func:`render_key`): for a
 word, the exact synthesis string + voice + model; for a definition, the masked
-text + voice + model; for an item, the parts it is composed of + voice + model.
+text + voice + model.
 The VOICE is in every key, so an American render never collides with, or
-replaces, a British one -- the two accents are two sets of rows and files, and
-an item still differs by accent because its parts are spoken in the voice.
+replaces, a British one -- the two accents are two sets of rows and files.
 Content addressing the input rather than the output is what lets a row exist, and be
 looked up, before the audio does. Consequences worth stating:
 
@@ -42,18 +40,9 @@ at the masks, each piece is synthesised on its own, and the pieces are joined
 with silence. Several masks in a row (a masked phrase is one blank per word)
 are ONE silence: the learner hears one gap where one phrase was.
 
-## An item is composed, not synthesised
-
-definition + :data:`ITEM_PAUSE_MS` of silence + word + :data:`ITEM_TAIL_MS`,
-in ONE file (decision 13: a locked phone cannot be trusted to chain files).
-The word part is the word's own TTS render. Every part is levelled to the same
-RMS before it is laid down, and the file records ``word_offset_ms``, where the word starts, which
-the client uses as "the word was heard".
-
-An item's ``input`` names its parts rather than holding audio, and the worker
-resolves them itself -- a part whose own render is not ready yet is synthesised
-inline and its row marked ready -- so an item never waits on, or fails because
-of, the order the queue happened to be drained in.
+There is no composed file: On the go sequences a word's render and a definition's
+render on the client, so the order and the pause are the learner's (decision 13,
+superseded 2026-10-07).
 """
 
 import asyncio
@@ -91,9 +80,6 @@ logger = logging.getLogger(__name__)
 VOICE = accents.voice_for(accents.DEFAULT_ACCENT)
 MODEL = "hexgrad/Kokoro-82M"
 
-#: Decision 12: definition, three seconds to recall, the word, then a beat.
-ITEM_PAUSE_MS = 3000
-ITEM_TAIL_MS = 1500
 #: Decision 11: how long a masked word is silent.
 MASK_PAUSE_MS = 400
 
@@ -324,11 +310,10 @@ def render_key(kind: str, input_text: str, voice: str = VOICE, model: str = MODE
 
 
 def storage_key_for(kind: str, key: str) -> str:
-    """``tts/{key}.m4a`` for words and definitions, ``renders/{key}.m4a`` for
-    items. The key is the input's hash, so the object's name is stable before
-    the object exists."""
-    prefix = "renders" if kind == RenderKind.ITEM else "tts"
-    return f"{prefix}/{key}.m4a"
+    """``tts/{key}.m4a``. The key is the input's hash, so the object's name is
+    stable before the object exists. ``kind`` is not in the path (words and
+    definitions share ``tts/``); it stays in the signature for the callers."""
+    return f"tts/{key}.m4a"
 
 
 def word_input(lemma: str, pronunciation: str | None) -> str:
@@ -373,31 +358,6 @@ def definition_spec(
     voice = accents.voice_for(accent)
     return RenderSpec(
         RenderKind.DEFINITION, text, render_key(RenderKind.DEFINITION, text, voice), voice
-    )
-
-
-def item_spec(definition: RenderSpec, word_spec_: RenderSpec) -> RenderSpec:
-    """The render for one On the go file. The input names the parts (the
-    definition's and the word's synthesis strings); see the module docstring.
-    The item is in the voice of its ``definition`` and the word must be in the
-    same one, so an item has one key per accent."""
-    if word_spec_.voice != definition.voice:
-        raise ValueError("an item's definition and word are in one voice")
-    word_part = {"source": "tts", "input": word_spec_.input}
-    text = json.dumps(
-        {
-            "definition": {"input": definition.input},
-            "word": word_part,
-            "pause_ms": ITEM_PAUSE_MS,
-            "tail_ms": ITEM_TAIL_MS,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-    return RenderSpec(
-        RenderKind.ITEM, text, render_key(RenderKind.ITEM, text, definition.voice),
-        definition.voice,
     )
 
 
@@ -454,22 +414,6 @@ def synthesise_definition(synth: Synth, masked: str, voice: str = VOICE) -> np.n
         else:
             parts.append(trim_edges(synth(piece, voice)))
     return audio_pcm.normalise_rms(audio_pcm.concat(*parts))
-
-
-def compose_item(
-    definition: np.ndarray,
-    word: np.ndarray,
-    *,
-    pause_ms: int = ITEM_PAUSE_MS,
-    tail_ms: int = ITEM_TAIL_MS,
-) -> tuple[np.ndarray, int]:
-    """``(file samples, word_offset_ms)``: definition, ``pause_ms`` of silence,
-    word, ``tail_ms`` of silence; both speech parts levelled to the same RMS.
-    The offset is where the word's first sample is."""
-    lead = audio_pcm.concat(audio_pcm.normalise_rms(definition), audio_pcm.silence(pause_ms))
-    offset_ms = audio_pcm.duration_ms(lead)
-    samples = audio_pcm.concat(lead, audio_pcm.normalise_rms(word), audio_pcm.silence(tail_ms))
-    return samples, offset_ms
 
 
 # --- The queue ------------------------------------------------------------------
@@ -618,9 +562,8 @@ async def claim_renders(
     row still in its failure back-off (``next_attempt_at`` in the future) is
     not claimable.
 
-    Words first, then definitions, then items, oldest first within a kind: a
-    request is most often waiting on a word, and an item would only have to
-    synthesise its parts inline if it were claimed ahead of them. ``kinds`` and
+    Words first, then definitions, oldest first within a kind: a request is
+    most often waiting on a word. ``kinds`` and
     ``keys`` narrow the claim to those kinds / exactly those renders (a seed
     run that must not touch whatever else is pending; tests)."""
     rank = case(
@@ -691,94 +634,12 @@ async def _store(
     return storage_key, audio_pcm.duration_ms(samples)
 
 
-async def _tts_part(
-    session: AsyncSession,
-    spec: RenderSpec,
-    synth: Synth,
-    storage: MediaStorage,
-) -> np.ndarray:
-    """The audio of a word/definition render, for use inside an item: read it
-    if it is ready and in storage, otherwise make it now and record it."""
-    row = (await session.exec(select(AudioRender).where(AudioRender.key == spec.key))).first()
-    if row is not None and row.status == RenderStatus.READY and row.storage_key:
-        try:
-            return await asyncio.to_thread(audio_pcm.decode, await storage.get(row.storage_key))
-        except InfrastructureError:
-            raise  # storage is down: remaking would fail the same way, and say so
-        except Exception:  # noqa: BLE001 - the file is gone; fall through and remake it
-            logger.warning("render %s is ready but unreadable; remaking", spec.key)
-    samples = await _in_synth_thread(_synthesise, spec, synth)
-    storage_key, duration = await _store(storage, spec.kind, spec.key, samples)
-    stmt = pg_insert(AudioRender).values(
-        id=uuid.uuid4(),
-        key=spec.key,
-        kind=spec.kind,
-        input=spec.input,
-        voice=spec.voice,
-        model=spec.model,
-        status=RenderStatus.READY,
-        attempts=0,
-        storage_key=storage_key,
-        duration_ms=duration,
-        created_at=datetime.now(timezone.utc),
-    )
-    await session.execute(
-        stmt.on_conflict_do_update(
-            index_elements=["key"],
-            set_={
-                "status": RenderStatus.READY,
-                "storage_key": storage_key,
-                "duration_ms": duration,
-                "error": None,
-                "updated_at": func.now(),
-            },
-        )
-    )
-    await session.commit()
-    return samples
-
-
 def _synthesise(spec: RenderSpec, synth: Synth) -> np.ndarray:
     if spec.kind == RenderKind.WORD:
         return synthesise_word(synth, spec.input, spec.voice)
     if spec.kind == RenderKind.DEFINITION:
         return synthesise_definition(synth, spec.input, spec.voice)
     raise ValueError(f"{spec.kind} is not synthesised directly")
-
-
-async def build_item(
-    session: AsyncSession, row: AudioRender, synth: Synth, storage: MediaStorage
-) -> tuple[np.ndarray, int]:
-    """Resolve an item's parts (see the module docstring) and compose it."""
-    spec = json.loads(row.input)
-    definition = await _tts_part(
-        session,
-        RenderSpec(
-            RenderKind.DEFINITION,
-            spec["definition"]["input"],
-            render_key(RenderKind.DEFINITION, spec["definition"]["input"], row.voice, row.model),
-            row.voice,
-            row.model,
-        ),
-        synth,
-        storage,
-    )
-    word_part = spec["word"]
-    word = await _tts_part(
-        session,
-        RenderSpec(
-            RenderKind.WORD,
-            word_part["input"],
-            render_key(RenderKind.WORD, word_part["input"], row.voice, row.model),
-            row.voice,
-            row.model,
-        ),
-        synth,
-        storage,
-    )
-    return compose_item(
-        definition, word, pause_ms=int(spec["pause_ms"]), tail_ms=int(spec["tail_ms"])
-    )
 
 
 async def process_render(
@@ -802,15 +663,11 @@ async def process_render(
     limit = max_attempts if max_attempts is not None else settings.tts_max_attempts
     row_id, kind, key = row.id, row.kind, row.key
     try:
-        offset: int | None = None
-        if kind == RenderKind.ITEM:
-            samples, offset = await build_item(session, row, synth, storage)
-        else:
-            samples = await _in_synth_thread(
-                _synthesise,
-                RenderSpec(kind, row.input, key, row.voice, row.model),
-                synth,
-            )
+        samples = await _in_synth_thread(
+            _synthesise,
+            RenderSpec(kind, row.input, key, row.voice, row.model),
+            synth,
+        )
         storage_key, duration = await _store(storage, kind, key, samples)
     except Exception as exc:  # noqa: BLE001 - recorded on the row, never propagated
         await session.rollback()
@@ -849,7 +706,6 @@ async def process_render(
     fresh.status = RenderStatus.READY
     fresh.storage_key = storage_key
     fresh.duration_ms = duration
-    fresh.word_offset_ms = offset
     fresh.error = None
     fresh.next_attempt_at = None
     session.add(fresh)

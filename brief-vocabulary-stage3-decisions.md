@@ -95,7 +95,7 @@ contract the backend and frontend build against.
     audio by a short silence.
 12. **Sequence:** definition → 3 s pause → word → 1.5 s → next. The list is
     played once and stops at the end.
-13. **Locked screen:** the server renders ONE file per item (definition +
+13. **(Superseded 2026-10-07, see the On the go addendum.) Locked screen:** the server renders ONE file per item (definition +
     3 s silence + word + 1.5 s), content-addressed. The client plays items
     back to back on one `<audio>` with the Media Session API (play / pause /
     next / previous from headphones and the lock screen). Lock-screen
@@ -238,3 +238,35 @@ are gone). Removed with them:
   `"source":"clip"`) are deleted by the migration; items re-render on demand
   with the TTS word. Items that were TTS-worded keep their keys.
 - TTS for every word already existed (decision 26), so nothing is regenerated.
+
+## Addendum (2026-10-07) On the go: client-sequenced, order and pause are the learner's
+
+The owner rejected the composed item file: with the meaning, the 3 s pause and
+the word baked into one file the learner cannot hear the word first and then the
+meaning, nor change the pause. Playback on a locked iPhone will be solved later
+by a native app, so it no longer justifies baking.
+
+Superseded, text above kept for the record: decision **13** (and the "ONE file
+per item" part of 12).
+
+- **Two files per item, sequenced by the client:** the word's own audio (the
+  learner's accent, exactly what the reveal plays) and the sense's masked
+  definition audio. `GET /vocabulary/on-the-go` ->
+  `{ items: [{ word_id, word_url, definition_url }], preparing }`; an item is
+  listed only when BOTH are ready.
+- **Order and pause are set on the On the go screen itself and saved to the
+  account:** `vocabulary_settings.on_the_go_order` (`meaning_first` default |
+  `word_first`) and `on_the_go_pause_s` (1..10, default 3), optional on `PUT
+  /vocabulary/settings` (absent = unchanged), returned on GET. Changes apply
+  from the next item. The gap between words stays a fixed 1.5 s.
+- **No timers:** the pause and the gap are silence, a WAV of exactly N seconds
+  generated on the client and played on the SAME `<audio>` element, so the
+  element is "playing" through them and background tabs and locked Android
+  screens keep going. Media Session and the lock-screen title
+  `On the go . 3 / 40` stay; the word is never shown or put in metadata.
+- **Exposure (14) unchanged:** one row per item per pass, posted when the WORD
+  part has finished playing, whichever order.
+- **Removed:** `RenderKind.ITEM`, `item_spec`, `item_renders`, item composition
+  (`compose_item`, `build_item`), `audio_renders.word_offset_ms`, `seed_tts
+  items`. Migration `e7b2c4d9a315` deletes the `item` rows; their files under
+  `media/renders/` are removed by hand.

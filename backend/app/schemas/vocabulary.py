@@ -33,6 +33,8 @@ from app.services.accents import Accent
 Direction = Literal["passive", "active"]
 ExerciseType = Literal["recognise", "recall", "produce", "listen", "speak"]
 Verdict = Literal["correct", "close", "wrong"]
+#: On the go: what plays first within an item.
+OnTheGoOrder = Literal["meaning_first", "word_first"]
 #: What `PracticeItemOut`/`PracticeAnswerIn` call a level (`exercise_type`,
 #: `planned_exercise`) and what the settings screen's exercise type is drawn
 #: from: the ladder's rungs (passive `recognise`/`recall`/`listen`, active
@@ -727,6 +729,10 @@ class VocabularySettingsOut(BaseModel):
     #: The accent of the synthetic voice (``british`` default, ``american``).
     #: A live recording keeps its speaker's accent regardless.
     accent: Accent = "british"
+    #: On the go: which part of an item plays first, and the seconds between the
+    #: two (the gap between words is fixed).
+    on_the_go_order: OnTheGoOrder = "meaning_first"
+    on_the_go_pause_s: int = 3
     #: How many of the learner's active cards have actually started and
     #: are not already retired -- shown beside the direction toggle so
     #: switching it to ``passive`` is an informed choice: "N words are
@@ -759,6 +765,10 @@ class VocabularySettingsIn(BaseModel):
     #: Absent (or null) = unchanged, like ``pronunciation``: only the
     #: Accent control sends it. Anything but ``british`` / ``american`` is a 422.
     accent: Accent | None = None
+    #: Absent (or null) = unchanged: only the On the go screen sends these two,
+    #: and a save from the settings screen must not flip them.
+    on_the_go_order: OnTheGoOrder | None = None
+    on_the_go_pause_s: int | None = Field(default=None, ge=1, le=10)
 
 
 # --- "This translation is wrong" (P4) ---------------------------------------
@@ -863,21 +873,21 @@ class SpeakCheckOut(BaseModel):
 
 
 class OnTheGoItemOut(BaseModel):
-    """One rendered file: definition, a pause, the word, a short tail.
-    ``word_offset_ms`` is where the WORD starts inside it -- the moment an
-    exposure counts. The word is never on the wire."""
+    """One word to listen to: its own audio (the learner's accent, what the
+    reveal plays) and its masked definition's audio. Two files, sequenced by the
+    client in the learner's order. The word's TEXT is never on the wire."""
 
     word_id: uuid.UUID
-    url: str
-    duration_ms: int
-    word_offset_ms: int
+    word_url: str
+    definition_url: str
 
 
 class OnTheGoOut(BaseModel):
+    #: Only words whose BOTH audios are ready.
     items: list[OnTheGoItemOut]
-    #: Words in rotation whose file is not rendered yet and still being made
-    #: (queued or in progress). A render that has FAILED is not "preparing":
-    #: it is not coming, and counting it would leave the client waiting.
+    #: Words in rotation with a missing part still being made (queued or in
+    #: progress). A render that has FAILED is not "preparing": it is not
+    #: coming, and counting it would leave the client waiting.
     preparing: int
 
 

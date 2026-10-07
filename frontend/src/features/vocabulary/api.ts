@@ -80,6 +80,8 @@ export const wordListKey = (key: string) =>
  *  is independent of the daily queue and nothing a practice answer does
  *  changes it. */
 export const onTheGoKey = ["vocabulary", "on-the-go"] as const;
+/** The account's vocabulary settings (the same key the settings page uses). */
+export const settingsKey = ["vocabulary", "settings"] as const;
 
 export const vocabularyApi = {
   /** One tapped word, in this passage's sense.
@@ -253,12 +255,12 @@ export const vocabularyApi = {
 
   // --- On the go ----------------------------------------------------------
 
-  /** The words in rotation as rendered files, newest first. Independent of
-   *  the daily queue. */
+  /** The words in rotation, newest first, each as two audio files (word,
+   *  definition). Independent of the daily queue. */
   onTheGo: () => api.get<OnTheGoList>("/api/vocabulary/on-the-go"),
 
   /** One row in the exposure log, sent once the WORD part of an item has
-   *  actually played. 204. It is a log, never an FSRS write: hearing a word
+   *  finished playing. 204. It is a log, never an FSRS write: hearing a word
    *  is not recalling it. */
   onTheGoExposure: (wordId: string) =>
     api.post<void>("/api/vocabulary/on-the-go/exposures", {
@@ -288,9 +290,14 @@ export const vocabularyApi = {
    *  value and leaving the other two for the server to guess at. */
   updateSettings: (
     settings: Pick<VocabularySettings, "daily_minutes" | "direction" | "exercise_types"> &
-      // Optional: absent means unchanged, so only the Pronunciation and
-      // Accent controls send them.
-      Partial<Pick<VocabularySettings, "pronunciation" | "accent">>,
+      // Optional: absent means unchanged, so only the Pronunciation, Accent
+      // and On the go controls send them.
+      Partial<
+        Pick<
+          VocabularySettings,
+          "pronunciation" | "accent" | "on_the_go_order" | "on_the_go_pause_s"
+        >
+      >,
   ) =>
     api.put<VocabularySettings>("/api/vocabulary/settings", {
       json: settings,

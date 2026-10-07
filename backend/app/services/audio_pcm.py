@@ -17,14 +17,13 @@ no ``ffmpeg`` executable anywhere in the stack.
 
 ## Loudness
 
-A word and a definition Kokoro synthesised can differ by several dB, and one
-file holding both (an On the go item) must not make the learner reach for the
-volume between the definition and the answer. :func:`normalise_rms` brings a
+A word and a definition Kokoro synthesised can differ by several dB, and the
+learner hears them back to back (On the go) without reaching for the volume. :func:`normalise_rms` brings a
 piece to :data:`TARGET_RMS_DBFS` -- RMS, not peak, because RMS tracks perceived
 loudness of speech far better than a single spike does -- with a ceiling on the
 peak so a piece with one sharp consonant is not driven into clipping to reach
 the target. It is applied to every artefact when it is made AND again when
-pieces are composed, which is harmless: a piece already at the target gets a
+pieces are joined, which is harmless: a piece already at the target gets a
 gain of ~1.
 
 The gain is CAPPED (:data:`MAX_GAIN_DB`): near-silence brought to -20 dBFS is
@@ -62,7 +61,7 @@ _SILENCE_RMS = 1e-5
 def decode(data: bytes) -> np.ndarray:
     """``data`` (any container/codec PyAV reads) as float32 mono at
     :data:`SAMPLE_RATE`. The renders this layer stored are read back through
-    here (an item is composed from its word and definition renders)."""
+    here (the seed's doctor checks that a stored file is readable)."""
     resampler = av.AudioResampler(format="flt", layout="mono", rate=SAMPLE_RATE)
     chunks: list[np.ndarray] = []
     with av.open(io.BytesIO(data)) as container:

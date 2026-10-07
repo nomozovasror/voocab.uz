@@ -20,7 +20,7 @@ render is ready it is served, otherwise it is **enqueued** and the answer is
 Every function takes the learner's ``accent`` (``settings.accent``, default
 British) and it decides exactly two things: which Kokoro VOICE a render is in
 (the voice is in the render key, so each accent has its own rows and files, for
-words, definitions and items alike) and which stored heteronym choice is used
+words and definitions alike) and which stored heteronym choice is used
 (``LexemeSense.pronunciation`` British, ``pronunciation_us`` American -- a
 phoneme string belongs to its alphabet). A heteronym's sense carries its own
 phonemes, so its two senses are two renders.
@@ -29,9 +29,8 @@ phonemes, so its two senses are two renders.
 
 A word-list entry nobody has saved yet is just a ``LexemeSense``; a saved word
 is a ``LexemeSense`` plus a learner. Audio depends only on the sense (and its
-lexeme's lemma and POS), so every function here takes senses; only
-:func:`item_renders` takes a saved word, because an On the go item is a thing a
-learner has in rotation. Lexemes are loaded for you if not passed.
+lexeme's lemma and POS), so every function here takes senses. Lexemes are loaded
+for you if not passed.
 
 ## Batch variants, and why they are the real API
 
@@ -52,14 +51,12 @@ already on its way.
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import NamedTuple
 
 from sqlmodel import select
 
 from app.core.database import AsyncSession
 from app.models.audio_render import AudioRender, RenderStatus
 from app.models.lexicon import Lexeme, LexemeSense
-from app.models.vocabulary import SavedWord
 from app.services import pronunciation, tts
 from app.services.accents import DEFAULT_ACCENT, Accent
 from app.services.storage import get_storage
@@ -70,15 +67,6 @@ class AudioOut:
     """The wire shape of a word's audio: the URL of the word alone."""
 
     url: str
-
-
-class ItemAudio(NamedTuple):
-    """One On the go file: where it is, how long, and where the word starts
-    inside it."""
-
-    url: str
-    duration_ms: int
-    word_offset_ms: int
 
 
 def decided_pronunciation(sense: LexemeSense, accent: Accent) -> str | None:
@@ -221,89 +209,3 @@ async def definition_audio_url(
         accent=accent,
     )
     return result.get(sense.id)
-
-
-async def item_renders(
-    session: AsyncSession,
-    saved_words: Sequence[SavedWord],
-    *,
-    accent: Accent = DEFAULT_ACCENT,
-) -> dict[uuid.UUID, ItemAudio | None]:
-    """The On the go file of every saved word: ``{saved word id: ItemAudio |
-    None}``. ``None`` = not ready (its parts and the item are queued, parts
-    first) or the sense has no definition to play."""
-    storage = get_storage()
-    senses = {
-        s.id: s
-        for s in (
-            await session.exec(
-                select(LexemeSense).where(
-                    LexemeSense.id.in_({w.lexeme_sense_id for w in saved_words})
-                )
-            )
-        ).all()
-    } if saved_words else {}
-    ordered = list(senses.values())
-    pairs = {s.id: lexeme for s, lexeme in await _pairs(session, ordered, None)}
-
-    parts: dict[uuid.UUID, tuple[tts.RenderSpec, tts.RenderSpec, tts.RenderSpec]] = {}
-    for sense_id, sense in senses.items():
-        lexeme = pairs.get(sense_id)
-        if lexeme is None:
-            continue
-        definition = tts.definition_spec(sense.definition_en, lexeme.lemma, accent)
-        if definition is None:
-            continue
-        word = tts_word_spec(sense, lexeme, accent)
-        parts[sense_id] = (definition, word, tts.item_spec(definition, word))
-
-    rows = await _render_rows(
-        session,
-        (
-            spec.key
-            for definition, word, item in parts.values()
-            for spec in (definition, word, item)
-        ),
-    )
-    # Parts first: the claim order is by kind anyway, but one insert holding all
-    # three keeps a half-queued item from ever existing.
-    await _enqueue_missing(
-        rows,
-        (
-            spec
-            for definition, word, item in parts.values()
-            if not _ready(rows.get(item.key))
-            for spec in (definition, word, item)
-        ),
-    )
-
-    out: dict[uuid.UUID, ItemAudio | None] = {}
-    for saved in saved_words:
-        triple = parts.get(saved.lexeme_sense_id)
-        row = rows.get(triple[2].key) if triple is not None else None
-        if (
-            row is not None
-            and _ready(row)
-            and row.duration_ms is not None
-            and row.word_offset_ms is not None
-        ):
-            out[saved.id] = ItemAudio(
-                await storage.url(row.storage_key),  # type: ignore[arg-type]
-                row.duration_ms,
-                row.word_offset_ms,
-            )
-        else:
-            out[saved.id] = None
-    return out
-
-
-async def item_render(
-    session: AsyncSession,
-    saved_word: SavedWord,
-    *,
-    accent: Accent = DEFAULT_ACCENT,
-) -> ItemAudio | None:
-    """``(url, duration_ms, word_offset_ms)`` of one word's On the go file, or
-    ``None`` (queued, or nothing to play)."""
-    result = await item_renders(session, [saved_word], accent=accent)
-    return result.get(saved_word.id)

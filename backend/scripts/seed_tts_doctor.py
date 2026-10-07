@@ -206,7 +206,7 @@ async def check_media() -> list[Check]:
             problems.append(f"{key}: {type(exc).__name__}: {exc}")
     if problems:
         out.append(Check(FAIL, "Render files present", f"{len(problems)} of {len(samples)} sampled file(s) unusable, e.g. {problems[0]}",
-                         "copy backend/media/tts (and renders/) from the Mac into MEDIA_ROOT; `check-files` lists every missing one"))
+                         "copy backend/media/tts from the Mac into MEDIA_ROOT; `check-files` lists every missing one"))
     else:
         out.append(Check(PASS, "Render files present", f"{len(samples)} sampled file(s) found and readable"))
     return out

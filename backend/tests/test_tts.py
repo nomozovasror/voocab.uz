@@ -1,5 +1,5 @@
 """The TTS layer (`app.services.tts`): keys, masked definitions spoken as
-silence, item composition, and the render queue's claim / fail / retry path.
+silence, and the render queue's claim / fail / retry path.
 Kokoro is a fake; PyAV is real."""
 
 import asyncio
@@ -66,10 +66,9 @@ def test_the_key_is_the_hash_of_the_exact_input_voice_and_model() -> None:
     assert key != tts.render_key("definition", "abandon")
 
 
-def test_storage_keys_live_under_tts_and_renders() -> None:
+def test_storage_keys_live_under_tts() -> None:
     assert tts.storage_key_for("word", "ab" * 32) == f"tts/{'ab' * 32}.m4a"
     assert tts.storage_key_for("definition", "cd" * 32).startswith("tts/")
-    assert tts.storage_key_for("item", "ef" * 32) == f"renders/{'ef' * 32}.m4a"
 
 
 def test_a_heteronym_is_spoken_from_phonemes_and_anything_else_from_text() -> None:
@@ -124,38 +123,6 @@ def test_trim_edges_leaves_a_short_lead_and_tail() -> None:
     assert len(tts.trim_edges(np.zeros(1000, dtype=np.float32))) == 1000  # all silence: untouched
 
 
-# --- composing an item -----------------------------------------------------------
-
-
-def test_an_item_is_definition_pause_word_tail_and_records_where_the_word_starts() -> None:
-    definition, word = tone(2000, amp=0.02), tone(600, freq=700, amp=0.4)
-    samples, offset = tts.compose_item(definition, word)
-    assert offset == 2000 + tts.ITEM_PAUSE_MS == 5000
-    assert audio_pcm.duration_ms(samples) == 2000 + 3000 + 600 + 1500
-    # The word begins exactly at the offset; before it, the pause is silence.
-    start = round(offset * SR / 1000)
-    assert float(np.max(np.abs(samples[start - 10 : start - 1]))) == 0.0
-    assert float(np.max(np.abs(samples[start : start + 2000]))) > 0.05
-    assert float(np.max(np.abs(samples[-SR:]))) == 0.0  # the 1.5 s tail
-    # Levelled: a quiet definition and a loud word end up at one loudness.
-    spoken_def = samples[: round(2000 * SR / 1000)]
-    spoken_word = samples[start : start + round(600 * SR / 1000)]
-    assert abs(audio_pcm.rms_dbfs(spoken_def) - audio_pcm.rms_dbfs(spoken_word)) < 0.5
-
-
-def test_an_items_key_follows_its_parts() -> None:
-    definition = tts.definition_spec("to abandon something", "abandon")
-    word = tts.word_spec("abandon", None)
-    assert definition is not None
-    item = tts.item_spec(definition, word)
-    assert item == tts.item_spec(definition, word)  # stable
-    changed = tts.definition_spec("to give up something", "abandon")
-    assert changed is not None
-    assert tts.item_spec(changed, word).key != item.key
-    with pytest.raises(ValueError):  # the word must be in the definition's voice
-        tts.item_spec(definition, tts.word_spec("abandon", None, "american"))
-
-
 # --- the queue -------------------------------------------------------------------
 
 
@@ -184,20 +151,19 @@ async def test_enqueue_is_idempotent_and_leaves_existing_rows_alone(created: Cre
     assert row.status == RenderStatus.FAILED and row.voice == tts.VOICE and row.model == tts.MODEL
 
 
-async def test_claim_takes_words_before_definitions_before_items(created: Created) -> None:
+async def test_claim_takes_words_before_definitions(created: Created) -> None:
     word = tts.word_spec(unique_word(), None)
     definition = tts.definition_spec(f"a {unique_word()} thing", "x")
-    item = tts.item_spec(definition, word)
-    keys = [item.key, definition.key, word.key]
+    keys = [definition.key, word.key]
     created.render_keys.extend(keys)
-    await tts.enqueue([item, definition, word])  # inserted in the WRONG order
+    await tts.enqueue([definition, word])  # inserted in the WRONG order
     claimed = []
-    for _ in range(3):
+    for _ in range(2):
         async with async_session_factory() as session:
             row = await tts.claim_render(session, keys=keys)
             assert row is not None and row.status == RenderStatus.PROCESSING
             claimed.append(row.kind)
-    assert claimed == [RenderKind.WORD, RenderKind.DEFINITION, RenderKind.ITEM]
+    assert claimed == [RenderKind.WORD, RenderKind.DEFINITION]
     async with async_session_factory() as session:
         assert await tts.claim_render(session, keys=keys) is None  # nothing pending left
 
@@ -297,7 +263,6 @@ async def test_a_word_render_is_made_stored_and_marked_ready(created: Created) -
     assert synth.calls == [spec.input]
     audio = audio_pcm.decode(storage.objects[ready.storage_key])
     assert abs(audio_pcm.duration_ms(audio) - ready.duration_ms) < 60
-    assert ready.word_offset_ms is None  # only items have one
 
 
 async def test_a_failing_render_goes_back_to_pending_then_to_failed(created: Created) -> None:
@@ -445,29 +410,6 @@ async def test_enqueue_inserts_in_key_order(created: Created, monkeypatch: pytes
     monkeypatch.setattr(tts, "pg_insert", spy)
     await tts.enqueue(list(reversed(specs)))
     assert seen == [sorted(s.key for s in specs)]
-
-
-async def test_an_item_is_composed_from_parts_it_makes_itself(created: Created) -> None:
-    lemma = unique_word()
-    definition = tts.definition_spec(f"to {lemma} something completely", lemma)
-    word = tts.word_spec(lemma, None)
-    item = tts.item_spec(definition, word)
-    created.render_keys.extend([definition.key, word.key, item.key])
-    await tts.enqueue([item])  # ONLY the item: its parts have no rows yet
-    storage, synth = FakeStorage(), FakeSynth()
-    async with async_session_factory() as session:
-        row = await tts.claim_render(session, keys=[item.key])
-        await tts.process_render(session, row, synth, storage)
-    ready = await _row(item.key)
-    assert ready.status == RenderStatus.READY and ready.storage_key == f"renders/{item.key}.m4a"
-    # The offset is the spoken definition plus the three-second pause.
-    spoken_definition = tts.synthesise_definition(FakeSynth(), definition.input)
-    assert ready.word_offset_ms == audio_pcm.duration_ms(spoken_definition) + tts.ITEM_PAUSE_MS
-    word_ms = audio_pcm.duration_ms(tts.synthesise_word(FakeSynth(), lemma))
-    assert abs(ready.duration_ms - (ready.word_offset_ms + word_ms + tts.ITEM_TAIL_MS)) <= 2
-    # The parts it made are recorded as ready, so nothing makes them twice.
-    assert (await _row(definition.key)).status == RenderStatus.READY
-    assert (await _row(word.key)).status == RenderStatus.READY
 
 
 async def test_the_worker_pass_reports_what_happened(created: Created) -> None:

@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Integer,
     SmallInteger,
     String,
     UniqueConstraint,
@@ -989,4 +990,17 @@ class VocabularySettings(SQLModel, table=True):
     accent: str = Field(
         default="british",
         sa_column=Column(String(16), nullable=False, server_default="british"),
+    )
+    #: On the go: which part of an item plays first -- ``meaning_first`` (the
+    #: masked definition, then the word; the default) or ``word_first``. Set on
+    #: the On the go screen itself; the client sequences the two files.
+    on_the_go_order: str = Field(
+        default="meaning_first",
+        sa_column=Column(String(16), nullable=False, server_default="meaning_first"),
+    )
+    #: On the go: whole seconds of silence between the two parts of an item
+    #: (1..10, validated at the schema layer). The gap BETWEEN words is fixed.
+    on_the_go_pause_s: int = Field(
+        default=3,
+        sa_column=Column(Integer, nullable=False, server_default="3"),
     )

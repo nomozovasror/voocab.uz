@@ -1147,8 +1147,9 @@ below are the ones a later change can silently break.
   learner's accent (below); a heteronym sense carries its own phonemes. Ready ->
   its URL; no row -> enqueued and `None`. Resolve through `word_audio_many`; a
   list endpoint calling `word_audio` per row is the N+1 the `*_many` functions
-  exist to prevent. `item_renders` always builds the item from the word's TTS
-  render (`tts_word_spec`).
+  exist to prevent. On the go calls `word_audio_many` and
+  `definition_audio_urls` -- the same two renders the reveal and `speak` play --
+  and nothing composes them.
 - **Heteronym-ness** is `is_heteronym(lemma, accent)`: exact and per lemma, and
   means two or more candidates that differ once stress is ignored -- misaki's table also holds stress-only variants (`be`)
   that are NOT heteronyms. Its data is `app/data/tts/` (see the README there),
@@ -1175,16 +1176,16 @@ below are the ones a later change can silently break.
   synthesis string + voice + model, canonical JSON, `KEY_VERSION` inside), so
   a row exists before its audio does and one word is synthesised once in the
   whole system. A corrected definition or a newly decided pronunciation is a NEW key and a new render -- never an edit of
-  an old row. Storage keys are `tts/{key}.m4a` and `renders/{key}.m4a` (items). Bump `KEY_VERSION` to re-render
-  everything after changing trimming, levelling or composition.
+  an old row. Storage keys are `tts/{key}.m4a`. Bump `KEY_VERSION` to re-render
+  everything after changing trimming or levelling.
 - **The accent is the learner's, and it only picks the voice.**
   `vocabulary_settings.accent` (`british` default | `american`;
   `app/services/accents.py` is THE table: British `bf_emma`/`'b'`, American
   `af_heart`/`'a'`). Every `word_audio` function, `tts.word_spec`,
-  `definition_spec` and the item path take `accent` (default British) and every
+  `definition_spec` take `accent` (default British) and every
   caller passes `settings.accent` (practice session build -- one settings read
   -- the reveal, the speak-check reveal, the word page, On the go). The VOICE is
-  inside every render key (word, definition AND item), so accents never collide and
+  inside every render key (word and definition), so accents never collide and
   a render row carries the voice the worker must use.   The accent also chooses `pronunciation` vs `pronunciation_us`
   (`word_audio.decided_pronunciation`) and misaki's fallback table.
 - **The voices: Kokoro-82M `bf_emma` (British) and `af_heart` (American).** A
@@ -1204,22 +1205,21 @@ below are the ones a later change can silently break.
   text is cut at the masks, each piece is synthesised on its own, and a run of
   masks (a masked phrase is one blank per word) is ONE `MASK_PAUSE_MS`
   silence. The text with its `_____` is the render's `input` and key.
-- **An On the go item is composed, not synthesised, and is one file**
-  (decision 13): definition + 3.0 s silence + word + 1.5 s, every speech part
-  levelled to the same RMS (`audio_pcm.normalise_rms`), `word_offset_ms` recorded -- where the word
-  starts, which the client counts as "the word was heard". The word part is
-  the word's own TTS render (the input's `"source":"tts"` is kept so the keys of
-  existing items did not change when clips went). An item's `input` names its
-  parts, and the worker resolves them itself, synthesising a missing part
-  inline, so an item never fails because the queue was drained in a different
-  order. Claim order is still word, definition, item.
+- **An On the go item is NOT a render.** Until 2026-10-07 the server composed
+  one file per word (definition + 3 s + word + 1.5 s, `RenderKind.ITEM`,
+  `word_offset_ms`); the owner rejected it because a baked file cannot be
+  reversed or re-timed (decision 13, superseded). The client sequences the
+  word's render and the definition's render, so `RenderKind` is `word` and
+  `definition` only and the claim order is word, definition. The migration
+  `e7b2c4d9a315` deleted the `item` rows and dropped `word_offset_ms`; the files
+  under `media/renders/` are orphans removed by hand.
 - **Levelling is capped.** `normalise_rms` never amplifies by more than
   `MAX_GAIN_DB` (+20): near-silence brought to -20 dBFS is hiss.
 - **Everything stored is 24 kHz mono AAC in MP4, faststart** (`audio_pcm`):
   Kokoro's native rate, small files, `moov` first so the browser can start
   playing. FFmpeg's native `aac` encoder only (always compiled in); PyAV is a
-  main dependency and there is no `ffmpeg` binary anywhere.  `audio_pcm.decode` reads a stored render back (items are composed from
-  their parts).
+  main dependency and there is no `ffmpeg` binary anywhere.  `audio_pcm.decode` reads a stored render back (the seed doctor's
+  readability check).
 - **The queue is `audio_renders`, claimed `FOR UPDATE SKIP LOCKED`**, the same
   contract as `audio_blob.transcript_status`: `pending` -> `processing` ->
   `ready`. `process_render` never raises, and a failure is one of two kinds
@@ -1272,7 +1272,7 @@ below are the ones a later change can silently break.
   history when a word is forgotten: `saved_word_id` is `ON DELETE SET NULL`
   and `lemma` is copied onto the row (default `""` for a writer that does not
   set it), like `vocabulary_review_logs`.
-- **Seed order**: `words` -> `definitions` (-> `items`), each with `--accent
+- **Seed order**: `words` -> `definitions`, each with `--accent
   british|american|both` (default both). `words` makes TTS for every sense.
   `seed_tts doctor` checks the machine first; whisper is not needed.
 
@@ -1354,10 +1354,17 @@ below are the ones a later change can silently break.
   is the server's third. At most `SPEAK_MISS_ROW_CAP` rows per (learner, word,
   window) are written. Three misses are OUR miss, never an Again.
 - **On the go (`on_the_go.py`)**: words in rotation (not `EXCLUDED_STATUSES`,
-  practisable), `created_at` desc, independent of the daily queue, ready item
-  renders only, `preparing` = the rest that is still being made (queued or
-  in progress). A word with no speakable definition, or whose item or part
-  render is `failed`, counts in neither (`_failed_words`: the keys are
-  re-derived with the same public helpers `item_renders` uses). Exposures insert one
+  practisable), `created_at` desc, independent of the daily queue. An item is
+  `(word_url, definition_url)` -- the word's TTS render in the learner's accent
+  and the sense's masked definition render -- listed only when BOTH are ready;
+  `preparing` = the rest that is still being made (queued or in progress). A
+  word with no speakable definition, or with a `failed` part, counts in neither
+  (`_failed_words`: the keys are re-derived with the same public helpers
+  `word_audio` uses). The words' text is never on the wire. **Order and pause
+  are the learner's**: `vocabulary_settings.on_the_go_order`
+  (`meaning_first` default | `word_first`) and `on_the_go_pause_s` (1..10,
+  default 3), optional on `PUT /vocabulary/settings` (absent = unchanged) and
+  returned on GET; the server applies neither -- the client sequences. The gap
+  between words is a fixed 1.5 s on the client. Exposures insert one
   `on_the_go_exposures` row and touch no card.
 

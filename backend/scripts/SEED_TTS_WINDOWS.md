@@ -80,7 +80,7 @@ ssh win powershell -NoProfile -Command "Get-Content D:\voocab\words.err -Tail 5"
 1. `words --accent both` (every word is TTS; nothing else to do first)
 2. `definitions --accent both`
 
-(`items` is optional and not part of this run.) Add `--limit 50` first as a
+(On the go needs nothing more: it plays the word and the definition renders.) Add `--limit 50` first as a
 pilot if you like. Flags: `--concurrency N` (default 8, max 12).
 
 Estimates, NOT measured on a 3060 (read the live ETA instead): `words` about 24k renders, 15-40 min;
@@ -107,7 +107,6 @@ re-copying is harmless:
 ```bash
 # from the repo root on the Mac; repeat every ~10-15 min while it runs, and at the end
 ssh win "tar -cf - --exclude *.tmp -C D:/voocab-media tts" | tar -xf - -C backend/media
-# (`renders` instead of `tts` for On the go files, only if you ran `items`)
 ```
 
 Then, on the Mac, from `backend/`, prove nothing is dangling (and requeue any

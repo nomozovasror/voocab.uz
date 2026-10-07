@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
 import { getErrorMessage } from "@/lib/api";
 import { vocabularyApi } from "@/features/vocabulary/api";
+import { OptionPill } from "@/features/vocabulary/components/OptionPill";
 import { AUTOMATIC_LABEL, EXERCISE_LABEL } from "@/features/vocabulary/status";
 import type { Accent, ExerciseType, VocabularySettings } from "@/features/vocabulary/types";
 
@@ -204,14 +205,14 @@ export default function VocabularySettingsPage() {
           className="mt-3 flex flex-wrap gap-1.5"
         >
           {ACCENT_OPTIONS.map(({ value, label }) => (
-            <ExercisePill
+            <OptionPill
               key={value}
               on={data.accent === value}
               disabled={update.isPending}
               onClick={() => patch({ accent: value })}
             >
               {label}
-            </ExercisePill>
+            </OptionPill>
           ))}
         </div>
       </section>
@@ -228,56 +229,26 @@ export default function VocabularySettingsPage() {
           aria-label="Exercise type"
           className="mt-3 flex flex-wrap gap-1.5"
         >
-          <ExercisePill
+          <OptionPill
             on={data.exercise_types === null}
             disabled={update.isPending}
             onClick={() => patch({ exercise_types: null })}
           >
             {AUTOMATIC_LABEL}
-          </ExercisePill>
+          </OptionPill>
           {EXERCISE_TYPES.map((type) => (
-            <ExercisePill
+            <OptionPill
               key={type}
               on={data.exercise_types?.[0] === type}
               disabled={update.isPending}
               onClick={() => patch({ exercise_types: [type] })}
             >
               {EXERCISE_LABEL[type]}
-            </ExercisePill>
+            </OptionPill>
           ))}
         </div>
       </section>
     </div>
-  );
-}
-
-function ExercisePill({
-  on,
-  disabled,
-  onClick,
-  children,
-}: {
-  on: boolean;
-  disabled: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={on}
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        "rounded-full px-3 py-1 text-xs font-medium transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50",
-        on
-          ? "bg-primary/20 text-primary"
-          : "bg-surface-hover text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {children}
-    </button>
   );
 }
 

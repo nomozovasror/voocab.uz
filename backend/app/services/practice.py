@@ -1823,13 +1823,17 @@ async def update_settings(
     exercise_types: list[str] | None,
     pronunciation: bool | None = None,
     accent: Accent | None = None,
+    on_the_go_order: Literal["meaning_first", "word_first"] | None = None,
+    on_the_go_pause_s: int | None = None,
 ) -> VocabularySettings:
     """Stage 2's settings screen, all three fields at once -- a PUT rather
     than three separate setters, because the screen shows them together and
     saves them together. ``pronunciation`` and ``accent`` (stage 3) are the
     exceptions that prove the rule: ``None`` leaves them as they were, so a
     save of the other three can never flip a choice the caller did not
-    mention (a new row starts at the columns' defaults: on, British)."""
+    mention (a new row starts at the columns' defaults: on, British). The
+    On the go order and pause follow the same rule: only the On the go screen
+    sends them."""
     row = await session.get(VocabularySettings, user_id)
     if row is None:
         row = VocabularySettings(user_id=user_id)
@@ -1840,6 +1844,10 @@ async def update_settings(
         row.pronunciation = pronunciation
     if accent is not None:
         row.accent = accent
+    if on_the_go_order is not None:
+        row.on_the_go_order = on_the_go_order
+    if on_the_go_pause_s is not None:
+        row.on_the_go_pause_s = on_the_go_pause_s
     session.add(row)
     await session.commit()
     await session.refresh(row)

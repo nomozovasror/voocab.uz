@@ -68,22 +68,18 @@ def test_every_kind_of_render_has_its_own_key_per_accent() -> None:
     gb_def = tts.definition_spec("to abandon something", "abandon")
     us_def = tts.definition_spec("to abandon something", "abandon", "american")
     assert gb_def.key != us_def.key and us_def.voice == "af_heart"
-    gb_item = tts.item_spec(gb_def, gb_word)
-    us_item = tts.item_spec(us_def, us_word)
-    assert gb_item.key != us_item.key and us_item.voice == "af_heart"
 
 
 async def test_the_worker_speaks_each_row_in_its_own_voice(created: Created) -> None:
     lemma = unique_word()
     definition = tts.definition_spec(f"to {lemma} something completely", lemma, "american")
     word = tts.word_spec(lemma, None, "american")
-    item = tts.item_spec(definition, word)
-    created.render_keys.extend([definition.key, word.key, item.key])
-    await tts.enqueue([item])
+    created.render_keys.extend([definition.key, word.key])
+    await tts.enqueue([definition, word])
     synth = FakeSynth()
-    assert await tts.drain(synth, keys=[item.key], storage=FakeStorage()) == 1
-    assert synth.voices and set(synth.voices) == {"af_heart"}  # parts made inline, same voice
-    assert all(r.voice == "af_heart" for r in await _rows(definition.key, word.key, item.key))
+    assert await tts.drain(synth, keys=[definition.key, word.key], storage=FakeStorage()) == 2
+    assert synth.voices and set(synth.voices) == {"af_heart"}
+    assert all(r.voice == "af_heart" for r in await _rows(definition.key, word.key))
 
 
 # --- resolution ---------------------------------------------------------------------
@@ -147,10 +143,8 @@ async def test_on_the_go_and_the_word_page_queue_only_the_learners_accent(create
     gb = tts.word_spec(word.lemma, None)
     us = tts.word_spec(word.lemma, None, "american")
     us_def = tts.definition_spec(DEFINITION, word.lemma, "american")
-    us_item = tts.item_spec(us_def, us)
     gb_def = tts.definition_spec(DEFINITION, word.lemma)
-    gb_item = tts.item_spec(gb_def, gb)
-    created.render_keys.extend([gb.key, us.key, us_def.key, gb_def.key, us_item.key, gb_item.key])
+    created.render_keys.extend([gb.key, us.key, us_def.key, gb_def.key])
     async with _client() as client:
         await client.put(
             "/api/vocabulary/settings", cookies=cookies,
@@ -158,8 +152,8 @@ async def test_on_the_go_and_the_word_page_queue_only_the_learners_accent(create
         )
         assert (await client.get("/api/vocabulary/on-the-go", cookies=cookies)).status_code == 200
         assert (await client.get(f"/api/vocabulary/words/{word.id}", cookies=cookies)).status_code == 200
-    assert {r.key for r in await _rows(gb.key, gb_def.key, gb_item.key)} == set()
-    assert {r.key for r in await _rows(us.key, us_def.key, us_item.key)} == {us.key, us_def.key, us_item.key}
+    assert {r.key for r in await _rows(gb.key, gb_def.key)} == set()
+    assert {r.key for r in await _rows(us.key, us_def.key)} == {us.key, us_def.key}
 
 
 async def test_a_practice_session_asks_for_audio_in_the_learners_accent(created: Created) -> None:
@@ -254,8 +248,6 @@ def test_british_render_keys_are_frozen() -> None:
     definition = tts.definition_spec("to give up completely", "abandon")
     assert definition is not None
     assert definition.key == "d17978964186c9bafa977ba95c8f158f09719ad1746ad93b033fceb263127b58"
-    item = tts.item_spec(definition, word)
-    assert item.key == "33ea3d75ed3419350106060b8c6e26044b415e8e451ba4cf417b7e0860feda96"
 
 
 # --- KokoroSynth with a fake `kokoro` --------------------------------------------------------------
