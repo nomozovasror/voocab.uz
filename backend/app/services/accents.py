@@ -6,7 +6,7 @@ a render is made with, and so which key it has), the worker's synthesiser
 pronunciation tables (which phoneme alphabet a heteronym is decided in).
 
 The accent only chooses the TTS voice (vocabulary stage 3, decisions 22-23):
-a verified live clip keeps its own speaker's accent and is heard by everyone.
+every word is Kokoro TTS, since the live clips were dropped (2026-10-07).
 British is the default -- the brief's choice -- for a learner who has never
 opened the setting.
 """

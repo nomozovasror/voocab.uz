@@ -46,18 +46,18 @@ contract the backend and frontend build against.
 ## Agreed decisions
 
 ### Audio source
-1. **Exact form only.** A clip is taken only where the transcript has the word
+1. *(Superseded 2026-10-07: live clips dropped.)* **Exact form only.** A clip is taken only where the transcript has the word
    in exactly the saved form (case- and punctuation-insensitive): `played` is
    not a clip of `play` — in `listen` the learner types what they hear. A
    phrase matches consecutive words.
-2. **Heteronyms never take a material clip.** The transcript has no part of
+2. *(Clip half superseded 2026-10-07: there are no clips; a heteronym is still TTS with the sense's own pronunciation.)* **Heteronyms never take a material clip.** The transcript has no part of
    speech, so a `record` clip may be the verb. Every heteronym lemma (see 6)
    is always TTS with the sense's own pronunciation.
-3. **Clips are verified before use.** Each candidate clip is transcribed once
+3. *(Superseded 2026-10-07: live clips dropped.)* **Clips are verified before use.** Each candidate clip is transcribed once
    with faster-whisper (seed run, on the 3060) and kept only if the word is
    heard. Candidates from materials added after a seed run stay unused until
    the next verification run — TTS serves them meanwhile.
-4. **The server cuts.** Each clip is cut once into a small file, stored
+4. *(Superseded 2026-10-07: live clips dropped.)* **The server cuts.** Each clip is cut once into a small file, stored
    content-addressed; the browser never seeks inside a 30-minute recording.
    Padding ±150 ms (brief). Context clip: 2 words before + the word + 2 words
    after, within the same segment.
@@ -136,14 +136,17 @@ contract the backend and frontend build against.
 ### Small calls taken in building (not owner decisions — flagged in the report)
 - The listen card plays the word once on its own when it appears; it never
   repeats by itself. Replay = button or Tab; presses alternate word → context
-  → word … when a context clip exists.
+  → word … when a context clip exists. *(The "in context" second press and
+  the word page's "In context" button are superseded 2026-10-07: removed with
+  the clips; replay now only ever plays the word.)*
 - `0.75×` is a toggle that stays for the session (`playbackRate`,
   `preservesPitch`).
 
 ## API contract
 
 All audio is `AudioOut = { url: string, context_url: string | null,
-source: "clip" | "tts" }`. `null` where an audio field is allowed means "not
+source: "clip" | "tts" }` *(superseded 2026-10-07: now `{ url: string }`, since
+every word is TTS)*. `null` where an audio field is allowed means "not
 ready yet" — the server has already queued it.
 
 ### Practice
@@ -198,7 +201,7 @@ TTS; clips are shared).
 22. **Two TTS accents.** British `bf_emma` (`lang_code='b'`) and American
     `af_heart` (`lang_code='a'`, the highest-graded voice in Kokoro's own
     table). Default British — the brief's choice.
-23. **Live clips first for everyone.** A recording keeps its speaker's accent
+23. *(Superseded 2026-10-07: live clips dropped; every word is TTS in the learner's accent.)* **Live clips first for everyone.** A recording keeps its speaker's accent
     (British, Australian, …); the accent choice only selects which TTS voice
     fills in where there is no verified clip. The brief's main rule stands.
 24. **Where it is chosen:** Settings → "Accent: British / American".
@@ -210,3 +213,28 @@ TTS; clips are shared).
     words that have a verified clip, so a later "prefer the synthetic voice
     over live recordings" setting (owner: a future option, not built now)
     needs no generation.
+
+## Addendum (2026-10-07) Live clips dropped
+
+The owner listened to the cut and verified live clips and dropped them: they
+carry fragments of the neighbouring words, and the emotion and pitch of the
+sentence they were cut from. From now on **every word is Kokoro TTS only**, in
+the learner's accent (decisions 22, 24-26 stand; the voice, the heteronym
+handling of 2's second half, and the per-accent keys are unchanged).
+
+Superseded, text above kept for the record: decisions **1, 2 (its clip half),
+3, 4 and 23**, and the "small call" that the `listen` card's presses alternate
+word -> context (the second press, and the word page's "In context" button,
+are gone). Removed with them:
+
+- The `word_clips` table (migration `d6a1f3b8e204`; its downgrade recreates it
+  empty), the clip indexer/cutter/verifier, the worker's clip loop and its
+  settings, `seed_tts clips` / `verify-clips`, and the doctor's clip and
+  whisper checks.
+- `AudioOut` is `{ url }` on the wire: `context_url` and `source` were constant.
+  `prefer_material_ids` (the learner's own materials first) existed only to
+  choose a clip, and went too.
+- On the go item renders that embedded a clip (`kind = item`, the word part
+  `"source":"clip"`) are deleted by the migration; items re-render on demand
+  with the TTS word. Items that were TTS-worded keep their keys.
+- TTS for every word already existed (decision 26), so nothing is regenerated.

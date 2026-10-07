@@ -86,15 +86,10 @@ async def item_list(
         )
         is not None
     ]
-    material_ids = await practice.learner_material_ids(session, user.id)
-    renders = await word_audio.item_renders(
-        session, playable, prefer_material_ids=material_ids, accent=accent
-    )
+    renders = await word_audio.item_renders(session, playable, accent=accent)
     ready = [(word, renders[word.id]) for word in playable if renders.get(word.id)]
     waiting = [word for word in playable if not renders.get(word.id)]
-    failed = await _failed_words(
-        session, waiting, senses, prefer_material_ids=material_ids, accent=accent
-    )
+    failed = await _failed_words(session, waiting, senses, accent=accent)
     return ready, len(waiting) - len(failed)
 
 
@@ -103,7 +98,6 @@ async def _failed_words(
     words: list[SavedWord],
     senses: dict[uuid.UUID, LexemeSense],
     *,
-    prefer_material_ids: frozenset[uuid.UUID],
     accent: Accent = DEFAULT_ACCENT,
 ) -> set[uuid.UUID]:
     """The words whose item, or one of the parts it is made of (definition,
@@ -127,27 +121,18 @@ async def _failed_words(
             )
         ).all()
     }
-    sources = await word_audio.word_sources(
-        session, wanted, lexemes=lexemes, prefer_material_ids=prefer_material_ids,
-        accent=accent,
-    )
     keys_of: dict[uuid.UUID, list[str]] = {}
     for word in words:
         sense = senses[word.lexeme_sense_id]
         lexeme = lexemes.get(sense.lexeme_id)
-        if lexeme is None or sense.id not in sources:
+        if lexeme is None:
             continue
         definition = tts.definition_spec(sense.definition_en, lexeme.lemma, accent)
         if definition is None:
             continue
-        source = sources[sense.id]
-        item = tts.item_spec(
-            definition,
-            word_spec_=source.spec,
-            clip_storage_key=source.clip.storage_key if source.clip is not None else None,
-        )
+        word_spec = word_audio.tts_word_spec(sense, lexeme, accent)
         keys_of[word.id] = [
-            spec.key for spec in (definition, source.spec, item) if spec is not None
+            definition.key, word_spec.key, tts.item_spec(definition, word_spec).key
         ]
     all_keys = {key for keys in keys_of.values() for key in keys}
     if not all_keys:

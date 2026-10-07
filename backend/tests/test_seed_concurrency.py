@@ -1,7 +1,7 @@
 """The seed run's concurrency and its Windows-facing parts: one synthesis
 stream with the rest overlapped, two drainers never making a render twice,
-clips cut and verified concurrently, the unknown-pronunciation guard, the
-atomic local storage, progress arithmetic. Real DB, fake Kokoro / whisper /
+the unknown-pronunciation guard, the
+atomic local storage, progress arithmetic. Real DB, fake Kokoro /
 storage (no GPU)."""
 
 import asyncio
@@ -19,8 +19,7 @@ from sqlmodel import select
 from app.core.config import settings
 from app.core.database import async_session_factory
 from app.models.audio_render import AudioRender, RenderKind, RenderStatus
-from app.models.word_clip import ClipStatus, WordClip
-from app.services import audio_pcm, tts, word_clips
+from app.services import tts
 from app.services import storage as storage_module
 from app.services.infra_errors import InfrastructureError
 from scripts import seed_tts
@@ -28,9 +27,6 @@ from tests.audio_helpers import (
     Created,
     FakeStorage,
     FakeSynth,
-    add_clip,
-    make_blob,
-    sentence,
     tone,
     unique_word,
 )
@@ -308,133 +304,6 @@ async def test_an_unknown_word_fails_its_row_with_the_reason_and_the_others_are_
     assert rows[bad.key].status != RenderStatus.READY and "no pronunciation" in rows[bad.key].error
 
 
-# --- cutting and verifying concurrently ------------------------------------------
-
-
-async def test_clips_are_cut_from_several_recordings_at_once(created: Created) -> None:
-    source = np.concatenate([tone(1000, 300), tone(1000, 600), tone(1000, 900)])
-    storage = FakeStorage()
-    forms, blobs = [], []
-    for _ in range(4):
-        form = unique_word()
-        blob = await make_blob(created, [sentence(["a", form, "c", "d"])], duration_ms=3000)
-        storage.objects[blob.storage_key] = audio_pcm.encode_m4a(source)
-        async with async_session_factory() as session:
-            await word_clips.index_clips(session, blob_ids=[blob.id], forms=[form])
-        forms.append(form)
-        blobs.append(blob.id)
-
-    active = peak = 0
-    real_get = storage.get
-
-    async def slow_get(key: str) -> bytes:
-        nonlocal active, peak
-        active += 1
-        peak = max(peak, active)
-        await asyncio.sleep(0.1)
-        active -= 1
-        return await real_get(key)
-
-    storage.get = slow_get  # type: ignore[method-assign]
-    async with async_session_factory() as session:
-        report = await word_clips.cut_clips(session, storage=storage, blob_ids=blobs, concurrency=4)
-    assert (report.cut, report.failed, report.deferred) == (4, 0, 0)
-    assert peak >= 2
-    async with async_session_factory() as session:
-        rows = (await session.exec(select(WordClip).where(WordClip.form.in_(forms)))).all()
-    assert all(r.status == ClipStatus.CUT and r.storage_key in storage.objects for r in rows)
-
-
-async def _cut_clip(created: Created, form: str, ms: int = 500) -> WordClip:
-    blob = await make_blob(created, [sentence(["a", form, "c", "d"])])
-    return await add_clip(blob, form, status=ClipStatus.CUT, start_ms=1000, end_ms=1000 + ms)
-
-
-async def test_verify_overlaps_storage_reads_over_one_transcription_stream(created: Created) -> None:
-    forms = [unique_word() for _ in range(6)]
-    clips = [await _cut_clip(created, form) for form in forms]
-    storage = FakeStorage()
-    for clip in clips:
-        storage.objects[clip.storage_key] = clip.storage_key.encode()
-    active = peak = 0
-    real_get = storage.get
-
-    async def slow_get(key: str) -> bytes:
-        nonlocal active, peak
-        active += 1
-        peak = max(peak, active)
-        await asyncio.sleep(0.1)
-        active -= 1
-        return await real_get(key)
-
-    storage.get = slow_get  # type: ignore[method-assign]
-    threads: set[int] = set()
-    by_key = {c.storage_key: c.form for c in clips}
-    running = peak_running = 0
-    guard = threading.Lock()
-
-    def transcribe(data: bytes) -> str:
-        nonlocal running, peak_running
-        with guard:
-            running += 1
-            peak_running = max(peak_running, running)
-        threads.add(threading.get_ident())
-        time.sleep(0.01)
-        with guard:
-            running -= 1
-        return by_key[data.decode()]  # hears exactly the form
-
-    report = word_clips.VerifyReport()
-    async with async_session_factory() as session:
-        await word_clips.verify_clips(
-            session, transcribe, storage=storage, form_whitelist=forms, concurrency=6, report=report
-        )
-    assert (report.verified, report.rejected, report.forms_done, report.forms_total) == (6, 0, 6, 6)
-    assert peak >= 3 and peak_running == 1 and len(threads) == 1
-    async with async_session_factory() as session:
-        rows = (await session.exec(select(WordClip).where(WordClip.form.in_(forms)))).all()
-    assert all(r.status == ClipStatus.VERIFIED and r.verified_at for r in rows)
-
-
-async def test_verify_does_not_overwrite_a_clip_somebody_else_already_resolved(created: Created) -> None:
-    form = unique_word()
-    clip = await _cut_clip(created, form)
-    storage = FakeStorage()
-    storage.objects[clip.storage_key] = b"x"
-
-    def transcribe(data: bytes) -> str:
-        return form
-
-    async with async_session_factory() as session:
-        await session.execute(update(WordClip).where(WordClip.id == clip.id).values(status=ClipStatus.REJECTED))
-        await session.commit()
-    async with async_session_factory() as session:
-        report = await word_clips.verify_clips(session, transcribe, storage=storage, form_whitelist=[form])
-    assert report.verified == 0  # it was no longer `cut`: nothing to do
-
-
-async def test_verify_stops_loudly_when_nothing_can_be_transcribed(created: Created) -> None:
-    forms = [unique_word() for _ in range(5)]
-    for form in forms:
-        clip = await _cut_clip(created, form)
-    storage = FakeStorage()
-    async with async_session_factory() as session:
-        for clip in (await session.exec(select(WordClip).where(WordClip.form.in_(forms)))).all():
-            storage.objects[clip.storage_key] = b"x"
-
-    def broken(data: bytes) -> str:
-        raise RuntimeError("Library cublas64_12.dll is not found")
-
-    async with async_session_factory() as session:
-        with pytest.raises(word_clips.VerifyAborted, match="cublas"):
-            await word_clips.verify_clips(
-                session, broken, storage=storage, form_whitelist=forms, max_consecutive_failures=3
-            )
-    async with async_session_factory() as session:
-        rows = (await session.exec(select(WordClip).where(WordClip.form.in_(forms)))).all()
-    assert all(r.status == ClipStatus.CUT for r in rows)  # nothing was marked
-
-
 # --- check-files -----------------------------------------------------------------
 
 
@@ -445,7 +314,7 @@ async def test_check_files_lists_ready_rows_whose_file_is_missing(created: Creat
     await tts.drain(FakeSynth(), keys=keys, storage=storage)
     gone = next(iter(storage.objects))
     del storage.objects[gone]
-    result = await seed_tts.check_files(storage, clips=False, renders=True)
+    result = await seed_tts.check_files(storage)
     assert gone in [k for _i, k in result.missing_renders]
 
 
@@ -477,7 +346,7 @@ async def test_a_media_root_that_is_not_there_is_retryable_not_a_missing_key(mon
 
 def test_forward_slash_keys_join_correctly_under_a_windows_root() -> None:
     assert str(PureWindowsPath("D:\\voocab-media") / "tts/ab/cd.m4a") == "D:\\voocab-media\\tts\\ab\\cd.m4a"
-    assert str(PureWindowsPath("Z:\\") / "clips/x.m4a") == "Z:\\clips\\x.m4a"
+    assert str(PureWindowsPath("Z:\\") / "tts/x.m4a") == "Z:\\tts\\x.m4a"
 
 
 # --- progress and arguments --------------------------------------------------------
@@ -502,10 +371,11 @@ def test_durations_are_short_and_readable() -> None:
 
 def test_arguments_default_to_eight_in_flight_and_refuse_more_than_the_pool_holds() -> None:
     assert seed_tts._parse_args(["words"]).concurrency == 8
-    assert seed_tts._parse_args(["clips"]).concurrency == 4
     with pytest.raises(SystemExit):
         seed_tts._parse_args(["words", "--concurrency", "40"])
-    assert seed_tts._parse_args(["doctor"]).model == "large-v3"
+    for gone in ("clips", "verify-clips"):  # live clips were dropped
+        with pytest.raises(SystemExit):
+            seed_tts._parse_args([gone])
 
 
 def test_a_cuda_run_is_refused_without_cuda(monkeypatch: pytest.MonkeyPatch) -> None:

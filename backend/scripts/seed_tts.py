@@ -1,5 +1,5 @@
-"""Offline bulk audio for vocabulary: clips from the recordings, then TTS for
-the rest (stage 3 of the vocabulary brief, decisions 3 and 7).
+"""Offline bulk audio for vocabulary: Kokoro TTS for every word, definition and
+On the go item (stage 3 of the vocabulary brief).
 
 NOT part of the API or the worker -- a standalone script the owner runs by
 hand on a machine with a GPU (the RTX 3060, Windows), the same contract as
@@ -7,8 +7,7 @@ hand on a machine with a GPU (the RTX 3060, Windows), the same contract as
 ``MediaStorage`` (R2 in production, local disk in dev -- whatever
 ``app.core.config.settings`` points at on the machine this runs on), and it
 writes the EXACT rows and keys the production worker would
-(:mod:`app.services.tts`, :mod:`app.services.word_clips`), so the worker, which
-generates only what is new or changed, finds the seed's output already there.
+(:mod:`app.services.tts`), so the worker, which generates only what is new or changed, finds the seed's output already there.
 
 The step-by-step Windows run (tunnel to the dev database, local media folder,
 copying files across) is ``scripts/SEED_TTS_WINDOWS.md``. Start with
@@ -16,10 +15,9 @@ copying files across) is ``scripts/SEED_TTS_WINDOWS.md``. Start with
 
 Prerequisite (GPU machine only). One environment holds one torch build, so
 the GPU machine installs the ``tts-gpu`` extra (CUDA torch from the cu128
-index) -- NOT ``tts``, which is the CPU build the worker image uses -- plus
-``seed`` for faster-whisper::
+index) -- NOT ``tts``, which is the CPU build the worker image uses::
 
-    uv sync --extra seed --extra tts-gpu
+    uv sync --extra tts-gpu
 
 For a different CUDA than 12.8, replace torch in that environment after the
 sync with the matching wheel index, one line::
@@ -28,47 +26,28 @@ sync with the matching wheel index, one line::
 
 (Kokoro and misaki's espeak loader do not run on macOS at all -- the
 ``espeakng-loader`` wheel kills the interpreter -- so on the Mac this script's
-``words``/``definitions``/``items`` refuse to start; ``clips`` needs only PyAV
-and works anywhere. Docker/Linux is where Kokoro runs on the dev machine.)
+``words``/``definitions``/``items`` refuse to start. Docker/Linux is where
+Kokoro runs on the dev machine.)
 
 Usage (from the ``backend/`` directory), in this order::
 
     uv run python -m scripts.seed_tts doctor                 # preflight: PASS/FAIL list
-    uv run python -m scripts.seed_tts clips                  # index + cut candidates
-    uv run python -m scripts.seed_tts verify-clips           # faster-whisper, GPU
     uv run python -m scripts.seed_tts words                  # TTS for every word, both accents
     uv run python -m scripts.seed_tts definitions            # TTS for every definition, both accents
     uv run python -m scripts.seed_tts items                  # optional: On the go files
     uv run python -m scripts.seed_tts check-files            # which rows point at a missing file
 
 * ``doctor`` -- see :mod:`scripts.seed_tts_doctor`. Exit status 1 on any FAIL.
-* ``clips`` -- index where every lexicon form is spoken in the transcripts
-  and cut the word and its context from the recordings
-  (:func:`app.services.word_clips.index_clips` / ``cut_clips``). Idempotent.
-  ``--concurrency`` recordings are fetched and cut at once (default 4: each is
-  held in memory whole).
-* ``verify-clips`` -- transcribe each cut word with faster-whisper and keep it
-  only if the word is heard. ``--model`` (default ``large-v3``; a smaller one,
-  e.g. ``small.en``, is fine on a CPU dev machine), ``--device`` (default
-  ``cuda``; ``cpu`` runs int8). One model stream; storage reads and database
-  writes of ``--concurrency`` forms overlap it. Stops with an error after ten
-  clips in a row that could not be read or transcribed (a broken CUDA install
-  would otherwise warn its way through the library). Only ``verified`` clips are
-  ever served.
-* ``words`` -- the word read by Kokoro, for EVERY lexicon sense, whether or not
-  its word has a verified clip (decision 26: a verified clip is what a learner
-  hears today, but a later "prefer the synthetic voice" option must need no
-  generation). ``--skip-clipped`` restores the old behaviour (only words
-  without a verified clip; run it AFTER ``verify-clips``). Heteronym senses
-  are given their decided pronunciation in the voice's own alphabet
-  (``lexeme_senses.pronunciation`` for British, ``pronunciation_us`` for
-  American; see ``scripts/decide_heteronyms.py``).
+* ``words`` -- the word read by Kokoro, for EVERY lexicon sense. (Live clips
+  from the recordings were dropped on 2026-10-07: every word a learner hears is
+  TTS.) Heteronym senses are given their decided pronunciation in the voice's
+  own alphabet (``lexeme_senses.pronunciation`` for British,
+  ``pronunciation_us`` for American; see ``scripts/decide_heteronyms.py``).
 * ``definitions`` -- the masked definition of every sense, the masks silences.
 * ``items`` -- the single On the go file per word in rotation (needs the
   parts; makes them inline if not ready).
-* ``check-files`` -- ``--what clips|renders|all``: every ``cut``/``verified``
-  clip and every ``ready`` render whose file is not in the configured storage.
-  ``--requeue`` puts such renders back to ``pending``. The check to run on
+* ``check-files`` -- every ``ready`` render whose file is not in the
+  configured storage. ``--requeue`` puts such renders back to ``pending``. The check to run on
   the machine that serves the files, after they were copied there.
 
 The two voices (decisions 22-26) -- British ``bf_emma`` and American
@@ -82,7 +61,7 @@ one model, so ``both`` costs one model load.
 Flags: ``--limit N`` stops after N items (a pilot); ``--saved-only`` restricts
 ``words``/``definitions`` to senses somebody has saved (the dev run: a few
 hundred renders instead of seventeen thousand); ``--device`` is the torch
-device for Kokoro and the whisper device -- default ``cuda``, and the run
+device for Kokoro -- default ``cuda``, and the run
 REFUSES to start if torch has no CUDA rather than quietly synthesising seventeen
 thousand renders on the CPU (say ``--device cpu`` to mean it);
 ``--concurrency N`` (default 8, at most 12) is how many renders are in flight.
@@ -102,29 +81,24 @@ by age (``tts_stale_after_s``) at the start of the next one. Ctrl+C releases
 what it had claimed at once.
 
 On Windows the script reconfigures the console to UTF-8 (misaki phonemes are
-not cp1252), runs on the selector event loop (no noisy Proactor shutdown
-errors with asyncpg) and makes torch's bundled CUDA DLLs findable for
-faster-whisper (:func:`_prepare_windows`).
+not cp1252) and runs on the selector event loop (no noisy Proactor shutdown
+errors with asyncpg) (:func:`_prepare_windows`).
 
 NOTE: the real GPU run is for the project owner to verify -- the development
 sandbox has no GPU. The logic is covered by ``tests/test_seed_tts.py`` and
-``tests/test_audio_layer.py`` with fake synthesiser and transcriber; what is
-proven only by running it is Kokoro/faster-whisper themselves, which is what
-``doctor`` is for.
+``tests/test_audio_layer.py`` with a fake synthesiser; what is proven only by
+running it is Kokoro itself, which is what ``doctor`` is for.
 """
 
 import argparse
 import asyncio
-import io
 import logging
-import os
 import sys
 import time
 import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from sqlalchemy import select as sa_select
 from sqlalchemy import update
@@ -135,8 +109,7 @@ from app.core.database import AsyncSession, async_session_factory, engine
 from app.models.audio_render import AudioRender, RenderKind, RenderStatus
 from app.models.lexicon import Lexeme, LexemeSense
 from app.models.vocabulary import SavedWord
-from app.models.word_clip import ClipStatus, WordClip
-from app.services import tts, word_audio, word_clips
+from app.services import tts, word_audio
 from app.services.accents import ACCENTS, Accent
 from app.services.storage import MediaStorage, get_storage
 
@@ -147,7 +120,6 @@ ENQUEUE_BATCH = 500
 #: Seconds between progress lines.
 PROGRESS_EVERY_S = 20.0
 DEFAULT_CONCURRENCY = 8
-DEFAULT_CUT_CONCURRENCY = 4
 
 
 # --- Windows ---------------------------------------------------------------------
@@ -159,31 +131,11 @@ def _prepare_windows() -> None:
     * The console: Windows consoles default to cp1252 and misaki phonemes
       (``ɹˈɛkɔːd``) are not in it -- one such log line raises
       ``UnicodeEncodeError`` out of ``logging``. Both streams are switched to
-      UTF-8 with ``errors='replace'`` (any platform: a pipe is no better).
-    * ``KMP_DUPLICATE_LIB_OK``: torch and ctranslate2 each ship their own
-      ``libiomp5md.dll`` and loading both aborts with "OMP: Error #15".
-      ``doctor`` loads both in one process, which is the proof it is safe here.
-    * The CUDA DLLs: faster-whisper's ctranslate2 needs cuBLAS 12 and cuDNN 9.
-      The torch cu128 wheel (installed with the ``tts-gpu`` extra) bundles
-      exactly those in ``torch\\lib``; that directory is put on the DLL search
-      path and ``PATH`` WITHOUT importing torch (importing it would load its
-      OpenMP runtime into a process that only wants whisper)."""
+      UTF-8 with ``errors='replace'`` (any platform: a pipe is no better)."""
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
             reconfigure(encoding="utf-8", errors="replace")
-    if sys.platform != "win32":
-        return
-    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
-    import importlib.util
-
-    spec = importlib.util.find_spec("torch")
-    if spec is None or not spec.submodule_search_locations:
-        return
-    lib = Path(list(spec.submodule_search_locations)[0]) / "lib"
-    if lib.is_dir():
-        os.add_dll_directory(str(lib))
-        os.environ["PATH"] = str(lib) + os.pathsep + os.environ.get("PATH", "")
 
 
 def _run(coro: Awaitable[None]) -> None:
@@ -294,27 +246,14 @@ async def _lexemes(session: AsyncSession, senses: list[LexemeSense]) -> dict[uui
 
 
 async def word_specs(
-    session: AsyncSession,
-    *,
-    saved_only: bool,
-    limit: int | None,
-    accents_: list[Accent],
-    skip_clipped: bool = False,
+    session: AsyncSession, *, saved_only: bool, limit: int | None, accents_: list[Accent]
 ) -> list[tts.RenderSpec]:
-    """The word render of each sense, in each accent's voice -- clip or no clip
-    (decision 26). ``skip_clipped`` restores the old rule: a word that has a
-    verified clip, and is not a heteronym, is left out."""
+    """The word render of each sense, in each accent's voice."""
     senses = await _senses(session, saved_only=saved_only, limit=limit)
     lexemes = await _lexemes(session, senses)
     specs: dict[str, tts.RenderSpec] = {}
     for accent in accents_:
-        sources = await word_audio.word_sources(session, senses, accent=accent)
         for sense in senses:
-            source = sources.get(sense.id)
-            if source is None:
-                continue
-            if source.clip is not None and skip_clipped:
-                continue
             spec = word_audio.tts_word_spec(sense, lexemes[sense.lexeme_id], accent)
             specs[spec.key] = spec
     return list(specs.values())
@@ -340,15 +279,11 @@ async def enqueue_words(
     saved_only: bool,
     limit: int | None,
     accents_: list[Accent],
-    skip_clipped: bool = False,
 ) -> int:
     """Queue the word renders (:func:`word_specs`). Returns how many specs were
     offered (new ones are ``pending``, the rest already existed)."""
     return await _enqueue(
-        await word_specs(
-            session, saved_only=saved_only, limit=limit, accents_=accents_,
-            skip_clipped=skip_clipped,
-        )
+        await word_specs(session, saved_only=saved_only, limit=limit, accents_=accents_)
     )
 
 
@@ -442,31 +377,6 @@ async def run_renders(
     return done
 
 
-def make_transcriber(model_name: str, device: str) -> Callable[[bytes], str]:
-    """The real verifier: faster-whisper over a clip's bytes. Lazy import --
-    ``faster_whisper`` is the optional ``seed`` extra, absent everywhere
-    except the GPU machine."""
-    from faster_whisper import WhisperModel  # lazy: optional, GPU-only
-
-    model = WhisperModel(
-        model_name,
-        device=device,
-        compute_type="float16" if device == "cuda" else "int8",
-    )
-
-    def transcribe(data: bytes) -> str:
-        segments, _info = model.transcribe(
-            io.BytesIO(data),
-            language="en",  # locked, like seed_audio: no auto-detect
-            beam_size=5,
-            without_timestamps=True,
-            condition_on_previous_text=False,
-        )
-        return " ".join(segment.text.strip() for segment in segments).strip()
-
-    return transcribe
-
-
 def selected_accents(args: argparse.Namespace) -> list[Accent]:
     """``--accent`` as a list: ``both`` (the default) is every accent we have."""
     return list(ACCENTS) if args.accent == "both" else [args.accent]
@@ -476,7 +386,7 @@ def _require_kokoro() -> None:
     if not tts.kokoro_available():
         raise SystemExit(
             "Kokoro is not installed. On the GPU machine: "
-            "`uv sync --extra seed --extra tts-gpu`. (It cannot run on macOS.)"
+            "`uv sync --extra tts-gpu`. (It cannot run on macOS.)"
         )
 
 
@@ -500,68 +410,6 @@ def resolve_device(requested: str | None) -> str:
     return device
 
 
-async def cmd_clips(args: argparse.Namespace) -> None:
-    async with async_session_factory() as session:
-        report = await word_clips.index_clips(session)
-        logger.info(
-            "indexed %d recording(s): %d candidate(s) seen, %d new",
-            report.blobs, report.candidates_seen, report.inserted,
-        )
-    # Cut in slabs so a long run reports progress and a crash loses little.
-    total = 0
-    meter = Throughput()
-    while args.limit is None or total < args.limit:
-        remaining = None if args.limit is None else args.limit - total
-        async with async_session_factory() as session:
-            cut = await word_clips.cut_clips(
-                session,
-                limit=min(200, remaining) if remaining is not None else 200,
-                concurrency=args.concurrency,
-            )
-        total += cut.cut + cut.failed
-        meter.record(total)
-        left = await word_clips.count_candidates()
-        logger.info(
-            "cut %d (failed %d, deferred %d); %d handled, %d candidate(s) left, %.1f/s, ETA %s",
-            cut.cut, cut.failed, cut.deferred, total, left, meter.rate(),
-            format_duration(meter.eta_s(left)),
-        )
-        if cut.cut + cut.failed == 0:
-            break
-
-
-async def cmd_verify(args: argparse.Namespace) -> None:
-    transcribe = make_transcriber(args.model, resolve_device(args.device))
-    report = word_clips.VerifyReport()
-    reporter = asyncio.create_task(
-        _report_progress(
-            "verify-clips (forms)",
-            lambda: report.forms_done,
-            _forms_left(report),
-        )
-    )
-    try:
-        async with async_session_factory() as session:
-            await word_clips.verify_clips(
-                session, transcribe, limit_forms=args.limit,
-                stop_at_first=not args.all_candidates,
-                concurrency=args.concurrency, report=report,
-            )
-    finally:
-        reporter.cancel()
-    logger.info(
-        "verified %d, rejected %d, over %d form(s)",
-        report.verified, report.rejected, report.forms_done,
-    )
-
-
-def _forms_left(report: word_clips.VerifyReport) -> Callable[[], Awaitable[int]]:
-    async def left() -> int:
-        return max(0, report.forms_total - report.forms_done)
-
-    return left
-
-
 async def cmd_words(args: argparse.Namespace) -> None:
     _require_kokoro()
     device = resolve_device(args.device)
@@ -571,7 +419,7 @@ async def cmd_words(args: argparse.Namespace) -> None:
     async with async_session_factory() as session:
         await enqueue_words(
             session, saved_only=args.saved_only, limit=args.limit,
-            accents_=selected_accents(args), skip_clipped=args.skip_clipped,
+            accents_=selected_accents(args),
         )
     await run_renders(
         [RenderKind.WORD], tts.KokoroSynth(device=device), limit=None,
@@ -620,72 +468,44 @@ class FileCheck:
     """Rows whose file is not in storage."""
 
     checked: int = 0
-    missing_clips: list[str] = field(default_factory=list)
     missing_renders: list[tuple[uuid.UUID, str]] = field(default_factory=list)
 
 
-async def check_files(
-    storage: MediaStorage, *, clips: bool, renders: bool, concurrency: int = 32
-) -> FileCheck:
-    """Every ``cut``/``verified`` clip file and every ``ready`` render file
-    that ``storage`` does not have. The seed writes files where it runs and the
+async def check_files(storage: MediaStorage, *, concurrency: int = 32) -> FileCheck:
+    """Every ``ready`` render file that ``storage`` does not have. The seed writes files where it runs and the
     database says ``ready`` the moment a file is written -- if the files are
     then copied to the machine that SERVES them, this is how to know they all
     arrived (a missing file is served as no audio, never an error)."""
     out = FileCheck()
     gate = asyncio.Semaphore(concurrency)
     async with async_session_factory() as session:
-        clip_rows = (
-            list(
-                (
-                    await session.exec(
-                        select(WordClip.storage_key, WordClip.context_storage_key).where(
-                            WordClip.status.in_((ClipStatus.CUT, ClipStatus.VERIFIED))
-                        )
+        render_rows = list(
+            (
+                await session.exec(
+                    select(AudioRender.id, AudioRender.storage_key).where(
+                        AudioRender.status == RenderStatus.READY,
+                        AudioRender.storage_key.is_not(None),
                     )
-                ).all()
-            )
-            if clips
-            else []
-        )
-        render_rows = (
-            list(
-                (
-                    await session.exec(
-                        select(AudioRender.id, AudioRender.storage_key).where(
-                            AudioRender.status == RenderStatus.READY,
-                            AudioRender.storage_key.is_not(None),
-                        )
-                    )
-                ).all()
-            )
-            if renders
-            else []
+                )
+            ).all()
         )
 
     async def has(key: str) -> bool:
         async with gate:
             return await storage.exists(key)
 
-    clip_keys = sorted({k for pair in clip_rows for k in pair if k})
-    found = await asyncio.gather(*(has(k) for k in clip_keys))
-    out.missing_clips = [k for k, ok in zip(clip_keys, found) if not ok]
     found = await asyncio.gather(*(has(key) for _id, key in render_rows))
     out.missing_renders = [(i, k) for (i, k), ok in zip(render_rows, found) if not ok]
-    out.checked = len(clip_keys) + len(render_rows)
+    out.checked = len(render_rows)
     return out
 
 
 async def cmd_check_files(args: argparse.Namespace) -> None:
-    result = await check_files(
-        get_storage(), clips=args.what in ("clips", "all"), renders=args.what in ("renders", "all")
-    )
+    result = await check_files(get_storage())
     logger.info(
-        "%d file(s) checked: %d clip file(s) and %d render file(s) missing",
-        result.checked, len(result.missing_clips), len(result.missing_renders),
+        "%d file(s) checked: %d render file(s) missing",
+        result.checked, len(result.missing_renders),
     )
-    for key in result.missing_clips[:10]:
-        logger.info("  missing clip: %s", key)
     for _id, key in result.missing_renders[:10]:
         logger.info("  missing render: %s", key)
     if args.requeue and result.missing_renders:
@@ -698,7 +518,7 @@ async def cmd_check_files(args: argparse.Namespace) -> None:
             )
             await session.commit()
         logger.info("%d render(s) put back to pending", len(result.missing_renders))
-    if result.missing_clips or (result.missing_renders and not args.requeue):
+    if result.missing_renders and not args.requeue:
         raise SystemExit(1)
 
 
@@ -714,8 +534,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m scripts.seed_tts",
         description=(
-            "Offline bulk audio for vocabulary: word clips from the recordings "
-            "and Kokoro TTS for everything else. Meant to be run by hand on a "
+            "Offline bulk audio for vocabulary: Kokoro TTS for every word, "
+            "definition and On the go item. Meant to be run by hand on a "
             "GPU machine; see the module docstring."
         ),
     )
@@ -729,26 +549,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument("--limit", type=int, help="stop after N (a pilot)")
-        p.add_argument("--device", help="torch/whisper device (cuda, cpu)")
+        p.add_argument("--device", help="torch device (cuda, cpu)")
 
     p = sub.add_parser("doctor", help="preflight: PASS/FAIL list for this machine")
-    p.add_argument("--device", help="torch/whisper device (default cuda)")
-    p.add_argument("--model", default="large-v3", help="faster-whisper model (default large-v3)")
-    p = sub.add_parser("clips", help="index and cut word clips")
-    common(p)
-    concurrency(p, DEFAULT_CUT_CONCURRENCY)
-    p = sub.add_parser("verify-clips", help="verify cut clips with faster-whisper")
-    common(p)
-    concurrency(p, DEFAULT_CONCURRENCY)
-    p.add_argument("--model", default="large-v3", help="faster-whisper model (default large-v3)")
-    p.add_argument("--all-candidates", action="store_true",
-                   help="verify every cut clip, not only until a form's first verified one")
+    p.add_argument("--device", help="torch device (default cuda)")
     p = sub.add_parser("check-files", help="rows whose file is missing from the storage")
-    p.add_argument("--what", choices=["clips", "renders", "all"], default="all")
     p.add_argument("--requeue", action="store_true",
                    help="put `ready` renders with no file back to pending")
     for name, helptext in (
-        ("words", "TTS for every word (clip or not)"),
+        ("words", "TTS for every word"),
         ("definitions", "TTS for every masked definition"),
         ("items", "On the go files for words in rotation"),
     ):
@@ -761,9 +570,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                        help="put failed renders back to pending first")
         p.add_argument("--accent", choices=[*ACCENTS, "both"], default="both",
                        help="which voice(s) to make (default both)")
-        if name == "words":
-            p.add_argument("--skip-clipped", action="store_true",
-                           help="leave out words that have a verified clip (the pre-accent rule)")
     return parser.parse_args(argv)
 
 
@@ -781,8 +587,6 @@ def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
     handler = {
         "doctor": cmd_doctor,
-        "clips": cmd_clips,
-        "verify-clips": cmd_verify,
         "words": cmd_words,
         "definitions": cmd_definitions,
         "items": cmd_items,

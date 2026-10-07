@@ -847,26 +847,6 @@ async def _senses_for(
     return {sense.id: sense for sense in rows.all()}
 
 
-async def learner_material_ids(
-    session: AsyncSession, user_id: uuid.UUID
-) -> frozenset[uuid.UUID]:
-    """The materials this learner has saved a word from -- what
-    ``word_audio``'s ``prefer_material_ids`` is ("the learner's own
-    materials": a clip from a recording they met the word in wins over any
-    other). ONE set per learner rather than one per word, deliberately: it is
-    a single query however many words an item list needs audio for, and it
-    makes the same word resolve to the same clip in the listen card, on the
-    reveal and on the word page (a per-word set would differ between a
-    session built over the whole queue and an answer about one word)."""
-    rows = await session.exec(
-        select(SavedWordContext.material_id)
-        .join(SavedWord, SavedWord.id == SavedWordContext.saved_word_id)
-        .where(SavedWord.user_id == user_id)
-        .distinct()
-    )
-    return frozenset(rows.all())
-
-
 async def _contexts_by_word(
     session: AsyncSession, word_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, list[SavedWordContext]]:
@@ -2354,9 +2334,7 @@ async def build_session(
                 )
             else:
                 audio_by_sense = await word_audio.word_audio_many(
-                    session, audio_senses,
-                    prefer_material_ids=await learner_material_ids(session, user.id),
-                    accent=settings.accent,
+                    session, audio_senses, accent=settings.accent
                 )
         except Exception:
             logger.warning(
@@ -2610,9 +2588,9 @@ async def record_answer(
     ``listen`` is the passive ladder's top rung: accepted exactly when the
     word's own stored level is ``listen``, and graded as `recall` is (exact
     -> Good, a slip -> Hard, else Again) -- against the LEMMA, not the
-    sentence's inflected surface, because the audio is the lemma's (a clip is
-    the exact lemma form, decision 1) and "type what you hear" cannot be
-    marked wrong for typing what was said. Its fallback ("Can't listen now",
+    sentence's inflected surface, because the audio is the lemma's and
+    "type what you hear" cannot be marked wrong for typing what was said. Its
+    fallback ("Can't listen now",
     or no audio ready) is `recall` with the plan still ``listen``
     (:data:`LISTEN_FALLBACK_EXERCISE`), graded as recall, and read by the
     ladder like any fallback: an Again demotes ``listen`` to ``recall``.
@@ -3016,7 +2994,6 @@ async def record_answer(
         try:
             audio = await word_audio.word_audio(
                 session, sense,
-                prefer_material_ids=await learner_material_ids(session, user.id),
                 accent=(await get_settings(session, user.id)).accent,
             )
         except Exception:
@@ -3155,7 +3132,6 @@ async def speak_check(
         try:
             audio = await word_audio.word_audio(
                 session, sense,
-                prefer_material_ids=await learner_material_ids(session, user.id),
                 accent=(await get_settings(session, user.id)).accent,
             )
         except Exception:

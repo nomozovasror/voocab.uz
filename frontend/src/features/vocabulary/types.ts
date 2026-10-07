@@ -373,17 +373,12 @@ export type LeechChoiceResponse = SavedWord;
  * makes people quit Anki.
  */
 
-/** One word's audio. `url` is the word alone; `context_url` is the same word
- *  inside the 2 words either side of it, where the word came from a recording
- *  (a TTS word has none). `source` says whether it is a clip cut from a real
- *  recording or synthesised — kept on the type because the contract carries
- *  it, not because any screen distinguishes the two to a learner: a word is
- *  a word either way. `null` wherever an `AudioOut` field is allowed means
- *  "not ready yet" and the server has already queued it. */
+/** One word's audio: `url` is the word alone, always Kokoro TTS (live clips
+ *  cut from recordings were dropped on 2026-10-07). `null` wherever an
+ *  `AudioOut` field is allowed means "not ready yet" and the server has
+ *  already queued it. */
 export interface AudioOut {
   url: string;
-  context_url: string | null;
-  source: "clip" | "tts";
 }
 
 /** The home screen's numbers. Nothing here is a queue — `due_now` and

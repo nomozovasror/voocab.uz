@@ -20,7 +20,6 @@ from app.models.lexicon import Lexeme, LexemeSense
 from app.models.material import Material
 from app.models.user import User
 from app.models.vocabulary import SavedWord
-from app.models.word_clip import WordClip
 from app.services import audio_pcm
 
 
@@ -121,8 +120,6 @@ class Created:
                 await session.execute(
                     delete(AudioRender).where(AudioRender.key.in_(self.render_keys))
                 )
-            if self.blob_ids:
-                await session.execute(delete(WordClip).where(WordClip.blob_id.in_(self.blob_ids)))
             if self.material_ids:
                 await session.execute(delete(Material).where(Material.id.in_(self.material_ids)))
             if self.asset_ids:
@@ -211,8 +208,7 @@ async def make_blob(
     visibility: str | None = "public",
 ) -> AudioBlob:
     """A ready blob with one ``AudioSegment`` per list of words, used by a
-    PUBLIC material by default -- the only kind of recording a clip may come
-    from. ``visibility="private"`` or ``None`` (no material) make the others."""
+    PUBLIC material by default. ``visibility="private"`` or ``None`` (no material) make the others."""
     async with async_session_factory() as session:
         blob = AudioBlob(
             sha256=f"test-{uuid.uuid4().hex}",
@@ -281,74 +277,3 @@ async def make_lexeme(
         await session.refresh(sense)
     created.lexeme_ids.append(lexeme.id)
     return lexeme, sense
-
-
-async def add_clip(
-    blob: AudioBlob,
-    form: str,
-    *,
-    status: str = "verified",
-    start_ms: int = 1000,
-    end_ms: int = 1500,
-    with_context: bool = True,
-) -> WordClip:
-    """A clip row, as if cut (and, by default, verified). Each gets its own
-    word index so several can sit on one blob."""
-    index = uuid.uuid4().int % 1_000_000 + 1
-    async with async_session_factory() as session:
-        clip = WordClip(
-            form=form,
-            blob_id=blob.id,
-            segment_order_index=0,
-            word_start_index=index,
-            word_end_index=index,
-            start_ms=start_ms,
-            end_ms=end_ms,
-            context_start_index=0,
-            context_end_index=2,
-            context_start_ms=start_ms - 400,
-            context_end_ms=end_ms + 400,
-            storage_key=f"clips/test-{uuid.uuid4().hex}.m4a",
-            context_storage_key=(f"clips/test-{uuid.uuid4().hex}.m4a" if with_context else None),
-            status=status,
-        )
-        session.add(clip)
-        await session.commit()
-        await session.refresh(clip)
-    return clip
-
-
-def encode_mp3(left: np.ndarray, right: np.ndarray | None = None, *, rate: int = 44_100) -> bytes:
-    """``left``/``right`` (float32 at ``rate``) as a stereo MP3 -- what the
-    material recordings really look like (44.1 kHz stereo), as opposed to the
-    24 kHz mono AAC the layer itself stores. Through a real file: PyAV's mp3
-    muxer wants a seekable output with a name."""
-    import os
-    import tempfile
-    from fractions import Fraction
-
-    import av
-
-    right = left if right is None else right
-    pcm = np.clip(np.stack([left, right]), -1.0, 1.0).astype(np.float32)
-    with tempfile.TemporaryDirectory() as workdir:
-        path = os.path.join(workdir, "in.mp3")
-        with av.open(path, mode="w", format="mp3") as container:
-            stream = container.add_stream("libmp3lame", rate=rate, layout="stereo")
-            stream.bit_rate = 128_000
-            pts = 0
-            for offset in range(0, pcm.shape[1], rate):
-                piece = np.ascontiguousarray(pcm[:, offset : offset + rate])
-                frame = av.AudioFrame.from_ndarray(
-                    piece.reshape(1, -1, order="F").copy(), format="flt", layout="stereo"
-                )
-                frame.sample_rate = rate
-                frame.pts = pts
-                frame.time_base = Fraction(1, rate)
-                pts += piece.shape[1]
-                for packet in stream.encode(frame):
-                    container.mux(packet)
-            for packet in stream.encode(None):
-                container.mux(packet)
-        with open(path, "rb") as handle:
-            return handle.read()

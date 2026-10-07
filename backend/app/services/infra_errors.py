@@ -1,10 +1,9 @@
 """Which errors are the infrastructure's fault, and which are the input's.
 
-One classification, shared by the transcription worker (``process_blob``), the
-render queue (``tts.process_render``) and the clip cutter
-(``word_clips.cut_clips``). It lives in its own small module because all
-three need it and ``app.worker`` imports the other two: defining it in the
-worker would make ``tts`` and ``word_clips`` import the worker (a cycle).
+One classification, shared by the transcription worker (``process_blob``) and
+the render queue (``tts.process_render``). It lives in its own small module
+because both need it and ``app.worker`` imports ``tts``: defining it in the
+worker would make ``tts`` import the worker (a cycle).
 ``app.worker`` re-exports the names, so nothing that imported them from there
 changes.
 

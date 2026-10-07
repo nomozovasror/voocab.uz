@@ -1117,19 +1117,24 @@ unchanged (one sense).
   `used_here`) and on `SavedWordOut` (word detail only, items `saved`;
   empty on the list/practice rows).
 
-## The audio layer: clips first, one voice behind them (vocabulary stage 3)
+## The audio layer: every word is TTS (vocabulary stage 3)
 
 What a learner hears for a word is made in advance, never inside a request.
-`word_audio.py` is the one door the rest of the app uses; `word_clips.py`,
-`tts.py`, `pronunciation.py` and `audio_pcm.py` are what stands behind it.
+`word_audio.py` is the one door the rest of the app uses; `tts.py`,
+`pronunciation.py` and `audio_pcm.py` are what stands behind it. **Live clips
+cut from recordings were dropped on 2026-10-07** (the owner heard fragments of
+neighbouring words and the sentence's emotion and pitch): there is no
+`word_clips`, no clip worker loop, no `clips`/`verify-clips` seed step, and
+`AudioOut` is `{url}` only. Do not reintroduce a second source of word audio
+without the owner.
 Design decisions are in `brief-vocabulary-stage3-decisions.md`; the rules
 below are the ones a later change can silently break.
 
 - **A request only reads and enqueues.** `word_audio` answers a URL or `None`
-  ("not ready, and already queued"); synthesis, cutting and verification happen
-  in the worker (`app/worker.py`: the render loop and the clip step) or the seed
-  script (`scripts/seed_tts.py`). Nothing in `word_audio` may call Kokoro,
-  PyAV or a model. `tts.enqueue` runs on its **own transaction** and commits at
+  ("not ready, and already queued"); synthesis happens in the worker (`app/worker.py`:
+  the render loop) or the seed
+  script (`scripts/seed_tts.py`). Nothing in `word_audio` may call Kokoro
+  or PyAV. `tts.enqueue` runs on its **own transaction** and commits at
   once: a GET never commits its session, and a request that rolls back must
   not lose the work it asked for. It only inserts specs with NO row
   (`ON CONFLICT (key) DO NOTHING`): a `failed` render is not retried by every
@@ -1138,58 +1143,20 @@ below are the ones a later change can silently break.
   enqueues in different orders deadlock (`test_overlapping_enqueues...`).
   The own transaction costs a second pooled connection while the request's
   is open -- cheap at this scale, and the alternative is a GET that commits.
-- **The resolution order is a rule, not a preference**: a heteronym is always
-  TTS with its sense's phonemes -> else a VERIFIED clip of the exact form (the
-  learner's own listening materials first, then the longest word) -> else the
-  TTS render (in the learner's accent, below). `source` on the wire says which,
-  because only a clip has a context press. Resolve through `word_sources`/`word_audio_many`; a list
-  endpoint calling `word_audio` per row is the N+1 the `*_many` functions
-  exist to prevent.
-- **Only `verified` clips are ever served, and only while they are still
-  allowed.** `word_audio._verified_clips` re-checks at SERVE time
-  (`word_clips.servable_clip_clauses`) that the recording is still ready and in
-  a PUBLIC material and that the clip's segment is still uncorrected by any
-  asset. Indexing decided that once; a material made private, or a segment
-  corrected, after verification must stop being heard now, not at the next
-  seed run. Cut and candidate rows are scaffolding. Verification is the seed run's (faster-whisper, GPU); a
-  recording that becomes ready later is indexed and cut by the worker but stays
-  unserved, TTS covering for it, until the next `verify-clips`.
-- **Exact form, never an inflection** (`word_clips.find_occurrences`): `played`
-  is not a clip of `play`, because in `listen` the learner types what they
-  hear. A phrase is a consecutive run. Never the first or last word of a
-  segment (the ASR clips boundary words), and never a segment any asset
-  corrects (`transcript_overrides` rewrites the TEXT; the timings no longer
-  describe it). Padding is 150 ms a side, clamped to the recording, baked into
-  `start_ms`/`end_ms`. At most three candidates per form in TOTAL (rejected ones
-  count): the index converges instead of digging for a fourth -- except
-  `failed` rows, which do not hold a slot (their recording is not offered
-  again for that form, so a replacement comes from elsewhere). **Eligibility
-  is positive: a recording is a source only if a material with
-  `visibility = 'public'` uses it** (`materials.audio_asset_id` ->
-  `audio_asset.blob_id`). No material at all is NOT eligible -- an unattached
-  upload is some Studio user's private file, and a clip is a derivative served
-  to everyone. A cut window quieter than `audio_pcm.MIN_USABLE_DBFS` is
-  unusable (`failed`, with the reason) and TTS serves the word.
-- **A transient storage error is not a failed clip.** `cut_clips` runs its
-  storage through `infra_errors.GuardedStorage`: a retryable error (botocore
-  `ClientError` other than the permanent codes, `OSError` other than
-  `FileNotFoundError` -- `infra_errors.classify_error`, shared with the
-  worker's transcription) leaves the rows `candidate` for the next pass
-  (`CutReport.deferred`); only a permanent error marks `failed`.
-- **Heteronyms never take a clip** (decision 2) and are not even indexed: the
-  transcript has no part of speech. `pronunciation.is_heteronym_any_accent(lemma)`
-  (heteronym in EITHER accent -- a clip is heard by everyone and the transcript
-  cannot say which reading was spoken) gates both the index and the serve-time
-  clip choice in `word_sources`; `is_heteronym(lemma, accent)` is
-  exact and per lemma, and means two or more candidates that differ once
-  stress is ignored -- misaki's table also holds stress-only variants (`be`)
+- **One resolution, no order.** A word is the TTS render of its sense in the
+  learner's accent (below); a heteronym sense carries its own phonemes. Ready ->
+  its URL; no row -> enqueued and `None`. Resolve through `word_audio_many`; a
+  list endpoint calling `word_audio` per row is the N+1 the `*_many` functions
+  exist to prevent. `item_renders` always builds the item from the word's TTS
+  render (`tts_word_spec`).
+- **Heteronym-ness** is `is_heteronym(lemma, accent)`: exact and per lemma, and
+  means two or more candidates that differ once stress is ignored -- misaki's table also holds stress-only variants (`be`)
   that are NOT heteronyms. Its data is `app/data/tts/` (see the README there),
   in **misaki's phoneme alphabet, not IPA**; `tests/test_heteronyms.py`
   checks every string against misaki's alphabet -- the British one for the
   British table and extras' `ps`, the AMERICAN one (`O` not `Q`, no `ː`, plus
-  `æ ɾ ᵻ ʔ`) for `misaki_us_pos_entries.json` and the extras' `us`. Heteronym-
-  ness is per accent (`is_heteronym(lemma, accent)`); the extras items are
-  `{ps (British), us (American), note}`; they only choose phonemes.
+  `æ ɾ ᵻ ʔ`) for `misaki_us_pos_entries.json` and the extras' `us`. The extras
+  items are `{ps (British), us (American), note}`; they only choose phonemes.
 - **Which pronunciation a sense takes is decided once and kept in the repo.**
   `scripts/decide_heteronyms.py` asks a model per lemma and appends to
   `heteronym_decisions.jsonl`, keyed by lemma + pos + synset (or definition)
@@ -1207,10 +1174,8 @@ below are the ones a later change can silently break.
 - **A render's key is the hash of its INPUT** (`tts.render_key`: kind + exact
   synthesis string + voice + model, canonical JSON, `KEY_VERSION` inside), so
   a row exists before its audio does and one word is synthesised once in the
-  whole system. A corrected definition, a newly decided pronunciation or a
-  verified clip arriving is a NEW key and a new render -- never an edit of an
-  old row. Storage keys are `tts/{key}.m4a`, `renders/{key}.m4a` (items) and
-  `clips/{sha256 of the bytes}.m4a`. Bump `KEY_VERSION` to re-render
+  whole system. A corrected definition or a newly decided pronunciation is a NEW key and a new render -- never an edit of
+  an old row. Storage keys are `tts/{key}.m4a` and `renders/{key}.m4a` (items). Bump `KEY_VERSION` to re-render
   everything after changing trimming, levelling or composition.
 - **The accent is the learner's, and it only picks the voice.**
   `vocabulary_settings.accent` (`british` default | `american`;
@@ -1219,12 +1184,8 @@ below are the ones a later change can silently break.
   `definition_spec` and the item path take `accent` (default British) and every
   caller passes `settings.accent` (practice session build -- one settings read
   -- the reveal, the speak-check reveal, the word page, On the go). The VOICE is
-  inside every render key (word, definition AND item -- an item with a clip
-  word still differs by its definition's voice), so accents never collide and
-  a render row carries the voice the worker must use. A verified clip is
-  heard by everyone and keeps its speaker's accent (decision 23); accent
-  never changes clip-vs-TTS, and a heteronym is never a clip in either accent.
-  The accent also chooses `pronunciation` vs `pronunciation_us`
+  inside every render key (word, definition AND item), so accents never collide and
+  a render row carries the voice the worker must use.   The accent also chooses `pronunciation` vs `pronunciation_us`
   (`word_audio.decided_pronunciation`) and misaki's fallback table.
 - **The voices: Kokoro-82M `bf_emma` (British) and `af_heart` (American).** A
   heteronym sense is spoken from `[word](/phonemes/)`, anything else from the
@@ -1245,25 +1206,20 @@ below are the ones a later change can silently break.
   silence. The text with its `_____` is the render's `input` and key.
 - **An On the go item is composed, not synthesised, and is one file**
   (decision 13): definition + 3.0 s silence + word + 1.5 s, every speech part
-  levelled to the same RMS (`audio_pcm.normalise_rms`; a lecture clip and
-  Kokoro differ by many dB), `word_offset_ms` recorded -- where the word
+  levelled to the same RMS (`audio_pcm.normalise_rms`), `word_offset_ms` recorded -- where the word
   starts, which the client counts as "the word was heard". The word part is
-  whatever `word_audio` would serve (clip or TTS). An item's `input` names its
+  the word's own TTS render (the input's `"source":"tts"` is kept so the keys of
+  existing items did not change when clips went). An item's `input` names its
   parts, and the worker resolves them itself, synthesising a missing part
   inline, so an item never fails because the queue was drained in a different
   order. Claim order is still word, definition, item.
-- **Levelling is capped, and a cut is timed from the stream's start.**
-  `normalise_rms` never amplifies by more than `MAX_GAIN_DB` (+20): a
-  near-silent window brought to -20 dBFS is the recording's hiss. And
-  `decode_range` measures frame times from `stream.start_time`, not from 0 --
-  an MP3's ~25 ms encoder delay otherwise lands every seeked cut 25 ms late
-  (a full decode drops it; the ASR's word times are relative to that). A first
-  frame with no `pts` after a seek raises rather than assuming 0.
+- **Levelling is capped.** `normalise_rms` never amplifies by more than
+  `MAX_GAIN_DB` (+20): near-silence brought to -20 dBFS is hiss.
 - **Everything stored is 24 kHz mono AAC in MP4, faststart** (`audio_pcm`):
   Kokoro's native rate, small files, `moov` first so the browser can start
   playing. FFmpeg's native `aac` encoder only (always compiled in); PyAV is a
-  main dependency and there is no `ffmpeg` binary anywhere. A cut is a seek +
-  decode of the window, never a decode of the whole recording.
+  main dependency and there is no `ffmpeg` binary anywhere.  `audio_pcm.decode` reads a stored render back (items are composed from
+  their parts).
 - **The queue is `audio_renders`, claimed `FOR UPDATE SKIP LOCKED`**, the same
   contract as `audio_blob.transcript_status`: `pending` -> `processing` ->
   `ready`. `process_render` never raises, and a failure is one of two kinds
@@ -1305,17 +1261,10 @@ below are the ones a later change can silently break.
   idempotency check, so a half-written file after a kill would be "stored" for
   ever. An unavailable media root (unmapped drive) is a plain `OSError`
   (retryable), never `FileNotFoundError` (which fails the row for good).
-- **`verify_clips` has one whisper stream too** (single thread), `concurrency`
-  forms overlapping their storage reads and writes; each clip is one
-  `UPDATE ... WHERE status='cut'` on its own session (nothing ORM crosses
-  tasks), and `VerifyAborted` stops the run after 10 clips in a row that could
-  not be read/transcribed (a broken CUDA install must not walk the library).
-  `cut_clips(concurrency=N)` fetches/cuts N recordings at once but touches the
-  session from one task only. Defaults (1) keep the worker unchanged.
 - **Files are copied, rows are not.** When the seed runs on another machine its
   rows say `ready` as soon as the file is written THERE; until the files are
   copied to the serving machine the site gets no audio for them (treated as
-  none). `seed_tts check-files --what renders --requeue` finds and requeues any
+  none). `seed_tts check-files --requeue` finds and requeues any
   that never arrived. See `scripts/SEED_TTS_WINDOWS.md`.
 - **Exposure and speak-miss tables exist and are written by the practice
   layer, not here** (`on_the_go_exposures`, `speak_misses`). An exposure is
@@ -1323,12 +1272,9 @@ below are the ones a later change can silently break.
   history when a word is forgotten: `saved_word_id` is `ON DELETE SET NULL`
   and `lemma` is copied onto the row (default `""` for a writer that does not
   set it), like `vocabulary_review_logs`.
-- **Seed order matters**: `clips` -> `verify-clips` -> `words` -> `definitions`
-  (-> `items`). `words`, `definitions` and `items` take `--accent
-  british|american|both` (default both). `words` makes TTS for EVERY sense,
-  clip or not (decision 26: a later "prefer the synthetic voice" option then
-  needs no generation); `--skip-clipped` restores the old rule, under which it
-  must run after verification.
+- **Seed order**: `words` -> `definitions` (-> `items`), each with `--accent
+  british|american|both` (default both). `words` makes TTS for every sense.
+  `seed_tts doctor` checks the machine first; whisper is not needed.
 
 ## Vocabulary practice (stage 3): the third rung, `listen`, `speak`, On the go
 
@@ -1386,10 +1332,7 @@ below are the ones a later change can silently break.
 - **A `listen` item exists only with its audio READY**; otherwise it is an
   ordinary recall item with `planned_exercise="listen"` (the render is queued
   by `word_audio`). Audio for a whole session is ONE `word_audio_many` call
-  (and `definition_audio_urls` for `speak`) -- never per item. `prefer_material_
-  ids` is the learner's saved-from materials as one set per learner
-  (`learner_material_ids`), so the listen card, the reveal and the word page
-  agree on the clip.
+  (and `definition_audio_urls` for `speak`) -- never per item.
 - **`speak` is manual only** (`mode="speak"` or settings `["speak"]`); candidates
   are passive words at `recall`/`listen`; an automatic session never builds
   one. Its prompt carries the definition masked exactly as recall masks it. The

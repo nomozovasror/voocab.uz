@@ -403,11 +403,7 @@ async def get_saved_word(
     if sense is not None:
         try:
             found_audio = await word_audio_service.word_audio(
-                session, sense,
-                prefer_material_ids=await practice_service.learner_material_ids(
-                    session, user.id
-                ),
-                accent=settings.accent,
+                session, sense, accent=settings.accent,
             )
             audio = asdict(found_audio) if found_audio is not None else None
         except Exception:

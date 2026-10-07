@@ -28,9 +28,9 @@ area:**
   collections and studio, plus `GET /health`.
 - `backend/main.py` — an unrelated `uv`-generated console stub (`Hello from
   backend!`); **not** the server entrypoint.
-- `backend/app/worker.py` — five background loops: transcription, the
-  difficulty projection refresh, lexicon enrichment, TTS/On-the-go renders,
-  and word-clip cutting.
+- `backend/app/worker.py` — four background loops: transcription, the
+  difficulty projection refresh, lexicon enrichment, and TTS/On-the-go renders
+  (every vocabulary word is Kokoro TTS; live clips were dropped).
 - `frontend/` — **React 19 + Vite + Tailwind 4** SPA, React Router 7 and
   TanStack Query. Design notes in `frontend/docs/`.
 - `docker-compose.yml` — `db` (postgres:18, port 5432, db/user/pass

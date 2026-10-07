@@ -147,17 +147,13 @@ def test_an_items_key_follows_its_parts() -> None:
     definition = tts.definition_spec("to abandon something", "abandon")
     word = tts.word_spec("abandon", None)
     assert definition is not None
-    item = tts.item_spec(definition, word_spec_=word, clip_storage_key=None)
-    assert item == tts.item_spec(definition, word_spec_=word, clip_storage_key=None)  # stable
+    item = tts.item_spec(definition, word)
+    assert item == tts.item_spec(definition, word)  # stable
     changed = tts.definition_spec("to give up something", "abandon")
     assert changed is not None
-    assert tts.item_spec(changed, word_spec_=word, clip_storage_key=None).key != item.key
-    clip = tts.item_spec(definition, word_spec_=None, clip_storage_key="clips/x.m4a")
-    assert clip.key != item.key  # a verified clip arriving re-renders the item
-    with pytest.raises(ValueError):
-        tts.item_spec(definition, word_spec_=word, clip_storage_key="clips/x.m4a")
-    with pytest.raises(ValueError):
-        tts.item_spec(definition, word_spec_=None, clip_storage_key=None)
+    assert tts.item_spec(changed, word).key != item.key
+    with pytest.raises(ValueError):  # the word must be in the definition's voice
+        tts.item_spec(definition, tts.word_spec("abandon", None, "american"))
 
 
 # --- the queue -------------------------------------------------------------------
@@ -191,7 +187,7 @@ async def test_enqueue_is_idempotent_and_leaves_existing_rows_alone(created: Cre
 async def test_claim_takes_words_before_definitions_before_items(created: Created) -> None:
     word = tts.word_spec(unique_word(), None)
     definition = tts.definition_spec(f"a {unique_word()} thing", "x")
-    item = tts.item_spec(definition, word_spec_=word, clip_storage_key=None)
+    item = tts.item_spec(definition, word)
     keys = [item.key, definition.key, word.key]
     created.render_keys.extend(keys)
     await tts.enqueue([item, definition, word])  # inserted in the WRONG order
@@ -299,7 +295,7 @@ async def test_a_word_render_is_made_stored_and_marked_ready(created: Created) -
     assert ready.status == RenderStatus.READY and ready.error is None
     assert ready.storage_key == f"tts/{spec.key}.m4a"
     assert synth.calls == [spec.input]
-    audio = audio_pcm.decode_range(storage.objects[ready.storage_key])
+    audio = audio_pcm.decode(storage.objects[ready.storage_key])
     assert abs(audio_pcm.duration_ms(audio) - ready.duration_ms) < 60
     assert ready.word_offset_ms is None  # only items have one
 
@@ -455,7 +451,7 @@ async def test_an_item_is_composed_from_parts_it_makes_itself(created: Created) 
     lemma = unique_word()
     definition = tts.definition_spec(f"to {lemma} something completely", lemma)
     word = tts.word_spec(lemma, None)
-    item = tts.item_spec(definition, word_spec_=word, clip_storage_key=None)
+    item = tts.item_spec(definition, word)
     created.render_keys.extend([definition.key, word.key, item.key])
     await tts.enqueue([item])  # ONLY the item: its parts have no rows yet
     storage, synth = FakeStorage(), FakeSynth()
@@ -472,25 +468,6 @@ async def test_an_item_is_composed_from_parts_it_makes_itself(created: Created) 
     # The parts it made are recorded as ready, so nothing makes them twice.
     assert (await _row(definition.key)).status == RenderStatus.READY
     assert (await _row(word.key)).status == RenderStatus.READY
-
-
-async def test_an_item_with_a_clip_uses_the_clip_bytes(created: Created) -> None:
-    lemma = unique_word()
-    definition = tts.definition_spec(f"to {lemma} something completely", lemma)
-    clip_key = f"clips/test-{uuid.uuid4().hex}.m4a"
-    item = tts.item_spec(definition, word_spec_=None, clip_storage_key=clip_key)
-    created.render_keys.extend([definition.key, item.key])
-    storage, synth = FakeStorage(), FakeSynth()
-    storage.objects[clip_key] = audio_pcm.encode_m4a(tone(800, freq=900, amp=0.3))
-    await tts.enqueue([item])
-    async with async_session_factory() as session:
-        row = await tts.claim_render(session, keys=[item.key])
-        await tts.process_render(session, row, synth, storage)
-    ready = await _row(item.key)
-    assert ready.status == RenderStatus.READY
-    assert synth.calls and lemma not in synth.calls  # the word was not synthesised
-    # The clip (~800 ms) sits between the offset and the 1.5 s tail.
-    assert abs(ready.duration_ms - ready.word_offset_ms - 1500 - 800) < 80
 
 
 async def test_the_worker_pass_reports_what_happened(created: Created) -> None:

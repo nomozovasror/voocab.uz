@@ -4,11 +4,10 @@ Prints a PASS / FAIL / WARN / SKIP line per check, each FAIL with a one-line fix
 and exits non-zero if anything FAILed. It answers, in order: is this the right
 Python and platform; can it reach the database, is that database migrated to
 the repo's head, and what would each step do; is the media folder there,
-writable, and holding the clip files verification reads; does torch see the
-GPU; does Kokoro load and speak both voices on it; does misaki's espeak
-fallback work on this OS (a word outside the lexicon must get phonemes, or it
-would be spoken as a silent gap); does faster-whisper load on CUDA with the
-chosen model and hear a word.
+writable, and holding render files it can read; does torch see the GPU; does
+Kokoro load and speak both voices on it; does misaki's espeak fallback work on
+this OS (a word outside the lexicon must get phonemes, or it would be spoken as
+a silent gap).
 
 Every check is wrapped: one that crashes is a FAIL line, not a dead doctor. The
 espeak probe runs in a SUBPROCESS because on macOS the ``espeakng-loader``
@@ -36,8 +35,7 @@ from sqlmodel import select
 from app.core.config import settings
 from app.core.database import async_session_factory
 from app.models.audio_render import AudioRender, RenderKind, RenderStatus
-from app.models.word_clip import ClipStatus, WordClip
-from app.services import accents, audio_pcm, tts, word_clips
+from app.services import accents, audio_pcm, tts
 from app.services.storage import get_storage
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -128,15 +126,6 @@ async def check_database() -> list[Check]:
 
     try:
         async with async_session_factory() as session:
-            candidates = await word_clips.count_candidates()
-            clip_counts = dict(
-                (await session.exec(select(WordClip.status, func.count()).group_by(WordClip.status))).all()
-            )
-            cut_forms = int(
-                (await session.exec(
-                    select(func.count(func.distinct(WordClip.form))).where(WordClip.status == ClipStatus.CUT)
-                )).one()
-            )
             render_counts = {
                 (kind, status): n
                 for kind, status, n in (
@@ -159,9 +148,6 @@ async def check_database() -> list[Check]:
     def renders(kind: str, status: str) -> int:
         return int(render_counts.get((kind, status), 0))
 
-    out.append(Check(PASS, "clips", f"{candidates} candidate clip(s) left to cut (the dev worker cuts them too); "
-                     f"by status: {clip_counts or 'none yet'}"))
-    out.append(Check(PASS, "verify-clips", f"{clip_counts.get(ClipStatus.CUT, 0)} cut clip(s) over {cut_forms} form(s) to examine"))
     out.append(Check(PASS, "words --accent both", f"{new_words} new render(s) to queue, "
                      f"{renders(RenderKind.WORD, RenderStatus.PENDING)} already pending, "
                      f"{renders(RenderKind.WORD, RenderStatus.READY)} ready, "
@@ -201,53 +187,43 @@ async def check_media() -> list[Check]:
                       "set MEDIA_ROOT in backend/.env to an existing writable folder")]
     out.append(Check(PASS, "MEDIA_ROOT writable", f"{root.resolve()} (wrote, read and deleted a probe file)"))
 
-    samples: list[tuple[str, str]] = []
     async with async_session_factory() as session:
-        for row in (await session.exec(
-            select(WordClip).where(WordClip.status.in_((ClipStatus.CUT, ClipStatus.VERIFIED)),
-                                   WordClip.storage_key.is_not(None)).order_by(func.random()).limit(5)
-        )).all():
-            samples.append(("clip", row.storage_key))
-        for row in (await session.exec(
-            select(AudioRender).where(AudioRender.status == RenderStatus.READY,
-                                      AudioRender.storage_key.is_not(None)).order_by(func.random()).limit(3)
-        )).all():
-            samples.append(("render", row.storage_key))
-    clips = [k for kind, k in samples if kind == "clip"]
-    if not clips:
-        out.append(Check(WARN, "Clip files present", "no cut clips in the database yet",
-                         "let the dev worker finish cutting (or run `clips`) before `verify-clips`"))
+        samples = [
+            row.storage_key
+            for row in (await session.exec(
+                select(AudioRender).where(AudioRender.status == RenderStatus.READY,
+                                          AudioRender.storage_key.is_not(None)).order_by(func.random()).limit(8)
+            )).all()
+        ]
+    if not samples:
+        out.append(Check(WARN, "Render files present", "no ready renders in the database yet"))
         return out
     problems: list[str] = []
-    for kind, key in samples:
+    for key in samples:
         try:
-            data = await storage.get(key)
-            if kind == "clip":
-                audio_pcm.decode_range(data)  # PyAV can read it
-            elif not data:
-                raise OSError("empty file")
+            audio_pcm.decode(await storage.get(key))  # PyAV can read it
         except Exception as exc:  # noqa: BLE001
             problems.append(f"{key}: {type(exc).__name__}: {exc}")
     if problems:
-        out.append(Check(FAIL, "Clip files present", f"{len(problems)} of {len(samples)} sampled file(s) unusable, e.g. {problems[0]}",
-                         "copy backend/media/clips (and tts/, renders/) from the Mac into MEDIA_ROOT; `check-files --what clips` lists every missing one"))
+        out.append(Check(FAIL, "Render files present", f"{len(problems)} of {len(samples)} sampled file(s) unusable, e.g. {problems[0]}",
+                         "copy backend/media/tts (and renders/) from the Mac into MEDIA_ROOT; `check-files` lists every missing one"))
     else:
-        out.append(Check(PASS, "Clip files present", f"{len(samples)} sampled file(s) found and readable"))
+        out.append(Check(PASS, "Render files present", f"{len(samples)} sampled file(s) found and readable"))
     return out
 
 
-# --- 4-7. torch, Kokoro, espeak, faster-whisper --------------------------------------
+# --- 4-6. torch, Kokoro, espeak --------------------------------------
 
 
 def check_torch(device: str) -> tuple[list[Check], bool]:
     try:
         import torch
     except ImportError as exc:
-        return [Check(FAIL, "torch + CUDA", str(exc), "`uv sync --extra seed --extra tts-gpu`")], False
+        return [Check(FAIL, "torch + CUDA", str(exc), "`uv sync --extra tts-gpu`")], False
     detail = f"torch {torch.__version__}"
     if not torch.cuda.is_available():
         built = torch.version.cuda
-        fix = ("this is a CPU build of torch: `uv sync --extra seed --extra tts-gpu` (not the `tts` extra)"
+        fix = ("this is a CPU build of torch: `uv sync --extra tts-gpu` (not the `tts` extra)"
                if built is None else "update the NVIDIA driver (`nvidia-smi` must work; CUDA 12.8 needs driver 570+)")
         status = PASS if device == "cpu" else FAIL
         return [Check(status, "torch + CUDA", f"{detail}, CUDA not available (built for CUDA {built})", fix)], device == "cpu"
@@ -266,7 +242,7 @@ def probe_g2p_subprocess() -> list[Check]:
         return [Check(FAIL, "misaki espeak fallback", "probe timed out after 300 s", "re-run; the first start loads spaCy")]
     if done.returncode != 0:
         tail = (done.stderr or done.stdout).strip().splitlines()[-1:] or [""]
-        fix = ("misaki is not installed: `uv sync --extra seed --extra tts-gpu`"
+        fix = ("misaki is not installed: `uv sync --extra tts-gpu`"
                if "ModuleNotFoundError" in tail[0] else
                "espeakng-loader does not work on this OS/install: on Windows reinstall (`uv sync --reinstall-package espeakng-loader`); it cannot work on macOS")
         return [Check(FAIL, "misaki espeak fallback", f"the probe process died (exit {done.returncode}): {tail[0][:200]}", fix)]
@@ -289,7 +265,7 @@ def check_kokoro(device: str) -> tuple[list[Check], tts.KokoroSynth | None]:
     if sys.platform == "darwin":
         return [Check(SKIP, "Kokoro on the GPU", "Kokoro cannot run on macOS (espeakng-loader kills the process); run this on the Windows machine")], None
     if not tts.kokoro_available():
-        return [Check(FAIL, "Kokoro loads", "the kokoro package is not installed", "`uv sync --extra seed --extra tts-gpu`")], None
+        return [Check(FAIL, "Kokoro loads", "the kokoro package is not installed", "`uv sync --extra tts-gpu`")], None
     synth = tts.KokoroSynth(device=device)
     out: list[Check] = []
     first = True
@@ -332,44 +308,6 @@ def check_kokoro(device: str) -> tuple[list[Check], tts.KokoroSynth | None]:
     return out, synth
 
 
-def check_whisper(model_name: str, device: str, synth: tts.KokoroSynth | None) -> list[Check]:
-    from scripts import seed_tts
-
-    try:
-        t0 = time.perf_counter()
-        transcribe = seed_tts.make_transcriber(model_name, device)
-        load = time.perf_counter() - t0
-    except Exception as exc:  # noqa: BLE001
-        return [Check(FAIL, f"faster-whisper {model_name} on {device}", f"{type(exc).__name__}: {exc}", _whisper_fix(exc))]
-    speech = False
-    try:
-        if synth is not None:
-            samples = synth("hello", accents.voice_for("british"))
-            speech = True
-        else:
-            samples = audio_pcm.concat(audio_pcm.silence(300))
-        data = audio_pcm.encode_m4a(samples)
-        t1 = time.perf_counter()
-        heard = transcribe(data)
-        took = time.perf_counter() - t1
-    except Exception as exc:  # noqa: BLE001
-        return [Check(FAIL, f"faster-whisper {model_name} on {device}", f"loaded in {load:.1f}s but transcribing failed: {type(exc).__name__}: {exc}", _whisper_fix(exc))]
-    if speech and not word_clips.heard_contains("hello", heard):
-        return [Check(FAIL, f"faster-whisper {model_name} on {device}", f"heard {heard!r} for a generated 'hello'", "the model or the decode path is wrong; try `--model small.en`")]
-    note = f"heard {heard!r}" if speech else "ran on silence (no Kokoro to make speech)"
-    return [Check(PASS, f"faster-whisper {model_name} on {device}", f"loaded in {load:.1f}s, transcribed in {took:.2f}s, {note}")]
-
-
-def _whisper_fix(exc: Exception) -> str:
-    message = str(exc).lower()
-    if any(word in message for word in ("cublas", "cudnn", ".dll", "libcuda", "cuda")):
-        return ("CUDA libraries for ctranslate2 not found: `uv sync --extra tts-gpu` brings cuBLAS 12 + cuDNN 9 inside torch\\lib "
-                "(this script puts them on the path); else install CUDA 12 + cuDNN 9, or `uv pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`")
-    if "connection" in message or "hub" in message or "offline" in message:
-        return "the model downloads on first use (large-v3 ~3 GB): check the internet connection, or use `--model small.en`"
-    return "see the error; `--model small.en` is a smaller try"
-
-
 # --- run ---------------------------------------------------------------------------
 
 
@@ -395,7 +333,7 @@ async def run(args: argparse.Namespace) -> int:
             return await asyncio.to_thread(fn)
         return guarded(name, call)
 
-    print(f"seed_tts doctor -- device {device}, whisper model {args.model}\n", flush=True)
+    print(f"seed_tts doctor -- device {device}\n", flush=True)
     await guarded("Python / platform", lambda: _as_async(check_python))
     await guarded("Database", check_database)
     await guarded("MEDIA_ROOT", check_media)
@@ -408,19 +346,14 @@ async def run(args: argparse.Namespace) -> int:
         show([Check(FAIL, "torch + CUDA", f"check crashed: {type(exc).__name__}: {exc}")])
 
     await sync("misaki espeak fallback", probe_g2p_subprocess)
-    synth: tts.KokoroSynth | None = None
     if torch_ok:
         try:
-            items, synth = await asyncio.to_thread(check_kokoro, device)
+            items, _synth = await asyncio.to_thread(check_kokoro, device)
             show(items)
         except Exception as exc:  # noqa: BLE001
             show([Check(FAIL, "Kokoro", f"check crashed: {type(exc).__name__}: {exc}")])
     else:
         show([Check(SKIP, "Kokoro on the GPU", "skipped: torch has no usable device (see above)")])
-    if sys.platform == "darwin" and device == "cuda":
-        show([Check(SKIP, "faster-whisper on CUDA", "no CUDA on macOS")])
-    else:
-        await sync("faster-whisper", lambda: check_whisper(args.model, device, synth))
 
     failed = [c for c in checks if c.status == FAIL]
     warned = [c for c in checks if c.status == WARN]

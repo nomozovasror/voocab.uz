@@ -2,25 +2,18 @@
 
 Everything vocabulary stage 3 plays -- the speaker button, the `listen`
 exercise, the `speak` prompt, On the go -- asks THIS module for its audio and
-gets back a URL or "not ready yet". Nothing here synthesises or cuts anything:
-it reads what :mod:`app.services.word_clips` and :mod:`app.services.tts` have
-already made and, for what does not exist, **queues it and answers ``None``**
-(the work is the worker's; a request never waits on a model).
+gets back a URL or "not ready yet". Nothing here synthesises anything: it reads
+what :mod:`app.services.tts` has already made and, for what does not exist,
+**queues it and answers ``None``** (the work is the worker's; a request never
+waits on a model).
 
-## The resolution order, per sense
+## Every word is TTS
 
-1. **A heteronym is always TTS**, with the sense's own pronunciation
-   (decision 2). The transcript has no part of speech, so a recording of
-   `record` could be either word; a clip is never even looked for.
-2. **A verified clip** of the lemma's exact form (decisions 1 and 3), the
-   learner's OWN listening materials first (rule 1 of the brief: a word they
-   met in a recording they sat is best heard in that recording -- it cannot
-   fire today, because listening materials have no vocabulary, and is built
-   anyway), then any recording, longest word first. It carries the context
-   clip when one was cut.
-3. **The word read by the TTS voice** of the learner's ACCENT, if that render
-   is ready.
-4. Otherwise the TTS render is **enqueued** and the answer is ``None``.
+Live clips cut from listening recordings were tried and dropped (2026-10-07:
+the owner listened -- fragments of neighbouring words, the emotion and pitch of
+the sentence). A word is the Kokoro render in the learner's ACCENT; if that
+render is ready it is served, otherwise it is **enqueued** and the answer is
+``None``.
 
 ## The accent (decisions 22-26)
 
@@ -29,12 +22,8 @@ British) and it decides exactly two things: which Kokoro VOICE a render is in
 (the voice is in the render key, so each accent has its own rows and files, for
 words, definitions and items alike) and which stored heteronym choice is used
 (``LexemeSense.pronunciation`` British, ``pronunciation_us`` American -- a
-phoneme string belongs to its alphabet). It never changes whether a clip is
-used: a verified clip wins for everyone, and keeps its speaker's own accent
-(decision 23). A heteronym is still never a clip, in either accent.
-
-``source`` on :class:`AudioOut` says which of the two it was, because the
-client treats them differently (a clip has a context press, TTS does not).
+phoneme string belongs to its alphabet). A heteronym's sense carries its own
+phonemes, so its two senses are two renders.
 
 ## Works from a SENSE, not a saved word
 
@@ -61,34 +50,26 @@ already on its way.
 """
 
 import uuid
-from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Literal, NamedTuple
+from typing import NamedTuple
 
 from sqlmodel import select
 
 from app.core.database import AsyncSession
-from app.models.audio_asset import AudioAsset
 from app.models.audio_render import AudioRender, RenderStatus
 from app.models.lexicon import Lexeme, LexemeSense
-from app.models.material import Material
 from app.models.vocabulary import SavedWord
-from app.models.word_clip import ClipStatus, WordClip
 from app.services import pronunciation, tts
 from app.services.accents import DEFAULT_ACCENT, Accent
 from app.services.storage import get_storage
-from app.services.word_clips import normalise_form, servable_clip_clauses
 
 
 @dataclass(frozen=True)
 class AudioOut:
-    """The wire shape of a word's audio. ``context_url`` is the word with its
-    neighbours (a clip only); ``None`` for TTS."""
+    """The wire shape of a word's audio: the URL of the word alone."""
 
     url: str
-    context_url: str | None
-    source: Literal["clip", "tts"]
 
 
 class ItemAudio(NamedTuple):
@@ -100,18 +81,6 @@ class ItemAudio(NamedTuple):
     word_offset_ms: int
 
 
-@dataclass(frozen=True)
-class WordSource:
-    """Where a sense's word audio comes from: a verified clip, or a TTS spec."""
-
-    clip: WordClip | None = None
-    spec: tts.RenderSpec | None = None
-
-    @property
-    def source(self) -> Literal["clip", "tts"]:
-        return "clip" if self.clip is not None else "tts"
-
-
 def decided_pronunciation(sense: LexemeSense, accent: Accent) -> str | None:
     """The sense's stored heteronym choice for ``accent``'s alphabet."""
     return sense.pronunciation_us if accent == "american" else sense.pronunciation
@@ -119,9 +88,8 @@ def decided_pronunciation(sense: LexemeSense, accent: Accent) -> str | None:
 
 def tts_word_spec(sense: LexemeSense, lexeme: Lexeme, accent: Accent) -> tts.RenderSpec:
     """The TTS render of a sense's word in ``accent``'s voice -- with the
-    sense's phonemes when the lemma is a heteronym in that accent -- whether or
-    not a clip exists. The seed uses it directly: every word gets TTS, clip or
-    not (decision 26)."""
+    sense's phonemes when the lemma is a heteronym in that accent. The
+    seed uses it directly, with the worker and the API: one spec, one key."""
     phonemes = pronunciation.sense_pronunciation(
         lexeme.lemma, lexeme.pos, decided_pronunciation(sense, accent), accent
     )
@@ -142,89 +110,6 @@ async def _pairs(
         ).all():
             known[lexeme.id] = lexeme
     return [(s, known[s.lexeme_id]) for s in senses if s.lexeme_id in known]
-
-
-async def _blob_ids(
-    session: AsyncSession, material_ids: Iterable[uuid.UUID]
-) -> set[uuid.UUID]:
-    """The recordings behind these materials (``material -> audio asset ->
-    blob``)."""
-    ids = list(material_ids)
-    if not ids:
-        return set()
-    rows = await session.exec(
-        select(AudioAsset.blob_id)
-        .join(Material, Material.audio_asset_id == AudioAsset.id)
-        .where(Material.id.in_(ids))
-    )
-    return set(rows.all())
-
-
-async def _verified_clips(
-    session: AsyncSession, forms: Iterable[str]
-) -> dict[str, list[WordClip]]:
-    """The servable clips of each form: ``verified``, AND still allowed at
-    this moment -- the recording is still in a public material and the clip's
-    segment is still uncorrected (:func:`word_clips.servable_clip_clauses`).
-    Verification and indexing are earlier decisions; a material made private
-    afterwards must stop being heard now, not at the next seed run."""
-    wanted = list(set(forms))
-    if not wanted:
-        return {}
-    rows = (
-        await session.exec(
-            select(WordClip).where(
-                WordClip.form.in_(wanted),
-                WordClip.status == ClipStatus.VERIFIED,
-                WordClip.storage_key.is_not(None),
-                *servable_clip_clauses(),
-            )
-        )
-    ).all()
-    out: dict[str, list[WordClip]] = defaultdict(list)
-    for clip in rows:
-        out[clip.form].append(clip)
-    return out
-
-
-async def word_sources(
-    session: AsyncSession,
-    senses: Sequence[LexemeSense],
-    *,
-    lexemes: dict[uuid.UUID, Lexeme] | None = None,
-    prefer_material_ids: Iterable[uuid.UUID] = (),
-    accent: Accent = DEFAULT_ACCENT,
-) -> dict[uuid.UUID, WordSource]:
-    """Decide, per sense, clip or TTS (the module docstring's order). Pure
-    resolution: nothing is enqueued here. Keyed by sense id."""
-    pairs = await _pairs(session, senses, lexemes)
-    preferred_blobs = await _blob_ids(session, prefer_material_ids)
-
-    plans: dict[uuid.UUID, tuple[LexemeSense, Lexeme, bool, str]] = {}
-    for sense, lexeme in pairs:
-        # Any accent, not the learner's: a clip is heard by everyone and its
-        # transcript cannot say which reading was spoken (decision 2).
-        heteronym = pronunciation.is_heteronym_any_accent(lexeme.lemma)
-        plans[sense.id] = (sense, lexeme, heteronym, normalise_form(lexeme.lemma))
-    clips = await _verified_clips(
-        session, (form for _sense, _lexeme, heteronym, form in plans.values() if not heteronym)
-    )
-
-    out: dict[uuid.UUID, WordSource] = {}
-    for sense_id, (sense, lexeme, heteronym, form) in plans.items():
-        if not heteronym and clips.get(form):
-            best = min(
-                clips[form],
-                key=lambda c: (
-                    0 if c.blob_id in preferred_blobs else 1,
-                    -(c.end_ms - c.start_ms),
-                    str(c.id),
-                ),
-            )
-            out[sense_id] = WordSource(clip=best)
-        else:
-            out[sense_id] = WordSource(spec=tts_word_spec(sense, lexeme, accent))
-    return out
 
 
 async def _render_rows(
@@ -257,41 +142,24 @@ async def word_audio_many(
     senses: Sequence[LexemeSense],
     *,
     lexemes: dict[uuid.UUID, Lexeme] | None = None,
-    prefer_material_ids: Iterable[uuid.UUID] = (),
     accent: Accent = DEFAULT_ACCENT,
 ) -> dict[uuid.UUID, AudioOut | None]:
     """The word audio for every sense in one go: ``{sense id: AudioOut | None}``.
     ``None`` = not ready yet, and already queued (a sense whose lexeme cannot
     be found is simply absent)."""
     storage = get_storage()
-    sources = await word_sources(
-        session, senses, lexemes=lexemes, prefer_material_ids=prefer_material_ids,
-        accent=accent,
-    )
-    rows = await _render_rows(
-        session, (s.spec.key for s in sources.values() if s.spec is not None)
-    )
-    await _enqueue_missing(rows, (s.spec for s in sources.values() if s.spec is not None))
+    specs = {
+        sense.id: tts_word_spec(sense, lexeme, accent)
+        for sense, lexeme in await _pairs(session, senses, lexemes)
+    }
+    rows = await _render_rows(session, (spec.key for spec in specs.values()))
+    await _enqueue_missing(rows, specs.values())
 
     out: dict[uuid.UUID, AudioOut | None] = {}
-    for sense_id, source in sources.items():
-        if source.clip is not None:
-            clip = source.clip
-            assert clip.storage_key is not None
-            out[sense_id] = AudioOut(
-                url=await storage.url(clip.storage_key),
-                context_url=(
-                    await storage.url(clip.context_storage_key)
-                    if clip.context_storage_key
-                    else None
-                ),
-                source="clip",
-            )
-            continue
-        assert source.spec is not None
-        row = rows.get(source.spec.key)
+    for sense_id, spec in specs.items():
+        row = rows.get(spec.key)
         out[sense_id] = (
-            AudioOut(url=await storage.url(row.storage_key), context_url=None, source="tts")  # type: ignore[arg-type]
+            AudioOut(url=await storage.url(row.storage_key))  # type: ignore[arg-type]
             if _ready(row)
             else None
         )
@@ -303,17 +171,14 @@ async def word_audio(
     sense: LexemeSense,
     lexeme: Lexeme | None = None,
     *,
-    prefer_material_ids: Iterable[uuid.UUID] = (),
     accent: Accent = DEFAULT_ACCENT,
 ) -> AudioOut | None:
     """The audio for one sense's word, or ``None`` if it is not ready (it is
-    then queued). ``prefer_material_ids`` are the learner's own listening
-    materials: a verified clip from their recordings wins over any other."""
+    then queued)."""
     result = await word_audio_many(
         session,
         [sense],
         lexemes={lexeme.id: lexeme} if lexeme is not None else None,
-        prefer_material_ids=prefer_material_ids,
         accent=accent,
     )
     return result.get(sense.id)
@@ -362,7 +227,6 @@ async def item_renders(
     session: AsyncSession,
     saved_words: Sequence[SavedWord],
     *,
-    prefer_material_ids: Iterable[uuid.UUID] = (),
     accent: Accent = DEFAULT_ACCENT,
 ) -> dict[uuid.UUID, ItemAudio | None]:
     """The On the go file of every saved word: ``{saved word id: ItemAudio |
@@ -381,12 +245,8 @@ async def item_renders(
     } if saved_words else {}
     ordered = list(senses.values())
     pairs = {s.id: lexeme for s, lexeme in await _pairs(session, ordered, None)}
-    sources = await word_sources(
-        session, ordered, lexemes={lexeme.id: lexeme for lexeme in pairs.values()},
-        prefer_material_ids=prefer_material_ids, accent=accent,
-    )
 
-    parts: dict[uuid.UUID, tuple[tts.RenderSpec, tts.RenderSpec | None, tts.RenderSpec]] = {}
+    parts: dict[uuid.UUID, tuple[tts.RenderSpec, tts.RenderSpec, tts.RenderSpec]] = {}
     for sense_id, sense in senses.items():
         lexeme = pairs.get(sense_id)
         if lexeme is None:
@@ -394,13 +254,8 @@ async def item_renders(
         definition = tts.definition_spec(sense.definition_en, lexeme.lemma, accent)
         if definition is None:
             continue
-        source = sources[sense_id]
-        item = tts.item_spec(
-            definition,
-            word_spec_=source.spec,
-            clip_storage_key=source.clip.storage_key if source.clip is not None else None,
-        )
-        parts[sense_id] = (definition, source.spec, item)
+        word = tts_word_spec(sense, lexeme, accent)
+        parts[sense_id] = (definition, word, tts.item_spec(definition, word))
 
     rows = await _render_rows(
         session,
@@ -408,7 +263,6 @@ async def item_renders(
             spec.key
             for definition, word, item in parts.values()
             for spec in (definition, word, item)
-            if spec is not None
         ),
     )
     # Parts first: the claim order is by kind anyway, but one insert holding all
@@ -420,7 +274,6 @@ async def item_renders(
             for definition, word, item in parts.values()
             if not _ready(rows.get(item.key))
             for spec in (definition, word, item)
-            if spec is not None
         ),
     )
 
@@ -448,12 +301,9 @@ async def item_render(
     session: AsyncSession,
     saved_word: SavedWord,
     *,
-    prefer_material_ids: Iterable[uuid.UUID] = (),
     accent: Accent = DEFAULT_ACCENT,
 ) -> ItemAudio | None:
     """``(url, duration_ms, word_offset_ms)`` of one word's On the go file, or
     ``None`` (queued, or nothing to play)."""
-    result = await item_renders(
-        session, [saved_word], prefer_material_ids=prefer_material_ids, accent=accent
-    )
+    result = await item_renders(session, [saved_word], accent=accent)
     return result.get(saved_word.id)

@@ -33,11 +33,11 @@ services:
 
   worker:
     # Same image/codebase as the API, different entrypoint: the background
-    # process. No ports — it's not an HTTP service. Two loops: the Postgres-
+    # process. No ports — it's not an HTTP service. Four loops: the Postgres-
     # backed ASR transcription queue (§9, polling
     # audio_blob.transcript_status), the periodic refresh of the
     # material_difficulty projection, the lexicon enrichment, the TTS render
-    # queue (audio_renders) and the word-clip cutter.
+    # queue (audio_renders).
     #
     # One instance. A second would double the difficulty refresh — harmless,
     # it is an idempotent upsert, but pointless; the transcription half is

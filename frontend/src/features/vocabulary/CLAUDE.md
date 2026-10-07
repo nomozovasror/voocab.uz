@@ -1016,9 +1016,10 @@ are the ones that are easy to undo by accident.
   A play button, a field, nothing else (plus two quiet controls below).
 - **Plays once by itself when the card appears and never repeats by itself.**
   The automatic play is the word and is not a "press". Replay is the button or
-  `Tab`; with `audio.context_url` presses alternate word -> context -> word,
-  and the button says which it will play. `0.75x` is held by the page, so it
-  stays for the session.
+  `Tab`; every press plays the word. (The alternating "in context" press, and
+  the word page's "In context" button, existed only for live clips, dropped
+  2026-10-07: every word is Kokoro TTS and `AudioOut` is `{ url }`.) `0.75x` is
+  held by the page, so it stays for the session.
 - **Tab replays, and that is a keyboard-trap risk that is bounded, not
   ignored.** Only plain forward `Tab`, only inside the field; focus never
   leaves the field. `Shift+Tab` is untouched and the other controls (Can't

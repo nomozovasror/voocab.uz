@@ -1,8 +1,8 @@
 """The background process: transcription, the difficulty refresh, the
-lexicon's own enrichment, and the audio layer's text-to-speech and clips.
+lexicon's own enrichment, and the audio layer's text-to-speech.
 
-Five loops, run concurrently, and they have nothing to do with each other
-beyond all five being work that must not happen inside a request.
+Four loops, run concurrently, and they have nothing to do with each other
+beyond all four being work that must not happen inside a request.
 
 **Transcription** (§9 of the audio-ingestion brief). The queue is
 ``audio_blob.transcript_status`` itself — no Redis, no external broker
@@ -49,13 +49,6 @@ needs the ``tts`` extra -- installed in the worker image only -- and where
 does not run: the rest of the worker is unaffected. A failure sleeps out a
 doubling back-off, because a broken model must not spin the loop.
 
-**Clips** (`app.services.word_clips`). For recordings that became ready since
-the loop last looked, index where each lexicon word is spoken and cut the
-small word / context files. It never verifies (that needs a GPU model and is
-the seed script's job) -- clips are only SERVED once verified -- but it keeps
-the cuts primed, so a later verification run has bytes to listen to. Own loop,
-own interval: cutting is CPU the transcription poll should not queue behind.
-
 Entrypoint: ``python -m app.worker``.
 
 Logic is split into small, independently testable functions (rather than one
@@ -81,7 +74,6 @@ from app.services import difficulty as difficulty_service
 from app.services import lexicon_enrich as lexicon_enrich_service
 from app.services import lexicon_hints as lexicon_hints_service
 from app.services import tts as tts_service
-from app.services import word_clips as word_clips_service
 from app.services.asr import ASRProvider, GroqASR, TranscriptResult
 from app.services.audio import persist_transcript_result
 from app.services.infra_errors import (  # noqa: F401 - re-exported: the worker's own names
@@ -536,47 +528,6 @@ async def _render_loop() -> None:
             await _sleep_or_stop(backoff)
 
 
-#: Blobs whose clips this process has indexed. In memory: a restart simply
-#: indexes everything once more, which is idempotent.
-_clip_indexed: set = set()
-
-
-async def clips_once() -> tuple[int, int]:
-    """One pass of the clip step: index recordings not yet indexed by this
-    process, then cut up to ``clips_batch_size`` candidates. Returns
-    ``(indexed blobs, cut clips)``. Never raises."""
-    try:
-        async with async_session_factory() as session:
-            fresh_blobs = await word_clips_service.unindexed_blob_ids(session, _clip_indexed)
-            if fresh_blobs:
-                report = await word_clips_service.index_clips(session, blob_ids=fresh_blobs)
-                _clip_indexed.update(fresh_blobs)
-                logger.info(
-                    "clips: indexed %d recording(s), %d new candidate(s)",
-                    report.blobs, report.inserted,
-                )
-        async with async_session_factory() as session:
-            cut = await word_clips_service.cut_clips(
-                session, limit=settings.clips_batch_size
-            )
-        return len(fresh_blobs), cut.cut
-    except Exception:  # noqa: BLE001 - logged; the next pass tries again
-        logger.exception("clip pass failed; will retry next interval")
-        return 0, 0
-
-
-async def _clips_loop() -> None:
-    interval = settings.clips_interval_s
-    if interval <= 0:
-        logger.info("clip indexing disabled (interval <= 0)")
-        return
-    logger.info("clip indexing and cutting every %.0fs", interval)
-    while not _stop_event.is_set():
-        _indexed, cut = await clips_once()
-        # A full batch means more are waiting: keep draining.
-        await _sleep_or_stop(1.0 if cut >= settings.clips_batch_size else interval)
-
-
 async def _transcription_loop(provider: ASRProvider) -> None:
     async with async_session_factory() as session:
         recovered = await recover_stale(session)
@@ -647,7 +598,7 @@ async def main() -> None:
             pass
 
     logger.info("worker started")
-    # All five loops watch the same stop event, so one SIGTERM ends them
+    # All four loops watch the same stop event, so one SIGTERM ends them
     # all and `gather` returns when the slowest has finished its current
     # step. None is allowed to fail another: the transcription loop guards
     # every blob it touches, and the others swallow their own errors.
@@ -656,7 +607,6 @@ async def main() -> None:
         _difficulty_loop(),
         _lexicon_loop(),
         _render_loop(),
-        _clips_loop(),
     )
 
     logger.info("worker stopping")

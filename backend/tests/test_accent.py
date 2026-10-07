@@ -15,14 +15,13 @@ from sqlmodel import select
 from app.core.database import async_session_factory
 from app.core.security import create_access_token
 from app.models.audio_render import AudioRender
-from app.services import accents, practice as practice_service, tts, word_audio, word_clips
+from app.services import accents, practice as practice_service, tts, word_audio
 from app.services.infra_errors import InfrastructureError
 from app.services import heteronym_decisions as hd
 from app.services import pronunciation as pron
 from scripts import decide_heteronyms
 from tests.audio_helpers import (
-    Created, FakeStorage, FakeSynth, add_clip, make_blob, make_lexeme, make_user,
-    sentence, unique_word,
+    Created, FakeStorage, FakeSynth, make_lexeme, make_user, unique_word,
 )
 from tests.test_heteronyms import FakeGemini
 from tests.test_vocabulary_audio_practice import (  # noqa: F401 - `created` is a fixture
@@ -69,20 +68,16 @@ def test_every_kind_of_render_has_its_own_key_per_accent() -> None:
     gb_def = tts.definition_spec("to abandon something", "abandon")
     us_def = tts.definition_spec("to abandon something", "abandon", "american")
     assert gb_def.key != us_def.key and us_def.voice == "af_heart"
-    gb_item = tts.item_spec(gb_def, word_spec_=gb_word, clip_storage_key=None)
-    us_item = tts.item_spec(us_def, word_spec_=us_word, clip_storage_key=None)
+    gb_item = tts.item_spec(gb_def, gb_word)
+    us_item = tts.item_spec(us_def, us_word)
     assert gb_item.key != us_item.key and us_item.voice == "af_heart"
-    # a clip-worded item is still one per accent: its definition is the voice
-    gb_clip = tts.item_spec(gb_def, word_spec_=None, clip_storage_key="clips/x.m4a")
-    us_clip = tts.item_spec(us_def, word_spec_=None, clip_storage_key="clips/x.m4a")
-    assert gb_clip.key != us_clip.key
 
 
 async def test_the_worker_speaks_each_row_in_its_own_voice(created: Created) -> None:
     lemma = unique_word()
     definition = tts.definition_spec(f"to {lemma} something completely", lemma, "american")
     word = tts.word_spec(lemma, None, "american")
-    item = tts.item_spec(definition, word_spec_=word, clip_storage_key=None)
+    item = tts.item_spec(definition, word)
     created.render_keys.extend([definition.key, word.key, item.key])
     await tts.enqueue([item])
     synth = FakeSynth()
@@ -104,27 +99,11 @@ async def test_a_plain_word_is_queued_in_the_learners_voice_only(created: Create
     assert [r.key for r in await _rows(gb.key, us.key)] == [us.key]  # no British row
 
 
-async def test_a_verified_clip_is_heard_by_both_accents_and_queues_nothing(created: Created) -> None:
-    lemma = unique_word()
-    lexeme, sense = await make_lexeme(created, lemma)
-    blob = await make_blob(created, [sentence(["a", lemma, "c", "d"])])
-    await add_clip(blob, lemma)
-    keys = [tts.word_spec(lemma, None, a).key for a in accents.ACCENT_NAMES]
-    created.render_keys.extend(keys)
-    async with async_session_factory() as session:
-        gb = await word_audio.word_audio(session, sense, lexeme)
-        us = await word_audio.word_audio(session, sense, lexeme, accent="american")
-    assert gb is not None and gb == us and gb.source == "clip"
-    assert await _rows(*keys) == []
-
-
 async def test_a_heteronym_uses_the_column_of_the_learners_accent(created: Created) -> None:
     lexeme, sense = await make_lexeme(
         created, "record", pos="v", pronunciation="ɹɪkˈɔːd", pronunciation_us="ɹəkˈɔɹd",
         definition="make a record of; set down in permanent form",
     )
-    blob = await make_blob(created, [sentence(["a", "record", "c", "d"])])
-    await add_clip(blob, "record")  # a heteronym is never a clip, in either accent
     gb = tts.word_spec("record", "ɹɪkˈɔːd")
     us = tts.word_spec("record", "ɹəkˈɔɹd", "american")
     created.render_keys.extend([gb.key, us.key])
@@ -168,9 +147,9 @@ async def test_on_the_go_and_the_word_page_queue_only_the_learners_accent(create
     gb = tts.word_spec(word.lemma, None)
     us = tts.word_spec(word.lemma, None, "american")
     us_def = tts.definition_spec(DEFINITION, word.lemma, "american")
-    us_item = tts.item_spec(us_def, word_spec_=us, clip_storage_key=None)
+    us_item = tts.item_spec(us_def, us)
     gb_def = tts.definition_spec(DEFINITION, word.lemma)
-    gb_item = tts.item_spec(gb_def, word_spec_=gb, clip_storage_key=None)
+    gb_item = tts.item_spec(gb_def, gb)
     created.render_keys.extend([gb.key, us.key, us_def.key, gb_def.key, us_item.key, gb_item.key])
     async with _client() as client:
         await client.put(
@@ -236,30 +215,12 @@ def test_the_script_picks_the_accents_own_log_and_column() -> None:
     assert re.fullmatch(r"heteronym_decisions_us\.jsonl", hd.LOG_PATHS["american"].name)
 
 
-# --- a heteronym in ONE accent is a clip in neither -------------------------------------------
+# --- the two tables disagree about some lemmas -------------------------------------------------
 
 
 def test_the_two_tables_really_disagree_about_these_lemmas() -> None:
     assert pron.is_heteronym("discard", "american") and not pron.is_heteronym("discard", "british")
     assert pron.is_heteronym("alloy", "british") and not pron.is_heteronym("alloy", "american")
-    assert pron.is_heteronym_any_accent("discard") and pron.is_heteronym_any_accent("alloy")
-    assert not pron.is_heteronym_any_accent("window")
-
-
-@pytest.mark.parametrize("lemma", ["discard", "alloy"])
-async def test_a_heteronym_in_one_accent_is_never_indexed_or_served_as_a_clip(
-    created: Created, lemma: str
-) -> None:
-    assert lemma not in word_clips.forms_index([lemma, "window"])
-    lexeme, sense = await make_lexeme(created, lemma)
-    blob = await make_blob(created, [sentence(["a", lemma, "c", "d"])])
-    await add_clip(blob, lemma)  # even a verified clip row must not be served
-    specs = {a: tts.word_spec(lemma, None, a) for a in accents.ACCENT_NAMES}
-    created.render_keys.extend(s.key for s in specs.values())
-    async with async_session_factory() as session:
-        for accent in accents.ACCENT_NAMES:
-            sources = await word_audio.word_sources(session, [sense], accent=accent)
-            assert sources[sense.id].source == "tts", accent
 
 
 # --- apply clears a stale value -------------------------------------------------------------------
@@ -293,7 +254,7 @@ def test_british_render_keys_are_frozen() -> None:
     definition = tts.definition_spec("to give up completely", "abandon")
     assert definition is not None
     assert definition.key == "d17978964186c9bafa977ba95c8f158f09719ad1746ad93b033fceb263127b58"
-    item = tts.item_spec(definition, word_spec_=word, clip_storage_key=None)
+    item = tts.item_spec(definition, word)
     assert item.key == "33ea3d75ed3419350106060b8c6e26044b415e8e451ba4cf417b7e0860feda96"
 
 

@@ -1,7 +1,6 @@
-import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, ChevronLeft, Quote } from "lucide-react";
+import { BookOpen, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -12,7 +11,6 @@ import { SenseList } from "@/features/vocabulary/components/SenseList";
 import { CefrTag } from "@/features/vocabulary/components/CefrTag";
 import { StatusChip } from "@/features/vocabulary/components/StatusChip";
 import { SpeakerButton } from "@/features/vocabulary/components/SpeakerButton";
-import { playClip } from "@/features/vocabulary/audio";
 import { ReportTranslation } from "@/features/vocabulary/components/ReportTranslation";
 import { meanings } from "@/features/vocabulary/meaning";
 import {
@@ -136,7 +134,6 @@ export default function VocabularyWordPage() {
         {audio && (
           <span className="inline-flex items-center gap-1 self-center">
             <SpeakerButton url={audio.url} />
-            {audio.context_url && <InContextButton url={audio.context_url} />}
           </span>
         )}
         {word.pos && <span className="text-sm text-muted-foreground italic">{word.pos}</span>}
@@ -299,28 +296,6 @@ export default function VocabularyWordPage() {
         </Button>
       </section>
     </div>
-  );
-}
-
-/** The word inside the speech it came from — a few words either side. A small
- *  second control beside the speaker, only where such a clip exists (a
- *  synthesised word has no context). Like the speaker, a file that will not
- *  play makes it quiet and disabled rather than an error. */
-function InContextButton({ url }: { url: string }) {
-  const [failed, setFailed] = useState(false);
-  return (
-    <button
-      type="button"
-      disabled={failed}
-      onClick={async () => {
-        const result = await playClip(url);
-        if (result === "failed") setFailed(true);
-      }}
-      className="inline-flex h-7 items-center gap-1 rounded-full px-2 text-xs text-muted-foreground transition-colors duration-fast hover:bg-surface-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50"
-    >
-      <Quote className="size-3" aria-hidden />
-      {failed ? "Not available" : "In context"}
-    </button>
   );
 }
 

@@ -102,7 +102,7 @@ def test_lead_the_metal_is_there_alongside_to_lead() -> None:
 
 def test_stress_only_variants_are_not_heteronyms() -> None:
     # misaki keys `be` as DEFAULT biː / None bˈiː: a stressed and an unstressed
-    # reading of one word. A clip of `be` is as good as any.
+    # reading of one word. One reading serves.
     assert not pron.is_heteronym("be")
     assert not pron.is_heteronym("table")
     assert not pron.is_heteronym("close down")  # a phrase is never one

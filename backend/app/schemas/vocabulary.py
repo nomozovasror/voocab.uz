@@ -46,15 +46,11 @@ SenseLabel = Literal["most common", "common", "less common"]
 
 
 class AudioOut(BaseModel):
-    """One word's audio. ``url`` is the word alone; ``context_url`` the same
-    word with its neighbours, for a clip cut from a recording (never for TTS).
-    ``source`` says which -- only a clip has a context press. Wherever a field
-    of this type may be ``null`` it means "not ready yet", and the server has
-    already queued it (``app.services.word_audio``)."""
+    """One word's audio: ``url`` is the word alone (Kokoro TTS). Wherever a
+    field of this type may be ``null`` it means "not ready yet", and the server
+    has already queued it (``app.services.word_audio``)."""
 
     url: str
-    context_url: str | None = None
-    source: Literal["clip", "tts"]
 
 
 class LookupSenseOut(BaseModel):

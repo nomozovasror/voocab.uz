@@ -116,8 +116,8 @@ class Settings(BaseSettings):
     # words does not take all day to catch up.
     lexicon_enrich_batch_size: int = 10
 
-    # --- Text to speech and word clips (vocabulary stage 3: app/worker.py's
-    # render loop and clip step; app/services/tts.py, word_clips.py) ---
+    # --- Text to speech (vocabulary stage 3: app/worker.py's render loop;
+    # app/services/tts.py) ---
     # How long the render loop sleeps when `audio_renders` has nothing pending.
     # Short: a learner may be waiting on the word they just asked to hear, and
     # an empty pass is one query. 0 disables the loop (an API-only worker, a
@@ -146,13 +146,6 @@ class Settings(BaseSettings):
     # many hours, so a fault that has since been fixed heals without anyone
     # running `requeue_failed`. 0 disables it.
     tts_failed_requeue_h: float = 6.0
-    # How often the worker indexes and cuts clips for recordings that became
-    # ready since it last looked. 0 disables it. Clips are only SERVED once
-    # `seed_tts verify-clips` has verified them; this keeps the pipeline
-    # primed so a later verification run has bytes to listen to.
-    clips_interval_s: float = 300.0
-    # Clips cut per pass.
-    clips_batch_size: int = 40
 
     # --- Local media (dev fallback when R2 isn't configured) ---
     # Uploads land here and are served at ``media_url_prefix``. Relative to the

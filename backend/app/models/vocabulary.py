@@ -981,10 +981,9 @@ class VocabularySettings(SQLModel, table=True):
         default=True,
         sa_column=Column(Boolean, nullable=False, server_default=sa_true()),
     )
-    #: Which TTS voice speaks the words and definitions that are not a live
-    #: recording: ``british`` (``bf_emma``, the default) or ``american``
-    #: (``af_heart``) -- :mod:`app.services.accents` is the one table. A live
-    #: clip keeps its speaker's accent whatever this says (decision 23).
+    #: Which TTS voice speaks the words and definitions: ``british``
+    #: (``bf_emma``, the default) or ``american`` (``af_heart``) --
+    #: :mod:`app.services.accents` is the one table.
     #: Validated at the schema layer; the server default covers every row
     #: written before the column existed.
     accent: str = Field(

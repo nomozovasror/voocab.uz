@@ -22,10 +22,9 @@ const SLOW_RATE = 0.75;
  * - **It plays once by itself when the card appears and never repeats by
  *   itself.** Whoever wants it again presses; a card that repeats on a timer
  *   is one the learner cannot think under.
- * - **Replay is the button or `Tab`.** When the word came from a recording
- *   (`audio.context_url`) presses ALTERNATE word -> context -> word, and the
- *   button says which one the next press plays, so nobody has to remember
- *   the count. The automatic first play is the word and is not a press.
+ * - **Replay is the button or `Tab`.** Every press plays the word: every
+ *   word is Kokoro TTS (the "in context" second press existed only for live
+ *   clips, dropped 2026-10-07).
  * - **`0.75x` stays for the session** — the page holds it, so the next card
  *   starts slow too. Whoever needed it for one word needs it for the next.
  *
@@ -85,10 +84,6 @@ export function ListenCard({
   turnKey: string;
 }) {
   const { audio } = prompt;
-  const [contextBroken, setContextBroken] = useState(false);
-  const hasContext = Boolean(audio.context_url) && !contextBroken;
-  // What the NEXT press plays. The automatic first play was the word.
-  const [next, setNext] = useState<"word" | "context">("word");
   // The browser refused to play without a gesture (iOS Safari before it is
   // unlocked). Shown, never silent: the button pulses and says "Tap to play".
   const [blocked, setBlocked] = useState(false);
@@ -101,43 +96,25 @@ export function ListenCard({
   const disabledRef = useRef(disabled);
   disabledRef.current = disabled;
 
-  async function play(kind: "word" | "context") {
-    const url = kind === "context" ? audio.context_url : audio.url;
-    if (!url) return;
-    const result = await playClip(url, { rate: slowRef.current ? SLOW_RATE : 1 });
+  async function play() {
+    const result = await playClip(audio.url, { rate: slowRef.current ? SLOW_RATE : 1 });
     if (result === "blocked") setBlocked(true);
     else if (result === "started") setBlocked(false);
-    if (result !== "failed") return;
-    if (kind === "context") {
-      // The longer clip is missing; the word alone still works.
-      setContextBroken(true);
-      setNext("word");
-    } else if (!disabledRef.current) {
+    else if (result === "failed" && !disabledRef.current) {
       // Never mid-answer: once the answer is in, the reveal has the word.
       onUnavailable();
     }
   }
 
-  function replay() {
-    void play(hasContext ? next : "word");
-    if (hasContext) setNext((n) => (n === "word" ? "context" : "word"));
-  }
-
   // Once, when the card appears. `turnKey` remounts this component per turn
   // (and the page keys it), so "mount" is exactly "a card appeared".
   useEffect(() => {
-    void play("word");
+    void play();
     return () => stopAudio();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const nextLabel = blocked
-    ? "Tap to play"
-    : !hasContext
-    ? "Play again"
-    : next === "word"
-      ? "Play the word"
-      : "Play in context";
+  const label = blocked ? "Tap to play" : "Play again";
 
   return (
     <div className="text-center">
@@ -156,8 +133,8 @@ export function ListenCard({
       <div className="mt-2 flex flex-col items-center gap-2">
         <button
           type="button"
-          onClick={replay}
-          aria-label={nextLabel}
+          onClick={() => void play()}
+          aria-label={label}
           className={cn(
             "flex size-16 items-center justify-center rounded-full bg-primary text-primary-foreground transition-colors duration-fast hover:bg-primary/80 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none",
             blocked && "animate-pulse",
@@ -166,7 +143,7 @@ export function ListenCard({
           <Volume2 className="size-7" aria-hidden />
         </button>
         <p className="text-xs text-muted-foreground" aria-hidden>
-          {nextLabel}
+          {label}
         </p>
         <button
           type="button"
@@ -211,7 +188,7 @@ export function ListenCard({
             ) {
               // Replay, and keep focus here — see the note above.
               e.preventDefault();
-              replay();
+              void play();
             }
           }}
           disabled={disabled}

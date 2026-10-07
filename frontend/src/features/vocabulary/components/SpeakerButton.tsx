@@ -6,14 +6,14 @@ import { playClip } from "@/features/vocabulary/audio";
 
 /**
  * The speaker: press, hear the word. Used by the practice reveal and the word
- * page; the listen card draws its own button because it says which clip it
- * will play.
+ * page; the listen card draws its own button (a big one, with the slow toggle
+ * beside it).
  *
  * A file that cannot be played turns the button into a quiet "not available"
  * rather than hiding it (the row would reflow) or toasting (a missing
  * pronunciation is not an event worth interrupting somebody for). It tries
- * again on the next press, since a clip that was still being cut a moment ago
- * may be there now.
+ * again on the next press, since a render that was still being made a moment
+ * ago may be there now.
  *
  * `needsTap` is the parent saying "I tried to play this by myself and the
  * browser refused" (autoplay policy). The button then pulses and says "Tap to

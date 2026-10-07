@@ -1,9 +1,10 @@
 """Text to speech, and the queue that makes it: words, definitions, and the
 single On the go file per word.
 
-Everything the learner hears that is NOT cut from a recording is made here, by
-Kokoro-82M in the voice of the learner's accent (:mod:`app.services.accents`:
-British ``bf_emma``, American ``af_heart``) -- and always OUTSIDE a request. A request that needs audio that does not exist only writes a row into
+Everything the learner hears for a word is made here, by Kokoro-82M in the
+voice of the learner's accent (:mod:`app.services.accents`: British
+``bf_emma``, American ``af_heart``) -- and always OUTSIDE a request. A request
+that needs audio that does not exist only writes a row into
 ``audio_renders`` (:func:`enqueue`); the worker (``app.worker``) or the seed
 script (``scripts/seed_tts.py``) claims it, synthesises, stores, marks it
 ``ready``. The two run the same functions, so the same input gives the same
@@ -17,9 +18,8 @@ word, the exact synthesis string + voice + model; for a definition, the masked
 text + voice + model; for an item, the parts it is composed of + voice + model.
 The VOICE is in every key, so an American render never collides with, or
 replaces, a British one -- the two accents are two sets of rows and files, and
-an item (whose word may be a shared clip) still differs by accent because its
-definition is spoken in the voice. Content
-addressing the input rather than the output is what lets a row exist, and be
+an item still differs by accent because its parts are spoken in the voice.
+Content addressing the input rather than the output is what lets a row exist, and be
 looked up, before the audio does. Consequences worth stating:
 
 * One word is synthesised once per voice in the whole system, whoever asks.
@@ -46,10 +46,8 @@ are ONE silence: the learner hears one gap where one phrase was.
 
 definition + :data:`ITEM_PAUSE_MS` of silence + word + :data:`ITEM_TAIL_MS`,
 in ONE file (decision 13: a locked phone cannot be trusted to chain files).
-The word part is whatever :func:`app.services.word_audio` would serve for the
-word -- a verified clip if there is one, TTS otherwise. Every part is levelled
-to the same RMS before it is laid down (a lecture clip and Kokoro differ by
-many dB), and the file records ``word_offset_ms``, where the word starts, which
+The word part is the word's own TTS render. Every part is levelled to the same
+RMS before it is laid down, and the file records ``word_offset_ms``, where the word starts, which
 the client uses as "the word was heard".
 
 An item's ``input`` names its parts rather than holding audio, and the worker
@@ -378,22 +376,14 @@ def definition_spec(
     )
 
 
-def item_spec(
-    definition: RenderSpec, *, word_spec_: RenderSpec | None, clip_storage_key: str | None
-) -> RenderSpec:
-    """The render for one On the go file. Exactly one of ``word_spec_`` (the
-    word is TTS) and ``clip_storage_key`` (the word is a verified clip) is
-    given. The input names the parts; see the module docstring. The item is in
-    the voice of its ``definition`` (the word, if TTS, is the same voice by
-    construction), so a clip-worded item still has one key per accent."""
-    if (word_spec_ is None) == (clip_storage_key is None):
-        raise ValueError("an item's word is either TTS or a clip")
-    word_part: dict[str, str]
-    if clip_storage_key is not None:
-        word_part = {"source": "clip", "storage_key": clip_storage_key}
-    else:
-        assert word_spec_ is not None
-        word_part = {"source": "tts", "input": word_spec_.input}
+def item_spec(definition: RenderSpec, word_spec_: RenderSpec) -> RenderSpec:
+    """The render for one On the go file. The input names the parts (the
+    definition's and the word's synthesis strings); see the module docstring.
+    The item is in the voice of its ``definition`` and the word must be in the
+    same one, so an item has one key per accent."""
+    if word_spec_.voice != definition.voice:
+        raise ValueError("an item's definition and word are in one voice")
+    word_part = {"source": "tts", "input": word_spec_.input}
     text = json.dumps(
         {
             "definition": {"input": definition.input},
@@ -405,8 +395,6 @@ def item_spec(
         separators=(",", ":"),
         ensure_ascii=False,
     )
-    if word_spec_ is not None and word_spec_.voice != definition.voice:
-        raise ValueError("an item's definition and word are in one voice")
     return RenderSpec(
         RenderKind.ITEM, text, render_key(RenderKind.ITEM, text, definition.voice),
         definition.voice,
@@ -714,7 +702,7 @@ async def _tts_part(
     row = (await session.exec(select(AudioRender).where(AudioRender.key == spec.key))).first()
     if row is not None and row.status == RenderStatus.READY and row.storage_key:
         try:
-            return await asyncio.to_thread(audio_pcm.decode_range, await storage.get(row.storage_key))
+            return await asyncio.to_thread(audio_pcm.decode, await storage.get(row.storage_key))
         except InfrastructureError:
             raise  # storage is down: remaking would fail the same way, and say so
         except Exception:  # noqa: BLE001 - the file is gone; fall through and remake it
@@ -776,23 +764,18 @@ async def build_item(
         storage,
     )
     word_part = spec["word"]
-    if word_part["source"] == "clip":
-        word = await asyncio.to_thread(
-            audio_pcm.decode_range, await storage.get(word_part["storage_key"])
-        )
-    else:
-        word = await _tts_part(
-            session,
-            RenderSpec(
-                RenderKind.WORD,
-                word_part["input"],
-                render_key(RenderKind.WORD, word_part["input"], row.voice, row.model),
-                row.voice,
-                row.model,
-            ),
-            synth,
-            storage,
-        )
+    word = await _tts_part(
+        session,
+        RenderSpec(
+            RenderKind.WORD,
+            word_part["input"],
+            render_key(RenderKind.WORD, word_part["input"], row.voice, row.model),
+            row.voice,
+            row.model,
+        ),
+        synth,
+        storage,
+    )
     return compose_item(
         definition, word, pause_ms=int(spec["pause_ms"]), tail_ms=int(spec["tail_ms"])
     )

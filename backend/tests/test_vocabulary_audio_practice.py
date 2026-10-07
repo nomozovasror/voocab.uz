@@ -328,8 +328,7 @@ async def test_the_reveal_carries_audio_when_ready(created: Created) -> None:
     assert first["word"]["audio"] is None  # not ready: queued
     await _ready_audio(created, word.lemma)
     second = await _answer(user, word, "recall", word.lemma)
-    assert second["word"]["audio"]["source"] == "tts"
-    assert second["word"]["audio"]["context_url"] is None
+    assert set(second["word"]["audio"]) == {"url"}
 
 
 # --- serving listen -----------------------------------------------------------
@@ -346,7 +345,7 @@ async def test_listen_is_served_with_audio_and_a_recall_fallback(created: Create
     (item,) = await _session(user)
     assert item["exercise_type"] == "listen" and item["planned_exercise"] == "listen"
     prompt = item["prompt"]
-    assert prompt["kind"] == "listen" and prompt["audio"]["source"] == "tts"
+    assert prompt["kind"] == "listen" and set(prompt["audio"]) == {"url"}
     assert prompt["fallback"]["kind"] == "definition"
     assert "answer" not in prompt["fallback"]
     assert word.lemma not in prompt["audio"]["url"]
@@ -425,7 +424,7 @@ async def test_speak_check_catch_miss_and_the_third_attempt_reveal(created: Crea
     assert (await check(["wind", "wendy"], 2))["answer"] is None
     reveal = await check(["windy"], 3)
     assert reveal["caught"] is False and reveal["answer"] == word.lemma
-    assert reveal["audio"]["source"] == "tts"
+    assert set(reveal["audio"]) == {"url"}
     async with async_session_factory() as session:
         misses = (await session.exec(select(SpeakMiss).where(SpeakMiss.user_id == user.id))).all()
     assert sorted(m.attempt for m in misses) == [1, 2, 3]
@@ -516,7 +515,7 @@ async def test_word_page_has_top_level_audio(created: Created) -> None:
         assert r.status_code == 200 and r.json()["audio"] is None and "audio" not in r.json()["word"]
         await _ready_audio(created, word.lemma)
         r = await client.get(f"/api/vocabulary/words/{word.id}", cookies=cookies)
-        assert r.json()["audio"]["source"] == "tts"
+        assert set(r.json()["audio"]) == {"url"}
 
 
 # --- On the go -------------------------------------------------------------------
@@ -525,7 +524,7 @@ async def test_word_page_has_top_level_audio(created: Created) -> None:
 async def _ready_item(created: Created, word: SavedWord) -> None:
     lexeme_sense = DEFINITION
     definition = tts.definition_spec(lexeme_sense, word.lemma)
-    item = tts.item_spec(definition, word_spec_=tts.word_spec(word.lemma, None), clip_storage_key=None)
+    item = tts.item_spec(definition, tts.word_spec(word.lemma, None))
     created.render_keys.extend([definition.key, item.key, tts.word_spec(word.lemma, None).key])
     async with async_session_factory() as session:
         await tts.enqueue([item])
@@ -559,8 +558,7 @@ async def test_on_the_go_lists_ready_items_newest_first_and_counts_the_rest(
     # It is independent of the queue: nothing is due, the list is still there.
     async with async_session_factory() as session:
         # The pending word's item (and its parts) were queued by the request.
-        item = tts.item_spec(tts.definition_spec(DEFINITION, pending.lemma),
-                             word_spec_=tts.word_spec(pending.lemma, None), clip_storage_key=None)
+        item = tts.item_spec(tts.definition_spec(DEFINITION, pending.lemma), tts.word_spec(pending.lemma, None))
         created.render_keys.append(item.key)
         assert (await session.exec(select(AudioRender).where(AudioRender.key == item.key))).first()
 
@@ -771,11 +769,10 @@ async def test_on_the_go_preparing_ignores_failed_renders(created: Created) -> N
         for word in (failed_item, failed_part, waiting):
             definition = tts.definition_spec(DEFINITION, word.lemma)
             spoken = tts.word_spec(word.lemma, None)
-            item = tts.item_spec(definition, word_spec_=spoken, clip_storage_key=None)
+            item = tts.item_spec(definition, spoken)
             created.render_keys.extend([definition.key, spoken.key, item.key])
         key_item = tts.item_spec(
-            tts.definition_spec(DEFINITION, failed_item.lemma),
-            word_spec_=tts.word_spec(failed_item.lemma, None), clip_storage_key=None).key
+            tts.definition_spec(DEFINITION, failed_item.lemma), tts.word_spec(failed_item.lemma, None)).key
         key_part = tts.word_spec(failed_part.lemma, None).key
         async with async_session_factory() as session:
             await session.execute(

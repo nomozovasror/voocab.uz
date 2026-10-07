@@ -10,18 +10,15 @@ from sqlmodel import select
 from app.core.database import async_session_factory
 from app.models.audio_render import AudioRender, RenderStatus
 from app.models.vocabulary import SavedWord
-from app.services import lexicon_licences, tts, word_clips
-from app.worker import _render_loop, clips_once
+from app.services import lexicon_licences, tts
+from app.worker import _render_loop
 from scripts import seed_tts
 from tests.audio_helpers import (
     Created,
     FakeStorage,
     FakeSynth,
-    add_clip,
-    make_blob,
     make_lexeme,
     make_user,
-    sentence,
     unique_word,
 )
 
@@ -55,25 +52,6 @@ async def test_saved_only_queues_just_the_words_somebody_saved(created: Created)
     async with async_session_factory() as session:
         await seed_tts.enqueue_words(session, saved_only=True, limit=None, accents_=["british"])
     assert await _row(keys[0]) is not None and await _row(keys[1]) is None
-
-
-async def test_a_word_with_a_verified_clip_gets_tts_too_unless_skipped(created: Created) -> None:
-    clipped, bare = unique_word(), unique_word()
-    for lemma in (clipped, bare):
-        lexeme, sense = await make_lexeme(created, lemma)
-        await _saved(created, lexeme, sense)
-    blob = await make_blob(created, [sentence(["a", clipped, "c", "d"])])
-    await add_clip(blob, clipped)
-    keys = {w: tts.word_spec(w, None).key for w in (clipped, bare)}
-    created.render_keys.extend(keys.values())
-    async with async_session_factory() as session:
-        await seed_tts.enqueue_words(
-            session, saved_only=True, limit=None, accents_=["british"], skip_clipped=True
-        )
-    assert await _row(keys[clipped]) is None and await _row(keys[bare]) is not None  # old rule
-    async with async_session_factory() as session:
-        await seed_tts.enqueue_words(session, saved_only=True, limit=None, accents_=["british"])
-    assert await _row(keys[clipped]) is not None  # decision 26: every word gets TTS
 
 
 async def test_accent_both_queues_each_voice_and_one_accent_only_its_own(created: Created) -> None:
@@ -146,7 +124,7 @@ async def test_items_for_words_in_rotation_are_queued_with_their_parts(created: 
     await _saved(created, lexeme, sense)
     definition = tts.definition_spec(sense.definition_en, lemma)
     word = tts.word_spec(lemma, None)
-    item = tts.item_spec(definition, word_spec_=word, clip_storage_key=None)
+    item = tts.item_spec(definition, word)
     created.render_keys.extend([definition.key, word.key, item.key])
     async with async_session_factory() as session:
         await seed_tts.enqueue_items(session, limit=1, accents_=["british"])  # newest first: the one just saved
@@ -168,21 +146,6 @@ async def test_the_render_loop_says_once_that_it_is_off_without_kokoro(
         await _render_loop()  # returns at once: nothing to run
     messages = [r.getMessage() for r in caplog.records if r.name == "app.worker"]
     assert messages == ["text to speech disabled (kokoro is not installed in this image)"]
-
-
-async def test_the_clip_step_primes_only_recordings_it_has_not_seen(created: Created) -> None:
-    blob = await make_blob(created, [sentence(["a", unique_word(), "c", "d"])])
-    async with async_session_factory() as session:
-        assert blob.id in await word_clips.unindexed_blob_ids(session, set())
-        assert blob.id not in await word_clips.unindexed_blob_ids(session, {blob.id})
-
-
-async def test_the_clip_step_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def boom(*args, **kwargs):
-        raise RuntimeError("database went away")
-
-    monkeypatch.setattr(word_clips, "unindexed_blob_ids", boom)
-    assert await clips_once() == (0, 0)
 
 
 # --- licences --------------------------------------------------------------------

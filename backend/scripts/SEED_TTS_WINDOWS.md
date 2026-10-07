@@ -48,9 +48,6 @@ ENV
 scp /tmp/win.env win:D:/voocab/backend/.env && rm /tmp/win.env
 # No R2 keys, no Gemini key: they are not needed, and R2 keys would make
 # the run write to R2 instead of the folder (doctor warns if it sees them).
-
-# d) the cut clip files verify-clips reads (word clips only; ~ a few hundred MB at most)
-tar -cf - -C backend/media clips | ssh win "tar -xf - -C D:/voocab-media"
 ```
 
 Same database means same schema: the Mac database must already be migrated to
@@ -59,50 +56,34 @@ the head of THIS code (`doctor` checks it).
 ## 2. Windows (over ssh): install, then doctor
 
 ```bash
-ssh win powershell -NoProfile -Command "cd D:\voocab\backend; uv sync --extra seed --extra tts-gpu"
+ssh win powershell -NoProfile -Command "cd D:\voocab\backend; uv sync --extra tts-gpu"
 ssh win powershell -NoProfile -Command "cd D:\voocab\backend; uv run python -m scripts.seed_tts doctor"
 ```
 
-Every line must be PASS (a WARN about "no cut clips" means step 3 is not done).
-First run downloads Kokoro (~330 MB) and whisper large-v3 (~3 GB) from
+Every line must be PASS. First run downloads Kokoro (~330 MB) from
 huggingface.co. Every check has its fix on the line under a FAIL. Exit code is
-non-zero on any FAIL. Whisper needs cuBLAS 12 + cuDNN 9; the script finds the
-ones bundled in `torch\lib` by itself (the `tts-gpu` extra). If doctor still
-reports a missing `cublas64_12.dll`/`cudnn*.dll`, install CUDA 12 + cuDNN 9 or
-`uv pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`.
+non-zero on any FAIL. (Whisper is no longer needed here: live clips were
+dropped on 2026-10-07, so there is no verification step and no CUDA 12 / cuDNN 9
+requirement beyond what the `tts-gpu` torch wheel brings.)
 
-## 3. Have the clips been cut? (Mac)
-
-The Mac worker cuts clips; the Windows run only needs them. Done when this is 0
-for `candidate` (the doctor's `clips` line says the same):
-
-```bash
-docker compose exec db psql -U postgres -d app -c "select status, count(*) from word_clips group by 1"
-```
-
-Running `clips` on Windows is optional and not needed: it would first need
-`backend/media/audio` (the recordings) copied over. Re-copy step 1d after the
-Mac worker has cut more.
-
-## 4. The run, in this order
+## 3. The run, in this order
 
 Run each as a detached process with a log (it survives the ssh session ending;
 if it dies anyway, just start it again, see Resuming):
 
 ```bash
-ssh win powershell -NoProfile -Command "cd D:\voocab\backend; Start-Process -WindowStyle Hidden -FilePath uv -ArgumentList 'run','python','-m','scripts.seed_tts','verify-clips' -RedirectStandardOutput D:\voocab\verify.log -RedirectStandardError D:\voocab\verify.err"
-ssh win powershell -NoProfile -Command "Get-Content D:\voocab\verify.err -Tail 5"   # logging goes to stderr
+```bash
+ssh win powershell -NoProfile -Command "cd D:\voocab\backend; Start-Process -WindowStyle Hidden -FilePath uv -ArgumentList 'run','python','-m','scripts.seed_tts','words' -RedirectStandardOutput D:\voocab\words.log -RedirectStandardError D:\voocab\words.err"
+ssh win powershell -NoProfile -Command "Get-Content D:\voocab\words.err -Tail 5"   # logging goes to stderr
 ```
 
-1. `verify-clips` (needs `clips/` copied). Progress: `verify-clips (forms): N done, M left, rate, ETA`.
-2. `words --accent both`
-3. `definitions --accent both`
+1. `words --accent both` (every word is TTS; nothing else to do first)
+2. `definitions --accent both`
 
 (`items` is optional and not part of this run.) Add `--limit 50` first as a
 pilot if you like. Flags: `--concurrency N` (default 8, max 12).
 
-Estimates, NOT measured on a 3060 (read the live ETA instead): `verify-clips`
-about 5k forms, 10-30 min; `words` about 24k renders, 15-40 min;
+Estimates, NOT measured on a 3060 (read the live ETA instead): `words` about 24k renders, 15-40 min;
 `definitions` about 35k renders, 45-120 min; roughly 1 GB of files in total.
 The Mac's Docker worker keeps draining the same queues on CPU meanwhile; claims
 are `SKIP LOCKED`, so nothing is made twice (it just takes a few percent).
@@ -112,10 +93,9 @@ Progress from the Mac:
 ```bash
 docker compose exec db psql -U postgres -d app -c \
  "select kind, status, count(*) from audio_renders group by 1,2 order by 1,2"
-docker compose exec db psql -U postgres -d app -c "select status, count(*) from word_clips group by 1"
 ```
 
-## 5. Copy the audio back (Windows -> Mac) -- and the "ready but no file" window
+## 4. Copy the audio back (Windows -> Mac) -- and the "ready but no file" window
 
 A render is `ready` in the database the moment its file is written on Windows,
 but the Mac only has the file once you copy it. Until then the dev site asks
@@ -134,10 +114,10 @@ Then, on the Mac, from `backend/`, prove nothing is dangling (and requeue any
 render whose file never arrived, so the Mac worker makes it):
 
 ```bash
-uv run python -m scripts.seed_tts check-files --what renders --requeue
+uv run python -m scripts.seed_tts check-files --requeue
 ```
 
-## 6. Resuming
+## 5. Resuming
 
 Everything is idempotent. A stopped or crashed run: start the same command
 again. Renders are keyed by input hash (never made twice); rows a killed run left
@@ -147,7 +127,7 @@ them at once. Failed renders (`audio_renders.status = 'failed'`, reason in
 If the tunnel drops, the run stops with a database error: restore the tunnel,
 re-run.
 
-## 7. Afterwards (Mac)
+## 6. Afterwards (Mac)
 
 - Stop the tunnel (Ctrl+C its terminal). Delete `D:\voocab-media` if you like.
 - **Security:** `docker-compose.yml` publishes Postgres on all interfaces

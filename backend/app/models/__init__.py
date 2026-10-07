@@ -34,7 +34,6 @@ from app.models.vocabulary import (
     VocabularySettings,
 )
 from app.models.word_audio_log import OnTheGoExposure, SpeakMiss
-from app.models.word_clip import WordClip
 from app.models.word_list import UserWordList, WordList, WordListEntry
 
 __all__ = [
@@ -70,7 +69,6 @@ __all__ = [
     "WordListEntry",
     "UserWordList",
     "AudioRender",
-    "WordClip",
     "OnTheGoExposure",
     "SpeakMiss",
 ]
