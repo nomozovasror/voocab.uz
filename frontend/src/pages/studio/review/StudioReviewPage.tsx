@@ -339,9 +339,18 @@ function Row({
             {row.approved_at && (
               <span className="rounded-full bg-success/10 px-1.5 py-0.5 text-xs text-success">
                 approved {timeAgo(row.approved_at)}
+                {row.approved_by_name && ` by ${row.approved_by_name}`}
               </span>
             )}
           </div>
+
+          {/* The AI pass's note for whoever looks at this next -- why it
+              left the sense for a person rather than deciding itself. */}
+          {row.review_note && (
+            <p className="mt-1.5 rounded border border-border bg-foreground/5 px-2 py-1 text-xs text-muted-foreground">
+              Review note: {row.review_note}
+            </p>
+          )}
 
           <p className="mt-1.5 text-sm text-foreground">{row.definition_en}</p>
           <p className="text-sm text-muted-foreground">{row.meaning_uz}</p>

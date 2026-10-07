@@ -28,7 +28,11 @@ export interface ReviewRow {
   needs_review: boolean;
   provisional: boolean;
   approved_by: string | null;
+  /** Who approved it, by display name -- "Claude review" for the AI pass. */
+  approved_by_name: string | null;
   approved_at: string | null;
+  /** What the AI review left for a person to look at ("" when nothing). */
+  review_note: string;
   material_example_count: number;
   /** How many OPEN "this translation is wrong" reports this sense
    *  currently carries — zero for the ordinary row, and what puts a row in
