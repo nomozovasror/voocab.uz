@@ -79,6 +79,8 @@ ssh win powershell -NoProfile -Command "Get-Content D:\voocab\words.err -Tail 5"
 
 1. `words --accent both` (every word is TTS; nothing else to do first)
 2. `definitions --accent both`
+3. `definitions --full --accent both` (the plain definitions On the go's "word first" plays; only
+   those that differ from the masked text, a few thousand; the worker makes them on demand without it)
 
 (On the go needs nothing more: it plays the word and the definition renders.) Add `--limit 50` first as a
 pilot if you like. Flags: `--concurrency N` (default 8, max 12).

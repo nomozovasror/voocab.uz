@@ -13,6 +13,7 @@ import { onTheGoKey, settingsKey, vocabularyApi } from "@/features/vocabulary/ap
 import { OptionPill } from "@/features/vocabulary/components/OptionPill";
 import type {
   OnTheGoItem,
+  OnTheGoList,
   OnTheGoOrder,
   VocabularySettings,
 } from "@/features/vocabulary/types";
@@ -28,12 +29,28 @@ const GAP_MS = 1500;
 /** One stretch of sound inside an item: a speech file, or silence. */
 type Segment = { kind: "word" | "definition" | "silence"; src: string };
 
+/** The definition file to play for `item` in `order`, or null if it has none
+ *  that may be played there. "Word first" wants the plain definition (the word
+ *  has been said) and settles for the masked one while that is still being made.
+ *  "Meaning first" plays the masked one ONLY: the plain definition heard before
+ *  the word would say the answer, so it is never the fallback there. */
+function definitionSrc(item: OnTheGoItem, order: OnTheGoOrder): string | null {
+  if (order === "word_first") return item.definition_full_url ?? item.definition_masked_url;
+  return item.definition_masked_url;
+}
+
+/** Whether `item` lacks the definition its `order` is meant to play, so that a
+ *  fresh list could still help. (`definitionSrc` may play a stand-in.) */
+function missingDefinition(item: OnTheGoItem, order: OnTheGoOrder): boolean {
+  return (order === "word_first" ? item.definition_full_url : item.definition_masked_url) === null;
+}
+
 /** An item laid out as segments, in the learner's order and with the
  *  learner's pause AS THEY WERE when the item started — a change on the
  *  controls applies from the next item, never mid-sentence. */
 function plan(item: OnTheGoItem, order: OnTheGoOrder, pauseS: number): Segment[] {
   const word: Segment = { kind: "word", src: mediaUrl(item.word_url) };
-  const meaning: Segment = { kind: "definition", src: mediaUrl(item.definition_url) };
+  const meaning: Segment = { kind: "definition", src: mediaUrl(definitionSrc(item, order) ?? "") };
   const [first, second] = order === "word_first" ? [word, meaning] : [meaning, word];
   return [
     first,
@@ -47,8 +64,9 @@ function plan(item: OnTheGoItem, order: OnTheGoOrder, pauseS: number): Segment[]
  * `/vocabulary/on-the-go` — the words, as sound, with the screen optional.
  *
  * Each item is TWO files the server already has — the word's own audio (the
- * learner's accent, exactly what the reveal plays) and the sense's masked
- * definition — and THIS page sequences them: meaning first or word first, with
+ * learner's accent, exactly what the reveal plays) and the sense's definition
+ * (masked when it is heard before the word, plain when after) — and THIS
+ * page sequences them: meaning first or word first, with
  * a pause between them, both chosen on this screen and saved to the account.
  * (A file the server composed could not be reversed or re-timed; the lock
  * screen it was baked for is for a native app to solve.) It plays the list back
@@ -134,8 +152,11 @@ export default function VocabularyOnTheGoPage() {
         old ? { ...old, ...change } : old,
       );
     },
-    onSuccess: (server) => {
+    onSuccess: (server, change) => {
       if (qc.isMutating({ mutationKey: saveKey }) <= 1) qc.setQueryData(settingsKey, server);
+      // The server lists the definition the SAVED order needs and queues the
+      // other one, so only now that the order is saved can a fresh list have it.
+      if ("on_the_go_order" in change) void topUp(server.on_the_go_order);
     },
     onError: (e) => {
       toast(getErrorMessage(e));
@@ -200,10 +221,11 @@ export default function VocabularyOnTheGoPage() {
     let src = segments.current.slice(k + 1).find((s) => s.kind !== "silence")?.src;
     if (!src) {
       const upcoming = items[indexRef.current + 1];
-      if (upcoming)
-        src = mediaUrl(
-          choice.current.order === "word_first" ? upcoming.word_url : upcoming.definition_url,
-        );
+      const first =
+        choice.current.order === "word_first"
+          ? upcoming?.word_url
+          : upcoming && definitionSrc(upcoming, "meaning_first");
+      if (first) src = mediaUrl(first);
     }
     if (src && el.getAttribute("src") !== src) el.src = src;
   }
@@ -235,10 +257,19 @@ export default function VocabularyOnTheGoPage() {
   }
 
   /** Point the one element at the start of item `i`, optionally playing it. */
-  function load(i: number, play: boolean) {
+  function load(from: number, play: boolean) {
     const el = audioRef.current;
+    // An item with no definition that may be played in the order in force now
+    // (the order was changed and its other file is not made yet) is passed
+    // over, never played with the wrong one.
+    let i = from;
+    while (items[i] && !definitionSrc(items[i], choice.current.order)) i++;
     const item = items[i];
-    if (!el || !item) return;
+    if (!el) return;
+    if (!item) {
+      if (items[from]) finish();
+      return;
+    }
     // The practice clips share nothing with this element; make sure none is
     // still talking over the list.
     stopAudio();
@@ -274,7 +305,38 @@ export default function VocabularyOnTheGoPage() {
 
   function previous() {
     // At the first item "previous" means "from the top of this one".
-    load(Math.max(0, indexRef.current - 1), finished || intent.current);
+    let i = Math.max(0, indexRef.current - 1);
+    while (i > 0 && !definitionSrc(items[i], choice.current.order)) i--;
+    load(i, finished || intent.current);
+  }
+
+  /** After the order is saved: if upcoming items lack the definition it needs,
+   *  ask the server again (it has queued them) and fill the gaps IN PLACE. The
+   *  list itself is never replaced under a listener, so `index` stays valid. */
+  async function topUp(saved: OnTheGoOrder) {
+    const current = qc.getQueryData<OnTheGoList>(onTheGoKey);
+    if (!current?.items.slice(indexRef.current).some((it) => missingDefinition(it, saved))) return;
+    try {
+      const fresh = await vocabularyApi.onTheGo();
+      const byId = new Map(fresh.items.map((it) => [it.word_id, it]));
+      qc.setQueryData<OnTheGoList>(onTheGoKey, (old) =>
+        old && {
+          ...old,
+          preparing: fresh.preparing,
+          items: old.items.map((it) => {
+            const again = byId.get(it.word_id);
+            return {
+              ...it,
+              definition_masked_url: it.definition_masked_url ?? again?.definition_masked_url ?? null,
+              definition_full_url: it.definition_full_url ?? again?.definition_full_url ?? null,
+            };
+          }),
+        },
+      );
+    } catch {
+      // Best effort: an item without its file is skipped (meaning first) or
+      // plays the masked one (word first); the next visit has the full list.
+    }
   }
 
   function togglePlay() {

@@ -2,9 +2,11 @@
 having heard them (vocabulary stage 3, decisions 11-14).
 
 Nothing here is practice, and nothing here is composed: an item is two files
-(the word, the masked definition) that the CLIENT plays in the learner's order
-with the learner's pause, so what is stored for it is only those two renders
-(2026-10-07, superseding decision 13). The list is **independent of the daily queue** -- it
+(the word, a definition) that the CLIENT plays in the learner's order with the
+learner's pause, so what is stored for it is only those renders (2026-10-07,
+superseding decision 13). The definition has two renders -- masked, for
+"meaning first", where it is heard before the word it would give away, and
+the plain one for "word first", where the word has already been said. The list is **independent of the daily queue** -- it
 is simply the learner's words in rotation, newest first, so what they saved
 this morning is what they hear on the walk home -- and playing it writes only
 ``on_the_go_exposures``, never a card: hearing a word is not recalling it, and
@@ -52,18 +54,31 @@ async def in_rotation(session: AsyncSession, user_id: uuid.UUID) -> list[SavedWo
 
 class Item(NamedTuple):
     """One word in the On the go list: the word's own audio and its sense's
-    masked definition, as two files the client plays in the learner's order."""
+    definition, as files the client plays in the learner's order. The
+    definition comes in both renders (:func:`item_list`): the one the saved
+    order needs is always set; the other is ``None`` while it is still being
+    made."""
 
     word: SavedWord
     word_url: str
-    definition_url: str
+    definition_masked_url: str | None
+    definition_full_url: str | None
 
 
 async def item_list(session: AsyncSession, user: User) -> tuple[list[Item], int]:
     """``(ready items in order, how many are still being prepared)``.
 
-    An item is listed only when BOTH its audios are ready -- half of a pair is
-    no use in a pocket, and the client cannot know which half it may skip.
+    An item is listed only when BOTH its parts are ready -- half of a pair is
+    no use in a pocket, and the client cannot know which half it may skip. The
+    definition part is the one the learner's SAVED order needs (read from
+    settings, as the accent is): masked for ``meaning_first``, where it is heard
+    before the word, the plain one for ``word_first``, where the word has been
+    said already and a silence would be a hole. Masking hides the answer only
+    when the definition comes first, and the plain one would give it away there.
+    The OTHER render is looked up and queued too and rides on the item when it
+    is ready, because the order can be changed on the screen mid-session and the
+    client must be able to switch from the next item without asking again; it
+    never decides whether the item is listed.
     Anything else that is still being made counts towards ``preparing``; the
     two ``*_many`` calls have already queued it. A word with a ``failed`` part
     is in neither number (:func:`_failed_words`). All words go through ONE call
@@ -75,7 +90,8 @@ async def item_list(session: AsyncSession, user: User) -> tuple[list[Item], int]
 
     The audios are the very ones the rest of the app plays -- the word in the
     learner's accent (what the reveal plays) and the masked definition -- so a
-    word heard here is made once, however often it is asked for.
+    word heard here is made once, however often it is asked for. Where masking
+    changed nothing the two definition renders are one render and one URL.
     """
     words = await in_rotation(session, user.id)
     # The learner's own accent and word voice, read once: every definition is
@@ -83,6 +99,7 @@ async def item_list(session: AsyncSession, user: User) -> tuple[list[Item], int]
     # (or, under `synthetic` / with none, its Kokoro voice).
     learner = await practice.get_settings(session, user.id)
     accent = learner.accent
+    masked_needed = learner.on_the_go_order != "word_first"
     senses = {
         sense.id: sense
         for sense in (
@@ -112,6 +129,7 @@ async def item_list(session: AsyncSession, user: User) -> tuple[list[Item], int]
             senses[word.lexeme_sense_id].definition_en,
             lexemes[senses[word.lexeme_sense_id].lexeme_id].lemma,
             accent,
+            masked=masked_needed,
         )
         is not None
     ]
@@ -120,20 +138,30 @@ async def item_list(session: AsyncSession, user: User) -> tuple[list[Item], int]
         session, wanted, lexemes=lexemes, accent=accent,
         word_voice=learner.word_voice,  # type: ignore[arg-type]
     )
-    definition_urls = await word_audio.definition_audio_urls(
-        session, wanted, lexemes=lexemes, accent=accent
+    masked_urls = await word_audio.definition_audio_urls(
+        session, wanted, lexemes=lexemes, accent=accent, masked=True
     )
+    full_urls = await word_audio.definition_audio_urls(
+        session, wanted, lexemes=lexemes, accent=accent, masked=False
+    )
+    needed_urls = masked_urls if masked_needed else full_urls
     ready: list[Item] = []
     waiting: list[SavedWord] = []
     for word in playable:
         audio = word_urls.get(word.lexeme_sense_id)
-        definition_url = definition_urls.get(word.lexeme_sense_id)
-        if audio is not None and definition_url is not None:
-            ready.append(Item(word, audio.url, definition_url))
+        if audio is not None and needed_urls.get(word.lexeme_sense_id) is not None:
+            ready.append(
+                Item(
+                    word,
+                    audio.url,
+                    masked_urls.get(word.lexeme_sense_id),
+                    full_urls.get(word.lexeme_sense_id),
+                )
+            )
         else:
             waiting.append(word)
     failed = await _failed_words(
-        session, waiting, senses, lexemes, accent=accent,
+        session, waiting, senses, lexemes, accent=accent, masked=masked_needed,
         word_ready={sid for sid, audio in word_urls.items() if audio is not None},
     )
     return ready, len(waiting) - len(failed)
@@ -146,10 +174,12 @@ async def _failed_words(
     lexemes: dict[uuid.UUID, Lexeme],
     *,
     accent: Accent = DEFAULT_ACCENT,
+    masked: bool = True,
     word_ready: set[uuid.UUID] | frozenset[uuid.UUID] = frozenset(),
 ) -> set[uuid.UUID]:
     """The words with a ``failed`` render among the two parts of their item
-    (definition, word). Such a word is not "being prepared": a failed render
+    (the definition the saved order needs -- ``masked`` -- and the word). The
+    other definition render is not a part of the item: its failure hides nothing. Such a word is not "being prepared": a failed render
     waits for an operator's requeue (or the age-based one), and counting it in
     ``preparing`` would keep the client's "preparing N" up for ever. A word
     whose parts are merely ``pending``/``processing`` is not in the set.
@@ -163,7 +193,9 @@ async def _failed_words(
     for word in words:
         sense = senses[word.lexeme_sense_id]
         lexeme = lexemes[sense.lexeme_id]
-        definition = tts.definition_spec(sense.definition_en, lexeme.lemma, accent)
+        definition = tts.definition_spec(
+            sense.definition_en, lexeme.lemma, accent, masked=masked
+        )
         if definition is None:
             continue
         keys_of[word.id] = [definition.key]

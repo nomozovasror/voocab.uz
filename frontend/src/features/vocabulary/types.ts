@@ -810,14 +810,22 @@ export interface SpeakCheckResult {
   audio: AudioOut | null;
 }
 
-/** One item of "On the go": TWO files, played one after the other by the
- *  client in the learner's order — the word's own audio (the learner's accent,
- *  what the reveal plays) and the sense's masked definition. The word's text is
- *  never on the wire. */
+/** One item of "On the go": the word's own audio (the learner's accent, what
+ *  the reveal plays) and its definition, played one after the other by the
+ *  client in the learner's order. The word's text is never on the wire.
+ *
+ *  The definition comes twice. `definition_masked_url` has the headword as a
+ *  silence and is the only one that may be heard BEFORE the word ("Meaning
+ *  first"); `definition_full_url` is the plain definition for "Word first",
+ *  where the word has been said already. The one the learner's saved order
+ *  needs is always set; the other is null while it is still being made, so the
+ *  order can be changed on the screen and take effect from the next item. Where
+ *  masking changed nothing the two are the same URL. */
 export interface OnTheGoItem {
   word_id: string;
   word_url: string;
-  definition_url: string;
+  definition_masked_url: string | null;
+  definition_full_url: string | null;
 }
 
 export interface OnTheGoList {

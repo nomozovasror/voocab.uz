@@ -562,11 +562,15 @@ async def test_on_the_go_lists_ready_items_newest_first_and_counts_the_rest(
     assert data["preparing"] == 2
     assert str(pending.id) not in str(data["items"]) and str(half.id) not in str(data["items"])
     first = data["items"][0]
-    assert set(first) == {"word_id", "word_url", "definition_url"}
+    assert set(first) == {"word_id", "word_url", "definition_masked_url", "definition_full_url"}
     word_key = tts.word_spec(new.lemma, None).key
     definition_key = tts.definition_spec(DEFINITION, new.lemma).key
     assert first["word_url"].endswith(f"/tts/{word_key}.m4a")
-    assert first["definition_url"].endswith(f"/tts/{definition_key}.m4a")
+    # DEFINITION does not name the word, so masking changed nothing: the masked
+    # and the plain definition are one render, one URL.
+    assert tts.definition_spec(DEFINITION, new.lemma, masked=False).key == definition_key
+    assert first["definition_masked_url"].endswith(f"/tts/{definition_key}.m4a")
+    assert first["definition_full_url"] == first["definition_masked_url"]
     # The word's text is never on the wire.
     assert new.lemma not in str(data)
     # It is independent of the queue: nothing is due, the list is still there.
@@ -576,6 +580,52 @@ async def test_on_the_go_lists_ready_items_newest_first_and_counts_the_rest(
             created.render_keys.append(spec.key)
             assert (await session.exec(select(AudioRender).where(AudioRender.key == spec.key))).first()
         assert not (await session.exec(select(AudioRender).where(AudioRender.kind == "item"))).first()
+
+
+async def test_on_the_go_serves_the_definition_the_saved_order_needs(created: Created) -> None:
+    """Masked for meaning first, plain for word first -- and both ride on the
+    item when ready, so the screen can change the order without asking again."""
+    user = await make_user(created)
+    definition = "to {} something completely, and then some"
+    lemma = unique_word()
+    word = await _word(created, user, level="recognise", due=False, lemma=lemma,
+                       definition=definition.format(lemma))
+    masked = tts.definition_spec(definition.format(lemma), lemma)
+    full = tts.definition_spec(definition.format(lemma), lemma, masked=False)
+    spoken = tts.word_spec(lemma, None)
+    assert masked.key != full.key
+    created.render_keys.extend([masked.key, full.key, spoken.key])
+    async with async_session_factory() as session:
+        await tts.enqueue([spoken, masked])
+        await session.execute(
+            update(AudioRender).where(AudioRender.key.in_([spoken.key, masked.key])).values(
+                status=RenderStatus.READY, duration_ms=2000,
+                storage_key=tts.storage_key_for("word", "x"),
+            )
+        )
+        await session.commit()
+    cookies = {"access_token": create_access_token(str(user.id))}
+    body = {"daily_minutes": 10, "direction": "passive", "exercise_types": None}
+    async with _client() as client:
+        data = (await client.get("/api/vocabulary/on-the-go", cookies=cookies)).json()
+        assert [i["word_id"] for i in data["items"]] == [str(word.id)] and data["preparing"] == 0
+        assert data["items"][0]["definition_full_url"] is None
+        # Word first: the plain render is not ready, so the word is being prepared.
+        await client.put("/api/vocabulary/settings", cookies=cookies,
+                         json={**body, "on_the_go_order": "word_first"})
+        data = (await client.get("/api/vocabulary/on-the-go", cookies=cookies)).json()
+        assert data["items"] == [] and data["preparing"] == 1
+    async with async_session_factory() as session:
+        await session.execute(update(AudioRender).where(AudioRender.key == full.key).values(
+            status=RenderStatus.READY, duration_ms=2000,
+            storage_key=tts.storage_key_for("definition", full.key)))
+        await session.commit()
+    async with _client() as client:
+        data = (await client.get("/api/vocabulary/on-the-go", cookies=cookies)).json()
+    [item] = data["items"]
+    assert item["definition_full_url"].endswith(f"/tts/{full.key}.m4a")
+    assert item["definition_masked_url"].endswith("/tts/x.m4a")
+    assert lemma not in str(data)
 
 
 async def test_on_the_go_order_and_pause_are_optional_on_put_and_validated(

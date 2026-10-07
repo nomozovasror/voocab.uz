@@ -903,6 +903,17 @@ what the PROMPT shows moved.
   ever known how to judge one word at a time, so a phrase is nothing more
   than asking it that question once per word it is made of, on top of the
   whole-phrase pass.
+- **A prefix-share threshold was measured on 2026-10-07 and rejected.** The
+  five-character rule over-masks words that merely begin alike (`after` in the
+  definition of `afternoon`), so requiring the shared prefix to be a share
+  (60%) of the word was tried on the whole dev lexicon. Against the SHORTER
+  word it changes little and cannot help `after`/`afternoon` (the start of the
+  lemma is 100% of the shorter word) while unmasking real relatives
+  (`abolition`/`abolishing`, `organisational`/`organization`). Against the
+  LONGER word it unmasks genuine giveaways (`creativeness`/`create`,
+  `waterproof`/`water`). The documented over-masking is the safer error, and the
+  readability guard below already covers the extreme cases, so the rule stays
+  as it is.
 - **The readability guard is a fallback, not a refusal, and runs on EITHER
   kind now.** Masking a passive `recall` item's definition down to fewer
   than `READABILITY_MIN_REMAINING_WORDS` words, or past
@@ -1447,6 +1458,14 @@ below are the ones a later change can silently break.
   text is cut at the masks, each piece is synthesised on its own, and a run of
   masks (a masked phrase is one blank per word) is ONE `MASK_PAUSE_MS`
   silence. The text with its `_____` is the render's `input` and key.
+  **The plain definition is a second render of the same kind**
+  (`definition_spec(..., masked=False)`, `definition_audio_urls(...,
+  masked=False)`): input = the definition as written. Masking hides the answer
+  only when the definition is heard BEFORE the word; On the go's `word_first`
+  has said the word already, so it plays this one. Where masking changed
+  nothing the two inputs are identical, hence ONE key and one render. A plain
+  definition is speakable when the masked one is not (a definition that is only
+  the headword).
 - **An On the go item is NOT a render.** Until 2026-10-07 the server composed
   one file per word (definition + 3 s + word + 1.5 s, `RenderKind.ITEM`,
   `word_offset_ms`); the owner rejected it because a baked file cannot be
@@ -1515,8 +1534,10 @@ below are the ones a later change can silently break.
   history when a word is forgotten: `saved_word_id` is `ON DELETE SET NULL`
   and `lemma` is copied onto the row (default `""` for a writer that does not
   set it), like `vocabulary_review_logs`.
-- **Seed order**: `words` -> `definitions`, each with `--accent
-  british|american|both` (default both). `words` makes TTS for every sense.
+- **Seed order**: `words` -> `definitions` -> `definitions --full`, each with
+  `--accent british|american|both` (default both). `words` makes TTS for every
+  sense; `--full` the plain definitions that differ from the masked text (the
+  doctor counts them); the worker makes either on demand meanwhile.
   `seed_tts doctor` checks the machine first; whisper is not needed.
 
 ## Vocabulary practice (stage 3): the third rung, `listen`, `speak`, On the go
@@ -1598,8 +1619,16 @@ below are the ones a later change can silently break.
   window) are written. Three misses are OUR miss, never an Again.
 - **On the go (`on_the_go.py`)**: words in rotation (not `EXCLUDED_STATUSES`,
   practisable), `created_at` desc, independent of the daily queue. An item is
-  `(word_url, definition_url)` -- the word's TTS render in the learner's accent
-  and the sense's masked definition render -- listed only when BOTH are ready;
+  `(word_url, definition_masked_url, definition_full_url)` -- the word's TTS
+  render in the learner's accent and the sense's definition in both renders
+  (masked, for `meaning_first`; plain, for `word_first`: see "A definition is
+  spoken exactly as recall shows it"). The one the learner's SAVED order needs
+  (read from settings, as the accent is) must be ready for the item to be
+  listed, and is never null; the other is queued in the same request and rides
+  on the item when ready, else `null`, so the screen can change the order
+  mid-session without a refetch (the client never plays the plain one before
+  the word). `_failed_words` looks only at the needed one: a failed plain render
+  hides no `meaning_first` item. Listed only when BOTH parts are ready;
   `preparing` = the rest that is still being made (queued or in progress). A
   word with no speakable definition, or with a `failed` part, counts in neither
   (`_failed_words`: the keys are re-derived with the same public helpers

@@ -886,12 +886,22 @@ class SpeakCheckOut(BaseModel):
 
 class OnTheGoItemOut(BaseModel):
     """One word to listen to: its own audio (the learner's accent, what the
-    reveal plays) and its masked definition's audio. Two files, sequenced by the
-    client in the learner's order. The word's TEXT is never on the wire."""
+    reveal plays) and its definition's audio, sequenced by the client in the
+    learner's order. The word's TEXT is never on the wire.
+
+    The definition comes twice. ``definition_masked_url`` has the headword a
+    silence: it is for "meaning first", where the definition is heard BEFORE the
+    word. ``definition_full_url`` is the plain definition for "word first", where
+    the word has been said already. The one the learner's saved order needs is
+    always set; the other is ``None`` while it is still being made, so a client
+    that changes the order mid-session can switch from the next item. A client
+    must never play the full one before the word. Where masking changed nothing
+    the two are the same URL."""
 
     word_id: uuid.UUID
     word_url: str
-    definition_url: str
+    definition_masked_url: str | None
+    definition_full_url: str | None
 
 
 class OnTheGoOut(BaseModel):

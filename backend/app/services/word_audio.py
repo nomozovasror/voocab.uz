@@ -220,13 +220,17 @@ async def definition_audio_urls(
     *,
     lexemes: dict[uuid.UUID, Lexeme] | None = None,
     accent: Accent = DEFAULT_ACCENT,
+    masked: bool = True,
 ) -> dict[uuid.UUID, str | None]:
-    """URL of each sense's spoken, MASKED definition (the headword a silence),
-    or ``None`` -- not ready (queued), or the sense has no definition."""
+    """URL of each sense's spoken definition, or ``None`` -- not ready
+    (queued), or the sense has no definition. ``masked`` (the default) has the
+    headword a silence, as recall shows it; ``masked=False`` is the plain
+    definition (On the go's "word first"; the same render as the masked one
+    when masking changed nothing)."""
     storage = get_storage()
     specs: dict[uuid.UUID, tts.RenderSpec] = {}
     for sense, lexeme in await _pairs(session, senses, lexemes):
-        spec = tts.definition_spec(sense.definition_en, lexeme.lemma, accent)
+        spec = tts.definition_spec(sense.definition_en, lexeme.lemma, accent, masked=masked)
         if spec is not None:
             specs[sense.id] = spec
     rows = await _render_rows(session, (s.key for s in specs.values()))

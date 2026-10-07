@@ -150,3 +150,28 @@ async def test_the_licences_page_credits_kokoro_and_misaki_once_audio_exists(
         assert rows[key]["licence_name"] == "Apache-2.0"
         assert rows[key]["authors"] == "hexgrad" and rows[key]["count"] >= 1
         assert rows[key]["source_url"].startswith("https://")
+
+
+async def test_definitions_full_queues_only_the_plain_renders_that_differ(created: Created) -> None:
+    named = unique_word()
+    lexeme, sense = await make_lexeme(created, named, definition=f"to {named} something completely")
+    await _saved(created, lexeme, sense)
+    unnamed = unique_word()
+    lexeme2, sense2 = await make_lexeme(created, unnamed, definition="a thing that people do every day")
+    await _saved(created, lexeme2, sense2)
+    full = tts.definition_spec(sense.definition_en, named, masked=False)
+    masked = tts.definition_spec(sense.definition_en, named)
+    same = tts.definition_spec(sense2.definition_en, unnamed)
+    created.render_keys.extend([full.key, masked.key, same.key])
+    assert seed_tts._parse_args(["definitions", "--full"]).full is True
+    assert seed_tts._parse_args(["definitions"]).full is False
+    async with async_session_factory() as session:
+        specs = await seed_tts.definition_specs(
+            session, saved_only=True, limit=None, accents_=["british"], full=True
+        )
+        assert [s.key for s in specs if s.key in {full.key, masked.key, same.key}] == [full.key]
+        await seed_tts.enqueue_definitions(
+            session, saved_only=True, limit=None, accents_=["british"], full=True
+        )
+    assert await _row(full.key) is not None
+    assert await _row(masked.key) is None and await _row(same.key) is None

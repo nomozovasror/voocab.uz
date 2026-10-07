@@ -91,6 +91,20 @@ def test_the_definition_is_the_masked_text_recall_shows() -> None:
     assert tts.definition_spec("_____", "abandon") is None  # nothing left to say
 
 
+def test_the_plain_definition_is_the_unmasked_text_and_one_render_when_nothing_was_masked() -> None:
+    masked = tts.definition_spec("to abandon something completely", "abandon")
+    full = tts.definition_spec("to abandon something completely", "abandon", masked=False)
+    assert full is not None and full.input == "to abandon something completely"
+    assert full.kind == masked.kind == "definition" and full.key != masked.key
+    # Nothing to mask: the same text, so the same render -- made once.
+    plain = "a thing that people do every day"
+    assert tts.definition_spec(plain, "abandon", masked=False).key == tts.definition_spec(plain, "abandon").key
+    # A definition that is only the headword is speakable plain, not masked.
+    assert tts.definition_spec("abandon", "abandon") is None
+    assert tts.definition_spec("abandon", "abandon", masked=False) is not None
+    assert tts.definition_spec("", "abandon", masked=False) is None
+
+
 # --- masks become silence --------------------------------------------------------
 
 

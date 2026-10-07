@@ -1097,8 +1097,18 @@ Entry: a row on the vocabulary home, named exactly "On the go" — never
 exercise).
 
 - **The client sequences two files per item.** The word's own audio
-  (`word_url`, the learner's accent, what the reveal plays) and the definition's
-  (`definition_url`, masked as in recall). Until 2026-10-07 the server baked one
+  (`word_url`, the learner's accent, what the reveal plays) and the definition's,
+  which comes twice: `definition_masked_url` (headword a silence, as in recall)
+  and `definition_full_url` (plain). Masking hides the answer only when the
+  definition is heard BEFORE the word, so `Meaning first` plays the masked one
+  and `Word first` the plain one. The server lists the one the SAVED order needs
+  and queues the other, which rides along when ready (else null). The page picks
+  per item from the order in force WHEN THE ITEM STARTS (`definitionSrc`):
+  `Word first` settles for the masked file while the plain one is missing;
+  `Meaning first` NEVER plays the plain one, so an item without its masked file
+  is skipped. After an order change is saved, if upcoming items lack the needed
+  file the page refetches once and fills the gaps in place (`topUp`; the list
+  is never replaced under a listener). Until 2026-10-07 the server baked one
   file per item; the owner rejected that (no reversing, no re-timing). Order
   (`Meaning first` / `Word first` pills) and pause (`Pause: 3 s`, - / +, 1..10)
   are on the On the go screen above the player and saved to the account through

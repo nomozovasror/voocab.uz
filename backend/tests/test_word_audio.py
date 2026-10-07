@@ -3,16 +3,16 @@ render, heteronym phonemes, enqueueing, and the On the go item list."""
 
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import delete, update
 from sqlmodel import select
 
 from app.core.database import async_session_factory
 from app.models.audio_render import AudioRender, RenderStatus
 from app.models.lexicon import LexemeSense
 from app.models.user import User
-from app.models.vocabulary import SavedWord
+from app.models.vocabulary import SavedWord, VocabularySettings
 from app.models.word_audio_log import OnTheGoExposure, SpeakMiss
-from app.services import on_the_go, pronunciation, tts, word_audio
+from app.services import on_the_go, practice, pronunciation, tts, word_audio
 from tests.audio_helpers import (
     Created,
     make_lexeme,
@@ -25,6 +25,12 @@ from tests.audio_helpers import (
 async def created():
     made = Created()
     yield made
+    async with async_session_factory() as session:
+        if made.user_ids:
+            await session.execute(
+                delete(VocabularySettings).where(VocabularySettings.user_id.in_(made.user_ids))
+            )
+            await session.commit()
     await made.cleanup()
 
 
@@ -233,7 +239,114 @@ async def test_an_item_is_listed_only_when_both_parts_are_ready(created: Created
     assert preparing == 0 and len(items) == 1
     assert items[0].word.id == saved.id
     assert items[0].word_url == f"/media/tts/{word.key}.m4a"
-    assert items[0].definition_url == f"/media/tts/{definition.key}.m4a"
+    assert items[0].definition_masked_url == f"/media/tts/{definition.key}.m4a"
+    # The plain definition is the other render: queued by the same request, and
+    # not ready, so it rides as None and does not hold the item back.
+    assert items[0].definition_full_url is None
+    full = tts.definition_spec(sense.definition_en, lemma, masked=False)
+    created.render_keys.append(full.key)
+    assert full.key != definition.key
+    assert (await _render_rows(full.key))[0].status == RenderStatus.PENDING
+
+
+async def _set_order(user_id, order: str) -> None:
+    async with async_session_factory() as session:
+        await practice.update_settings(session, user_id, on_the_go_order=order)
+
+
+async def test_word_first_lists_an_item_only_with_the_plain_definition_ready(
+    created: Created,
+) -> None:
+    """Masking hides the answer when the definition is heard BEFORE the word; in
+    "word first" the word has been said, so the item needs the plain render --
+    the masked one is not enough, and the other way round."""
+    lemma = unique_word()
+    lexeme, sense = await make_lexeme(created, lemma, definition=f"to {lemma} something completely")
+    saved = await _saved_word(created, lexeme, sense)
+    masked = tts.definition_spec(sense.definition_en, lemma)
+    full = tts.definition_spec(sense.definition_en, lemma, masked=False)
+    word = tts.word_spec(lemma, None)
+    created.render_keys.extend([masked.key, full.key, word.key])
+    assert masked.key != full.key and full.input == f"to {lemma} something completely"
+    await _set_order(saved.user_id, "word_first")
+
+    async def listed() -> tuple[list[on_the_go.Item], int]:
+        async with async_session_factory() as session:
+            return await on_the_go.item_list(session, await session.get(User, saved.user_id))
+
+    await listed()  # queues everything
+    await _mark_ready(word)
+    await _mark_ready(masked)
+    assert await listed() == ([], 1)  # the masked render does not serve "word first"
+    await _mark_ready(full)
+    items, preparing = await listed()
+    assert preparing == 0 and len(items) == 1
+    # Both are on the item, so the client can change the order from the next one.
+    assert items[0].definition_full_url == f"/media/tts/{full.key}.m4a"
+    assert items[0].definition_masked_url == f"/media/tts/{masked.key}.m4a"
+
+    # Back to "meaning first": the masked render alone is enough, the plain one
+    # being absent changes nothing about the listing.
+    await _set_order(saved.user_id, "meaning_first")
+    async with async_session_factory() as session:
+        await session.execute(update(AudioRender).where(AudioRender.key == full.key).values(
+            status=RenderStatus.PENDING, storage_key=None))
+        await session.commit()
+    items, preparing = await listed()
+    assert preparing == 0 and len(items) == 1
+    assert items[0].definition_masked_url is not None and items[0].definition_full_url is None
+
+
+async def test_a_failed_plain_definition_does_not_hide_a_meaning_first_item(
+    created: Created,
+) -> None:
+    lemma = unique_word()
+    lexeme, sense = await make_lexeme(created, lemma, definition=f"to {lemma} something completely")
+    saved = await _saved_word(created, lexeme, sense)
+    masked = tts.definition_spec(sense.definition_en, lemma)
+    full = tts.definition_spec(sense.definition_en, lemma, masked=False)
+    word = tts.word_spec(lemma, None)
+    created.render_keys.extend([masked.key, full.key, word.key])
+    await _mark_ready(word)
+    await _mark_ready(full)
+    async with async_session_factory() as session:
+        await tts.enqueue([masked])
+        await session.execute(update(AudioRender).where(AudioRender.key == full.key).values(
+            status=RenderStatus.FAILED))
+        await session.commit()
+    # meaning_first needs the masked one: pending, so preparing -- a failed plain
+    # render is nobody's part of this item.
+    async with async_session_factory() as session:
+        _, preparing = await on_the_go.item_list(session, await session.get(User, saved.user_id))
+    assert preparing == 1
+    # word_first needs the plain one, and it has failed: in neither number.
+    await _set_order(saved.user_id, "word_first")
+    async with async_session_factory() as session:
+        items, preparing = await on_the_go.item_list(session, await session.get(User, saved.user_id))
+    assert (items, preparing) == ([], 0)
+
+
+async def test_the_plain_definition_is_the_masked_render_when_nothing_was_masked(
+    created: Created,
+) -> None:
+    lemma = unique_word()
+    lexeme, sense = await make_lexeme(
+        created, lemma, definition="a thing that people do on every single ordinary day"
+    )
+    saved = await _saved_word(created, lexeme, sense)
+    masked = tts.definition_spec(sense.definition_en, lemma)
+    full = tts.definition_spec(sense.definition_en, lemma, masked=False)
+    word = tts.word_spec(lemma, None)
+    assert masked.key == full.key  # one render, made once
+    created.render_keys.extend([masked.key, word.key])
+    await _mark_ready(word)
+    await _mark_ready(masked)
+    for order in ("meaning_first", "word_first"):
+        await _set_order(saved.user_id, order)
+        async with async_session_factory() as session:
+            items, preparing = await on_the_go.item_list(session, await session.get(User, saved.user_id))
+        assert preparing == 0 and len(items) == 1
+        assert items[0].definition_masked_url == items[0].definition_full_url
 
 
 async def test_a_changed_definition_is_a_new_definition_render(created: Created) -> None:

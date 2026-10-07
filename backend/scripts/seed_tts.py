@@ -44,7 +44,11 @@ Usage (from the ``backend/`` directory), in this order::
   ``pronunciation_us`` for American; see ``scripts/decide_heteronyms.py``).
 * ``definitions`` -- the masked definition of every sense, the masks silences.
   On the go plays exactly these two renders (the word, the definition) one
-  after the other, so there is nothing else to make for it.
+  after the other. ``definitions --full`` makes the PLAIN definitions that
+  "word first" plays (the word has been said, so nothing is masked): only those
+  that differ from the masked text -- where masking changed nothing it is the
+  same render and ``definitions`` has made it. The worker makes them on demand
+  meanwhile; this is the bulk run.
 * ``check-files`` -- every ``ready`` render whose file is not in the
   configured storage. ``--requeue`` puts such renders back to ``pending``. The check to run on
   the machine that serves the files, after they were copied there.
@@ -259,14 +263,30 @@ async def word_specs(
 
 
 async def definition_specs(
-    session: AsyncSession, *, saved_only: bool, limit: int | None, accents_: list[Accent]
+    session: AsyncSession,
+    *,
+    saved_only: bool,
+    limit: int | None,
+    accents_: list[Accent],
+    full: bool = False,
 ) -> list[tts.RenderSpec]:
+    """The definition renders of the senses: the masked ones (recall, On the go
+    "meaning first"), or with ``full`` the plain ones (On the go "word first").
+    ``full`` lists only the plain renders that are NOT the masked one -- where
+    masking changed nothing the two are one render and the plain run made it."""
     senses = await _senses(session, saved_only=saved_only, limit=limit)
     lexemes = await _lexemes(session, senses)
     specs: dict[str, tts.RenderSpec] = {}
     for accent in accents_:
         for sense in senses:
-            spec = tts.definition_spec(sense.definition_en, lexemes[sense.lexeme_id].lemma, accent)
+            lemma = lexemes[sense.lexeme_id].lemma
+            if full:
+                spec = tts.definition_spec(sense.definition_en, lemma, accent, masked=False)
+                masked = tts.definition_spec(sense.definition_en, lemma, accent)
+                if spec is not None and masked is not None and spec.key == masked.key:
+                    continue
+            else:
+                spec = tts.definition_spec(sense.definition_en, lemma, accent)
             if spec is not None:
                 specs[spec.key] = spec
     return list(specs.values())
@@ -287,10 +307,17 @@ async def enqueue_words(
 
 
 async def enqueue_definitions(
-    session: AsyncSession, *, saved_only: bool, limit: int | None, accents_: list[Accent]
+    session: AsyncSession,
+    *,
+    saved_only: bool,
+    limit: int | None,
+    accents_: list[Accent],
+    full: bool = False,
 ) -> int:
     return await _enqueue(
-        await definition_specs(session, saved_only=saved_only, limit=limit, accents_=accents_)
+        await definition_specs(
+            session, saved_only=saved_only, limit=limit, accents_=accents_, full=full
+        )
     )
 
 
@@ -417,7 +444,7 @@ async def cmd_definitions(args: argparse.Namespace) -> None:
     async with async_session_factory() as session:
         await enqueue_definitions(
             session, saved_only=args.saved_only, limit=args.limit,
-            accents_=selected_accents(args),
+            accents_=selected_accents(args), full=args.full,
         )
     await run_renders(
         [RenderKind.DEFINITION], tts.KokoroSynth(device=device), limit=None,
@@ -534,6 +561,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                        help="put failed renders back to pending first")
         p.add_argument("--accent", choices=[*ACCENTS, "both"], default="both",
                        help="which voice(s) to make (default both)")
+        if name == "definitions":
+            p.add_argument("--full", action="store_true",
+                           help="the plain (unmasked) definitions for On the go's "
+                                "\"word first\", instead of the masked ones")
     return parser.parse_args(argv)
 
 

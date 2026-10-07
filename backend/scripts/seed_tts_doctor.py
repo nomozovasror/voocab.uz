@@ -139,8 +139,14 @@ async def check_database() -> list[Check]:
             every = list(accents.ACCENTS)
             words = await seed_tts.word_specs(session, saved_only=False, limit=None, accents_=every)
             definitions = await seed_tts.definition_specs(session, saved_only=False, limit=None, accents_=every)
+            full_definitions = await seed_tts.definition_specs(
+                session, saved_only=False, limit=None, accents_=every, full=True
+            )
         new_words = len(words) - len(await _existing_keys([s.key for s in words]))
         new_defs = len(definitions) - len(await _existing_keys([s.key for s in definitions]))
+        new_full = len(full_definitions) - len(
+            await _existing_keys([s.key for s in full_definitions])
+        )
     except Exception as exc:  # noqa: BLE001
         out.append(Check(WARN, "What each step would do", f"could not count: {type(exc).__name__}: {exc}"))
         return out
@@ -156,6 +162,11 @@ async def check_database() -> list[Check]:
                      f"{renders(RenderKind.DEFINITION, RenderStatus.PENDING)} already pending, "
                      f"{renders(RenderKind.DEFINITION, RenderStatus.READY)} ready, "
                      f"{renders(RenderKind.DEFINITION, RenderStatus.FAILED)} failed"))
+    # The plain definitions are the same kind as the masked ones, so the status
+    # counts above already include them; this line is only what is still to make.
+    out.append(Check(PASS, "definitions --full --accent both",
+                     f"{new_full} new render(s) to queue ({len(full_definitions)} differ from "
+                     f"the masked text; On the go's \"word first\" plays these)"))
     return out
 
 

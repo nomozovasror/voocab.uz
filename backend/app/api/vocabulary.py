@@ -727,9 +727,11 @@ async def practice_speak_check(
 async def on_the_go(user: CurrentUser, session: SessionDep) -> OnTheGoOut:
     """The learner's words in rotation, newest first -- independent of the
     daily queue -- each as TWO audios the client plays in the learner's order
-    (``on_the_go_order``) with their pause: the word's own and its masked
-    definition's. Only words with both ready are listed; ``preparing`` counts
-    the rest, which are already queued. The word's text is never on the wire:
+    (``on_the_go_order``) with their pause: the word's own and its definition's,
+    masked for "meaning first" and plain for "word first" (the saved order
+    decides which must be ready; the other rides along when it is). Only words
+    with both ready are listed; ``preparing`` counts the rest, which are already
+    queued. The word's text is never on the wire:
     the lock screen and the network tab must not show the answer during the
     pause."""
     ready, preparing = await on_the_go_service.item_list(session, user)
@@ -738,7 +740,8 @@ async def on_the_go(user: CurrentUser, session: SessionDep) -> OnTheGoOut:
             OnTheGoItemOut(
                 word_id=item.word.id,
                 word_url=item.word_url,
-                definition_url=item.definition_url,
+                definition_masked_url=item.definition_masked_url,
+                definition_full_url=item.definition_full_url,
             )
             for item in ready
         ],

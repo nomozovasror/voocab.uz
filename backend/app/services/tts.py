@@ -348,11 +348,23 @@ def word_spec(
 
 
 def definition_spec(
-    definition: str, lemma: str, accent: accents.Accent = accents.DEFAULT_ACCENT
+    definition: str,
+    lemma: str,
+    accent: accents.Accent = accents.DEFAULT_ACCENT,
+    *,
+    masked: bool = True,
 ) -> RenderSpec | None:
-    """The render for a sense's masked definition, or ``None`` when there is
-    no definition to speak."""
-    text = masked_definition(definition, lemma)
+    """The render for a sense's definition, or ``None`` when there is no
+    definition to speak.
+
+    ``masked`` (the default) is the definition as recall shows it, the headword
+    a silence: what a learner hears BEFORE the word. ``masked=False`` is the
+    plain definition, headword and all, for On the go's "word first", where the
+    word has already been said and a silence in its place would only be a hole.
+    Both are ``RenderKind.DEFINITION`` keyed by their input text, so they are two
+    renders whenever masking changed the text and ONE render when it did not --
+    nothing is made twice."""
+    text = masked_definition(definition, lemma) if masked else (definition or "").strip()
     if not re.search(r"[A-Za-z0-9]", _MASK_RUN.sub(" ", text)):
         return None
     voice = accents.voice_for(accent)
