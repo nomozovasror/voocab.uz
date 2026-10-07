@@ -301,6 +301,24 @@ def clean_definition(text: str) -> tuple[str, list[str], bool]:
     return cleaned, targets, xref_only
 
 
+#: A definition that opens with a parenthesis followed by a SPACE carries a
+#: list whose label the extract lost: alternative forms, a symbol or an
+#: abbreviation, verb forms, sometimes their transcription. The source's own
+#: qualifiers ("(of a person) ...", "(in mathematics) ...") never have that
+#: space, so they are left alone.
+_LABEL_LOST_PREFIX = re.compile(r"^\(\s[^)]*\)\s*")
+
+
+def strip_label_lost_prefix(text: str) -> str:
+    """``text`` without a leading label-less list (see
+    :data:`_LABEL_LOST_PREFIX`) -- what a learner reads and what TTS says.
+    Applied when a plan is built, NOT in the index: the questions already
+    asked carry the index's text in their keys, and changing it there would
+    re-ask (and re-pay for) every lexeme that has such a candidate."""
+    stripped = _LABEL_LOST_PREFIX.sub("", text, count=1)
+    return stripped if stripped.strip() else text
+
+
 def _senses(block: dict, ref_prefix: str) -> list[dict]:
     """A block's senses that HAVE a definition, each with its ref."""
     out = []
@@ -2472,7 +2490,8 @@ def plan_items(items: list[dict], index: CaldIndex, log: DecisionLog,
         if mapping["decision"] != "mapped":
             continue
         block, sense = index.senses[mapping["ref"]]
-        plan.ref, plan.definition, plan.cald_level = mapping["ref"], sense["def"], sense["level"]
+        plan.ref, plan.definition, plan.cald_level = (
+            mapping["ref"], strip_label_lost_prefix(sense["def"]), sense["level"])
         # The cap: CALD's level only near ours (or where we have none).
         gap = band_gap(item["cefr"], sense["level"])
         if sense["level"] and (gap is None or abs(gap) <= CEFR_CAP_BANDS):

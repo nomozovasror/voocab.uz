@@ -688,3 +688,11 @@ async def test_far_levels_are_verified_capped_flagged_and_undone_when_dropped(tm
         assert await _state(ids) == before
     finally:
         await _drop(ids)
+
+
+def test_a_label_lost_list_at_the_start_is_dropped_but_a_qualifier_is_kept() -> None:
+    # Invented strings in the source's two shapes.
+    assert lc.strip_label_lost_prefix("( zub, zubs) a small blue tool") == "a small blue tool"
+    assert lc.strip_label_lost_prefix("( zub, /zʌb/ ) a small blue tool") == "a small blue tool"
+    assert lc.strip_label_lost_prefix("(of a tool) small and blue") == "(of a tool) small and blue"
+    assert lc.strip_label_lost_prefix("( only this)") == "( only this)"
