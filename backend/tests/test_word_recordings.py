@@ -247,6 +247,12 @@ def test_a_corrupt_or_silent_file_is_a_result_not_a_crash(tmp_path: Path) -> Non
         assert isinstance(result, str) and result.startswith(wr.UNDECODABLE)
 
 
+def test_a_recording_far_longer_than_a_word_is_refused(tmp_path: Path) -> None:
+    write_wav(tmp_path / "long.wav", ms=wr.MAX_RECORDING_MS + 1500)
+    result = wr.process_file(str(tmp_path / "long.wav"))
+    assert isinstance(result, str) and "too long" in result
+
+
 # --- the import ------------------------------------------------------------------------------
 
 

@@ -113,7 +113,17 @@ def _say_once(key: str, level: int, message: str, *args: object) -> None:
 
 
 class EmptyRecording(ValueError):
-    """The file decoded to nothing, or to digital silence."""
+    """The file decoded to nothing, or to digital silence, or to far more
+    sound than one word or phrase is said in."""
+
+
+#: The longest a stored recording may be once its edges are trimmed. A word is
+#: said in under a second (the import's mean is 0.86 s); the first full import
+#: found 38 files of 8 to 16 seconds still full of sound after trimming --
+#: whatever they hold, it is not the headword said once, and a learner who
+#: presses play on `curved` must not get sixteen seconds of something else.
+#: Refused like an undecodable file, so the word falls back to Kokoro.
+MAX_RECORDING_MS = 4000
 
 
 @dataclass(frozen=True)
@@ -141,6 +151,9 @@ def normalise(raw: bytes) -> Normalised:
     levelled = audio_pcm.normalise_rms(trimmed)
     if float(np.max(np.abs(levelled))) < 1e-4:
         raise EmptyRecording("the file is silent")
+    length_ms = audio_pcm.duration_ms(levelled)
+    if length_ms > MAX_RECORDING_MS:
+        raise EmptyRecording(f"too long for one word ({length_ms} ms)")
     return Normalised(
         data=audio_pcm.encode_m4a(levelled),
         duration_ms=audio_pcm.duration_ms(levelled),
