@@ -34,7 +34,7 @@ backend/scripts/.seed_vocabulary_state.json
 # logs and anything else `scripts/cald.py` derives from CALD (see that
 # script's docstring). Ignored as a whole directory so a new artefact cannot
 # slip through by having a name nobody listed here.
-backend/app/data/private/
+backend/app/data/private
 
 # macOS
 .DS_Store
