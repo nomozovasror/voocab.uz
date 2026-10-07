@@ -101,34 +101,35 @@ export default function VocabularyOnTheGoPage() {
     refetchOnReconnect: false,
   });
 
-  // The order and the pause. Playing does not wait for them (the defaults are
-  // the server's own); the controls appear once they are known, because the
-  // PUT needs the rest of the row.
+  // The order and the pause. Play waits until the query has SETTLED (answered
+  // or failed), so item 1 is laid out in the learner's own order and pause,
+  // not the defaults; a failure falls back to the defaults with a Retry and
+  // never blocks playback for good (one quick retry, not the default three).
   const settingsQuery = useQuery({
     queryKey: settingsKey,
     queryFn: () => vocabularyApi.settings(),
+    retry: 1,
   });
   const settings = settingsQuery.data;
+  const settingsSettled = settingsQuery.isSuccess || settingsQuery.isError;
   const order = settings?.on_the_go_order ?? DEFAULT_ORDER;
   const pauseS = settings?.on_the_go_pause_s ?? DEFAULT_PAUSE_S;
 
   const saveKey = ["vocabulary", "settings", "on-the-go"] as const;
   const save = useMutation({
     mutationKey: saveKey,
-    mutationFn: (change: Pick<VocabularySettings, "on_the_go_order"> | Pick<VocabularySettings, "on_the_go_pause_s">) => {
-      const current = qc.getQueryData<VocabularySettings>(settingsKey);
-      if (!current) throw new Error("settings not loaded");
-      return vocabularyApi.updateSettings({
-        daily_minutes: current.daily_minutes,
-        direction: current.direction,
-        exercise_types: current.exercise_types,
-        ...change,
-      });
-    },
+    // Only the changed field goes: the PUT is a partial update, so a copy of
+    // the rest of the row from the cache can never overwrite a change made
+    // elsewhere (the settings page in another tab).
+    mutationFn: (change: Pick<VocabularySettings, "on_the_go_order"> | Pick<VocabularySettings, "on_the_go_pause_s">) =>
+      vocabularyApi.updateSettings(change),
     // Optimistic: the pill moves at once. The server's answer wins — but only
     // the LAST one in a burst of clicks, so a slow early response cannot put
     // an old value back over a newer click.
-    onMutate: (change) => {
+    onMutate: async (change) => {
+      // An in-flight GET would land after the optimistic write and put the
+      // old value back.
+      await qc.cancelQueries({ queryKey: settingsKey });
       qc.setQueryData<VocabularySettings>(settingsKey, (old) =>
         old ? { ...old, ...change } : old,
       );
@@ -156,13 +157,15 @@ export default function VocabularyOnTheGoPage() {
     audioRef.current = el;
   }, []);
   const [index, setIndex] = useState(0);
-  const [started, setStarted] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [finished, setFinished] = useState(false);
   // Read from event handlers that fire between renders (`timeupdate`,
   // `ended`), where state is a step behind the element's `src`.
   const indexRef = useRef(0);
   const intent = useRef(false);
+  // A ref, not state: the element's `error` handler is registered by an
+  // earlier render's closure and would read a stale `false` for item 1.
+  const started = useRef(false);
   const posted = useRef<Set<string>>(new Set());
   // The item being played, laid out once when it starts, and which of its
   // segments the element is on.
@@ -175,6 +178,46 @@ export default function VocabularyOnTheGoPage() {
   // The Blob URLs of the silences die with the screen.
   useEffect(() => releaseSilence, []);
 
+  // A second, never-played element that only fetches: the next speech file is
+  // in the HTTP cache by the time the playing element asks for it, so there is
+  // no audible gap. The playing element stays the one and only.
+  const preloader = useRef<HTMLAudioElement | null>(null);
+  useEffect(() => {
+    const el = new Audio();
+    el.preload = "auto";
+    preloader.current = el;
+    return () => {
+      el.removeAttribute("src");
+      preloader.current = null;
+    };
+  }, []);
+
+  /** Warm the cache with the next speech file after segment `k`: later in this
+   *  item, else the first speech file of the next item. */
+  function preloadAfter(k: number) {
+    const el = preloader.current;
+    if (!el) return;
+    let src = segments.current.slice(k + 1).find((s) => s.kind !== "silence")?.src;
+    if (!src) {
+      const upcoming = items[indexRef.current + 1];
+      if (upcoming)
+        src = mediaUrl(
+          choice.current.order === "word_first" ? upcoming.word_url : upcoming.definition_url,
+        );
+    }
+    if (src && el.getAttribute("src") !== src) el.src = src;
+  }
+
+  /** Only a refusal by the autoplay policy means "the user must press"; an
+   *  `AbortError` is a load that a newer one superseded, and playback goes on
+   *  under the intent. (Anything else surfaces as the element's `error`.) */
+  function onPlayRejected(err: unknown) {
+    if (err instanceof DOMException && err.name === "NotAllowedError") {
+      intent.current = false;
+      setPlaying(false);
+    }
+  }
+
   /** Put segment `k` of the current item on the element, optionally playing. */
   function playSegment(k: number, play: boolean) {
     const el = audioRef.current;
@@ -186,11 +229,9 @@ export default function VocabularyOnTheGoPage() {
       // A refusal here would be the browser's autoplay policy; the user
       // pressed something to get here, so it is unlikely, and the button
       // simply shows Play.
-      el.play().catch(() => {
-        intent.current = false;
-        setPlaying(false);
-      });
+      el.play().catch(onPlayRejected);
     }
+    preloadAfter(k);
   }
 
   /** Point the one element at the start of item `i`, optionally playing it. */
@@ -204,7 +245,7 @@ export default function VocabularyOnTheGoPage() {
     intent.current = play;
     indexRef.current = i;
     setIndex(i);
-    setStarted(true);
+    started.current = true;
     setFinished(false);
     // Laid out now, so a change on the controls waits for the next item.
     segments.current = plan(item, choice.current.order, choice.current.pauseS);
@@ -239,17 +280,16 @@ export default function VocabularyOnTheGoPage() {
   function togglePlay() {
     const el = audioRef.current;
     if (!el) return;
+    // The button is aria-disabled until then; so is the headphone's play.
+    if (!started.current && !settingsSettled) return;
     if (finished) startAgain();
-    else if (!started) load(index, true);
+    else if (!started.current) load(index, true);
     else if (intent.current) {
       intent.current = false;
       el.pause();
     } else {
       intent.current = true;
-      void el.play().catch(() => {
-        intent.current = false;
-        setPlaying(false);
-      });
+      void el.play().catch(onPlayRejected);
     }
   }
 
@@ -277,7 +317,7 @@ export default function VocabularyOnTheGoPage() {
    *  file that fails takes its whole item with it (half an item teaches
    *  nothing), and the list keeps playing if the learner was listening. */
   function onSegmentError() {
-    if (!started) return;
+    if (!started.current) return;
     const k = segmentRef.current;
     if (segments.current[k]?.kind === "silence" && k + 1 < segments.current.length)
       playSegment(k + 1, intent.current);
@@ -318,25 +358,38 @@ export default function VocabularyOnTheGoPage() {
     };
   }, []);
 
-  // Esc leaves, as on the practice page; arrows step. Neither while a field
-  // has focus (there is none here, but the rule travels).
+  // Esc leaves, as on the practice page; arrows step. The arrows are the
+  // controls' own once focus is on one (a link, a field, a pill, a stepper):
+  // only the transport buttons (`data-transport`: Previous, Play, Next) leave
+  // them to the page, because Play holds focus on arrival and an arrow means
+  // nothing to a plain button. And once "That's all" is up they do nothing:
+  // there is no item N to step from.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.altKey || e.ctrlKey || e.metaKey) return;
       if (e.key === "Escape") {
         e.preventDefault();
         navigate("/vocabulary");
-      } else if (e.key === "ArrowRight" && total > 0) {
+        return;
+      }
+      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+      if (finished || total === 0) return;
+      const target = e.target instanceof Element ? e.target : null;
+      const control = target?.matches(
+        "button, input, textarea, select, a[href], [role], [contenteditable]",
+      );
+      if (control && !target?.hasAttribute("data-transport")) return;
+      if (e.key === "ArrowRight") {
         e.preventDefault();
         controls.current.next();
-      } else if (e.key === "ArrowLeft" && total > 0) {
+      } else {
         e.preventDefault();
         controls.current.previous();
       }
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [navigate, total]);
+  }, [navigate, total, finished]);
 
   if (isPending) return <OnTheGoSkeleton />;
 
@@ -355,6 +408,17 @@ export default function VocabularyOnTheGoPage() {
       onOrder={(next) => save.mutate({ on_the_go_order: next })}
       onPause={(next) => save.mutate({ on_the_go_pause_s: next })}
     />
+  ) : settingsQuery.isError ? (
+    <p className="mb-8 text-xs text-muted-foreground">
+      Your order and pause couldn&apos;t be loaded; playing with the defaults.{" "}
+      <button
+        type="button"
+        onClick={() => void settingsQuery.refetch()}
+        className="rounded-sm text-primary-ink underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      >
+        Retry
+      </button>
+    </p>
   ) : null;
 
   const preparing = data.preparing;
@@ -389,8 +453,13 @@ export default function VocabularyOnTheGoPage() {
         // `pause` fires just before `ended`; that one is the file finishing,
         // not the learner pausing, and `ended` carries on (or `finish`
         // stops) — so it must not flip the button to Play for a moment.
+        // Any OTHER pause that reaches here is the system's (a call, lost
+        // audio focus, unplugged headphones): the app's own pauses clear the
+        // intent first, and a `src` swap fires no pause. Clear it too, or the
+        // Media Session "play" would see an intent already on and do nothing.
         onPause={(e) => {
           if (e.currentTarget.ended) return;
+          intent.current = false;
           setPlaying(false);
         }}
         onEnded={onSegmentEnded}
@@ -411,6 +480,7 @@ export default function VocabularyOnTheGoPage() {
             <button
               type="button"
               aria-label="Previous"
+              data-transport
               onClick={previous}
               className="flex size-12 items-center justify-center rounded-full text-muted-foreground transition-colors duration-fast hover:bg-surface-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
             >
@@ -420,8 +490,12 @@ export default function VocabularyOnTheGoPage() {
               type="button"
               autoFocus
               aria-label={playing ? "Pause" : "Play"}
+              // Not `disabled`: it holds focus on arrival, and the press is
+              // ignored until the settings have settled (see `togglePlay`).
+              aria-disabled={!started.current && !settingsSettled}
+              data-transport
               onClick={togglePlay}
-              className="flex size-24 items-center justify-center rounded-full bg-primary text-primary-foreground transition-colors duration-fast hover:bg-primary/80 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none"
+              className="flex size-24 items-center justify-center rounded-full bg-primary text-primary-foreground transition-colors duration-fast hover:bg-primary/80 aria-disabled:opacity-50 aria-disabled:hover:bg-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none"
             >
               {playing ? (
                 <Pause className="size-10" aria-hidden />
@@ -432,6 +506,7 @@ export default function VocabularyOnTheGoPage() {
             <button
               type="button"
               aria-label="Next"
+              data-transport
               onClick={() => next()}
               className="flex size-12 items-center justify-center rounded-full text-muted-foreground transition-colors duration-fast hover:bg-surface-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
             >
@@ -504,14 +579,21 @@ function OrderAndPause({
   onPause: (seconds: number) => void;
 }) {
   const stepper =
-    "flex size-8 items-center justify-center rounded-full bg-surface-hover text-muted-foreground transition-colors duration-fast hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50 disabled:hover:text-muted-foreground";
+    "flex size-8 items-center justify-center rounded-full bg-surface-hover text-muted-foreground transition-colors duration-fast hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none aria-disabled:opacity-50 aria-disabled:hover:text-muted-foreground";
   return (
     <div className="mb-8 flex w-full flex-wrap items-center justify-center gap-x-6 gap-y-3">
-      <div role="radiogroup" aria-label="Order" className="flex gap-1.5">
-        <OptionPill on={order === "meaning_first"} onClick={() => onOrder("meaning_first")}>
+      {/* Plain toggle buttons (`aria-pressed`), each in the tab order: a
+       *  `radiogroup` promises arrow-key movement between its radios, and the
+       *  arrows belong to skipping tracks. */}
+      <div role="group" aria-label="Order" className="flex gap-1.5">
+        <OptionPill
+          toggle
+          on={order === "meaning_first"}
+          onClick={() => onOrder("meaning_first")}
+        >
           Meaning first
         </OptionPill>
-        <OptionPill on={order === "word_first"} onClick={() => onOrder("word_first")}>
+        <OptionPill toggle on={order === "word_first"} onClick={() => onOrder("word_first")}>
           Word first
         </OptionPill>
       </div>
@@ -519,8 +601,10 @@ function OrderAndPause({
         <button
           type="button"
           aria-label="Shorter pause"
-          disabled={pauseS <= MIN_PAUSE_S}
-          onClick={() => onPause(pauseS - 1)}
+          // `aria-disabled`, not `disabled`: pressing the last step must not
+          // drop the focus the learner is holding.
+          aria-disabled={pauseS <= MIN_PAUSE_S}
+          onClick={() => pauseS > MIN_PAUSE_S && onPause(pauseS - 1)}
           className={stepper}
         >
           <Minus className="size-4" aria-hidden />
@@ -534,8 +618,8 @@ function OrderAndPause({
         <button
           type="button"
           aria-label="Longer pause"
-          disabled={pauseS >= MAX_PAUSE_S}
-          onClick={() => onPause(pauseS + 1)}
+          aria-disabled={pauseS >= MAX_PAUSE_S}
+          onClick={() => pauseS < MAX_PAUSE_S && onPause(pauseS + 1)}
           className={stepper}
         >
           <Plus className="size-4" aria-hidden />

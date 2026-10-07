@@ -1095,10 +1095,30 @@ exercise).
   file per item; the owner rejected that (no reversing, no re-timing). Order
   (`Meaning first` / `Word first` pills) and pause (`Pause: 3 s`, - / +, 1..10)
   are on the On the go screen above the player and saved to the account through
-  `PUT /vocabulary/settings` (optimistic; the server's answer wins, but only the
-  last of a burst of clicks may overwrite). The item is laid out as segments
-  WHEN IT STARTS, so a change applies from the next item. The gap after each
-  item is a fixed 1.5 s.
+  `PUT /vocabulary/settings`, which is a PARTIAL update (absent field =
+  unchanged; `exercise_types: null` is the value "Automatic", told apart from
+  absent by `model_fields_set`): On the go sends only the field it changed.
+  Optimistic (`cancelQueries` first, so an in-flight GET cannot put the old
+  value back); the server's answer wins, but only the last of a burst of
+  clicks may overwrite. The item is laid out as segments WHEN IT STARTS, so a
+  change applies from the next item. The gap after each item is a fixed 1.5 s.
+- **Play waits for the settings query to settle** (answered or failed) so item
+  1 uses the saved order and pause; the button is `aria-disabled` (not
+  `disabled`: it holds focus). On failure a quiet "playing with the defaults"
+  line with Retry shows; playback is never blocked for good. The order pills
+  are plain `aria-pressed` toggles (no `radiogroup`); the - / + steppers use
+  `aria-disabled` at the bounds so focus is not lost.
+- **Keys**: Esc leaves. ArrowLeft/Right skip tracks only when focus is on
+  nothing or on a transport button (`data-transport`: Previous, Play, Next --
+  Play holds focus on arrival and a plain button has no use for arrows); on
+  any other control (pill, stepper, link, field, `[role]`) they are that
+  control's own. They do nothing at "That's all".
+- **A pause the app did not ask for** (call, lost audio focus, unplugged
+  headphones) clears the intent in `onPause` (when not `ended`), so the Media
+  Session "play" and the button both work at the first press. `play()`
+  rejections clear the intent only for `NotAllowedError`; an `AbortError` from
+  a superseded load must not. The next speech file is preloaded on a second,
+  never-played `Audio()` (cache warm-up); the playing element is still the one.
 - **Every `src` goes through `mediaUrl()`** -- the server sends `/media/...`
   paths on the API origin. (The silences are Blob URLs and are not passed
   through it.)

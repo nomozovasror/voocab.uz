@@ -500,7 +500,7 @@ function Toggle({
       className={cn(
         "rounded-full px-2.5 py-1 text-[0.7rem] transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
         on
-          ? "bg-primary/20 text-primary"
+          ? "bg-primary/20 text-primary-ink"
           : "bg-surface-hover text-muted-foreground hover:text-foreground",
       )}
     >

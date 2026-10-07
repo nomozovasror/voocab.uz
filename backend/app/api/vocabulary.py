@@ -787,7 +787,12 @@ async def put_vocabulary_settings(
         user.id,
         daily_minutes=data.daily_minutes,
         direction=data.direction,
-        exercise_types=data.exercise_types,
+        # Absent is "unchanged"; an explicit null is "Automatic".
+        exercise_types=(
+            data.exercise_types
+            if "exercise_types" in data.model_fields_set
+            else practice_service.UNSET
+        ),
         pronunciation=data.pronunciation,
         accent=data.accent,
         on_the_go_order=data.on_the_go_order,

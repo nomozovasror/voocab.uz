@@ -391,7 +391,7 @@ function PillRow<T extends string>({
             className={cn(
               "rounded-full px-2.5 py-1 font-medium transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
               on
-                ? "bg-primary/20 text-primary"
+                ? "bg-primary/20 text-primary-ink"
                 : "bg-surface-hover text-muted-foreground hover:text-foreground",
             )}
           >
@@ -429,7 +429,7 @@ function Checkbox({
       className={cn(
         "flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
         checked
-          ? "border-primary bg-primary/20 text-primary"
+          ? "border-primary bg-primary/20 text-primary-ink"
           : "border-border text-transparent hover:border-primary/50",
       )}
     >

@@ -742,14 +742,20 @@ class VocabularySettingsOut(BaseModel):
 
 
 class VocabularySettingsIn(BaseModel):
-    """The whole settings screen, saved together: a plain replace, not a
-    per-field patch, because that is how the screen presents it."""
+    """A partial update: every field is optional and an ABSENT one is left as
+    it was, so each control (the settings screen's, On the go's) sends only
+    what it changed and can never write back a stale copy of the rest.
+    ``exercise_types`` is the one field where ``null`` means something
+    ("Automatic"), so the API tells absent from explicit null by
+    ``model_fields_set``."""
 
-    daily_minutes: Literal[5, 10, 15, 20]
+    #: Absent (or null) = unchanged.
+    daily_minutes: Literal[5, 10, 15, 20] | None = None
     #: The brief's toggle has no "active only" -- ``passive`` is silence,
-    #: ``both`` is the toggle switched on.
-    direction: Literal["passive", "both"]
-    #: Null means "Automatic" (the system chooses); otherwise exactly ONE of
+    #: ``both`` is the toggle switched on. Absent (or null) = unchanged.
+    direction: Literal["passive", "both"] | None = None
+    #: Absent = unchanged. An explicit null means "Automatic" (the system
+    #: chooses); otherwise exactly ONE of
     #: the tasks -- the settings screen's exercise type is a single choice
     #: (Automatic / Recognise / Recall / Produce / Listen / Speak), never a
     #: subset, so both an empty list and a list of more than one are refused

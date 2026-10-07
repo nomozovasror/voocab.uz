@@ -283,22 +283,11 @@ export const vocabularyApi = {
 
   settings: () => api.get<VocabularySettings>("/api/vocabulary/settings"),
 
-  /** The settings page's one call. A plain replace, not a per-field patch —
-   *  `daily_minutes` and `direction` are both required on the wire, because
-   *  that is how the settings screen presents itself: one form with three
-   *  fields, saved together, never a lone minutes picker sending its own
-   *  value and leaving the other two for the server to guess at. */
-  updateSettings: (
-    settings: Pick<VocabularySettings, "daily_minutes" | "direction" | "exercise_types"> &
-      // Optional: absent means unchanged, so only the Pronunciation, Accent
-      // and On the go controls send them.
-      Partial<
-        Pick<
-          VocabularySettings,
-          "pronunciation" | "accent" | "on_the_go_order" | "on_the_go_pause_s"
-        >
-      >,
-  ) =>
+  /** A partial update: absent means unchanged, so each control sends only what
+   *  it changed (On the go its order or pause, Pronunciation and Accent their
+   *  own). `exercise_types: null` is a value, "Automatic", not "absent". The
+   *  settings page happens to send the three it shows together. */
+  updateSettings: (settings: Partial<Omit<VocabularySettings, "active_in_progress">>) =>
     api.put<VocabularySettings>("/api/vocabulary/settings", {
       json: settings,
     }),

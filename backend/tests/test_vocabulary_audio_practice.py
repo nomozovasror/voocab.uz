@@ -602,6 +602,34 @@ async def test_on_the_go_order_and_pause_are_optional_on_put_and_validated(
         assert (got["on_the_go_order"], got["on_the_go_pause_s"]) == ("word_first", 1)
 
 
+async def test_put_settings_is_partial_and_null_exercise_types_is_automatic(
+    created: Created,
+) -> None:
+    user = await make_user(created)
+    cookies = {"access_token": create_access_token(str(user.id))}
+    url = "/api/vocabulary/settings"
+    async with _client() as client:
+        full = {"daily_minutes": 20, "direction": "both", "exercise_types": ["produce"]}
+        assert (await client.put(url, cookies=cookies, json=full)).status_code == 200
+        # Absent: the three are untouched by an On the go save.
+        r = await client.put(url, cookies=cookies, json={"on_the_go_pause_s": 5})
+        got = r.json()
+        assert (got["daily_minutes"], got["direction"], got["exercise_types"]) == (20, "both", ["produce"])
+        assert got["on_the_go_pause_s"] == 5
+        # A value changes only that field.
+        got = (await client.put(url, cookies=cookies, json={"daily_minutes": 5})).json()
+        assert (got["daily_minutes"], got["direction"], got["exercise_types"]) == (5, "both", ["produce"])
+        # Explicit null is "Automatic", not "unchanged".
+        got = (await client.put(url, cookies=cookies, json={"exercise_types": None})).json()
+        assert got["exercise_types"] is None and got["daily_minutes"] == 5
+        # ...and absent afterwards leaves Automatic alone.
+        got = (await client.put(url, cookies=cookies, json={"direction": "passive"})).json()
+        assert got["exercise_types"] is None and got["direction"] == "passive"
+        # Validation still holds, and an empty body changes nothing.
+        assert (await client.put(url, cookies=cookies, json={"daily_minutes": 7})).status_code == 422
+        assert (await client.put(url, cookies=cookies, json={})).json()["daily_minutes"] == 5
+
+
 async def test_exposures_are_owner_only_and_never_touch_fsrs(created: Created) -> None:
     user, other = await make_user(created), await make_user(created)
     word = await _word(created, user, level="recall")

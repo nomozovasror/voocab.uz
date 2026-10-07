@@ -132,7 +132,7 @@ export default function VocabularySettingsPage() {
                 className={cn(
                   "flex-1 rounded-full px-2.5 py-1 text-xs font-medium tabular-nums transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50",
                   on
-                    ? "bg-primary/20 text-primary"
+                    ? "bg-primary/20 text-primary-ink"
                     : "text-muted-foreground hover:bg-surface-hover hover:text-foreground",
                 )}
               >

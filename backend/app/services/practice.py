@@ -1814,32 +1814,40 @@ async def set_daily_minutes(
     return row
 
 
+class _Unset:
+    """The type of :data:`UNSET`."""
+
+
+#: "Not mentioned", for the one setting where ``None`` is a real value.
+UNSET = _Unset()
+
+
 async def update_settings(
     session: AsyncSession,
     user_id: uuid.UUID,
     *,
-    daily_minutes: int,
-    direction: Literal["passive", "both"],
-    exercise_types: list[str] | None,
+    daily_minutes: int | None = None,
+    direction: Literal["passive", "both"] | None = None,
+    exercise_types: list[str] | None | _Unset = UNSET,
     pronunciation: bool | None = None,
     accent: Accent | None = None,
     on_the_go_order: Literal["meaning_first", "word_first"] | None = None,
     on_the_go_pause_s: int | None = None,
 ) -> VocabularySettings:
-    """Stage 2's settings screen, all three fields at once -- a PUT rather
-    than three separate setters, because the screen shows them together and
-    saves them together. ``pronunciation`` and ``accent`` (stage 3) are the
-    exceptions that prove the rule: ``None`` leaves them as they were, so a
-    save of the other three can never flip a choice the caller did not
-    mention (a new row starts at the columns' defaults: on, British). The
-    On the go order and pause follow the same rule: only the On the go screen
-    sends them."""
+    """A partial update: a field the caller did not mention is left as it
+    was, so a save of one control can never flip a choice it did not mean
+    (a new row starts at the columns' defaults). ``None`` is "not mentioned"
+    for every field but ``exercise_types``, where ``None`` is the real value
+    "Automatic" and :data:`UNSET` is "not mentioned"."""
     row = await session.get(VocabularySettings, user_id)
     if row is None:
         row = VocabularySettings(user_id=user_id)
-    row.daily_minutes = daily_minutes
-    row.direction = direction
-    row.exercise_types = exercise_types
+    if daily_minutes is not None:
+        row.daily_minutes = daily_minutes
+    if direction is not None:
+        row.direction = direction
+    if not isinstance(exercise_types, _Unset):
+        row.exercise_types = exercise_types
     if pronunciation is not None:
         row.pronunciation = pronunciation
     if accent is not None:
