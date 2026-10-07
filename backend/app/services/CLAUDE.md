@@ -1320,13 +1320,56 @@ below are the ones a later change can silently break.
   The report (coverage per accent, fallbacks by reason with example lemmas,
   levels and durations) goes to `app/data/private/cald/recordings_*.json`.
   Never write the real media root from a trial: set `MEDIA_ROOT`.
+- **Stale rows are deleted, files never.** `plan()` lists the rows of senses
+  it covered that no longer have a pick (`Plan.stale`: a `restore`d sense, a
+  heteronym now without a ref) and `run_import` deletes them in their own
+  transaction first; a pick that fell back only as `file-missing` (a source
+  directory partly unavailable) is NOT stale. `lexicon_cald.restore_senses`
+  (hence `apply`'s undo too) drops the restored senses' rows itself, since the
+  block a ref pointed into is no longer theirs; `recordings` re-plans them.
+  Storage files are content-addressed and shared: nothing deletes one.
+- **More guards in `plan_sense`.** A heteronym never takes a block's audio
+  when `pron_from == 'entry'` (the block borrowed the page's first
+  pronunciation, maybe the other part of speech's): `no-recording-for-accent`.
+  A redirect page's key counts as the block's word only when it is a variant of
+  the headword (`redirect_is_variant`, the matcher's `alias_is_same`); the
+  report counts the redirect blocks refused. On the `pos` basis ONE block with
+  both accents is preferred over per-accent picks, so switching accent keeps
+  the same block.
+- **Retry: the recordings sweep** (`word_recordings.sweep`, called from
+  `lexicon_cald.run_sweep` on `cald_sweep_interval_s`, WITHOUT the model
+  cooldown/switch -- it asks no model). It plans EVERY sense and lets `plan`
+  say what is missing or stale, so it covers lexemes with no refs,
+  no-definition headwords, approved senses, a source directory set later and a
+  changed ref -- the same answer `scripts/cald.py recordings` gives. A scan is
+  skipped while a cheap signature (sense / recording / ref / approval counts,
+  source path, index mtime) is unchanged. `attach_for_lexemes` (the hook) is
+  the fast path for the lexemes it just finished.
+- **`CALD_SOURCE_DIR` for the worker.** `settings.cald_source_dir` is any path
+  on the machine the process runs on; in the worker container it is wherever
+  the source is mounted read-only (e.g. `CALD_SOURCE_DIR=/cald`), and the
+  private index (`app/data/private/cald/`, from the bind-mounted backend dir)
+  must be readable there too -- both or nothing (one log line). Never a host
+  path in a committed file. `cald_recordings_workers` (2) sizes the sweep's
+  process pool.
+- **`recordings --check-files [--confirm-db NAME]`** lists the stored
+  recordings the CONFIGURED storage does not hold and, with `--confirm-db`,
+  deletes those rows (serving falls back to Kokoro; the import puts them
+  back). It is the only existence check: a request never asks storage.
+- **Importer robustness.** The pool recycles its processes
+  (`POOL_RECYCLE`), a `BrokenProcessPool` ends the run with the files not yet
+  done reported as failed (a re-run resumes), it shuts down with
+  `wait=False, cancel_futures=True` (never blocking the event loop), and the
+  thread path is bounded (`THREAD_LIMIT`).
+- **On the go's `_failed_words`** skips the TTS word key of a word whose word
+  part is already answered (`word_ready`): a recording-served word must not be
+  hidden by an old failed render of its TTS key.
 - **New senses** (`lexicon_cald._map_and_apply` -> `word_recordings
   .attach_for_lexemes`): after the CALD hook/sweep applies a pass it attaches
   the recordings of those lexemes' senses -- only when `settings
   .cald_source_dir` names the source directory (empty = ONE log line, nothing
-  attached, they are spoken by Kokoro until `recordings` is run). It never
-  raises into the hook.
-
+  attached; the sweep above picks them up once it is set). It never raises
+  into the hook.
 - **A request only reads and enqueues.** `word_audio` answers a URL or `None`
   ("not ready, and already queued"); synthesis happens in the worker (`app/worker.py`:
   the render loop) or the seed

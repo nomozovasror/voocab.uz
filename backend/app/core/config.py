@@ -158,7 +158,14 @@ class Settings(BaseSettings):
     # (`app.services.word_recordings.attach_for_lexemes`); empty = no
     # recordings for new senses (ONE log line), they are spoken by the
     # synthetic voice. Never inside the repository.
+    #
+    # In the worker container this is wherever the source is mounted
+    # read-only (CALD_SOURCE_DIR=/cald); the private index
+    # (`app/data/private/cald/`) must be there too. Without both, nothing.
     cald_source_dir: str = ""
+    # Processes the recordings sweep decodes with (the sweep can find thousands
+    # of files the first time it runs); 1 = threads in the worker's own process.
+    cald_recordings_workers: int = 2
 
     # --- Text to speech (vocabulary stage 3: app/worker.py's render loop;
     # app/services/tts.py) ---

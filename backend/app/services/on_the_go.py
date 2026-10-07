@@ -132,7 +132,10 @@ async def item_list(session: AsyncSession, user: User) -> tuple[list[Item], int]
             ready.append(Item(word, audio.url, definition_url))
         else:
             waiting.append(word)
-    failed = await _failed_words(session, waiting, senses, lexemes, accent=accent)
+    failed = await _failed_words(
+        session, waiting, senses, lexemes, accent=accent,
+        word_ready={sid for sid, audio in word_urls.items() if audio is not None},
+    )
     return ready, len(waiting) - len(failed)
 
 
@@ -143,6 +146,7 @@ async def _failed_words(
     lexemes: dict[uuid.UUID, Lexeme],
     *,
     accent: Accent = DEFAULT_ACCENT,
+    word_ready: set[uuid.UUID] | frozenset[uuid.UUID] = frozenset(),
 ) -> set[uuid.UUID]:
     """The words with a ``failed`` render among the two parts of their item
     (definition, word). Such a word is not "being prepared": a failed render
@@ -162,9 +166,12 @@ async def _failed_words(
         definition = tts.definition_spec(sense.definition_en, lexeme.lemma, accent)
         if definition is None:
             continue
-        keys_of[word.id] = [
-            definition.key, word_audio.tts_word_spec(sense, lexeme, accent).key
-        ]
+        keys_of[word.id] = [definition.key]
+        # A word already answered (by a human recording, or a ready render) has
+        # no word part that can have failed: its TTS key may belong to an old
+        # failed render nobody serves any more.
+        if sense.id not in word_ready:
+            keys_of[word.id].append(word_audio.tts_word_spec(sense, lexeme, accent).key)
     all_keys = {key for keys in keys_of.values() for key in keys}
     if not all_keys:
         return set()

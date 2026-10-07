@@ -47,10 +47,9 @@ const EXERCISE_TYPES: ExerciseType[] = [
  * cannot do `speak` must not rewrite what a laptop is offered; the speak card
  * turns itself into a typing card where it cannot listen.
  *
- * `PUT /vocabulary/settings` takes `daily_minutes` and `direction` as
- * REQUIRED fields, a plain replace saved together per the server's own
- * docstring, so every control below sends the full triple rather than a
- * lone field the server has no default for.
+ * `PUT /vocabulary/settings` is a PARTIAL update (an absent field is left as
+ * it was), so every control sends ONLY what it changed: a save from a stale
+ * cached copy can never write back a choice another screen made meanwhile.
  */
 export default function VocabularySettingsPage() {
   const qc = useQueryClient();
@@ -72,19 +71,14 @@ export default function VocabularySettingsPage() {
     onError: (e) => toast(getErrorMessage(e)),
   });
 
-  // Every control below calls this rather than `update.mutate` directly —
-  // one place that merges a single change into the full triple the server
-  // requires, so no button here has to remember the other two fields.
+  // Every control below calls this: one place that sends just the changed
+  // field(s). The server answers with the whole row, which is what the cache
+  // is then set from.
   function patch(
     change: Partial<Parameters<typeof vocabularyApi.updateSettings>[0]>,
   ) {
     if (!data) return;
-    update.mutate({
-      daily_minutes: data.daily_minutes,
-      direction: data.direction,
-      exercise_types: data.exercise_types,
-      ...change,
-    });
+    update.mutate(change);
   }
 
   if (isPending) return <SettingsSkeleton />;

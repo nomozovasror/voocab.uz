@@ -20,6 +20,7 @@ and the rules agreed with the owner. Run from ``backend/``::
     # phase 2b: human word recordings (dry run unless --confirm-db)
     uv run python -m scripts.cald recordings [--source <dir>] [--limit N] [--lemma w ...]
     uv run python -m scripts.cald recordings --confirm-db <dbname> [--workers 4]
+    uv run python -m scripts.cald recordings --check-files [--confirm-db <dbname>]
 
     # phase 1: the 100-sense pilot (kept: its review page and dump)
     uv run python -m scripts.cald map --sample 100 --seed 7
@@ -1296,6 +1297,21 @@ async def cmd_apply(confirm_db: str | None, judge: str, out_dir: Path = PRIVATE_
     print(f"needs_letter_hint recomputed ({len(lexemes)} lexemes touched)")
 
 
+async def cmd_check_files(confirm_db: str | None) -> None:
+    """Which recordings the table lists that the configured storage does not
+    hold (``--confirm-db`` deletes those rows, so serving falls back to the
+    synthetic voice; the import puts them back)."""
+    from app.core.database import async_session_factory
+    from app.services import word_recordings as wr
+
+    database = _database_name()
+    if confirm_db and confirm_db != database:
+        raise SystemExit(f"--confirm-db {confirm_db!r} is not the database DATABASE_URL points at "
+                         f"({database!r}); nothing written")
+    result = await wr.check_files(async_session_factory, delete=bool(confirm_db))
+    print(f"database {database!r}: {'DELETE' if confirm_db else 'check only'}; {result}")
+
+
 async def cmd_recordings(confirm_db: str | None, source: Path | None, limit: int | None,
                          lemmas: list[str] | None, workers: int, sample: int,
                          out_dir: Path = PRIVATE_DIR) -> None:
@@ -1343,6 +1359,8 @@ async def cmd_recordings(confirm_db: str | None, source: Path | None, limit: int
         "fallbacks": {reason: dict(per) for reason, per in sorted(decided.fallbacks.items())},
         "fallback_examples": decided.examples,
         "already_imported": decided.already,
+        "stale_rows_to_delete": len(decided.stale),
+        "redirect_blocks_whose_key_is_not_a_variant": wr.redirect_mismatches(index),
         "todo": {"files": len(decided.todo), "files_before_limit": full_todo,
                  "rows": sum(len(r) for r in decided.todo.values())},
     }
@@ -1354,7 +1372,10 @@ async def cmd_recordings(confirm_db: str | None, source: Path | None, limit: int
     for reason, per in sorted(decided.fallbacks.items()):
         print(f"    {reason:34s} {per.get('british', 0):6d} / {per.get('american', 0):6d}")
     print(f"  already in the table: {decided.already}; still to import: "
-          f"{report['todo']['rows']} rows from {report['todo']['files']} files")
+          f"{report['todo']['rows']} rows from {report['todo']['files']} files; "
+          f"stale rows to delete: {len(decided.stale)}")
+    print(f"  redirect pages whose key is not a variant of the headword (refused): "
+          f"{report['redirect_blocks_whose_key_is_not_a_variant']}")
     if not confirm_db:
         report["estimate"] = await wr.estimate(decided.todo, source_dir, sample=sample)
         print(f"  estimate (from {report['estimate']['sampled']} files normalised): "
@@ -1365,11 +1386,11 @@ async def cmd_recordings(confirm_db: str | None, source: Path | None, limit: int
             print(f"\r  {done}/{total} files", end="", flush=True)
 
         stats = await wr.run_import(async_session_factory, decided.todo, source_dir,
-                                    workers=workers, progress=progress)
+                                    stale=decided.stale, workers=workers, progress=progress)
         print()
         levels = list(stats.measured.values())
         report["imported"] = {
-            "files": stats.files, "rows": stats.rows, "mb": round(stats.bytes / 1e6, 2),
+            "files": stats.files, "rows": stats.rows, "stale_removed": stats.stale_removed, "mb": round(stats.bytes / 1e6, 2),
             "failed": stats.failed,
             "duration_ms": {"min": min((m[0] for m in levels), default=0),
                             "max": max((m[0] for m in levels), default=0),
@@ -1583,6 +1604,8 @@ async def main() -> None:
     rc.add_argument("--limit", type=int, help="only the first N lexemes with something to import")
     rc.add_argument("--lemma", dest="lemmas", action="append",
                     help="only this lemma (repeatable); a trial on chosen words")
+    rc.add_argument("--check-files", action="store_true",
+                    help="list (with --confirm-db: delete) rows whose file is not in storage")
     rc.add_argument("--workers", type=int, default=4, help="processes for decode/encode (<=1: one thread)")
     rc.add_argument("--sample", type=int, default=60, help="dry run: files to normalise for the size estimate")
     args = parser.parse_args()
@@ -1634,6 +1657,8 @@ async def main() -> None:
         cmd_review_export(args.out)
     elif args.cmd == "backup":
         cmd_backup()
+    elif args.cmd == "recordings" and args.check_files:
+        await cmd_check_files(args.confirm_db)
     elif args.cmd == "recordings":
         await cmd_recordings(args.confirm_db, args.source, args.limit, args.lemmas, args.workers,
                              args.sample)

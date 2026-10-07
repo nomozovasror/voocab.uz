@@ -269,7 +269,8 @@ async def _import(index, senses, source: Path, *, workers: int = 1):
     async with async_session_factory() as session:
         existing = await wr.load_existing(await session.connection(), [s.id for s in senses])
     decided = wr.plan(index, senses, existing, source_dir=source)
-    stats = await wr.run_import(async_session_factory, decided.todo, source, workers=workers)
+    stats = await wr.run_import(async_session_factory, decided.todo, source,
+                                stale=decided.stale, workers=workers)
     return decided, stats
 
 
@@ -475,3 +476,216 @@ async def test_the_hook_attaches_recordings_only_where_the_source_is_configured(
     assert counts["recordings"] == 2
     assert len(await _recordings(sense.id)) == 2
     assert not await wr.attach_for_lexemes(index, [lexeme.id])  # idempotent: nothing left to do
+
+
+# --- review fixes --------------------------------------------------------------------------------------
+
+
+def test_a_pos_pick_prefers_one_block_with_both_accents() -> None:
+    index = index_of({"wugz": {"headword": "wugz", "blocks": [
+        {"pos": "noun", "guideword": "A", "pron": pron("a-uk.wav", None),  # UK only
+         "senses": [{"definition": "invented: a wugz"}]},
+        {"pos": "noun", "guideword": "B", "pron": pron("b-uk.wav", "b-us.wav"),
+         "senses": [{"definition": "invented: another wugz"}]},
+    ]}})
+    sense = row("wugz", "n")
+    plan = wr.plan(index, [sense], {})
+    assert picked(plan, sense, "british") == "b-uk.wav"  # not A's, though A comes first
+    assert picked(plan, sense, "american") == "b-us.wav"
+
+
+def test_a_heteronym_never_takes_the_entrys_recording_for_a_block_without_its_own() -> None:
+    index = index_of({"record": {"headword": "record", "pron": pron("entry-uk.wav", "entry-us.wav"),
+                                 "blocks": [
+        {"pos": "noun", "pron": pron("noun-uk.wav", "noun-us.wav"),
+         "senses": [{"definition": "invented: a written account"}]},
+        {"pos": "verb",  # no pron of its own: the index gives it the entry's
+         "senses": [{"definition": "invented: to write down"}]},
+    ]}})
+    noun, verb = row("record", "n", "record#0#0"), row("record", "v", "record#1#0")
+    plan = wr.plan(index, [noun, verb], {})
+    assert picked(plan, noun, "british") == "noun-uk.wav"
+    assert picked(plan, verb, "british") is None and picked(plan, verb, "american") is None
+    assert plan.fallbacks[wr.NO_ACCENT] == {"british": 1, "american": 1}
+
+
+def test_the_entrys_recording_is_fine_for_a_word_that_is_not_a_heteronym() -> None:
+    index = index_of({"wugz": {"headword": "wugz", "pron": pron("e-uk.wav", "e-us.wav"), "blocks": [
+        {"pos": "noun", "senses": [{"definition": "invented: a wugz"}]}]}})
+    sense = row("wugz", "n", "wugz#0#0")
+    assert picked(wr.plan(index, [sense], {}), sense, "british") == "e-uk.wav"
+
+
+def test_a_redirect_page_key_counts_only_when_it_is_a_variant_of_the_headword() -> None:
+    index = index_of({
+        # the search for `advisr` landed on a page showing `adviser`: a one-edit variant
+        "advisr": {"headword": "advisr", "blocks": [
+            {"headword": "adviser", "pos": "noun", "pron": pron("a-uk.wav", "a-us.wav"),
+             "senses": [{"definition": "invented: someone who advises"}]}]},
+        # the search for `zork` landed on `plimb`: another word
+        "zork": {"headword": "zork", "blocks": [
+            {"headword": "plimb", "pos": "noun", "pron": pron("p-uk.wav", "p-us.wav"),
+             "senses": [{"definition": "invented: a thing"}]}]},
+    })
+    same, other = row("advisr", "n", "advisr#0#0"), row("zork", "n", "zork#0#0")
+    plan = wr.plan(index, [same, other], {})
+    assert picked(plan, same, "british") == "a-uk.wav"
+    assert picked(plan, other, "british") is None
+    assert plan.fallbacks[wr.OTHER_WORD]["british"] == 1
+    assert wr.redirect_mismatches(index) == 1
+
+
+def test_a_row_with_no_pick_any_more_is_stale_but_a_missing_source_file_is_not(tmp_path: Path) -> None:
+    index = index_of({"wugz": {"headword": "wugz", "blocks": [
+        {"pos": "noun", "pron": pron("here-uk.wav", "gone-us.wav"),
+         "senses": [{"definition": "invented: a wugz"}]}]}})
+    write_wav(tmp_path / "media/audio/here-uk.wav")
+    kept, dropped, outside = row("wugz", "n", "wugz#0#0"), row("zzabsent", "n"), row("wugz", "n")
+    existing = {
+        (kept.id, "british"): "here-uk.wav",
+        (kept.id, "american"): "gone-us.wav",   # the file is not in the source today: leave the row
+        (dropped.id, "british"): "old.wav",     # the sense now has no headword: stale
+    }
+    plan = wr.plan(index, [kept, dropped], existing, source_dir=tmp_path)
+    assert plan.stale == [(dropped.id, "british")]
+    # A sense the plan did not cover is never touched.
+    assert wr.plan(index, [outside], {(dropped.id, "british"): "old.wav"}).stale == []
+
+
+async def test_the_import_deletes_stale_rows_and_never_the_files(
+    created: Created, storage: FakeStorage, tmp_path: Path,
+) -> None:
+    lemma = unique_word()
+    lexeme, sense = await make_lexeme(created, lemma, pos="n")
+    entries = {lemma: {"headword": lemma, "blocks": [
+        {"pos": "noun", "pron": pron("w-uk.wav", "w-us.wav"), "senses": [{"definition": "invented"}]}]}}
+    write_wav(tmp_path / "media/audio/w-uk.wav")
+    write_wav(tmp_path / "media/audio/w-us.wav", freq=600)
+    senses = [wr.SenseRow(sense.id, lexeme.id, lemma, "n", f"{lemma}#0#0")]
+    await _import(index_of(entries), senses, tmp_path)
+    assert len(await _recordings(sense.id)) == 2 and len(storage.objects) == 2
+    # The ref is cleared (what `restore` does) and the lemma is a heteronym now: no pick.
+    senses = [wr.SenseRow(sense.id, lexeme.id, "record", "n", None)]
+    index = index_of({"record": {"headword": "record", "blocks": [
+        {"pos": "noun", "pron": pron("x-uk.wav", "x-us.wav"), "senses": [{"definition": "invented"}]}]}})
+    decided, stats = await _import(index, senses, tmp_path)
+    assert len(decided.stale) == 2 and stats.stale_removed == 2
+    assert await _recordings(sense.id) == []
+    assert len(storage.objects) == 2  # shared, content-addressed: never deleted
+
+
+async def test_restore_drops_the_senses_recordings(created: Created) -> None:
+    from datetime import datetime, timezone
+
+    from app.models.lexicon import LexemeSense
+
+    lexeme, sense = await make_lexeme(created, unique_word(), pos="n")
+    async with async_session_factory() as session:
+        row_ = await session.get(LexemeSense, sense.id)
+        row_.definition_source, row_.cald_ref = "cald", "x#0#0"
+        row_.definition_en_pre_cald, row_.cald_applied_at = "ours", datetime.now(timezone.utc)
+        await session.commit()
+    await _add_recording(sense.id, "british", "rec/a.m4a")
+    async with async_session_factory() as session:
+        counts, _ = await lc.restore_senses(session, [sense.id])
+        await session.commit()
+    assert counts["senses restored"] == 1
+    assert await _recordings(sense.id) == []
+
+
+async def test_check_files_removes_only_rows_whose_file_is_not_in_storage(
+    created: Created, storage: FakeStorage,
+) -> None:
+    _, sense = await make_lexeme(created, unique_word())
+    await _add_recording(sense.id, "british", "rec/present.m4a")
+    await _add_recording(sense.id, "american", "rec/absent.m4a")
+    storage.objects["rec/present.m4a"] = b"x"
+    only = await wr.check_files(async_session_factory, delete=False)
+    assert only["files_missing"] >= 1 and only["rows_removed"] == 0
+    assert len(await _recordings(sense.id)) == 2
+    done = await wr.check_files(async_session_factory, delete=True)
+    assert done["rows_removed"] >= 1
+    assert [r.accent for r in await _recordings(sense.id)] == ["british"]
+
+
+async def test_a_broken_pool_ends_the_run_and_reports_the_rest_as_failed(
+    created: Created, storage: FakeStorage, tmp_path: Path, monkeypatch,
+) -> None:
+    from concurrent.futures.process import BrokenProcessPool
+
+    lemma = unique_word()
+    lexeme, sense = await make_lexeme(created, lemma, pos="n")
+    for name in ("a", "b", "c"):
+        write_wav(tmp_path / f"media/audio/{name}.wav")
+    calls: list[str] = []
+    real = wr._process
+
+    async def flaky(pool, gate, path):
+        calls.append(path)
+        if path.endswith("b.wav"):
+            raise BrokenProcessPool("a worker died")
+        return await real(pool, gate, path)
+
+    monkeypatch.setattr(wr, "_process", flaky)
+    todo = {f"media/audio/{n}.wav": [(sense.id, a, "ref")] for n, a in
+            (("a", "british"), ("b", "american"), ("c", "british"))}
+    # `c` shares the sense and accent with `a`: only the first window matters here.
+    stats = await wr.run_import(async_session_factory, todo, tmp_path, window=1, workers=1)
+    assert [p.rsplit("/", 1)[-1] for p in calls] == ["a.wav", "b.wav"]  # stopped: c never started
+    assert stats.files == 1 and set(stats.failed) == {"b.wav", "c.wav"}
+
+
+async def test_failed_words_skips_the_tts_word_key_of_a_word_that_has_audio(created: Created) -> None:
+    from types import SimpleNamespace
+
+    from sqlalchemy import update
+
+    lemma = unique_word()
+    lexeme, sense = await make_lexeme(created, lemma)
+    spec = tts.word_spec(lemma, None)
+    created.render_keys.append(spec.key)
+    await tts.enqueue([spec])  # an old TTS render of this word that FAILED
+    async with async_session_factory() as session:
+        await session.execute(update(AudioRender).where(AudioRender.key == spec.key).values(status="failed"))
+        await session.commit()
+    created.render_keys.append(tts.definition_spec(sense.definition_en, lemma).key)
+    word = SimpleNamespace(id=sense.id, lexeme_sense_id=sense.id)
+    from app.services import on_the_go
+
+    async with async_session_factory() as session:
+        args = ([word], {sense.id: sense}, {lexeme.id: lexeme})
+        assert await on_the_go._failed_words(session, *args) == {word.id}
+        # Answered by a recording: its word part cannot have failed.
+        assert await on_the_go._failed_words(session, *args, word_ready={sense.id}) == set()
+
+
+async def test_the_sweep_picks_up_a_sense_the_hook_never_saw_and_then_goes_quiet(
+    created: Created, storage: FakeStorage, tmp_path: Path, monkeypatch,
+) -> None:
+    from app.core.config import settings
+
+    lemma = unique_word()
+    lexeme, sense = await make_lexeme(created, lemma, pos="n")  # no cald_ref: the hook skipped it
+    index = index_of({lemma: {"headword": lemma, "blocks": [
+        {"pos": "noun", "pron": pron("s-uk.wav", "s-us.wav"), "senses": [{"definition": "invented"}]}]}})
+    write_wav(tmp_path / "media/audio/s-uk.wav")
+    write_wav(tmp_path / "media/audio/s-us.wav")
+    loads: list[int] = []
+
+    def fake_index(out_dir):
+        loads.append(1)
+        return index
+
+    monkeypatch.setattr(lc, "worker_index", fake_index)
+    monkeypatch.setattr(settings, "cald_recordings_workers", 1)
+    wr.reset_sweep_state()
+
+    monkeypatch.setattr(settings, "cald_source_dir", "")
+    assert not await wr.sweep(tmp_path) and not loads  # no source: nothing, not even the index
+
+    monkeypatch.setattr(settings, "cald_source_dir", str(tmp_path))  # configured LATER
+    counts = await wr.sweep(tmp_path)
+    assert counts["recordings"] >= 2 and len(await _recordings(sense.id)) == 2
+    assert len(loads) == 1
+    assert not await wr.sweep(tmp_path) and len(loads) == 1  # unchanged: the scan is skipped
+    wr.reset_sweep_state()

@@ -208,21 +208,60 @@ def lemma_forms(lemma: str, index: Any) -> set[str]:
 
 def speaks(forms: set[str], block: dict) -> bool:
     """Whether the block's recording is of the word ``forms`` describes: its own
-    headword (or, for a redirect or a phrasal-verb page, the page's key), or a
-    variant spelling it lists. A derived sub-entry's key is NOT its word
-    (`busker` sits under `busk`)."""
+    headword, a phrasal-verb page's key, a redirect page's key -- only when it
+    is a real variant of the headword (:func:`redirect_is_variant`; a page
+    key is where the dictionary's SEARCH landed, not always the same word) --
+    or a variant spelling the block lists. A derived sub-entry's key is NOT its
+    word (`busker` sits under `busk`)."""
     from app.services.lexicon_cald import phrase_forms
 
     own = {str(block["hw"]).lower()} | phrase_forms(block["hw"])
-    if block.get("redirect") or block.get("base"):
+    if block.get("base") or redirect_is_variant(block):
         own.add(str(block["key"]).lower())
     own |= {str(v["word"]).lower() for v in block.get("variants") or []}
     return bool(own & forms)
 
 
-def _block_audio(block: dict, accent: Accent) -> str | None:
+def redirect_is_variant(block: dict) -> bool:
+    """A redirect page's key names the SAME word as its block: a spelling, a
+    hyphen or a one-edit variant (`advisor` -> `adviser`), by the matcher's own
+    test (:func:`app.services.lexicon_cald.alias_is_same`). False for a block
+    that is not a redirect."""
+    from app.services.lexicon_cald import alias_is_same
+
+    return bool(block.get("redirect")) and alias_is_same(str(block["key"]), str(block["hw"]))
+
+
+def redirect_mismatches(index: Any) -> int:
+    """How many redirect blocks have a page key that is NOT a variant of their
+    headword -- the ones :func:`speaks` refuses; counted for the private
+    report so the size of the refusal is known."""
+    return sum(1 for block in index.blocks.values()
+               if block.get("redirect") and not redirect_is_variant(block))
+
+
+def _block_audio(block: dict, accent: Accent, *, heteronym: bool = False) -> str | None:
+    """The block's recording for ``accent``. A heteronym never takes the
+    ENTRY's recording (``pron_from == 'entry'``: the block had none of its own
+    and borrowed the page's): it is the page's first pronunciation, which may
+    be the other part of speech's."""
+    if heteronym and block.get("pron_from") == "entry":
+        return None
     part = (block.get("pron") or {}).get(SOURCE_ACCENT[accent]) or {}
     return part.get("audio") or None
+
+
+def _choose(candidates: list[Callable[[Accent], str | None]], basis: str) -> dict[Accent, Pick | str]:
+    """One recording per accent from ordered ``candidates`` (each: accent ->
+    path or None). The first candidate with BOTH accents wins for both, so a
+    learner who switches accent hears the same block; only when none has both
+    is each accent chosen on its own."""
+    both = next((c for c in candidates if all(c(a) for a in ACCENT_NAMES)), None)
+    out: dict[Accent, Pick | str] = {}
+    for accent in ACCENT_NAMES:
+        path = both(accent) if both else next((p for p in (c(accent) for c in candidates) if p), None)
+        out[accent] = Pick(path, basis) if path else NO_ACCENT
+    return out
 
 
 def is_heteronym_either(lemma: str) -> bool:
@@ -243,6 +282,11 @@ class Plan:
     examples: dict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
     todo: dict[str, list[tuple[uuid.UUID, Accent, str]]] = field(default_factory=dict)
     already: int = 0
+    #: Rows in the table for a sense the plan covered that no longer has a
+    #: pick (a restored ref, a heteronym now without one): to be deleted. NOT
+    #: a pick that merely fell back as ``file-missing`` -- a source directory
+    #: that is partly unavailable must not erase good recordings.
+    stale: list[tuple[uuid.UUID, str]] = field(default_factory=list)
 
     def covered(self, accent: Accent) -> int:
         return sum(1 for (_, a) in self.picks if a == accent)
@@ -268,12 +312,10 @@ def _undefined_headword(index: Any, row: SenseRow) -> dict[Accent, Pick | str]:
         entry for entry in index.undefined_pron.get(lemma, [])
         if any(compatible(row.pos, cls, multi) for cls in entry["classes"])
     ]
-    out: dict[Accent, Pick | str] = {}
-    for accent in ACCENT_NAMES:
-        part = next((e["pron"].get(SOURCE_ACCENT[accent]) for e in entries
-                     if (e["pron"].get(SOURCE_ACCENT[accent]) or {}).get("audio")), None)
-        out[accent] = Pick(part["audio"], BASIS_POS) if part else NO_ACCENT
-    return out
+    def of(entry: dict) -> Callable[[Accent], str | None]:
+        return lambda accent: (entry["pron"].get(SOURCE_ACCENT[accent]) or {}).get("audio")
+
+    return _choose([of(entry) for entry in entries], BASIS_POS)
 
 
 def plan_sense(
@@ -306,14 +348,10 @@ def plan_sense(
                 seen.add(block["id"])
                 blocks.append(block)
     blocks = [block for block in blocks if speaks(forms, block)]
-    out: dict[Accent, Pick | str] = {}
-    for accent in ACCENT_NAMES:
-        if not blocks:
-            out[accent] = OTHER_WORD
-            continue
-        path = next((p for p in (_block_audio(b, accent) for b in blocks) if p), None)
-        out[accent] = Pick(path, basis) if path else NO_ACCENT
-    return out
+    if not blocks:
+        return {accent: OTHER_WORD for accent in ACCENT_NAMES}
+    return _choose(
+        [lambda accent, b=b: _block_audio(b, accent, heteronym=heteronym) for b in blocks], basis)
 
 
 def plan(
@@ -328,12 +366,15 @@ def plan(
     pick whose file is not there fall back as ``file-missing`` instead of
     failing the import later."""
     result = Plan()
+    covered: set[uuid.UUID] = set()
+    unverified: set[tuple[uuid.UUID, str]] = set()
     matches: dict[tuple[str, str], Any] = {}
     forms_of: dict[str, set[str]] = {}
     hetero: dict[str, bool] = {}
     on_disk: dict[str, bool] = {}
     for row in senses:
         result.senses += 1
+        covered.add(row.id)
         key = (row.lemma, row.pos)
         if key not in matches:
             matches[key] = index.match(row.lemma, row.pos)
@@ -353,12 +394,17 @@ def plan(
                     on_disk[pick.path] = (source_dir / pick.path).is_file()
                 if not on_disk[pick.path]:
                     result.fall_back(FILE_MISSING, accent, row.lemma)
+                    unverified.add((row.id, accent))
                     continue
             result.picks[(row.id, accent)] = pick
             if existing.get((row.id, accent)) == pick.file_name:
                 result.already += 1
             else:
                 result.todo.setdefault(pick.path, []).append((row.id, accent, pick.basis))
+    result.stale = sorted(
+        (key for key in existing
+         if key[0] in covered and key not in result.picks and key not in unverified),
+        key=lambda key: (str(key[0]), key[1]))
     return result
 
 
@@ -377,7 +423,7 @@ def restrict(decided: Plan, senses: Iterable[SenseRow], limit: int) -> Plan:
                 break
     keep = set(chosen)
     cut = Plan(senses=decided.senses, picks=decided.picks, fallbacks=decided.fallbacks,
-               examples=decided.examples, already=decided.already)
+               examples=decided.examples, already=decided.already, stale=decided.stale)
     for path, rows in decided.todo.items():
         kept = [r for r in rows if owner.get(r[0]) in keep]
         if kept:
@@ -453,15 +499,27 @@ class ImportStats:
     files: int = 0
     rows: int = 0
     bytes: int = 0
+    stale_removed: int = 0
     failed: dict[str, str] = field(default_factory=dict)
     #: per source file: (duration ms, rms in, rms out, bytes) -- the report's levels
     measured: dict[str, tuple[int, float, float, int]] = field(default_factory=dict)
 
 
-async def _process(pool: ProcessPoolExecutor | None, path: str) -> Normalised | str:
-    if pool is None:
-        return await asyncio.to_thread(process_file, path)
-    return await asyncio.get_running_loop().run_in_executor(pool, process_file, path)
+#: Decodes in flight when there is no process pool (``workers`` <= 1): the
+#: default thread executor would otherwise take a whole window at once.
+THREAD_LIMIT = 4
+#: A pool process is replaced after this many files: PyAV/FFmpeg buffers are
+#: freed by the allocator late, and a 19,000-file import should not grow.
+POOL_RECYCLE = 200
+
+
+async def _process(
+    pool: ProcessPoolExecutor | None, gate: asyncio.Semaphore, path: str
+) -> Normalised | str:
+    async with gate:
+        if pool is None:
+            return await asyncio.to_thread(process_file, path)
+        return await asyncio.get_running_loop().run_in_executor(pool, process_file, path)
 
 
 async def _upsert(session: Any, rows: list[dict[str, Any]]) -> None:
@@ -485,30 +543,68 @@ async def _upsert(session: Any, rows: list[dict[str, Any]]) -> None:
         await (await session.connection()).execute(stmt)
 
 
+async def delete_rows(
+    session_factory: Callable[[], Any], pairs: list[tuple[uuid.UUID, str]]
+) -> int:
+    """Delete the ``(sense, accent)`` rows, in one transaction. NEVER the files:
+    they are content-addressed and other senses share them."""
+    from sqlalchemy import delete, tuple_
+
+    from app.models.word_recording import WordRecording
+
+    if not pairs:
+        return 0
+    async with session_factory() as session:
+        conn = await session.connection()
+        for start in range(0, len(pairs), 500):
+            await conn.execute(delete(WordRecording).where(
+                tuple_(WordRecording.lexeme_sense_id, WordRecording.accent).in_(
+                    pairs[start:start + 500])))
+        await session.commit()
+    return len(pairs)
+
+
 async def run_import(
     session_factory: Callable[[], Any],
     todo: dict[str, list[tuple[uuid.UUID, Accent, str]]],
     source_dir: Path,
     *,
+    stale: list[tuple[uuid.UUID, str]] | None = None,
     workers: int = 1,
     window: int = 64,
     progress: Callable[[int, int], None] | None = None,
 ) -> ImportStats:
-    """Process ``todo`` (:attr:`Plan.todo`) a window of ``window`` source files
-    at a time: normalise in the pool, ``storage.put``, upsert and COMMIT the
-    window's rows. A killed run loses at most one window, and the next
-    :func:`plan` sees the committed rows. ``workers`` <= 1 runs in a thread."""
+    """Delete ``stale`` rows (:attr:`Plan.stale`), then process ``todo``
+    (:attr:`Plan.todo`) a window of ``window`` source files at a time:
+    normalise in the pool, ``storage.put``, upsert and COMMIT the window's
+    rows. A killed run loses at most one window, and the next :func:`plan`
+    sees the committed rows. ``workers`` <= 1 runs in threads, at most
+    :data:`THREAD_LIMIT` at once. A pool that breaks (a worker killed) ends the
+    run: the files not yet done are reported as failed, and a re-run takes
+    them up."""
+    from concurrent.futures.process import BrokenProcessPool
+
     stats = ImportStats()
+    stats.stale_removed = await delete_rows(session_factory, stale or [])
     storage = get_storage()
     paths = sorted(todo)
-    pool = ProcessPoolExecutor(max_workers=workers) if workers > 1 else None
+    pool = (ProcessPoolExecutor(max_workers=workers, max_tasks_per_child=POOL_RECYCLE)
+            if workers > 1 else None)
+    gate = asyncio.Semaphore(workers if pool else THREAD_LIMIT)
     try:
         for start in range(0, len(paths), window):
             chunk = paths[start:start + window]
-            results = await asyncio.gather(*(_process(pool, str(source_dir / p)) for p in chunk))
+            results = await asyncio.gather(
+                *(_process(pool, gate, str(source_dir / p)) for p in chunk),
+                return_exceptions=True)
             rows: list[dict[str, Any]] = []
+            broken = False
             for path, result in zip(chunk, results):
                 name = path.rsplit("/", 1)[-1]
+                if isinstance(result, BaseException):
+                    broken = broken or isinstance(result, BrokenProcessPool)
+                    stats.failed[name] = f"{UNDECODABLE}: {type(result).__name__}: {result}"
+                    continue
                 if isinstance(result, str):
                     stats.failed[name] = result
                     continue
@@ -533,9 +629,15 @@ async def run_import(
                 stats.rows += len(rows)
             if progress:
                 progress(min(start + window, len(paths)), len(paths))
+            if broken:
+                for path in paths[start + window:]:
+                    stats.failed[path.rsplit("/", 1)[-1]] = (
+                        f"{UNDECODABLE}: the worker pool broke before this file")
+                break
     finally:
         if pool is not None:
-            pool.shutdown()
+            # Not `shutdown()`: that blocks the event loop on running children.
+            pool.shutdown(wait=False, cancel_futures=True)
     return stats
 
 
@@ -556,44 +658,174 @@ async def estimate(todo: dict[str, list[Any]], source_dir: Path, *, sample: int 
             "estimated_mb": round(mean * len(paths) / 1_000_000, 1)}
 
 
-# --- The worker's hook ---------------------------------------------------------------------
+async def check_files(
+    session_factory: Callable[[], Any], *, delete: bool, concurrency: int = 16
+) -> dict[str, Any]:
+    """Which stored recordings are missing from the CONFIGURED storage (a
+    bucket not yet filled, a media root on another disk). With ``delete`` their
+    rows go, so serving falls back to Kokoro -- this is the only check: a
+    request never asks storage whether a file exists. A re-run of the import
+    puts them back (the plan sees no row). Returns counts and a few keys."""
+    from sqlalchemy import text
+
+    storage = get_storage()
+    async with session_factory() as session:
+        conn = await session.connection()
+        keys = [r[0] for r in (await conn.execute(text(
+            "select distinct storage_key from word_recordings"))).all()]
+    gate = asyncio.Semaphore(concurrency)
+
+    async def present(key: str) -> bool:
+        async with gate:
+            return await storage.exists(key)
+
+    flags = await asyncio.gather(*(present(key) for key in keys))
+    missing = [key for key, ok in zip(keys, flags) if not ok]
+    removed = 0
+    if delete and missing:
+        from sqlalchemy import bindparam
+        from sqlalchemy.dialects.postgresql import ARRAY
+        from sqlalchemy import String
+
+        async with session_factory() as session:
+            conn = await session.connection()
+            for start in range(0, len(missing), 500):
+                result = await conn.execute(
+                    text("delete from word_recordings where storage_key = any(:keys)")
+                    .bindparams(bindparam("keys", type_=ARRAY(String()))),
+                    {"keys": missing[start:start + 500]})
+                removed += result.rowcount
+            await session.commit()
+    return {"files_checked": len(keys), "files_missing": len(missing), "rows_removed": removed,
+            "examples": missing[:10]}
+
+
+# --- The worker's hook and sweep ---------------------------------------------------------------
+
+
+async def configured_source() -> Path | None:
+    """The source directory on THIS machine (``settings.cald_source_dir`` --
+    in the worker container the read-only mount, e.g. ``/cald``), or ``None``
+    with ONE log line. The directory check is disk I/O: off the event loop."""
+    source = settings.cald_source_dir.strip()
+    if not source:
+        _say_once("no-source", logging.INFO,
+                  "CALD source directory not configured (cald_source_dir); words without a "
+                  "recording are spoken by the synthetic voice")
+        return None
+    source_dir = Path(source).expanduser()
+    if not await asyncio.to_thread((source_dir / "media" / "audio").is_dir):
+        _say_once(f"missing:{source_dir}", logging.WARNING,
+                  "CALD source directory %s has no media/audio; no recordings attached", source_dir)
+        return None
+    return source_dir
+
+
+async def _plan_and_import(
+    index: Any, source_dir: Path, factory: Callable[[], Any], *,
+    lexeme_ids: list[uuid.UUID] | None, workers: int,
+) -> Counter:
+    """Plan ``lexeme_ids`` (None: every lexeme) from what the table holds NOW
+    and do what is missing or stale -- the plan decides, so a sense that was
+    skipped before (no refs, approved, a source directory set later) is picked
+    up by the next call."""
+    counts: Counter = Counter()
+    async with factory() as session:
+        conn = await session.connection()
+        senses = await load_senses(conn, lexeme_ids=lexeme_ids)
+        existing = await load_existing(conn, [s.id for s in senses] if lexeme_ids is not None else None)
+    decided = await asyncio.to_thread(plan, index, senses, existing, source_dir=source_dir)
+    if decided.todo or decided.stale:
+        stats = await run_import(factory, decided.todo, source_dir, stale=decided.stale,
+                                 workers=workers)
+        counts["recordings"] = stats.rows
+        counts["recording files"] = stats.files
+        counts["recordings failed"] = len(stats.failed)
+        counts["recordings removed"] = stats.stale_removed
+    return counts
 
 
 async def attach_for_lexemes(
     index: Any, lexeme_ids: Iterable[uuid.UUID], *, session_factory: Callable[[], Any] | None = None,
 ) -> Counter:
     """Recordings for the senses of ``lexeme_ids``, where the source directory
-    (``settings.cald_source_dir``) is on this machine -- else ONE log line and
-    nothing. For the lexemes the CALD hook just finished: their senses may
-    have a ``cald_ref`` now. Never raises into the hook."""
-    counts: Counter = Counter()
-    source = settings.cald_source_dir.strip()
-    if not source:
-        _say_once("no-source", logging.INFO,
-                  "CALD source directory not configured (cald_source_dir); new senses are spoken "
-                  "by the synthetic voice")
-        return counts
-    source_dir = Path(source).expanduser()
-    if not (source_dir / "media" / "audio").is_dir():
-        _say_once(f"missing:{source_dir}", logging.WARNING,
-                  "CALD source directory %s has no media/audio; no recordings attached", source_dir)
-        return counts
+    is on this machine -- else ONE log line and nothing. For the lexemes the
+    CALD hook just finished: their senses may have a ``cald_ref`` now. What it
+    misses, :func:`sweep` retries. Never raises into the hook."""
+    source_dir = await configured_source()
+    if source_dir is None:
+        return Counter()
     from app.core.database import async_session_factory
 
-    factory = session_factory or async_session_factory
-    ids = list(dict.fromkeys(lexeme_ids))
     try:
-        async with factory() as session:
-            conn = await session.connection()
-            senses = await load_senses(conn, lexeme_ids=ids)
-            existing = await load_existing(conn, [s.id for s in senses])
-        decided = await asyncio.to_thread(plan, index, senses, existing, source_dir=source_dir)
-        if decided.todo:
-            stats = await run_import(factory, decided.todo, source_dir, workers=1)
-            counts["recordings"] = stats.rows
-            counts["recording files"] = stats.files
-            counts["recordings failed"] = len(stats.failed)
+        return await _plan_and_import(
+            index, source_dir, session_factory or async_session_factory,
+            lexeme_ids=list(dict.fromkeys(lexeme_ids)), workers=1)
     except Exception:  # noqa: BLE001 - audio is an enhancement of the definition pass
         logger.exception("attaching recordings failed; the synthetic voice speaks these words")
-        counts["recordings error"] = 1
-    return counts
+        return Counter({"recordings error": 1})
+
+
+#: What the last sweep saw: nothing to do until it changes (see :func:`sweep`).
+_sweep_signature: tuple | None = None
+
+
+def reset_sweep_state() -> None:
+    global _sweep_signature
+    _sweep_signature = None
+
+
+async def _signature(factory: Callable[[], Any], out_dir: Path, source_dir: Path) -> tuple:
+    from sqlalchemy import text
+
+    from app.services.lexicon_cald import INDEX_FILE
+
+    async with factory() as session:
+        conn = await session.connection()
+        counts = (await conn.execute(text(
+            "select (select count(*) from lexeme_senses), (select count(*) from word_recordings), "
+            "(select count(*) from lexeme_senses where cald_ref is not null), "
+            "(select count(*) from lexeme_senses where approved_at is not null)"))).one()
+    index_file = out_dir / INDEX_FILE
+    mtime = index_file.stat().st_mtime_ns if index_file.exists() else None
+    return (tuple(counts), str(source_dir), mtime)
+
+
+async def sweep(
+    out_dir: Path | None = None, *, session_factory: Callable[[], Any] | None = None,
+) -> Counter:
+    """The retry for what :func:`attach_for_lexemes` missed or never saw:
+    lexemes with no refs, no-definition headwords, approved senses, senses
+    created while the hook was paused, a source directory configured LATER, a
+    changed ``cald_ref``. Plans EVERY sense and lets the plan say what is still
+    missing or stale, so it cannot disagree with ``scripts/cald.py
+    recordings``. A scan costs seconds of CPU, so it is skipped while a cheap
+    signature (sense/recording/ref/approval counts, source path, index mtime)
+    is what it was after the last one. Never raises."""
+    global _sweep_signature
+    from app.core.database import async_session_factory
+    from app.services import lexicon_cald as lc
+
+    out_dir = out_dir or lc.PRIVATE_DIR
+    source_dir = await configured_source()
+    if source_dir is None:
+        return Counter()
+    factory = session_factory or async_session_factory
+    try:
+        before = await _signature(factory, out_dir, source_dir)
+        if before == _sweep_signature:
+            return Counter()
+        index = await asyncio.to_thread(lc.worker_index, out_dir)
+        if index is None:
+            return Counter()
+        try:
+            counts = await _plan_and_import(index, source_dir, factory, lexeme_ids=None,
+                                            workers=max(1, settings.cald_recordings_workers))
+        finally:
+            index = None
+            lc._release_memory()
+        _sweep_signature = await _signature(factory, out_dir, source_dir)
+        return counts
+    except Exception:  # noqa: BLE001 - logged; retried next interval
+        logger.exception("the recordings sweep failed")
+        return Counter({"recordings error": 1})

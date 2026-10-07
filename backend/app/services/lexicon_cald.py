@@ -2830,6 +2830,7 @@ async def restore_senses(session, sense_ids: list | None = None
             rows += list((await session.exec(query.where(LexemeSense.id.in_(chunk)))).all())
     touched: set[uuid.UUID] = set()
     locked: set[uuid.UUID] = set()
+    restored_ids: list[uuid.UUID] = []
     for row in rows:
         if is_locked(row):
             locked.add(row.id)
@@ -2855,6 +2856,7 @@ async def restore_senses(session, sense_ids: list | None = None
         row.cald_applied_at = None
         session.add(row)
         touched.add(row.lexeme_id)
+        restored_ids.append(row.id)
         counts["senses restored"] += 1
     mv_query = select(MaterialVocabulary).where(MaterialVocabulary.cefr_level_pre_cald.is_not(None))
     mvs = []
@@ -2871,6 +2873,19 @@ async def restore_senses(session, sense_ids: list | None = None
         session.add(mv)
         counts["material rows restored"] += 1
     await session.flush()
+    # A restored sense has no `cald_ref` any more, so the block its recording
+    # came from is no longer its own: drop the recordings (they may be a
+    # heteronym's other pronunciation). `scripts/cald.py recordings` re-plans
+    # them from the lemma. The files stay: they are shared and content-addressed.
+    if restored_ids:
+        from sqlalchemy import delete
+
+        from app.models.word_recording import WordRecording
+
+        for chunk in _uuid_chunks(restored_ids):
+            await session.execute(delete(WordRecording).where(
+                WordRecording.lexeme_sense_id.in_(chunk)))
+        counts["recordings dropped"] = len(restored_ids)
     await _recompute_lexeme_cefr(session, touched)
     counts["lexemes"] = len(touched)
     return counts, touched
@@ -2960,6 +2975,7 @@ class HookState:
     #: ``_clock()`` value until which the hook holds off
     until: float = 0.0
     last_sweep: float | None = None
+    last_rec_sweep: float | None = None
     #: the sweep's last empty scan: nothing to do while this still holds
     sweep_clean: tuple | None = None
     sweep_tried: Counter = field(default_factory=Counter)
@@ -2974,6 +2990,9 @@ _clock = time.monotonic
 def reset_hook_state() -> None:
     """Forget cooldown, sweep bookkeeping and the once-only log lines
     (tests; a process restart does the same)."""
+    from app.services import word_recordings
+
+    word_recordings.reset_sweep_state()
     global _hook
     _hook = HookState()
     _worker_said.clear()
@@ -3278,7 +3297,28 @@ async def run_hook(lexeme_ids: list, *, out_dir: Path = PRIVATE_DIR, **kwargs) -
 async def run_sweep(*, out_dir: Path = PRIVATE_DIR, **kwargs) -> Counter:
     """What the worker calls every loop: :func:`sweep_unmapped`, at most once
     per `settings.cald_sweep_interval_s` (0 turns it off), under the same
-    policy as :func:`run_hook`."""
+    policy as :func:`run_hook`; and, on its own interval and WITHOUT the
+    model's cooldown or switch (it asks nobody anything), the recordings
+    sweep (:func:`app.services.word_recordings.sweep`)."""
+    counts = await _run_recordings_sweep(out_dir)
+    counts.update(await _run_definitions_sweep(out_dir=out_dir, **kwargs))
+    return counts
+
+
+async def _run_recordings_sweep(out_dir: Path) -> Counter:
+    interval = settings.cald_sweep_interval_s
+    if interval <= 0:
+        return Counter()
+    now = _clock()
+    if _hook.last_rec_sweep is not None and now - _hook.last_rec_sweep < interval:
+        return Counter()
+    _hook.last_rec_sweep = now
+    from app.services import word_recordings
+
+    return await word_recordings.sweep(out_dir)
+
+
+async def _run_definitions_sweep(*, out_dir: Path = PRIVATE_DIR, **kwargs) -> Counter:
     interval = settings.cald_sweep_interval_s
     if interval <= 0 or not settings.cald_map_new_lexemes or hook_cooldown_left() > 0:
         return Counter()
