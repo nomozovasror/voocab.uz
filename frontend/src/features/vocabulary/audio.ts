@@ -32,6 +32,8 @@
  * ties the lock-screen controls to that element).
  */
 
+import { mediaUrl } from "@/features/paper/api";
+
 /** What became of a request to play.
  *  - `started`: sound is on its way.
  *  - `blocked`: the browser wants a gesture first (autoplay policy). The file
@@ -171,7 +173,10 @@ export function playClip(
   const mine = ++claim;
   owner = mine;
   ownerEnded = opts.onEnded ?? null;
-  el.src = url;
+  // The server sends local files as a path (`/media/…`) on ITS origin. The
+  // dev SPA is on another origin, where that path is the app's own HTML page
+  // and every clip "failed" -- resolved the way listening resolves its audio.
+  el.src = mediaUrl(url);
   // Set after `src`: loading a new source resets `playbackRate` to
   // `defaultPlaybackRate` in some engines.
   el.playbackRate = opts.rate ?? 1;

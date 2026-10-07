@@ -975,6 +975,12 @@ are the ones that are easy to undo by accident.
   reveal and the word page all treat it so. The practice reveal asks
   `isPlaying()` before its autoplay, so a word the learner is still hearing is
   not restarted over itself.
+- **Every audio URL goes through `mediaUrl()`** (`features/paper/api.ts`, the
+  one listening uses). Local files come as `/media/…`, a path on the API's
+  origin; the dev SPA runs on another origin, where that path is the app's
+  own HTML page. Played raw, every clip "failed" and the whole feature was
+  silent in the browser while every server test passed. `playClip` and the
+  On the go element resolve it; nothing else sets a `src`.
 - **ONE shared `<audio>` element, unlocked for iOS.** `playClip` swaps `src`
   on one long-lived element instead of `new Audio()` per clip: Safari plays an
   element only inside a gesture, or after a gesture has unlocked THAT element,

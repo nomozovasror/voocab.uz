@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBlock } from "@/components/ui/skeleton";
+import { mediaUrl } from "@/features/paper/api";
 import { stopAudio } from "@/features/vocabulary/audio";
 import { onTheGoKey, vocabularyApi } from "@/features/vocabulary/api";
 
@@ -91,7 +92,8 @@ export default function VocabularyOnTheGoPage() {
     setIndex(i);
     setStarted(true);
     setFinished(false);
-    el.src = item.url;
+    // A local file arrives as a path on the API's origin (see `playClip`).
+    el.src = mediaUrl(item.url);
     if (play) {
       // A refusal here would be the browser's autoplay policy; the user
       // pressed something to get here, so it is unlikely, and the button
