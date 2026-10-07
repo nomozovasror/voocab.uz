@@ -15,8 +15,10 @@ emotion and pitch of the sentence) and dropped them: every word is Kokoro TTS.
   leaving them would be rows pointing at something removed. An item is
   re-rendered on demand with the TTS word (a different input, hence a new key
   -- the TTS-worded items' keys are unchanged). Their FILES are not deleted
-  here: a migration does not reach storage, and `check-files` / a manual
-  sweep owns orphans.
+  here: a migration does not reach storage. Those files, and everything under
+  `clips/`, are orphans nothing will ever look for -- `check-files` checks
+  the other direction (a ready row whose file is missing) -- so they are
+  removed by hand.
 
 Reversible in shape, not in data: `downgrade()` recreates `word_clips` EMPTY
 (the candidates are re-indexed by code that no longer exists, so there is
