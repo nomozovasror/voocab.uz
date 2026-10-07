@@ -263,6 +263,10 @@ class MaterialVocabulary(SQLModel, table=True):
     #: word used unusually is rated on the unusual use. THIS is the figure a
     #: learner sees, because CEFR is a scale they already have a feel for.
     cefr_level: str = Field(default="", max_length=4, index=True)
+    #: ``cefr_level`` before a CALD per-sense level replaced it (the row's
+    #: sense took CALD's level -- `app.services.lexicon_cald`); NULL = not
+    #: re-levelled. `scripts/cald.py restore` puts it back.
+    cefr_level_pre_cald: str | None = Field(default=None, max_length=4)
     #: ``core``, ``common``, ``wider``, ``academic`` or ``off-list``, from the
     #: frequency lists alone. Never shown to a learner -- "NGSL rank 2400" is
     #: a fact about a corpus -- and used for arithmetic instead: it is the

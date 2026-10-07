@@ -5,6 +5,9 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
+# Claude Code git worktrees (each a full checkout of another branch)
+.claude/worktrees/
+
 # uv / virtualenv
 .venv/
 venv/
@@ -25,6 +28,13 @@ backend/media/
 # learner, so --reset can find them again on a later run. Per-database, and
 # never something another checkout should inherit.
 backend/scripts/.seed_vocabulary_state.json
+
+# Third-party content this PUBLIC repository may read but never publish:
+# the Cambridge dictionary import's index, match table, samples, decision
+# logs and anything else `scripts/cald.py` derives from CALD (see that
+# script's docstring). Ignored as a whole directory so a new artefact cannot
+# slip through by having a name nobody listed here.
+backend/app/data/private/
 
 # macOS
 .DS_Store

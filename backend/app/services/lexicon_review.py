@@ -470,12 +470,28 @@ async def fix_and_approve(
     column, recomputed, never hand-set elsewhere) -- fixing the grade a
     reviewer actually sees and leaving the catalogue's own copy stale would
     make the fix invisible everywhere a listing filters or sorts by level.
+
+    A reviewer's decision LOCKS the sense (``approved_at``): the CALD apply
+    and restore skip it from then on (`lexicon_cald.apply_plans`,
+    `restore_senses`), so a re-run never overwrites what was fixed here. Two
+    provenance marks keep that honest. A ``cald`` sense whose DEFINITION was
+    rewritten becomes ``definition_source = 'human'`` (``cald_ref`` and the
+    licence stay: it began as dictionary text); one whose definition was
+    merely approved, or whose Uzbek alone was fixed, stays ``cald``. A
+    ``cald``-graded level the reviewer changed becomes ``cefr_source =
+    'ours'`` (``cald_cefr`` still says what the dictionary has), so nothing
+    later mistakes the reviewer's grade for the dictionary's.
     """
     if meaning_uz is not None:
         sense.meaning_uz = meaning_uz
     if definition_en is not None:
+        if (sense.definition_source == "cald"
+                and definition_en.strip() != sense.definition_en.strip()):
+            sense.definition_source = "human"
         sense.definition_en = definition_en
     if cefr is not None:
+        if sense.cefr_source == "cald" and cefr != sense.cefr:
+            sense.cefr_source = "ours"
         sense.cefr = cefr
         if sense.sense_rank == 1:
             lexeme = await session.get(Lexeme, sense.lexeme_id)

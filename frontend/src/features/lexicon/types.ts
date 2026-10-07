@@ -8,6 +8,12 @@ export interface ReviewRow {
   pos: string;
   is_phrase: boolean;
   cefr: string | null;
+  /** The dictionary's own level for this sense: set on EVERY sense that took
+   *  a dictionary definition, equal to `cefr` where it was taken, different
+   *  where it was 2+ bands away and therefore NOT taken (`cald_cefr_far`, or
+   *  a reviewer's own grade). Null where the dictionary has no level. Show it
+   *  only where it differs from `cefr`. */
+  cald_cefr: string | null;
   frequency_band: string | null;
   sense_rank: number;
   definition_en: string;

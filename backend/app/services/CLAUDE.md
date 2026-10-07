@@ -1117,6 +1117,144 @@ unchanged (one sense).
   `used_here`) and on `SavedWordOut` (word detail only, items `saved`;
   empty on the list/practice rows).
 
+## CALD definitions (`lexicon_cald.py`, `scripts/cald.py`)
+
+English definitions, CEFR and a fresh Uzbek come from the Cambridge Advanced
+Learner's Dictionary where it has the meaning. The engine is
+`app/services/lexicon_cald.py` (its docstring has the reasoning); the command
+line is `scripts/cald.py`.
+
+- **CALD text is NEVER committed.** The repository is public. Everything
+  derived from the source -- index, match table, decision log, usage,
+  reports -- lives in `app/data/private/cald/` (gitignored as a directory) and
+  is backed up with `scripts/cald.py backup` to `~/voocab-dev-backups/`.
+  Tests use invented entries only. A database dump now holds CALD text too:
+  treat it as private.
+- **The rules (agreed 2026-10-07).** A sense mapped `high`/`medium` takes the
+  CALD definition (cross-reference markup cleaned), `low`/`none` keeps ours.
+  A pointer-only CALD sense is followed one hop, else `none`. Two of our senses
+  on one CALD sense both take it; `lemma_senses.arrange` lists an identical
+  definition once WITHIN one part of speech (the anchor wins; nothing is
+  relinked). A CALD per-sense level replaces ours (`cefr_source='cald'`, else
+  `'ours'`), and the material
+  rows of that sense take it too (`cefr_level_pre_cald` keeps theirs);
+  `SavedWordContext` is untouched.
+- **Far levels are checked twice (agreed after the full run).** (1) A
+  mapping whose CALD level is 2+ bands from ours, either way
+  (`VERIFY_BANDS`), is RE-VERIFIED: `JUDGE_MODEL`, twice with the two senses
+  swapped, "is this the same meaning?" (`VERIFY_PROMPT`). `different` in
+  either run, or `unsure` in both, makes it `none` -- old definition, Uzbek
+  and CEFR stay, the reason is in the log; one run missing is `unverified`
+  (not applied, asked again). The owner found narrower senses chosen
+  (`crash` "cause to crash" -> a business failing). (2) The CEFR CAP:
+  CALD's level is taken only within one band of ours (`CEFR_CAP_BANDS`) or
+  where we have none; further away OURS stays (`cefr_source='ours'`),
+  `cald_cefr` keeps CALD's beside it and the review reason `cald_cefr_far`
+  sends it to Studio's queue (English Vocabulary Profile levels describe
+  what learners PRODUCE: `glue`, `nest`, `tractor` come out C1/C2). Material
+  rows follow the APPLIED level: untouched where the sense kept ours. An
+  applied sense the plan later says `none` for is restored by `apply`.
+- Every changed sense gets translation v2 and
+  the comparison judge (`JUDGE_MODEL`, `gemini-3.7-flash`, twice, swapped);
+  **loose keep: the old pair stays if EITHER run says old is better or new is
+  wrong**, and when no run answered; identical text is not judged.
+  `meaning_uz_material` is never touched.
+- **A human decision LOCKS the sense (review fix, 2026-10-07).** A sense with
+  `approved_at` set -- Studio's approve or fix, before or after the first
+  apply -- is skipped by `apply` (also its re-apply branch, which has no drift
+  check) and by `restore` (`--all` or `--sense-id`), reported as `locked by
+  review`; the dry run counts it too. The check reads the ROW, not the
+  plan's item: the approval may be newer than the plan. Its `needs_review` is
+  never set either (an approved sense is not re-opened); for senses apply does
+  write, `needs_review_pre_cald` keeps the old flag and `restore` puts it back.
+  `fix_and_approve` on a CALD sense: a REWRITTEN definition makes
+  `definition_source = 'human'` (`cald_ref` and the `cald` licence stay -- it
+  began as dictionary text; locked like `cald`; the licences page still does
+  not count it as OEWN); an approval or an Uzbek-only fix leaves it `cald`; a
+  changed level turns `cefr_source` to `ours` (`cald_cefr` still shows the
+  dictionary's, and the Studio chip appears only when it differs from `cefr`).
+- **`definition_source` is whose TEXT the definition is** (`oewn`/`model`/
+  `cald`/`human`); `source_id` stays where the SENSE came from (the synset still orders
+  it and drives the letter hint). A CALD sense has licence `cald`. The
+  licences page counts OEWN as `source_id='oewn'` minus CALD-defined senses,
+  and has no Cambridge card (the owner's choice). Every writer that sets
+  `source_id` sets `definition_source` beside it.
+- **Nothing drifts back.** `lexicon_enrich` never touches a locked sense
+  (`definition_source in LOCKED_DEFINITION_SOURCES` = `cald`/`human`;
+  `Sense.locked`): not its definition, CEFR or Uzbek (`step_cefr`/translate
+  skip it), not its `oewn_synset_id`/`oewn_rank`/`oewn_count`/`source_id`
+  (restored in `plan_senses` step 5, so a matcher label cannot relabel it),
+  never absorbed into another sense nor deleted as an unused deep OEWN sense
+  (step 4: a locked sense that lost its rows STAYS, empty, `Sense.lost_rows`,
+  and `apply_work` adds `lemma_merge` unless a human approved it), and
+  `apply_work` writes neither its `review_reasons` nor `needs_review`. The
+  one-off `scripts/lexicon_cleanup.py` commands skip or refuse such senses
+  with a message (`retranslate`/`restore-retranslation`, `list-only`,
+  `delete_lexeme`, `mark_proper`). `word_lists_build._held_sense` and
+  `lexicon._find_or_create_sense` also match a sense by its
+  `definition_en_pre_cald` -- the logs and the materials hold OUR wording --
+  or every rebuild / new row would mint a duplicate.
+- **The worker hook (`run_hook`, `run_sweep`).** After each enrichment pass
+  the worker runs `lexicon_cald.run_hook` on the lexemes it finished (same
+  decision log, nothing asked twice), and each loop `run_sweep`. Only where
+  the private index exists (else one log line). Policy, all in
+  `lexicon_cald._guarded`, all `settings.cald_*`: `cald_map_new_lexemes`
+  (ON by default -- new lexemes are mapped automatically; also switches the
+  sweep off; `tests/conftest.py` does for the whole suite, no test may reach
+  the real API or the private log); a **hard failure** (HTTP 402/401/403, or
+  a 429 that outlasted the client's own retries: `Gemini.hard_status`) stops
+  the pass before the next request (`HookBudget.check`, so the per-item
+  re-asks of `ask_map` are refused too), applies nothing, and pauses the hook:
+  `cald_hook_cooldown_s` (300), doubling to `cald_hook_cooldown_max_s` (6 h),
+  one log line entering the pause and one leaving it; a wall-clock timeout
+  `cald_hook_timeout_s` (300; counts as a failure); a per-pass
+  `cald_hook_pass_budget_usd` (0.50) and a per-day `cald_hook_daily_budget_usd`
+  (3.00, UTC, from `usage.jsonl`'s `worker*` records) cap, logged when they
+  stop it (not a failure). A mapped sense whose Uzbek no translator answered
+  is NOT applied (`deferred (untranslated)`): applied, the hook would never
+  revisit it. Approved senses are never asked about.
+- **The sweep** (`sweep_unmapped`, every `cald_sweep_interval_s` = 30 min,
+  `cald_sweep_batch` 25 lexemes, each tried at most `cald_sweep_max_tries` 3
+  times per worker process, same cooldown/caps/timeout) retries what the hook
+  left: map answers recorded as unanswered, mappings not yet applied, and
+  senses nothing ever asked about -- a `word_lists_build.write_new_sense`
+  sense goes into a lexeme whose `enriched_at` is already set, so the
+  enrichment hook never sees it. An empty scan is remembered by a signature
+  (candidate lexemes + decision-log mtime): the next sweep loads nothing until
+  one changes.
+- **Memory.** The index (~0.45 GB resident while loaded; its raw dict and the
+  `pron` table are NOT kept, only the lookups) and the decision log (27 MB of
+  JSONL, much more as Python objects) are loaded for ONE hook/sweep call and
+  dropped when it ends (`gc.collect()`); nothing is cached between calls. The
+  allocator keeps part of it afterwards (~0.15 GB measured on macOS) until it
+  is reused. Loading takes under a second, which is why dropping is cheaper
+  than keeping it resident in a long-lived worker.
+- **What a re-levelled sense does NOT reach.** A NEW `material_vocabulary`
+  row linked (`lexicon.link_row`) to a sense with `cefr_source = 'cald'` takes
+  that level at link time (its own level in `cefr_level_pre_cald`, restored by
+  `restore`). `hidden`, `unusual` and `vocabulary_load` are left as they are on
+  new and old rows alike: they were derived from the row's own level and the
+  apply never recomputed them.
+- **Every answer is logged, keyed by what was asked** -- the candidates'
+  CONTENT, not just their refs (a ref is a position in the source file).
+  Items are built from a sense's `*_pre_cald` values once applied, so a re-run
+  asks the same questions and `apply` is idempotent.
+- **Everything old is restorable**: the first apply copies `definition_en`,
+  `cefr`, `meaning_uz`, `meaning_uz_alt`, `licence`, `review_reasons`,
+  `needs_review` into
+  `*_pre_cald` (+ `cald_applied_at`); `restore` puts them back.
+- **Commands** (from `backend/`): `index --source ~/Desktop/vocabulary`,
+  `match`, `map --all`, `translate --v2 --all` (pointers, re-verify,
+  translate, compare; `verify --all` runs the re-verification alone and
+  writes `verify_report.txt`), then `apply` (a read-only dry
+  run printing the summary) and `apply --confirm-db <name>` (writes; refuses
+  unless `<name>` is the database `DATABASE_URL` points at). `restore --all |
+  --sense-id <uuid> ... --confirm-db <name>` undoes it (never a locked
+  sense). Model commands stop at
+  `--budget` (USD, CALD total in `usage.jsonl`, default 25). Back up the
+  database before `apply`, and `restore --all` before downgrading the
+  migration.
+
 ## The audio layer: every word is TTS (vocabulary stage 3)
 
 What a learner hears for a word is made in advance, never inside a request.

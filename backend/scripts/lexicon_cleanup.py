@@ -40,7 +40,12 @@ from sqlalchemy import update as sa_update
 from sqlmodel import select
 
 from app.core.database import async_session_factory
-from app.models.lexicon import Lexeme, LexemeSense, TranslationReport
+from app.models.lexicon import (
+    LOCKED_DEFINITION_SOURCES,
+    Lexeme,
+    LexemeSense,
+    TranslationReport,
+)
 from app.models.vocabulary import LookupEvent, MaterialVocabulary, SavedWord
 from app.services import lexicon_enrich as le
 from app.services import lexicon_hints
@@ -59,6 +64,20 @@ def print_usage(usage: le.UsageLog) -> None:
 async def _reason_counts(session) -> Counter:
     rows = (await session.exec(sa_select(LexemeSense.review_reasons))).scalars().all()
     return Counter(r for reasons in rows for r in reasons)
+
+
+def _is_locked(sense: LexemeSense) -> bool:
+    """A CALD sense or a reviewer's rewrite of one (`LOCKED_DEFINITION_SOURCES`):
+    none of these one-off commands may rewrite, strip or delete it. Run
+    `scripts/cald.py restore` first if one really must be redone."""
+    return sense.definition_source in LOCKED_DEFINITION_SOURCES
+
+
+async def _locked_senses(session, lexeme_id: uuid.UUID) -> int:
+    """How many of the lexeme's senses are locked (`_is_locked`)."""
+    return (await session.exec(sa_select(func.count()).select_from(LexemeSense).where(
+        LexemeSense.lexeme_id == lexeme_id,
+        LexemeSense.definition_source.in_(LOCKED_DEFINITION_SOURCES)))).scalar_one()
 
 
 def _set_reasons(sense: LexemeSense, reasons: list[str]) -> None:
@@ -196,13 +215,25 @@ async def _references(session, lexeme_id: uuid.UUID) -> dict[str, int]:
     return {"rows": rows, "saved": saved, "reports": reports}
 
 
-async def delete_lexeme(session, lexeme_id: uuid.UUID) -> None:
-    """A lexeme nothing points at: its senses, then itself."""
+async def delete_lexeme(session, lexeme_id: uuid.UUID) -> bool:
+    """A lexeme nothing points at: its senses, then itself. REFUSED (False,
+    with a message) when one of its senses is a CALD / reviewed one -- the
+    dictionary text and its `*_pre_cald` backup would go with it."""
+    if await _locked_senses(session, lexeme_id):
+        print(f"  not deleted, has a CALD/reviewed sense: {lexeme_id}")
+        return False
     await session.execute(sa_delete(LexemeSense).where(LexemeSense.lexeme_id == lexeme_id))
     await session.execute(sa_delete(Lexeme).where(Lexeme.id == lexeme_id))
+    return True
 
 
-async def mark_proper(session, lexeme: Lexeme) -> None:
+async def mark_proper(session, lexeme: Lexeme) -> bool:
+    """Mark ``lexeme`` a name and null its CEFR. REFUSED (False, with a
+    message) when it has a CALD / reviewed sense: nulling its level would
+    undo the dictionary's (or the reviewer's) grade."""
+    if await _locked_senses(session, lexeme.id):
+        print(f"  not marked proper, has a CALD/reviewed sense: {lexeme.lemma}")
+        return False
     lexeme.is_proper_noun = True
     lexeme.cefr = None
     session.add(lexeme)
@@ -211,6 +242,7 @@ async def mark_proper(session, lexeme: Lexeme) -> None:
         sense.cefr = None
         _set_reasons(sense, [r for r in sense.review_reasons if r not in CEFR_REASONS])
         session.add(sense)
+    return True
 
 
 async def apply_proper(path: Path) -> None:
@@ -227,10 +259,9 @@ async def apply_proper(path: Path) -> None:
                 continue
             refs = await _references(session, lexeme.id)
             if not any(refs.values()):
-                await delete_lexeme(session, lexeme.id)
-                deleted.append(lexeme.lemma)
-            else:
-                await mark_proper(session, lexeme)
+                if await delete_lexeme(session, lexeme.id):
+                    deleted.append(lexeme.lemma)
+            elif await mark_proper(session, lexeme):
                 marked.append((lexeme.lemma, refs))
         await session.commit()
     print(f"deleted {len(deleted)}: {deleted}")
@@ -328,6 +359,13 @@ async def list_only(apply: bool, out: Path | None) -> None:
                 LexemeSense.lexeme_id.in_([lx.id for lx in lexemes])))).all():
             senses_of[sense.lexeme_id].append(sense)
         keys = set((await session.exec(select(Lexeme.lemma, Lexeme.pos))).all())
+    # A lexeme with a CALD / reviewed sense is left alone: this command
+    # deletes `senses[1:]` and rewrites the first.
+    skipped = {lx.id: lx for lx in lexemes if any(_is_locked(s) for s in senses_of[lx.id])}
+    if skipped:
+        print(f"skipped, has a CALD/reviewed sense: {len(skipped)} "
+              f"({[lx.lemma for lx in list(skipped.values())[:10]]}...)")
+        lexemes = [lx for lx in lexemes if lx.id not in skipped]
 
     target: dict[uuid.UUID, dict] = {}
     undecided, gaps = [], []
@@ -441,7 +479,7 @@ async def list_only(apply: bool, out: Path | None) -> None:
                 if any(refs.values()):
                     print(f"  not merged, still referenced: {lx.lemma} {refs}")
                     continue
-                await delete_lexeme(session, lx.id)
+                await delete_lexeme(session, lx.id)  # refuses a CALD/reviewed lexeme
             await session.flush()
             for work in works:
                 lexeme = await session.get(Lexeme, work.id)
@@ -546,7 +584,8 @@ async def retranslate_trial(out: Path, log: Path | None) -> None:
         rows = (await session.exec(
             select(LexemeSense, Lexeme)
             .join(Lexeme, Lexeme.id == LexemeSense.lexeme_id)
-            .where(LexemeSense.review_reasons.contains(["judge_different"]))
+            .where(LexemeSense.review_reasons.contains(["judge_different"]),
+                   LexemeSense.definition_source.not_in(LOCKED_DEFINITION_SOURCES))
             .order_by(LexemeSense.id)
         )).all()
         for sense, _ in rows:
@@ -615,6 +654,9 @@ async def retranslate_decide(trial_path: Path) -> None:
             sense = await session.get(LexemeSense, uuid.UUID(key))
             if sense is None:
                 continue
+            if _is_locked(sense):
+                print(f"  skipped, CALD/reviewed sense: {t.get('lemma', key)}")
+                continue
             if keep and t["new_uz"]:
                 sense.meaning_uz, sense.meaning_uz_alt = t["new_uz"], t["new_alt"]
                 verdict = t["new_verdict"]
@@ -659,6 +701,9 @@ async def restore_retranslation(path: Path, sense_ids: list[str] | None) -> None
             sense = await session.get(LexemeSense, uuid.UUID(key))
             if sense is None:
                 missing.append(t["lemma"])
+                continue
+            if _is_locked(sense):
+                print(f"  skipped, CALD/reviewed sense: {t['lemma']}")
                 continue
             _restore_shape(sense, t)
             session.add(sense)
@@ -765,8 +810,8 @@ async def function_words(apply: bool) -> None:
             refs = await _references(session, lexeme.id)
             if not any(refs.values()):
                 deleted.append(lexeme.lemma)
-                if apply:
-                    await delete_lexeme(session, lexeme.id)
+                if apply and not await delete_lexeme(session, lexeme.id):
+                    deleted.pop()
             else:
                 marked.append(lexeme.lemma)
                 if refs["saved"]:

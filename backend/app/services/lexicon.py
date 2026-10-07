@@ -445,6 +445,18 @@ async def link_row(session: AsyncSession, row: MaterialVocabulary) -> None:
 
     sense = await _find_or_create_sense(session, lexeme, row)
     row.sense_id = sense.id
+    # A sense whose level is the dictionary's (`cefr_source = 'cald'`, the
+    # CALD apply): the material rows of that sense carry its level, and a
+    # row linked after the apply is no exception. The row's own level is
+    # kept once in `cefr_level_pre_cald` (what `scripts/cald.py restore` puts
+    # back). Only where the row has not been re-levelled already, and never
+    # for a name (no level). `hidden`, `unusual` and `vocabulary_load` are
+    # NOT recomputed -- they were derived from the row's own level and the
+    # CALD apply left them alone on the existing rows too.
+    if (sense.cefr_source == "cald" and sense.cefr and not lexeme.is_proper_noun
+            and row.cefr_level_pre_cald is None and row.cefr_level != sense.cefr):
+        row.cefr_level_pre_cald = row.cefr_level
+        row.cefr_level = sense.cefr
 
     # RULE BY KIND, not by row: a proper noun or a function word/single-
     # letter token is never glossed in a material, however it got linked --
@@ -536,7 +548,11 @@ async def _find_or_create_sense(
     ).all()
     if normalised:
         for sense in existing:
-            if normalise_meaning(sense.definition_en) == normalised:
+            # Also what the definition was before CALD replaced it: the
+            # material's wording is OUR wording, and a CALD sense would
+            # otherwise never be found again (a duplicate per new row).
+            if normalised in (normalise_meaning(sense.definition_en),
+                              normalise_meaning(sense.definition_en_pre_cald or "")):
                 return sense
 
     # A proper noun has no level: NULL here is final, not "not graded yet".

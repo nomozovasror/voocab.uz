@@ -11,7 +11,7 @@ area:**
 
 | File | Covers |
 |---|---|
-| `backend/app/services/CLAUDE.md` | Catalogue query, recommendations, collections, difficulty, learner stats, mistake classification, vocabulary, `answers.py` layering |
+| `backend/app/services/CLAUDE.md` | Catalogue query, recommendations, collections, difficulty, learner stats, mistake classification, vocabulary, CALD definitions, `answers.py` layering |
 | `frontend/CLAUDE.md` | Preferences, loading states and skeletons |
 | `frontend/src/features/paper/CLAUDE.md` | What listening and reading SHARE: the skill descriptor, the take engine, question types, the review |
 | `frontend/src/features/reading/CLAUDE.md` | The passage, and why the reading take screen is two panes |

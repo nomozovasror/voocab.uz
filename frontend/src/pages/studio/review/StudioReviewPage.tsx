@@ -317,6 +317,19 @@ function Row({
                 {row.cefr}
               </span>
             )}
+            {/* The dictionary's level, shown only where it differs from the
+                level the sense carries (`cald_cefr` is set on every sense
+                that took a dictionary definition, so a bare check would
+                echo the chip above) -- the reviewer decides which is
+                right. */}
+            {row.cald_cefr && row.cald_cefr !== row.cefr && (
+              <span
+                className="font-mono text-xs text-muted-foreground"
+                title="The dictionary's level for this sense"
+              >
+                dictionary {row.cald_cefr}
+              </span>
+            )}
             {row.frequency_band && (
               <span className="font-mono text-xs text-muted-foreground">
                 {row.frequency_band}

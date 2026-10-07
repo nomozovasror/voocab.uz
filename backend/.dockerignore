@@ -3,3 +3,6 @@ __pycache__
 .pytest_cache
 .ruff_cache
 media
+# Third-party dictionary data (CALD) -- never baked into an image; the dev
+# stack bind-mounts backend/ and so still sees it (app/services/lexicon_cald.py).
+app/data/private

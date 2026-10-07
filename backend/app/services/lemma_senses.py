@@ -78,7 +78,8 @@ def arrange(
 
     The anchor sense first overall; then the anchor lexeme's POS group, then
     the other groups (best-attested first); inside a group SemCor-counted
-    senses by count (rank breaks ties), the rest by our `sense_rank`.
+    senses by count (rank breaks ties), the rest by our `sense_rank`. A
+    definition identical to one already listed is listed once.
     """
     usable = [(lx, s) for lx, s in rows if s.definition_en.strip() or s.meaning_uz.strip()]
     top = max((s.oewn_count or 0 for _, s in usable if s.oewn_count is not None), default=0)
@@ -102,7 +103,30 @@ def arrange(
                 anchor=anchor_sense_id is not None and s.id == anchor_sense_id,
             ))
     # Stable: the anchor moves to the front, the rest keep their order.
-    return sorted(ordered, key=lambda v: not v.anchor)
+    ordered = sorted(ordered, key=lambda v: not v.anchor)
+    # Two of our senses mapped to ONE CALD sense carry the identical
+    # definition (agreed 2026-10-07: both take it, no link moves); a reader
+    # is shown it once. The first in this order stays -- the anchor when it
+    # is one of them -- and only the LIST loses the other: its rows, saved
+    # words and practice are untouched. Only WITHIN one part of speech: the
+    # same text under two (`light` noun / verb, an affix-like gloss) is two
+    # meanings to the reader, and hiding one would hide a whole pos group.
+    seen: set[tuple[str, str]] = set()
+    shown: list[SenseView] = []
+    for view in ordered:
+        key = (view.pos, _definition_key(view.definition_en))
+        if key[1] and key in seen:
+            continue
+        if key[1]:
+            seen.add(key)
+        shown.append(view)
+    return shown
+
+
+def _definition_key(text: str) -> str:
+    """A definition as the dedupe above compares it: case, spacing and a
+    final full stop do not make two definitions different."""
+    return " ".join(text.lower().split()).rstrip(" .;:")
 
 
 async def senses_for(

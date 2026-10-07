@@ -43,11 +43,13 @@ _NGSL_FAMILY_AUTHORS = "Browne, C., Culligan, B. & Phillips, J."
 _NGSL_FAMILY_URL = "https://www.newgeneralservicelist.com"
 
 #: Keyed by `Lexeme.frequency_source` (the NGSL family) or `LexemeSense
-#: .source_id` (`oewn`) -- the two columns `brief-lexicon.md` §9 names as
-#: what the page is generated from. `off-list` and `model` are deliberately
-#: absent: neither is a redistributed third-party source that owes an
-#: attribution (see `app.models.lexicon.SENSE_SOURCES`'s own docstring for
-#: why `model` carries no upstream licence at all).
+#: .source_id` (`oewn`, less the senses whose definition is CALD's -- see
+#: `sources`) -- the two columns `brief-lexicon.md` §9 names as what the
+#: page is generated from. `off-list`, `model` and `cald` are deliberately
+#: absent: the first two are not a redistributed third-party source that
+#: owes an attribution (see `app.models.lexicon.SENSE_SOURCES`'s own
+#: docstring for why `model` carries no upstream licence at all), and the
+#: owner chose no public Cambridge credit.
 REGISTRY: dict[str, _Entry] = {
     "ngsl": _Entry(
         "New General Service List", _NGSL_FAMILY_AUTHORS,
@@ -128,7 +130,7 @@ async def sources(session: AsyncSession) -> list[dict]:
     never a row for a key the database has nothing under, and never a
     fabricated zero. `frequency_source` counts `Lexeme` rows (what those
     lists actually classify); `source_id` counts `LexemeSense` rows (what
-    OEWN's definitions actually cover)."""
+    OEWN's definitions actually cover -- never a CALD-defined sense)."""
     rows: list[dict] = []
 
     freq_stmt = (
@@ -145,9 +147,17 @@ async def sources(session: AsyncSession) -> list[dict]:
             continue
         rows.append({"key": key, "count": count, **entry.__dict__})
 
+    # A sense still ordered by its OEWN synset (`source_id = 'oewn'`) whose
+    # definition is now CALD's (`definition_source = 'cald'`, or a reviewer's
+    # rewrite of it, `'human'`,
+    # `app.services.lexicon_cald`) is not covered by OEWN's licence:
+    # counting it here would claim the text is WordNet's, so it is left out.
+    # `cald` has no registry entry and so no card -- deliberately (the
+    # owner, 2026-10-07): no public Cambridge credit.
     sense_stmt = (
         select(LexemeSense.source_id, func.count(LexemeSense.id))
-        .where(LexemeSense.source_id != "model")
+        .where(LexemeSense.source_id != "model",
+               LexemeSense.definition_source.notin_(("cald", "human")))
         .group_by(LexemeSense.source_id)
     )
     for key, count in (await session.exec(sense_stmt)).all():

@@ -9,6 +9,7 @@ export const REVIEW_REASONS = [
   "ngsl_conflict",
   "material_level_gap",
   "lemma_merge",
+  "cald_cefr_far",
 ] as const;
 
 export type ReviewReason = (typeof REVIEW_REASONS)[number];
@@ -23,6 +24,7 @@ export const REASON_LABEL: Record<ReviewReason, string> = {
   ngsl_conflict: "Frequency conflict",
   material_level_gap: "Level gap vs. material",
   lemma_merge: "Lemma merge",
+  cald_cefr_far: "Dictionary level far from ours",
 };
 
 /** The synthetic second bucket — not a real reason, but filtered and

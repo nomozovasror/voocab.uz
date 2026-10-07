@@ -109,7 +109,12 @@ from sqlalchemy import update as sa_update
 from sqlmodel import select
 
 from app.core.config import settings
-from app.models.lexicon import Lexeme, LexemeSense, TranslationReport
+from app.models.lexicon import (
+    LOCKED_DEFINITION_SOURCES,
+    Lexeme,
+    LexemeSense,
+    TranslationReport,
+)
 from app.models.vocabulary import MaterialVocabulary, SavedWord, SavedWordContext
 from app.models.word_list import WordListEntry
 from app.services.dictionary import GEMINI_CHAT_URL
@@ -305,6 +310,11 @@ class UsageLog:
 
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.M)
 _RETRY_STATUS = {408, 429, 500, 502, 503, 504}
+#: Statuses that say the ACCOUNT, not the request, is the problem: an unpaid
+#: balance (402), a key that is refused (401, 403). Asking again with another
+#: prompt cannot help (`Gemini.hard_status`). A 429 that outlasts every
+#: retry is the same kind of answer.
+_HARD_STATUS = {401, 402, 403}
 
 
 class Gemini:
@@ -322,6 +332,13 @@ class Gemini:
         self._key = api_key if api_key is not None else settings.gemini_api_key
         self._attempts = attempts
         self._client = httpx.AsyncClient(timeout=timeout)
+        #: The HTTP status of the last failure that retrying other prompts
+        #: cannot fix (402/401/403, or a 429 that survived every attempt);
+        #: None until one happens and again after the next success. A
+        #: caller with many requests to make (`lexicon_cald.map_new_lexemes`)
+        #: stops asking the moment it is set -- `ask` itself still returns
+        #: None, as for every other failure.
+        self.hard_status: int | None = None
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -344,6 +361,7 @@ class Gemini:
             "reasoning_effort": EFFORT.get(model, "low"),
         }
         parse_failures = 0
+        last_retry_status: int | None = None
         for attempt in range(1, self._attempts + 1):
             try:
                 response = await self._client.post(
@@ -352,17 +370,22 @@ class Gemini:
                 )
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 logger.warning("%s %s transport error: %s", step, model, exc)
+                last_retry_status = None
                 await self._backoff(attempt)
                 continue
             if response.status_code in _RETRY_STATUS:
                 logger.warning("%s %s HTTP %s", step, model, response.status_code)
+                last_retry_status = response.status_code
                 await self._backoff(attempt)
                 continue
             if response.status_code >= 400:
                 logger.error("%s %s HTTP %s: %s", step, model,
                              response.status_code, response.text[:300])
+                if response.status_code in _HARD_STATUS:
+                    self.hard_status = response.status_code
                 self.usage.fail(model)
                 return None
+            self.hard_status = None
             data = response.json()
             usage = data.get("usage") or {}
             prompt_tokens = int(usage.get("prompt_tokens") or 0)
@@ -381,6 +404,9 @@ class Gemini:
             parse_failures += 1
             if parse_failures >= 2:
                 break
+        else:
+            if last_retry_status == 429:
+                self.hard_status = 429
         self.usage.fail(model)
         return None
 
@@ -562,6 +588,18 @@ class Sense:
     translate: bool = False
     normalise: bool = False
     judge: str | None = None
+    #: A CALD sense, or one a reviewer rewrote (`LexemeSense
+    #: .definition_source in LOCKED_DEFINITION_SOURCES`,
+    #: `app.services.lexicon_cald`): a re-run never rewrites its definition,
+    #: CEFR or Uzbek, never relabels its synset, source or rank, never
+    #: absorbs or deletes it, and never rewrites its review reasons --
+    #: planned, it keeps what it has (`plan_senses`, steps 4 and 5), is not
+    #: graded or translated, and `apply_work` leaves those columns alone.
+    locked: bool = False
+    #: A locked sense whose material rows the matcher gave to other senses:
+    #: it stays, empty, and `apply_work` flags it for review (`lemma_merge`)
+    #: unless it is approved.
+    lost_rows: bool = False
 
 
 @dataclass
@@ -734,6 +772,7 @@ def plan_senses(work: LexemeWork, uses: list[Use], answer: dict | None) -> None:
             oewn_count=old.oewn_count,
             source_id=old.source_id, licence=old.licence,
             review_reasons=list(old.review_reasons), provisional=old.provisional,
+            locked=old.locked, lost_rows=old.lost_rows,
         )
 
     # 1. OEWN groups reuse the sense already carrying that synset.
@@ -849,6 +888,9 @@ def plan_senses(work: LexemeWork, uses: list[Use], answer: dict | None) -> None:
     #    word list or a saved word points at it (`work.referenced`), which
     #    keeps it like a top sense (deleting it would fail the FK and stall
     #    the worker, or silently move a learner's word to another sense).
+    #    A LOCKED sense (CALD / a reviewer's rewrite) is never deleted or
+    #    absorbed, whatever it lost: it stays as it is and is flagged
+    #    (`Sense.lost_rows`) when the matcher gave its rows to other senses.
     #    Anything
     #    else lost its rows to another sense and is absorbed into whichever
     #    planned sense took most of them.
@@ -860,11 +902,15 @@ def plan_senses(work: LexemeWork, uses: list[Use], answer: dict | None) -> None:
             continue
         old_rows = rows_of_sense.get(sense.id, set())
         if not old_rows and sense.oewn_synset_id and sense.oewn_synset_id not in top_synsets \
-                and sense.id not in work.referenced:
+                and sense.id not in work.referenced and not sense.locked:
             work.deleted[sense.id] = None
             continue
-        if sense.oewn_synset_id in top_synsets or not old_rows:
+        if sense.locked or sense.oewn_synset_id in top_synsets or not old_rows:
+            # A locked sense (CALD / a reviewer's rewrite) is never absorbed:
+            # its rows went to other senses, it stays as it is and a human
+            # is told (`Sense.lost_rows`).
             kept = clone(sense)
+            kept.lost_rows = sense.locked and bool(old_rows)
             kept.oewn_rank = sense.oewn_rank
             kept.oewn_count = sense.oewn_count
             kept.row_ids = []
@@ -885,7 +931,30 @@ def plan_senses(work: LexemeWork, uses: list[Use], answer: dict | None) -> None:
 
     senses = list(plan.values()) + kept_untouched
 
-    # 5. OEWN's top sense(s).
+    # 5. A CALD sense keeps its content whatever the groups above did to it
+    #    (relabelled to another synset, cloned for an X group): its
+    #    definition, CEFR and Uzbek are CALD's and the CALD run's, and the
+    #    judge reasons that went with that Uzbek stay too.
+    locked = {s.id: s for s in work.senses if s.locked}
+    for sense in senses:
+        old = locked.get(sense.id) if sense.id is not None else None
+        if old is None:
+            continue
+        sense.locked = True
+        # Its identity too: another synset's label, rank or count, or a model
+        # sense's source, must not move onto it (the synset orders it and
+        # drives the letter hint, and licences count by `source_id`).
+        sense.oewn_synset_id, sense.oewn_rank = old.oewn_synset_id, old.oewn_rank
+        sense.oewn_count, sense.source_id = old.oewn_count, old.source_id
+        sense.definition_en, sense.cefr = old.definition_en, old.cefr
+        sense.meaning_uz, sense.meaning_uz_alt = old.meaning_uz, old.meaning_uz_alt
+        sense.meaning_uz_material, sense.licence = old.meaning_uz_material, old.licence
+        sense.review_reasons = ([r for r in sense.review_reasons if r not in JUDGE_REASONS]
+                                + [r for r in old.review_reasons if r in JUDGE_REASONS])
+        sense.translate = sense.normalise = False
+
+    # 6. OEWN's top sense(s) -- after step 5, so a locked sense's own synset
+    #    (restored there) counts as present and a relabel cannot hide a gap.
     present = {s.oewn_synset_id for s in senses if s.oewn_synset_id}
     for entry in work.oewn[:OEWN_TOP]:
         if entry["synset"] not in present:
@@ -1277,7 +1346,8 @@ async def step_cefr(gemini: Gemini, works: list[LexemeWork]) -> None:
         if work.is_proper_noun:
             for sense in work.plan:
                 sense.cefr = None  # a name has no level
-    items = [(w, s) for w in works if not w.is_proper_noun for s in w.plan]
+    # A CALD sense's level is CALD's or was kept on purpose: not regraded.
+    items = [(w, s) for w in works if not w.is_proper_noun for s in w.plan if not s.locked]
     for batch in _chunks(items, 60):
         text = "\n".join(f"k{i}: {_label(w)} -- {s.definition_en}"
                          for i, (w, s) in enumerate(batch, 1))
@@ -1532,7 +1602,8 @@ async def load_works(session, lexeme_ids: list[uuid.UUID],
         )).all())
     referenced_by: dict = defaultdict(set)
     for s in senses:
-        if s.id in referenced:
+        # A CALD / reviewed sense is kept like a referenced one (`Sense.locked`).
+        if s.id in referenced or s.definition_source in LOCKED_DEFINITION_SOURCES:
             referenced_by[s.lexeme_id].add(s.id)
     works = []
     for lx in lexemes:
@@ -1551,6 +1622,7 @@ async def load_works(session, lexeme_ids: list[uuid.UUID],
                 oewn_count=count_of.get(s.oewn_synset_id),
                 source_id=s.source_id, licence=s.licence, provisional=s.provisional,
                 review_reasons=list(s.review_reasons), sense_rank=s.sense_rank,
+                locked=s.definition_source in LOCKED_DEFINITION_SOURCES,
             ) for s in sorted(senses_by[lx.id], key=lambda s: s.sense_rank)],
             rows=[Row(
                 id=r.id, sense_id=r.sense_id, meaning_en=r.meaning_en, meaning_uz=r.meaning_uz,
@@ -1727,17 +1799,32 @@ async def apply_work(session, work: LexemeWork) -> None:
             row = LexemeSense(lexeme_id=work.id)
             session.add(row)
         row.sense_rank = planned.sense_rank
+        row.provisional = False
+        # A CALD / reviewed sense is never rewritten here, whatever the plan
+        # says (`Sense.locked`; this is the backstop): not its text, level or
+        # Uzbek, not its synset/source/rank labels, not its review state --
+        # a reviewer's approval (`needs_review` False) must survive. The one
+        # thing a re-run may add is the flag for rows the matcher took from
+        # it, and not on a sense a human has approved.
+        if row.definition_source in LOCKED_DEFINITION_SOURCES:
+            if planned.lost_rows and row.approved_at is None \
+                    and "lemma_merge" not in row.review_reasons:
+                row.review_reasons = [*row.review_reasons, "lemma_merge"]
+                row.needs_review = True
+            await session.flush()
+            planned.id = row.id
+            continue
         row.definition_en = planned.definition_en[:DEF_MAX]
         row.meaning_uz = planned.meaning_uz[:UZ_MAX]
         row.meaning_uz_alt = planned.meaning_uz_alt[:UZ_MAX]
         row.meaning_uz_material = planned.meaning_uz_material[:UZ_MAX]
         row.cefr = planned.cefr
+        row.licence = planned.licence
+        row.definition_source = planned.source_id
         row.oewn_synset_id = planned.oewn_synset_id
         row.oewn_rank = planned.oewn_rank
         row.oewn_count = planned.oewn_count
         row.source_id = planned.source_id
-        row.licence = planned.licence
-        row.provisional = False
         row.review_reasons = list(planned.review_reasons)
         row.needs_review = bool(planned.review_reasons)
         await session.flush()

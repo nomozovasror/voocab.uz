@@ -35,6 +35,10 @@ class ReviewRowOut(BaseModel):
     sense_rank: int
     definition_en: str
     meaning_uz: str
+    #: CALD's own level for the sense's CALD definition, where it has one
+    #: (`LexemeSense.cald_cefr`) -- shown beside ``cefr`` for a sense flagged
+    #: ``cald_cefr_far`` (ours was kept against it).
+    cald_cefr: str | None = None
     #: The other translator's candidate -- empty where the judge agreed or
     #: the sense was never machine-translated (a material copy).
     meaning_uz_alt: str

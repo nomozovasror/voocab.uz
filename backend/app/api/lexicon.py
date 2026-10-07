@@ -61,6 +61,7 @@ def _row_out(
         sense_rank=sense.sense_rank,
         definition_en=sense.definition_en,
         meaning_uz=sense.meaning_uz,
+        cald_cefr=sense.cald_cefr,
         meaning_uz_alt=sense.meaning_uz_alt,
         meaning_uz_material=sense.meaning_uz_material,
         review_reasons=sense.review_reasons,

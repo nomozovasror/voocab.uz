@@ -80,7 +80,34 @@ SENSE_SOURCES: tuple[str, ...] = ("oewn", "model")
 #: style -- and carries no third-party obligation at all, hence
 #: `proprietary` rather than any Creative Commons value: there is no
 #: upstream licence to preserve for text this project produced itself.
-SENSE_LICENCES: tuple[str, ...] = ("cc-by-4.0", "proprietary")
+SENSE_LICENCES: tuple[str, ...] = ("cc-by-4.0", "proprietary", "cald")
+
+#: Whose TEXT a sense's `definition_en` is -- `LexemeSense.definition_source`.
+#: Not `SENSE_SOURCES`: `source_id` says where the SENSE came from (an OEWN
+#: synset, which still orders it and drives the letter hint, or a model
+#: sense), this says whose words define it. ``cald``: the Cambridge Advanced
+#: Learner's Dictionary (`app.services.lexicon_cald`), licence ``cald`` --
+#: third-party text this project uses but may not redistribute, so it is
+#: neither ``cc-by-4.0`` (that would claim it is OEWN's) nor ``proprietary``
+#: (that would claim it is ours). The licences page gives it no entry.
+#: ``human``: a CALD sense whose definition a Studio reviewer rewrote
+#: (`lexicon_review.fix_and_approve`) -- the words are the reviewer's, but
+#: `cald_ref` and the ``cald`` licence stay: it began as dictionary text and
+#: is not ours to publish as our own. Locked like ``cald``.
+DEFINITION_SOURCES: tuple[str, ...] = ("oewn", "model", "cald", "human")
+
+#: A sense with one of these `definition_source` values is never rewritten,
+#: re-synset-ed, absorbed or deleted by `lexicon_enrich`, and none of the
+#: one-off cleanup commands (`scripts/lexicon_cleanup.py`) touches it: its
+#: text is the dictionary's or a reviewer's, not a model's to redo. (A sense
+#: with `approved_at` set is ALSO skipped by the CALD apply/restore, whatever
+#: its source: a human decision locks it.)
+LOCKED_DEFINITION_SOURCES: tuple[str, ...] = ("cald", "human")
+
+#: Who graded `LexemeSense.cefr`: ``ours`` (the model, or before P2 the
+#: material majority) or ``cald`` (CALD's per-sense level, which replaces
+#: ours where CALD has one -- agreed 2026-10-07).
+CEFR_SOURCES: tuple[str, ...] = ("ours", "cald")
 
 #: Reasons a `LexemeSense` needs a human's eye, kept SEPARATE from the single
 #: `needs_review` boolean so `translation_reports` and the Studio review tab
@@ -97,7 +124,12 @@ SENSE_LICENCES: tuple[str, ...] = ("cc-by-4.0", "proprietary")
 #: the material rows behind a sense use the headword as another part of
 #: speech (`subject` v glossed "a topic") or define a different word (`ai
 #: safety` glossed as plain "safety"). It flags; it never moves a row to
-#: another lexeme -- that is a human's call.
+#: another lexeme -- that is a human's call. ``cald_cefr_far`` (CALD,
+#: `app.services.lexicon_cald`): the sense took CALD's definition but CALD's
+#: level (`LexemeSense.cald_cefr`) is 2+ bands from ours (`cefr`), so ours
+#: was kept -- English Vocabulary Profile levels describe what learners
+#: produce in writing, and a reviewer decides. Set by the CALD apply only;
+#: carried, never recomputed, by `lexicon_enrich`.
 REVIEW_REASONS: tuple[str, ...] = (
     "judge_different",
     "judge_unsure",
@@ -105,6 +137,7 @@ REVIEW_REASONS: tuple[str, ...] = (
     "material_level_gap",
     "lemma_merge",
     "pos_mismatch",
+    "cald_cefr_far",
 )
 
 #: Where a translation-wrong report was filed from -- the brief is explicit
@@ -309,6 +342,37 @@ class LexemeSense(SQLModel, table=True):
     oewn_count: int | None = Field(default=None)
     source_id: str = Field(default="model", max_length=16)
     licence: str = Field(default="proprietary", max_length=16)
+    #: Whose text `definition_en` is (`DEFINITION_SOURCES`). Every writer
+    #: that sets `source_id` sets this beside it (``oewn``/``model`` alike);
+    #: only `app.services.lexicon_cald` writes ``cald`` (``human`` once a
+    #: reviewer rewrote it), and nothing else may then rewrite the
+    #: definition, the CEFR or the Uzbek (`lexicon_enrich`'s
+    #: ``Sense.locked``; `LOCKED_DEFINITION_SOURCES`).
+    definition_source: str = Field(default="model", max_length=16)
+    #: The CALD sense (``entry#block#sense``) the definition was taken from.
+    cald_ref: str | None = Field(default=None, max_length=200)
+    #: Who graded `cefr` (`CEFR_SOURCES`).
+    cefr_source: str = Field(default="ours", max_length=8)
+    #: CALD's own level for `cald_ref`, applied or not: equal to `cefr` when
+    #: `cefr_source == "cald"`; beside our kept level when it was too far
+    #: from it (the ``cald_cefr_far`` review reason).
+    cald_cefr: str | None = Field(default=None, max_length=4)
+    #: What the first CALD apply replaced, kept for as long as the CALD text
+    #: is there (`scripts/cald.py restore`). NULL = never applied.
+    definition_en_pre_cald: str | None = Field(default=None, max_length=400)
+    cefr_pre_cald: str | None = Field(default=None, max_length=4)
+    meaning_uz_pre_cald: str | None = Field(default=None, max_length=400)
+    meaning_uz_alt_pre_cald: str | None = Field(default=None, max_length=400)
+    licence_pre_cald: str | None = Field(default=None, max_length=16)
+    review_reasons_pre_cald: list[str] | None = Field(
+        default=None, sa_column=Column(ARRAY(TEXT), nullable=True),
+    )
+    #: `needs_review` as it was before the first CALD apply (restore puts
+    #: it back; apply recomputes it from the review reasons otherwise).
+    needs_review_pre_cald: bool | None = Field(default=None)
+    cald_applied_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
 
     needs_review: bool = Field(default=False, index=True)
     review_reasons: list[str] = Field(

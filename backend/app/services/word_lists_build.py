@@ -249,6 +249,10 @@ class SenseInfo:
     oewn_synset_id: str | None
     cefr: str | None
     source_id: str
+    #: What `definition_en` was before the CALD apply replaced it
+    #: (`LexemeSense.definition_en_pre_cald`); "" for a sense never applied.
+    #: A model decision is matched against it too (`_held_sense`).
+    definition_pre_cald: str = ""
 
 
 @dataclass
@@ -342,6 +346,7 @@ async def load_view(session, lemmas: set[str] | None = None) -> LexiconView:
             id=s.id, lexeme_id=s.lexeme_id, sense_rank=s.sense_rank,
             definition_en=s.definition_en, oewn_synset_id=s.oewn_synset_id,
             cefr=s.cefr, source_id=s.source_id,
+            definition_pre_cald=s.definition_en_pre_cald or "",
         ))
     return view
 
@@ -948,7 +953,12 @@ def _find_lexeme(view: LexiconView, lemma: str, pos: str) -> LexemeInfo | None:
 
 
 def _held_sense(view: LexiconView, lemma: str, decision: Decision) -> SenseInfo | None:
-    """The sense the lexicon already has for ``decision``, if any."""
+    """The sense the lexicon already has for ``decision``, if any. A model
+    decision's definition is compared with the sense's text AND with the text
+    it had before CALD replaced it (`definition_pre_cald`): the decision log
+    holds OUR wording, and after `scripts/cald.py apply` the row holds the
+    dictionary's, so matching only the row would mint a duplicate sense on
+    every rebuild."""
     if decision.type == "sense":
         return view.senses.get(decision.sense_id) if decision.sense_id else None
     lexeme = _find_lexeme(view, lemma, decision.pos)
@@ -957,9 +967,12 @@ def _held_sense(view: LexiconView, lemma: str, decision: Decision) -> SenseInfo 
     for sense in view.senses_of.get(lexeme.id, []):
         if decision.type == "oewn" and sense.oewn_synset_id == decision.synset:
             return sense
-        if decision.type == "model" and normalise_meaning(sense.definition_en) \
-                == normalise_meaning(decision.definition):
-            return sense
+        if decision.type == "model":
+            wanted = normalise_meaning(decision.definition)
+            held = [sense.definition_en, *([sense.definition_pre_cald]
+                                           if sense.definition_pre_cald else [])]
+            if wanted in (normalise_meaning(text) for text in held):
+                return sense
     return None
 
 
@@ -1044,6 +1057,7 @@ async def write_new_sense(session, view: LexiconView, item: NewSense,
         cefr=planned.cefr, oewn_synset_id=planned.oewn_synset_id,
         oewn_rank=planned.oewn_rank, oewn_count=planned.oewn_count,
         source_id=planned.source_id, licence=planned.licence,
+        definition_source=planned.source_id,
         provisional=False, needs_review=bool(reasons), review_reasons=reasons,
     )
     session.add(sense)

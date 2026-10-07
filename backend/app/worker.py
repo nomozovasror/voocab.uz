@@ -37,7 +37,12 @@ an earlier pass of THIS loop failed on and left exactly as it found it
 model step for a lexeme has answered). Its own loop for the same reason
 difficulty is: a Gemini call has nothing to do with polling the
 transcription queue, and gating either on the other's pace would be an
-accident of implementation, not a decision.
+accident of implementation, not a decision. A pass's finished lexemes then
+get the CALD full run's treatment (`app.services.lexicon_cald.run_hook`:
+CALD definition, level and a judged Uzbek), only where the private CALD index
+is on this machine and `settings.cald_map_new_lexemes` is on -- under a
+cooldown after a hard API failure, spend caps and a timeout, and followed by a
+slow retry sweep (`run_sweep`) for senses the hook left unanswered or never saw.
 
 **Text to speech** (`app.services.tts`, vocabulary stage 3). The queue is
 ``audio_renders`` -- the same shape as transcription: a request inserts a
@@ -71,6 +76,7 @@ from app.models.audio_render import AudioRender, RenderStatus
 from app.models.lexicon import Lexeme
 from app.services import accents
 from app.services import difficulty as difficulty_service
+from app.services import lexicon_cald as lexicon_cald_service
 from app.services import lexicon_enrich as lexicon_enrich_service
 from app.services import lexicon_hints as lexicon_hints_service
 from app.services import tts as tts_service
@@ -386,6 +392,15 @@ async def _lexicon_enrich_once(
         logger.exception(
             "needs_letter_hint recompute failed for %d lexeme(s)", len(ids)
         )
+    # The CALD full run's treatment for what it never saw: these lexemes'
+    # senses get CALD's definition, level and a judged Uzbek where CALD has
+    # the meaning (`app.services.lexicon_cald.run_hook`: nothing without the
+    # private index or with `cald_map_new_lexemes` off; a cooldown after a
+    # hard failure, spend caps and a wall-clock timeout; it never raises).
+    # The old definition staying one more pass is the smaller failure.
+    counts = await lexicon_cald_service.run_hook(ids)
+    if counts:
+        logger.info("CALD: %s", dict(counts))
     return len(ids)
 
 
@@ -416,6 +431,11 @@ async def _lexicon_loop() -> None:
     try:
         while not _stop_event.is_set():
             done = await _lexicon_enrich_once(gemini, oewn)
+            # The CALD retry sweep (own interval, cooldown and caps; never
+            # raises): senses the hook left unanswered or never saw.
+            swept = await lexicon_cald_service.run_sweep()
+            if swept:
+                logger.info("CALD sweep: %s", dict(swept))
             if done:
                 logger.info(
                     "lexicon: enriched %d lexeme(s), running cost $%.4f",

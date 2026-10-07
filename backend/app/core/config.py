@@ -115,6 +115,43 @@ class Settings(BaseSettings):
     # predictable, large enough that a seed import's whole batch of new
     # words does not take all day to catch up.
     lexicon_enrich_batch_size: int = 10
+    # --- CALD definitions (app/services/lexicon_cald.py) ---
+    # After each enrichment pass the worker maps the lexemes it just
+    # finished to the Cambridge dictionary -- map, translate v2, compare,
+    # apply, as the full run did -- when the private CALD index is on this
+    # machine (app/data/private/cald/, never committed); without it the hook
+    # logs once and does nothing. False turns it off: the test suite does
+    # (tests/conftest.py), because it must never reach the real API or the
+    # private decision log.
+    # ON by default (the owner agreed: a lexeme that arrives after the full
+    # run is mapped automatically); the switch is explicit so a deployment
+    # can turn the hook AND its retry sweep off.
+    cald_map_new_lexemes: bool = True
+    # What keeps the hook from costing more than it is worth. A hard failure
+    # (HTTP 402/401/403, or a 429 that outlasts the client's own retries)
+    # stops the pass at once and pauses the hook: the first pause lasts
+    # `cald_hook_cooldown_s`, each further failure in a row doubles it, up to
+    # `cald_hook_cooldown_max_s` (6 h). One log line on entering the pause and
+    # one on leaving it.
+    cald_hook_cooldown_s: float = 300.0
+    cald_hook_cooldown_max_s: float = 21600.0
+    # Wall-clock limit of one hook (or sweep) call, seconds; 0 = none. A call
+    # that overruns is cancelled and counts as a failure (the cooldown).
+    cald_hook_timeout_s: float = 300.0
+    # Spend caps in USD, from the client's own token counts (pass) and
+    # `usage.jsonl`'s `worker` records (day, UTC); 0 = no cap. The pass stops
+    # before the request that would cross the cap, with a log line.
+    cald_hook_pass_budget_usd: float = 0.50
+    cald_hook_daily_budget_usd: float = 3.00
+    # The retry sweep, run from the enrichment loop: senses of CALD-matched
+    # lexemes whose questions are recorded as unanswered, or were never asked
+    # (a word-list build writes senses into lexemes enrichment had finished).
+    # At most one sweep per `cald_sweep_interval_s` (0 = off), `..._batch`
+    # lexemes each, and a lexeme is tried at most `..._max_tries` times per
+    # worker process. Same cooldown, caps and timeout as the hook.
+    cald_sweep_interval_s: float = 1800.0
+    cald_sweep_batch: int = 25
+    cald_sweep_max_tries: int = 3
 
     # --- Text to speech (vocabulary stage 3: app/worker.py's render loop;
     # app/services/tts.py) ---
