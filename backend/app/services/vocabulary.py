@@ -90,7 +90,7 @@ from app.models.vocabulary import (
 )
 from app.services import dictionary as dictionary_service
 from app.services import practice as practice_service
-from app.services.lexicon import is_excluded_word, link_row
+from app.services.lexicon import is_excluded_word, is_refused_lemma, link_row
 
 logger = logging.getLogger("app.services.vocabulary")
 
@@ -1289,7 +1289,7 @@ async def replace_extracted(
         # a future loosened filter -- can put a function word or a single
         # letter into a material's word list. See
         # `app.services.lexicon.is_excluded_word`.
-        if not lemma or lemma in seen or is_excluded_word(lemma):
+        if not lemma or lemma in seen or is_excluded_word(lemma) or is_refused_lemma(lemma):
             continue
         seen.add(lemma)
         entry = MaterialVocabulary(

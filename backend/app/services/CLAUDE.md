@@ -1333,6 +1333,130 @@ has the reasoning; the rules a later change can silently break:
   `--exclude-file` reads a JSONL's own `sense_id` per line (a batch names other
   senses of the lexeme; they are not excluded).
 
+## Structural clean-up of the lexicon (`lexicon_restructure.py`, `scripts/lexicon_restructure.py`)
+
+The AI review changes a sense's level or Uzbek; this changes the SHAPE: which
+senses exist, which lexeme owns them, which material row points where. That is
+destructive in a way a CEFR fix is not (a dropped sense takes saved words,
+recordings and reports with it), so the engine is built around being exactly
+reversible. The module docstring has the full reasoning; the rules a later
+change can silently break:
+
+- **Ops** (JSONL, `op` + `note`; unknown keys rejected, `_x` keys ignored):
+  `merge_senses`, `delete_sense`, `delete_lexeme`, `merge_lexeme`,
+  `rename_lexeme`, `mark_function_word`, `create_phrase` (alias
+  `create_entry`; `pos` default `phr`, a word pos makes a single-word lexeme),
+  `add_sense`, `relink_rows`, `delete_rows`, and the no-ops `keep`, `skip`,
+  `human` (the AI review's human path: `needs_review` + `review_note`).
+  Files live in `app/data/private/restructure/` (gitignored: they hold lexicon
+  data and the repo is public), next to the `run_<id>.jsonl` reports.
+- **A dry run IS the run, rolled back.** Every op executes for real in one
+  transaction, each in a savepoint, and the caller rolls it all back. Ops must
+  be validated against the state EARLIER ops of the file leave (rows moved,
+  then the now row-less lexeme deleted; a relink, then a merge); the only
+  exact way is not to model it. Never give the dry run a separate code path,
+  and never "optimise" it into a read-only one. A refused op is rolled back
+  to its savepoint with its reason (`removed by op #N earlier in this file`
+  for an id an earlier op deleted); later ops go on.
+- **Stop the worker during a real apply.** `Journal.capture` takes
+  `SELECT ... FOR UPDATE` on every row it records, which stops a concurrent
+  writer from changing a row between the snapshot and the change, but not a
+  worker from starting an enrichment or CALD sweep on a lexeme the file is about
+  to rewrite. Run `apply --confirm-db` with the worker stopped.
+- **One transaction per op, journal before commit.** `Journal` captures the
+  rows an op may touch BEFORE it changes anything (by pk), and a
+  `before_flush` hook raises `UncapturedWrite` for any ORM update or delete of
+  a row not captured, so the snapshot can never be incomplete. Consequently
+  every op touches rows through the ORM and does the database's own
+  `ON DELETE` cascades and `SET NULL`s by hand first (recordings, AI-review
+  logs, `vocabulary_id`, review logs' `saved_word_id`): an invisible cascade
+  is an unrecoverable one. The record (before-images of updated/deleted rows,
+  after-images of all, ids created) is appended to the run report and fsynced,
+  then the op commits, then a `commit` marker follows.
+- **Undo is per op, newest first, and refuses to trample.** An op reverses
+  only if every row it wrote still equals its after-image and every row it
+  deleted is still absent; otherwise that op is reported `skipped` (a person's
+  later edit wins) and the rest go on. Order inside an op: per table, parents
+  first, restore updates THEN re-insert deletes (a saved word moved back
+  before the word it displaced returns: unique per learner and sense), delete
+  what it created children-first. Rules-file edits are reverted too.
+- **Saved words: more progress wins** (`_merge_saved_words`; deliberately not
+  `lexicon_enrich._repoint_saved_words`, which keeps the survivor's word and
+  its history). One learner on both senses: more `reps`, then the later last
+  review, wins and ends up on the surviving sense; a tie keeps the survivor's.
+  The loser's contexts move over (one per material: a duplicate is dropped).
+  Its review LOGS are kept as history but detached (`saved_word_id` NULL, and
+  `context_id` NULL where the context was dropped): the winner's schedule and
+  lapse chain are built from its own logs and must not be extended by another
+  card's answers. Exposures, speak misses and deck memberships fold into the
+  winner. DROPPED with the loser row: its `status`, FSRS state/due/stability,
+  `lapses`, ladder levels and leech/suspension marks. Reports and word-list
+  entries use the existing repoint helpers. `create_phrase`'s `drop_sense`
+  sends dependants to the new sense.
+- **Deleting saved words needs consent.** `delete_lexeme` rejects when saved
+  words hang on its senses unless the line says `"allow_saved_words": true`;
+  its result line always states how many saved words of how many learners.
+  (`delete_rows` only unlinks contexts and `delete_sense` without `into`
+  refuses anything referenced, so neither can delete a saved word.)
+- **Person-approved senses are untouchable** (`approved_at` set by anybody but
+  the review account): not dropped, not absorbed, not overwritten, not
+  re-opened by `human`. Every sense the tool writes is approved by the review
+  account and has a `cald`/`human` definition, so the CALD apply and
+  `lexicon_enrich` leave it alone; text not from CALD is `human` (locked),
+  never `model` (enrichment would rewrite it).
+- **Nothing is re-enriched.** `Lexeme.enriched_at` is never cleared (a new
+  phrase lexeme gets it set): clearing it sends the lexeme back through
+  enrichment, which re-translates its unlocked senses.
+- **CALD text is normalised as `plan_items` does** (`normalise_definition`:
+  `clean_definition`, then `strip_label_lost_prefix`) so an added sense equals
+  the existing CALD senses. `add_sense` needs an Uzbek meaning: `translate`
+  runs first and uses production's `step_translate` (two translators, the
+  judge twice), writes `<file>.translated.jsonl` with `judge`, and a verdict
+  that is not `same` sets `needs_review` + `judge_unsure|different`, which
+  `apply` carries onto the sense. It stops on the spend cap, an account-level
+  HTTP error, or two empty chunks, leaving the rest empty.
+- **Deleted lemmas and merged headwords must stay that way:
+  `app/data/lexicon_rules.json`** (committed; keyed by lemma, never by id, so
+  it replays on any database). Entries carry the run id and op number ONLY,
+  never the reviewer's note (the repo is public; a note may quote dictionary
+  text).
+  * `refused` lemmas are refused by `lexicon.is_refused_lemma`, used by the
+    WRITERS and builders only: `replace_extracted`, `word_lists_build`
+    (`exclusion_reason` -> `refused`), `build_lexicon`'s list-only selection.
+    `is_excluded_word` keeps its old meaning and is the only one the learner's
+    lookup path (`_generate`, `_from_lexicon`) asks: a reviewer's clean-up must
+    never turn a tapped word into "no answer". `delete_lexeme` refuses a lemma
+    only if no other lexeme (any pos) has it, it does not reduce by the
+    inflection rule to an existing lexeme, and CALD does not list it as a
+    headword; if the CALD index cannot be loaded the op is REJECTED (a
+    refusal that was not checked must not be written; `"refuse": false`
+    deletes without refusing). Otherwise the result line says `not refused: <why>`.
+  * `aliases` `(lemma, pos) -> (lemma, pos)` are consulted by
+    `_find_or_create_lexeme` and `build_lexicon.canonical_key` only when NO
+    lexeme has the exact `(lemma, pos)`: a real lexeme beats an alias, and
+    `merge_lexeme`/`rename_lexeme` skip sources that have a lexeme of their
+    own. One alias per distinct row lemma too (rows keep their own `lemma`:
+    unique per material); chains collapse; an alias keyed by a real target is
+    dropped.
+  * Reading never raises (`lexicon_rules`, on the request path): a malformed
+    file is logged once and the last good rules stay; entries are validated.
+    The TOOL's `read_rules_file` raises instead, so it never overwrites a file
+    it could not read.
+  * Written only AFTER the op's commit, from a fresh read under a lock
+    (`rules_lock`), recorded as a `rules` record in the run report so `undo`
+    reverses exactly what was written, even for an op with no commit marker.
+    The file is mtime-checked, so a long-lived worker notices an edit.
+- **What the rows keep.** `material_vocabulary.lemma`/`surface`/spans are never
+  rewritten; a moved row takes the target's `pos` and, for a phrase lexeme,
+  `is_phrase`, and a CALD-levelled sense's level by `link_row`'s rule.
+  `saved_words.lemma` and the review logs keep what the learner met.
+- **Commands** (from `backend/`): `translate --decisions F [--max-usd N]`;
+  `apply --decisions F [--confirm-db NAME] [-v]` (dry run without it);
+  `undo --run ID [--ops N ...] [--confirm-db NAME]` (ID: 12 hex characters); `status`. Tests run ONLY
+  against a throwaway database named `voocab_restructure_test` (its fixture
+  truncates and refuses any other name; the whole suite refuses any database
+  without "test" in its name, `tests/conftest.py`).
+
 ## The audio layer: a word is a recording or TTS (vocabulary stage 3)
 
 What a learner hears for a word is made in advance, never inside a request.

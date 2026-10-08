@@ -101,6 +101,7 @@ from app.services.lexicon import (
     WORDLISTS,
     frequency_lists,
     is_excluded_word,
+    is_refused_lemma,
     lexeme_is_phrase,
     normalise_meaning,
 )
@@ -379,6 +380,8 @@ def exclusion_reason(lemma: str, lexemes: list[LexemeInfo]) -> str | None:
         return "single_letter"
     if is_excluded_word(lemma):
         return "function_word"
+    if is_refused_lemma(lemma):
+        return "refused"
     if lexemes and all(lx.flagged for lx in lexemes):
         return "proper_noun" if any(lx.is_proper_noun for lx in lexemes) else "function_word"
     return None

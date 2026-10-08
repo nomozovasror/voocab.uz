@@ -131,6 +131,8 @@ from app.services.lexicon import (
     WORDLISTS,
     build_merge_map,
     is_excluded_word,
+    is_refused_lemma,
+    lexicon_rules,
     lexeme_is_phrase as _lexeme_is_phrase,
     merge_candidate as _merge_candidate,
     normalise_meaning as _normalise_meaning,
@@ -344,8 +346,15 @@ async def build(session, allow_wipe: bool = False) -> dict:
     print(f"  {len(merged_pairs)} raw (lemma, pos) pairs merged into "
           f"{len(merged_lexeme_keys)} lexemes")
 
+    # Merged/renamed headwords stay merged -- but a lexeme that exists under
+    # the exact (lemma, pos) beats an alias (`lexicon._find_or_create_lexeme`).
+    existing_keys = set((await session.exec(sm_select(Lexeme.lemma, Lexeme.pos))).all())
+    aliases = {k: v for k, v in lexicon_rules().aliases.items() if k not in existing_keys}
+
     def canonical_key(row: dict) -> tuple[str, str]:
         pair = (row["lemma"], row["pos"])
+        if pair in aliases:
+            return aliases[pair]
         return merge_map.get(pair, pair) if pair in word_pairs else pair
 
     material_rows_by_key: dict[tuple[str, str], list[dict]] = defaultdict(list)
@@ -365,7 +374,7 @@ async def build(session, allow_wipe: bool = False) -> dict:
     # here, not touched here either.
     list_only_lemmas = sorted(
         lemma for lemma in lists.all_lemmas() - material_lemmas
-        if not is_excluded_word(lemma)
+        if not is_excluded_word(lemma) and not is_refused_lemma(lemma)
     )
     print(f"  {len(list_only_lemmas)} list-only lemmas")
 

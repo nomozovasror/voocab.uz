@@ -74,8 +74,12 @@ documents both copies and how they are kept in sync.
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import re
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from sqlalchemy.exc import IntegrityError
@@ -404,7 +408,7 @@ FUNCTION_WORDS: frozenset[str] = frozenset({
 
 
 def is_excluded_word(lemma: str) -> bool:
-    """A single-letter token, or one of :data:`FUNCTION_WORDS` -- neither is
+    """A single-letter token or one of :data:`FUNCTION_WORDS` -- neither is
     vocabulary, the same "not a word worth teaching" judgement
     :func:`looks_like_name` makes about a name, made about grammar instead.
 
@@ -415,9 +419,129 @@ def is_excluded_word(lemma: str) -> bool:
     `scripts/build_lexicon.py`, so neither ever manufactures what
     `scripts/lexicon_cleanup.py function-words` would then have to clean up
     again on its next run.
+
+    Deliberately NOT affected by the refused list (:func:`is_refused_lemma`):
+    this one also guards the learner's lookup (`_generate`, `_from_lexicon`),
+    where a reviewer's clean-up of the dictionary must never turn a tapped
+    word into "no answer".
     """
     lemma = (lemma or "").strip().lower()
     return len(lemma) == 1 or lemma in FUNCTION_WORDS
+
+
+def is_refused_lemma(lemma: str) -> bool:
+    """A lemma a reviewer deleted as junk (`lexicon_rules.json`): the WRITERS
+    and builders (`replace_extracted`, `build_lexicon`'s list-only selection,
+    `word_lists_build`) never make it again. Not used on the lookup path."""
+    return (lemma or "").strip().lower() in lexicon_rules().refused
+
+
+# --- Refused lemmas and aliases (`scripts/lexicon_restructure.py`) -----------
+
+#: A small, committed JSON file: ``{"refused": [{"lemma", "run", "op"}],
+#: "aliases": [{"from": {"lemma", "pos"}, "to": {"lemma", "pos"}, "run",
+#: "op"}]}``. It holds the two things a structural clean-up has to make STICK,
+#: which a database delete or merge alone cannot: a junk lemma a reviewer
+#: deleted must not be minted again by the next extraction, and a lexeme
+#: merged into another must not be recreated the next time a row is written
+#: under its old spelling. Keyed by lemma / (lemma, pos), never by a database
+#: id, so it replays on any database. Entries carry the run id and op number
+#: only -- never the reviewer's note (the repository is public and a note may
+#: quote dictionary text). Read through :func:`lexicon_rules`.
+RULES_PATH = Path(__file__).resolve().parents[1] / "data" / "lexicon_rules.json"
+
+logger = logging.getLogger("app.services.lexicon")
+
+
+@dataclass(frozen=True)
+class LexiconRules:
+    refused: frozenset[str] = frozenset()
+    #: ``(lemma, pos)`` -> ``(lemma, pos)`` of the lexeme to use instead.
+    aliases: dict[tuple[str, str], tuple[str, str]] = field(default_factory=dict)
+
+
+def _clean_rules(data: object) -> dict:
+    """Entries that are well-formed, nothing else: a bad entry is dropped, not
+    fatal. Raises ``ValueError`` only for a document that is not an object."""
+    if not isinstance(data, dict):
+        raise ValueError("the rules file is not a JSON object")
+    refused, aliases = [], []
+    for entry in data.get("refused") or []:
+        if isinstance(entry, dict) and isinstance(entry.get("lemma"), str) and entry["lemma"].strip():
+            refused.append(entry)
+    for entry in data.get("aliases") or []:
+        try:
+            src, dst = entry["from"], entry["to"]
+            ok = all(isinstance(x[k], str) for x in (src, dst) for k in ("lemma", "pos")) \
+                and src["lemma"].strip() and dst["lemma"].strip()
+        except (KeyError, TypeError):
+            ok = False
+        if ok and (src["lemma"], src["pos"]) != (dst["lemma"], dst["pos"]):
+            aliases.append(entry)
+    return {"refused": refused, "aliases": aliases}
+
+
+def read_rules_file(path: Path | None = None) -> dict:
+    """The validated JSON (empty lists where the file is missing). RAISES on
+    malformed JSON -- for the tool that is about to rewrite the file, which
+    must not overwrite what it could not read. Readers on a request path use
+    :func:`lexicon_rules`, which never raises."""
+    path = path or RULES_PATH
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"refused": [], "aliases": []}
+    return _clean_rules(raw)
+
+
+def write_rules_file(data: dict, path: Path | None = None) -> None:
+    """Atomic (temp + replace), sorted, so a diff shows only what changed."""
+    path = path or RULES_PATH
+    data = {
+        "refused": sorted(data.get("refused", []), key=lambda e: e["lemma"]),
+        "aliases": sorted(data.get("aliases", []),
+                          key=lambda e: (e["from"]["lemma"], e["from"]["pos"])),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+_rules_cache: tuple[str, float | None, LexiconRules] | None = None
+_rules_warned: str | None = None
+
+
+def lexicon_rules() -> LexiconRules:
+    """The rules file, re-read only when its modification time changes. NEVER
+    raises (it is on the request path): a malformed file is logged once per
+    state and the last good rules stay in force (empty if there were none)."""
+    global _rules_cache, _rules_warned
+    path = RULES_PATH
+    try:
+        mtime: float | None = path.stat().st_mtime
+    except OSError:
+        mtime = None
+    if _rules_cache is not None and _rules_cache[0] == str(path) and _rules_cache[1] == mtime:
+        return _rules_cache[2]
+    previous = _rules_cache[2] if _rules_cache is not None and _rules_cache[0] == str(path) \
+        else LexiconRules()
+    try:
+        data = read_rules_file(path)
+        rules = LexiconRules(
+            refused=frozenset(e["lemma"].strip().lower() for e in data["refused"]),
+            aliases={(e["from"]["lemma"], e["from"]["pos"]): (e["to"]["lemma"], e["to"]["pos"])
+                     for e in data["aliases"]},
+        )
+    except (OSError, ValueError) as exc:
+        marker = f"{path}:{mtime}"
+        if _rules_warned != marker:
+            _rules_warned = marker
+            logger.error("lexicon rules file %s is unreadable (%s); keeping the last good rules",
+                         path, exc)
+        rules = previous
+    _rules_cache = (str(path), mtime, rules)
+    return rules
 
 
 # --- Find-or-create -------------------------------------------------------
@@ -479,6 +603,16 @@ async def _find_or_create_lexeme(
     ).first()
     if found is not None:
         return found
+
+    # A merged or renamed headword is not recreated: the rules file says which
+    # lexeme now holds it (`lexicon_rules`). Only when no lexeme has this exact
+    # (lemma, pos) -- a real lexeme always beats an alias.
+    alias = lexicon_rules().aliases.get((lemma, pos))
+    if alias is not None:
+        aliased = (await session.exec(
+            select(Lexeme).where(Lexeme.lemma == alias[0], Lexeme.pos == alias[1]))).first()
+        if aliased is not None:
+            return aliased
 
     if not is_phrase and pos:
         known = set(
