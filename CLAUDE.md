@@ -82,10 +82,16 @@ across all four places when changing them:
 every schema change had to be migrated twice and anything run from the host
 landed somewhere the site never looked.
 
-The cost of collapsing them: `uv run pytest` writes into the same database the
-site reads, so test rows show up in Studio. Run tests against a throwaway
-database when that matters:
+The cost of collapsing them: tests write into whatever database they run
+against, and some rewrite every lexeme sense. **Plain `uv run pytest` now
+refuses to run** (`tests/conftest.py` aborts the session before anything
+connects) unless the configured database has "test" in its name and is not
+`app` -- it once destroyed the dev data. Always name a test database inline:
 
 ```bash
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/app_test uv run pytest
 ```
+
+(or a named throwaway such as `voocab_restructure_test`; create it, run
+`alembic upgrade head` against it, drop it when done). Never `export` the
+variable: set it in the same command.
