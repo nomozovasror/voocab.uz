@@ -61,3 +61,4 @@ catalogue.db
 
 # Machine-specific compose additions (e.g. the dictionary source mount).
 docker-compose.override.yml
+backend/app/data/lexicon_rules.json.lock
