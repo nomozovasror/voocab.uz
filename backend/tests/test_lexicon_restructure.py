@@ -1034,3 +1034,63 @@ async def test_translate_stops_on_a_payment_failure_and_leaves_the_rest_empty(cl
                                     max_usd=50.0, chunk=2, log=lambda *_: None)
     assert stats["translated"] == 0 and "402" in stats["stopped"] and stats["remaining"] == 4
     assert lr.translated_path(src).exists()
+
+
+# --- set_sense --------------------------------------------------------------------------------------------
+
+
+async def test_set_sense_changes_fields_approves_and_undoes(clean):
+    w = await world()
+    before = await dump()
+    results, run_id = await run(clean, [
+        op("set_sense", sense_id=w.a1, cefr="B1", meaning_uz="yangi, asosiy", meaning_uz_alt="avval"),
+        op("set_sense", sense_id=w.a2, needs_review=True),
+        op("set_sense", sense_id=w.a2, needs_review=False),
+        op("set_sense", sense_id=w.a3, cefr="B1"),   # already B1: nothing to change
+    ])
+    assert outcomes(results) == ["applied", "applied", "applied", "unchanged"], results
+    async with async_session_factory() as session:
+        a1 = await session.get(LexemeSense, w.a1)
+        bot = (await session.exec(select(User).where(User.email == REVIEW_BOT_EMAIL))).one()
+        assert (a1.cefr, a1.meaning_uz, a1.meaning_uz_alt) == ("B1", "yangi, asosiy", "avval")
+        assert a1.approved_by == bot.id and not a1.needs_review and "because invented" in a1.review_note
+        assert a1.review_reasons == ["ngsl_conflict"]  # kept as history
+        assert (await session.get(Lexeme, w.alpha)).cefr == "B1"   # rank 1 -> the lexeme follows
+        a2 = await session.get(LexemeSense, w.a2)
+        assert a2.approved_by == bot.id and not a2.needs_review
+        await session.rollback()
+    await undo(clean, run_id)
+    assert await dump() == before
+
+
+async def test_set_sense_flags_a_sense_for_a_person_alone(clean):
+    w = await world()
+    results, _ = await run(clean, [
+        op("set_sense", sense_id=w.a2, needs_review=True),
+        op("set_sense", sense_id=w.a3, needs_review=True, cefr="A2"),
+    ])
+    assert outcomes(results) == ["applied", "rejected"]
+    a2 = await get(LexemeSense, w.a2)
+    assert a2.needs_review and a2.approved_at is None and "because invented" in a2.review_note
+
+
+async def test_set_sense_refuses_a_person_approved_sense_and_bad_values(clean):
+    w = await world()
+    async with async_session_factory() as session:
+        a2 = await session.get(LexemeSense, w.a2)
+        a2.approved_by, a2.approved_at = w.user, datetime.now(timezone.utc)
+        session.add(a2)
+        await session.commit()
+    results, _ = await run(clean, [
+        op("set_sense", sense_id=w.a2, cefr="C2"),
+        op("set_sense", sense_id=w.a1),                                   # nothing given
+        op("set_sense", sense_id=w.a1, cefr="Z9"),
+        op("set_sense", sense_id=w.a1, meaning_uz="ўзбек"),
+        op("set_sense", sense_id=w.a1, meaning_uz="bir", meaning_uz_alt="BIR"),
+        op("set_sense", sense_id=w.a1, needs_review="no"),
+        op("set_sense", sense_id=uuid.uuid4(), cefr="B1"),
+    ])
+    assert outcomes(results) == ["rejected"] * 7, results
+    assert "person" in results[0].detail
+    assert (await get(LexemeSense, w.a2)).approved_by == w.user
+    assert (await get(LexemeSense, w.a2)).cefr == "B2"

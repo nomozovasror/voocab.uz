@@ -146,7 +146,7 @@ RESTRUCTURE_DIR = Path(__file__).resolve().parents[1] / "data" / "private" / "re
 OPS: tuple[str, ...] = (
     "merge_senses", "delete_lexeme", "merge_lexeme", "rename_lexeme",
     "mark_function_word", "create_phrase", "add_sense", "relink_rows", "delete_sense",
-    "delete_rows", "keep", "skip", "human",
+    "delete_rows", "set_sense", "keep", "skip", "human",
 )
 #: Accepted spellings of an op, normalised by `parse_op`.
 OP_ALIASES = {"create_entry": "create_phrase"}
@@ -160,6 +160,7 @@ OP_KEYS: dict[str, frozenset[str]] = {
     "mark_function_word": frozenset({"lexeme_id"}),
     "delete_sense": frozenset({"sense_id", "into"}),
     "delete_rows": frozenset({"rows"}),
+    "set_sense": frozenset({"sense_id", "cefr", "meaning_uz", "meaning_uz_alt", "needs_review"}),
     "create_phrase": frozenset({"lemma", "pos", "definition_en", "cefr", "meaning_uz", "meaning_uz_alt",
                                 "cald_ref", "rows", "drop_sense", "cald_cefr", "judge",
                                 "needs_review", "review_reasons"}),
@@ -700,6 +701,22 @@ def parse_op(raw: Any) -> dict:
             raise Reject(f"review_reasons may only hold {list(JUDGE_REASONS)}")
         out["needs_review"] = needs
         out["review_reasons"] = list(dict.fromkeys(reasons)) if needs else []
+    elif op == "set_sense":
+        out["sense_id"] = _uuid(raw.get("sense_id"), "sense_id")
+        out["cefr"] = _cefr(raw.get("cefr"))
+        out["meaning_uz"] = _uz(raw.get("meaning_uz"), "meaning_uz", allow_empty=False)
+        out["meaning_uz_alt"] = _uz(raw.get("meaning_uz_alt"), "meaning_uz_alt", allow_empty=True)
+        needs = raw.get("needs_review")
+        if needs is not None and not isinstance(needs, bool):
+            raise Reject("needs_review must be true or false")
+        out["needs_review"] = needs
+        given = [k for k in ("cefr", "meaning_uz", "meaning_uz_alt", "needs_review")
+                 if out[k] is not None]
+        if not given:
+            raise Reject("set_sense needs at least one of cefr, meaning_uz, meaning_uz_alt, needs_review")
+        if needs is True and len(given) > 1:
+            raise Reject("needs_review: true flags the sense for a person and cannot be combined "
+                         "with other changes")
     elif op == "delete_rows":
         out["rows"] = _uuid_list(raw.get("rows"), "rows")
     elif op == "delete_sense":
@@ -1556,6 +1573,55 @@ async def op_delete_rows(ctx: Ctx, o: dict) -> Done:
     return Done(_stats_text(stats))
 
 
+async def op_set_sense(ctx: Ctx, o: dict) -> Done:
+    """Set fields of one sense. A change to level or Uzbek approves it as the
+    review account (and clears `needs_review`, reasons kept, unless a learner
+    report is open); `needs_review: false` alone clears the flag the same way;
+    `needs_review: true` alone flags it for a person (the `human` path)."""
+    s = ctx.session
+    sense = await s.get(LexemeSense, o["sense_id"])
+    if sense is None:
+        raise Reject(ctx.missing("lexeme_senses", o["sense_id"], "sense"))
+    if _person(sense, ctx.bot_id):
+        raise Reject("approved by a person; not overwritten")
+    lexeme = await _lexeme(ctx, sense.lexeme_id)
+    change: dict[str, Any] = {}
+    if o["cefr"] is not None and o["cefr"] != sense.cefr:
+        if lexeme.is_proper_noun:
+            raise Reject("a name has no CEFR level")
+        change["cefr"] = o["cefr"]
+    for name in ("meaning_uz", "meaning_uz_alt"):
+        if o[name] is not None and o[name] != getattr(sense, name):
+            change[name] = o[name]
+    new_uz = change.get("meaning_uz", sense.meaning_uz)
+    new_alt = change.get("meaning_uz_alt", sense.meaning_uz_alt)
+    if new_alt and new_alt.casefold() == new_uz.casefold():
+        raise Reject("meaning_uz_alt equals meaning_uz")
+    flag = o["needs_review"]
+    if not change and (flag is None or flag == sense.needs_review):
+        return Done("nothing to change", outcome="unchanged")
+    await _capture_lexeme(ctx, lexeme.id)
+    await ctx.journal.capture("translation_reports",
+                              where=_cap("translation_reports").lexeme_sense_id == sense.id)
+    for name, value in change.items():
+        if name == "cefr":
+            sense.cefr_source = "cald" if value == sense.cald_cefr else "ours"
+        setattr(sense, name, value)
+    note = f"{REVIEW_TAG}: {o['note']}"[:NOTE_MAX]
+    if flag is True:
+        sense.needs_review, sense.review_note = True, note
+    else:
+        _approve(sense, ctx)
+        if flag is False or not await _has_open_report(ctx, sense.id):
+            sense.needs_review = False
+        sense.review_note = note
+    s.add(sense)
+    await s.flush()
+    await _renumber(ctx, lexeme)  # lexeme.cefr from the rank-1 sense
+    what = sorted(change) + ([f"needs_review={flag}"] if flag is not None else [])
+    return Done(f"sense {sense.id} of {lexeme.lemma!r}: set {what}")
+
+
 async def op_noop(ctx: Ctx, o: dict) -> Done:
     s = ctx.session
     lexeme = await _lexeme(ctx, o["lexeme_id"])
@@ -1588,7 +1654,7 @@ HANDLERS = {
     "merge_senses": op_merge_senses, "delete_lexeme": op_delete_lexeme,
     "merge_lexeme": op_merge_lexeme, "rename_lexeme": op_rename_lexeme,
     "mark_function_word": op_mark_function_word, "create_phrase": op_create_phrase,
-    "add_sense": op_add_sense, "relink_rows": op_relink_rows, "delete_sense": op_delete_sense, "delete_rows": op_delete_rows,
+    "add_sense": op_add_sense, "relink_rows": op_relink_rows, "delete_sense": op_delete_sense, "delete_rows": op_delete_rows, "set_sense": op_set_sense,
     "keep": op_noop, "skip": op_noop, "human": op_noop,
 }
 

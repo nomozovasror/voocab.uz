@@ -1346,7 +1346,9 @@ change can silently break:
   `merge_senses`, `delete_sense`, `delete_lexeme`, `merge_lexeme`,
   `rename_lexeme`, `mark_function_word`, `create_phrase` (alias
   `create_entry`; `pos` default `phr`, a word pos makes a single-word lexeme),
-  `add_sense`, `relink_rows`, `delete_rows`, and the no-ops `keep`, `skip`,
+  `add_sense`, `relink_rows`, `delete_rows`, `set_sense` (cefr / Uzbek / `needs_review` of one sense; a
+  change approves it as the review account, `needs_review: true` alone flags it
+  for a person), and the no-ops `keep`, `skip`,
   `human` (the AI review's human path: `needs_review` + `review_note`).
   Files live in `app/data/private/restructure/` (gitignored: they hold lexicon
   data and the repo is public), next to the `run_<id>.jsonl` reports.
