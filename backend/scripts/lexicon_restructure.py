@@ -15,6 +15,9 @@ Run from ``backend/``::
     uv run python -m scripts.lexicon_restructure apply --decisions F.jsonl
     uv run python -m scripts.lexicon_restructure apply --decisions F.jsonl --confirm-db app
 
+    # re-order every lexeme's senses easiest first (read only; writes the file)
+    uv run python -m scripts.lexicon_restructure plan-rerank --out F.decisions.jsonl
+
     # 3. runs so far; take one back, exactly
     uv run python -m scripts.lexicon_restructure status
     uv run python -m scripts.lexicon_restructure undo --run <id> --confirm-db app
@@ -118,6 +121,28 @@ async def cmd_status(args: argparse.Namespace) -> None:
             print(f"      {key:<34}{n:>5}")
 
 
+async def cmd_plan_rerank(args: argparse.Namespace) -> None:
+    import json
+
+    from sqlalchemy import text
+
+    async with async_session_factory() as session:
+        await session.exec(text("SET TRANSACTION READ ONLY"))
+        lines, stats = await lr.plan_rerank(session)
+        await session.rollback()
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in lines),
+                        encoding="utf-8")
+    print(f"database {database_name()!r} (read only): {stats['lexemes']} lexemes, "
+          f"{stats['changed']} need a rerank_senses line: {stats['reordered']} re-ordered "
+          f"({stats['rank1_changed']} change their rank-1 sense), {stats['ranks_not_1_to_n']} with ranks "
+          f"not 1..n, {stats['cefr_changed']} with a Lexeme.cefr to change; ngsl_conflict flags: "
+          f"{stats['ngsl_stale']} lexemes (+{stats['ngsl_add']} / -{stats['ngsl_remove']})")
+    for shift, n in sorted(stats["cefr_shift"].items(), key=lambda kv: -kv[1]):
+        print(f"  {shift:<10}{n:>6}")
+    print(f"written {args.out}")
+
+
 async def cmd_translate(args: argparse.Namespace) -> None:
     from app.services import lexicon_enrich as le
     from scripts.lexicon_cleanup import print_usage
@@ -160,6 +185,10 @@ def main() -> None:
     st = sub.add_parser("status", help="runs and op counts")
     st.add_argument("--out", type=Path, default=lr.RESTRUCTURE_DIR)
 
+    pr = sub.add_parser("plan-rerank", help="write rerank_senses lines for every lexeme the "
+                                            "easiest-first rule would re-order (read only)")
+    pr.add_argument("--out", type=Path, default=lr.RESTRUCTURE_DIR / "rerank.decisions.jsonl")
+
     tr = sub.add_parser("translate", help="fill meaning_uz of add_sense/create_phrase lines")
     tr.add_argument("--decisions", type=Path, required=True)
     tr.add_argument("--max-usd", type=float, default=2.0)
@@ -167,7 +196,7 @@ def main() -> None:
 
     args = parser.parse_args()
     handler = {"apply": cmd_apply, "undo": cmd_undo, "status": cmd_status,
-               "translate": cmd_translate}[args.cmd]
+               "translate": cmd_translate, "plan-rerank": cmd_plan_rerank}[args.cmd]
     asyncio.run(handler(args))
 
 

@@ -2680,16 +2680,13 @@ def _uuid_chunks(ids, size: int = 1000) -> list[list[uuid.UUID]]:
 
 
 async def _recompute_lexeme_cefr(session, lexeme_ids) -> None:
-    """`Lexeme.cefr` is the rank-1 sense's (`app.models.lexicon.Lexeme`)."""
-    from sqlalchemy import bindparam, text
-    from sqlalchemy.dialects.postgresql import ARRAY, UUID
+    """A sense's level changed: the lexeme's senses are re-ordered easiest
+    first, `Lexeme.cefr` is the new rank 1's and the rank-1 `ngsl_conflict`
+    flag follows (`lexicon.rerank_lexemes`, the one keeper of that order)."""
+    from app.services.lexicon import rerank_lexemes
 
-    stmt = text(
-        "update lexemes l set cefr = (select s.cefr from lexeme_senses s where s.lexeme_id = l.id "
-        "order by s.sense_rank, s.id limit 1) where l.id = any(:ids) and not l.is_proper_noun"
-    ).bindparams(bindparam("ids", type_=ARRAY(UUID(as_uuid=True))))
-    for chunk in _uuid_chunks(lexeme_ids):
-        await session.execute(stmt, {"ids": chunk})
+    await session.flush()
+    await rerank_lexemes(session, list(lexeme_ids))
 
 
 async def apply_plans(session, plans: list[Plan], *, now: datetime | None = None) -> Counter:

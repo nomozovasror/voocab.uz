@@ -69,10 +69,10 @@ async def _world() -> dict:
                          review_reasons=["ngsl_conflict", "judge_unsure"], needs_review=True,
                          provisional=False, definition_source="oewn")
         s2 = LexemeSense(lexeme_id=noun.id, sense_rank=2, definition_en="an invented group",
-                         meaning_uz="guruh", cefr="B2", review_reasons=["lemma_merge"],
+                         meaning_uz="guruh", cefr="C1", review_reasons=["lemma_merge"],
                          needs_review=True, provisional=False)
         s3 = LexemeSense(lexeme_id=noun.id, sense_rank=3, definition_en="an unflagged meaning",
-                         meaning_uz="boshqa", cefr="B1", provisional=False)
+                         meaning_uz="boshqa", cefr="C1", provisional=False)
         v1 = LexemeSense(lexeme_id=verb.id, sense_rank=1, definition_en="to invent a thing",
                          meaning_uz="o'ylab topmoq", cefr="B1", review_reasons=["pos_mismatch"],
                          needs_review=True, provisional=False)
@@ -133,10 +133,17 @@ async def _full(ids: dict) -> dict:
             out[key] = (await session.get(Lexeme, ids[key])).model_dump(exclude={"updated_at"})
         for key in ("s1", "s2", "s3", "v1"):
             out[key] = (await session.get(LexemeSense, ids[key])).model_dump(
-                exclude={"updated_at"})
+                exclude={"updated_at", "sense_rank"})  # the rank follows the level (rerank_lexemes)
         for i, row_id in enumerate(ids["rows"]):
             out[f"row{i}"] = (await session.get(MaterialVocabulary, row_id)).model_dump()
         return out
+
+
+def _loose(full: dict) -> dict:
+    """`_full` without the lexemes' level: after an undo it is the EASIEST
+    sense's (`lexicon.rerank_lexemes` re-orders when a level changes), which
+    need not be what a hand-built world had."""
+    return {k: ({**v, "cefr": None} if k in ("noun", "verb") else v) for k, v in full.items()}
 
 
 def _d(sense_id, action="approve", confidence="high", note="looks right", **extra) -> dict:
@@ -622,7 +629,7 @@ async def test_undo_puts_every_value_back_exactly():
         assert await _full(ids) != before
         results = await _undo([ids["s1"], ids["s2"], ids["v1"]])
         assert [r.outcome for r in results] == ["undone"] * 3
-        assert await _full(ids) == before
+        assert _loose(await _full(ids)) == _loose(before)
         async with async_session_factory() as session:
             logs = (await session.exec(select(LexiconAiReview).where(
                 LexiconAiReview.sense_id.in_([ids["s1"], ids["s2"], ids["v1"]])))).all()

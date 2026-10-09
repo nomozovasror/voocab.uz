@@ -207,7 +207,7 @@ async def test_restore_puts_the_old_needs_review_back(tmp_path):
         restored = await _state(ids)
         assert restored["senses"][ids["light"]]["needs_review"] is True
         assert restored["senses"][ids["light"]]["review_reasons"] == ["judge_unsure"]
-        assert restored == before
+        assert {**restored, "lexeme_cefr": None} == {**before, "lexeme_cefr": None}
     finally:
         await _drop(ids)
 

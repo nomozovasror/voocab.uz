@@ -223,7 +223,9 @@ async def test_the_hook_maps_translates_judges_applies_and_restore_puts_it_back(
         assert other == before["senses"][ids["other"]]
         # The material rows of the levelled sense take CALD's level, keeping theirs.
         assert after["rows"] == [("B2", "B2"), ("B2", "C1")]
-        assert after["lexeme_cefr"] == "B2"  # the rank-1 sense's
+        # the rank-1 sense's: senses are re-ordered easiest first when a level
+        # changes (`lexicon.rerank_lexemes`), so it is the easiest sense's
+        assert after["lexeme_cefr"] == "B1"
         # The licences page: the CALD-defined OEWN sense is no longer OEWN's.
         async with async_session_factory() as session:
             oewn_after = {r["key"]: r["count"] for r in await lexicon_licences.sources(session)}
@@ -255,7 +257,8 @@ async def test_the_hook_maps_translates_judges_applies_and_restore_puts_it_back(
             await session.commit()
         assert restored["senses restored"] == 2 and restored["material rows restored"] == 2
         assert lexemes == {ids["lexeme"]}
-        assert await _state(ids) == before
+        # (the lexeme's level is the easiest sense's, not what the hand-built world had)
+        assert {**await _state(ids), "lexeme_cefr": None} == {**before, "lexeme_cefr": None}
     finally:
         await _drop(ids)
 
@@ -685,7 +688,8 @@ async def test_far_levels_are_verified_capped_flagged_and_undone_when_dropped(tm
             counts = await lc.apply_plans(session, lc.plan_items(items, index, log, JUDGE))
             await session.commit()
         assert counts["restored (now none)"] == 1
-        assert await _state(ids) == before
+        # everything but the lexeme's level, which is the easiest sense's now
+        assert {**await _state(ids), "lexeme_cefr": None} == {**before, "lexeme_cefr": None}
     finally:
         await _drop(ids)
 

@@ -103,6 +103,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import delete as core_delete
+from sqlalchemy import func
 from sqlalchemy import event, tuple_
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import insert as core_insert
@@ -146,7 +147,7 @@ RESTRUCTURE_DIR = Path(__file__).resolve().parents[1] / "data" / "private" / "re
 OPS: tuple[str, ...] = (
     "merge_senses", "delete_lexeme", "merge_lexeme", "rename_lexeme",
     "mark_function_word", "create_phrase", "add_sense", "relink_rows", "delete_sense",
-    "delete_rows", "set_sense", "keep", "skip", "human",
+    "delete_rows", "set_sense", "rerank_senses", "keep", "skip", "human",
 )
 #: Accepted spellings of an op, normalised by `parse_op`.
 OP_ALIASES = {"create_entry": "create_phrase"}
@@ -160,6 +161,7 @@ OP_KEYS: dict[str, frozenset[str]] = {
     "mark_function_word": frozenset({"lexeme_id"}),
     "delete_sense": frozenset({"sense_id", "into"}),
     "delete_rows": frozenset({"rows"}),
+    "rerank_senses": frozenset({"lexeme_id", "order"}),
     "set_sense": frozenset({"sense_id", "cefr", "meaning_uz", "meaning_uz_alt", "needs_review"}),
     "create_phrase": frozenset({"lemma", "pos", "definition_en", "cefr", "meaning_uz", "meaning_uz_alt",
                                 "cald_ref", "rows", "drop_sense", "cald_cefr", "judge",
@@ -717,6 +719,9 @@ def parse_op(raw: Any) -> dict:
         if needs is True and len(given) > 1:
             raise Reject("needs_review: true flags the sense for a person and cannot be combined "
                          "with other changes")
+    elif op == "rerank_senses":
+        out["lexeme_id"] = _uuid(raw.get("lexeme_id"), "lexeme_id")
+        out["order"] = _uuid_list(raw.get("order"), "order")
     elif op == "delete_rows":
         out["rows"] = _uuid_list(raw.get("rows"), "rows")
     elif op == "delete_sense":
@@ -954,20 +959,12 @@ async def _absorb(ctx: Ctx, keep: LexemeSense, keep_lexeme: Lexeme,
     return stats
 
 
-async def _renumber(ctx: Ctx, lexeme: Lexeme) -> None:
-    """Contiguous `sense_rank` in the existing order; `Lexeme.cefr` from the
-    rank-1 sense, the way `lexicon_enrich.apply_work` does."""
-    senses = await _senses_of(ctx, lexeme.id)
-    for rank, sense in enumerate(senses, start=1):
-        if sense.sense_rank != rank:
-            sense.sense_rank = rank
-            ctx.session.add(sense)
-    first = senses[0] if senses else None
-    cefr = first.cefr if first else None
-    if lexeme.cefr != cefr:
-        lexeme.cefr = cefr
-        ctx.session.add(lexeme)
-    await ctx.session.flush()
+async def _rerank(ctx: Ctx, lexeme: Lexeme, *, reorder: bool = True) -> dict[str, int]:
+    """`lexicon.rerank_lexemes` for one lexeme (the one keeper of the order):
+    senses easiest first and numbered 1..n, `Lexeme.cefr` from rank 1, the
+    rank-1 `ngsl_conflict` flag in line. The caller has captured the lexeme's
+    senses (`_capture_lexeme`)."""
+    return await lexicon_service.rerank_lexemes(ctx.session, [lexeme.id], reorder=reorder)
 
 
 def _stats_text(stats: Counter) -> str:
@@ -1046,7 +1043,7 @@ async def op_merge_senses(ctx: Ctx, o: dict) -> Done:
         keep.review_note = f"{REVIEW_TAG}: {o['note']}"[:NOTE_MAX]
     s.add(keep)
     await s.flush()
-    await _renumber(ctx, lexeme)
+    await _rerank(ctx, lexeme)
     return Done(f"{len(drops)} sense(s) merged into {keep.id}: {_stats_text(stats)}"
                 + (f"; set {sorted(change)}" if change else ""))
 
@@ -1247,7 +1244,7 @@ async def op_merge_lexeme(ctx: Ctx, o: dict) -> Done:
     await s.flush()
     await s.delete(src)
     await s.flush()
-    await _renumber(ctx, dst)
+    await _rerank(ctx, dst)
     sources = await _without_own_lexeme(ctx, sources - {(dst.lemma, dst.pos)})
     plan = {"alias": {"sources": sorted(sources), "target": [dst.lemma, dst.pos]}} if sources else None
     return Done(f"{src.lemma!r} ({src.pos or '-'}) merged into {dst.lemma!r} ({dst.pos or '-'}): "
@@ -1417,7 +1414,7 @@ async def op_add_sense(ctx: Ctx, o: dict) -> Done:
     moved = sum(_move_row(row, sense, lexeme) for row in rows)
     for row in rows:
         s.add(row)
-    await _renumber(ctx, lexeme)
+    await _rerank(ctx, lexeme)
     return Done(f"sense {sense.id} added at rank {sense.sense_rank} (cald_cefr "
                 f"{sense.cald_cefr or 'unknown'}); {moved} row(s) moved to it")
 
@@ -1478,11 +1475,11 @@ async def op_create_phrase(ctx: Ctx, o: dict) -> Done:
             raise Reject(f"drop_sense {drop.id} still has {len(left)} material row(s) "
                          f"(name them in this op or move them in an earlier one)")
         stats = await _absorb(ctx, sense, lexeme, [drop])
-        await _renumber(ctx, old_lexeme)
+        await _rerank(ctx, old_lexeme)
         notes.append(f"sense {drop.id} of {old_lexeme.lemma!r} dropped ({_stats_text(stats)}; "
                      f"learners' saved words follow to the phrase sense)")
     if not created_lexeme:
-        await _renumber(ctx, lexeme)
+        await _rerank(ctx, lexeme)
     elif lexeme.cefr != sense.cefr:
         lexeme.cefr = sense.cefr
         s.add(lexeme)
@@ -1537,7 +1534,7 @@ async def op_delete_sense(ctx: Ctx, o: dict) -> Done:
         stats = Counter({"senses removed": 1})
     else:
         stats = await _absorb(ctx, into, lexeme, [sense])
-    await _renumber(ctx, lexeme)
+    await _rerank(ctx, lexeme)
     return Done(f"sense {sid} of {lexeme.lemma!r} deleted"
                 + (f" into {into.id}" if into else "") + f": {_stats_text(stats)}")
 
@@ -1617,9 +1614,110 @@ async def op_set_sense(ctx: Ctx, o: dict) -> Done:
         sense.review_note = note
     s.add(sense)
     await s.flush()
-    await _renumber(ctx, lexeme)  # lexeme.cefr from the rank-1 sense
+    if "cefr" in change:  # the level moved: order, Lexeme.cefr and the rank-1 flag follow
+        await _rerank(ctx, lexeme)
     what = sorted(change) + ([f"needs_review={flag}"] if flag is not None else [])
     return Done(f"sense {sense.id} of {lexeme.lemma!r}: set {what}")
+
+
+async def op_rerank_senses(ctx: Ctx, o: dict) -> Done:
+    """Put a lexeme's senses in exactly the given order (1..n), take
+    `Lexeme.cefr` from the new rank 1 and bring the rank-1 `ngsl_conflict`
+    flag in line (`lexicon.rerank_lexemes`, `reorder=False`). Nothing else
+    changes and no approval is touched (an order is not a decision about a
+    sense's content). `plan-rerank` also emits this op, with the order the
+    lexeme already has, for a lexeme whose only fault is a stale flag."""
+    s = ctx.session
+    lexeme = await _lexeme(ctx, o["lexeme_id"])
+    await _capture_lexeme(ctx, lexeme.id)
+    senses = {x.id: x for x in await _senses_of(ctx, lexeme.id)}
+    if set(o["order"]) != set(senses):
+        extra = sorted(str(i) for i in set(o["order"]) - set(senses))
+        missing = sorted(str(i) for i in set(senses) - set(o["order"]))
+        raise Reject(f"order must be exactly the senses of {lexeme.lemma!r}"
+                     + (f"; not its senses: {extra}" if extra else "")
+                     + (f"; missing: {missing}" if missing else ""))
+    old_first = min(senses.values(), key=lambda x: (x.sense_rank, str(x.id)))
+    old_cefr = lexeme.cefr
+    changed = 0
+    for rank, sid in enumerate(o["order"], start=1):
+        if senses[sid].sense_rank != rank:
+            senses[sid].sense_rank = rank
+            s.add(senses[sid])
+            changed += 1
+    await s.flush()
+    counts = await _rerank(ctx, lexeme, reorder=False)
+    new_first = senses[o["order"][0]]
+    if not changed and not counts["cefr"] and not counts["ngsl added"] and not counts["ngsl removed"]:
+        return Done("already in that order", outcome="unchanged")
+    flags = (f"; ngsl_conflict +{counts['ngsl added']} -{counts['ngsl removed']}"
+             if counts["ngsl added"] or counts["ngsl removed"] else "")
+    return Done(f"{lexeme.lemma!r}: rank 1 {old_first.cefr or '-'} -> {new_first.cefr or '-'}"
+                + ("" if new_first.id != old_first.id else " (same sense)")
+                + f", Lexeme.cefr {old_cefr or '-'} -> {lexeme.cefr or '-'}{flags}")
+
+
+async def plan_rerank(session: AsyncSession) -> tuple[list[dict], dict]:
+    """READ ONLY. One `rerank_senses` line per lexeme the rule would change: a
+    different order, ranks that are not exactly 1..n, `Lexeme.cefr` that is not
+    the new rank 1's, or a stale rank-1 `ngsl_conflict` flag (the line then
+    carries the order the lexeme already has). Starts from the same tie-break
+    as the ops (`lexicon.tie_ordered`). A lexeme with no sense is skipped."""
+    from app.services.lexicon_enrich import ngsl_conflict
+
+    rows = (await session.execute(
+        core_select(Lexeme.id, Lexeme.lemma, Lexeme.pos, Lexeme.cefr, Lexeme.frequency_band,
+                    Lexeme.is_proper_noun, LexemeSense.id, LexemeSense.sense_rank,
+                    LexemeSense.created_at, LexemeSense.cefr, LexemeSense.oewn_count,
+                    LexemeSense.review_reasons, LexemeSense.approved_at)
+        .join(LexemeSense, LexemeSense.lexeme_id == Lexeme.id))).all()
+    uses = {sid: n for sid, n in (await session.execute(
+        core_select(MaterialVocabulary.sense_id, func.count())
+        .where(MaterialVocabulary.sense_id.is_not(None))
+        .group_by(MaterialVocabulary.sense_id))).all()}
+    by_lexeme: dict[uuid.UUID, tuple[tuple, list[Any]]] = {}
+    for lid, lemma, pos, lcefr, band, proper, sid, rank, created, cefr, count, reasons, approved in rows:
+        sense = type("S", (), {})()
+        sense.id, sense.sense_rank, sense.created_at = sid, rank, created
+        sense.cefr, sense.oewn_count, sense.reasons = cefr, count, list(reasons or [])
+        sense.approved = approved is not None
+        by_lexeme.setdefault(lid, ((lemma, pos, lcefr, band, proper), []))[1].append(sense)
+    lines: list[dict] = []
+    stats: dict = {"lexemes": len(by_lexeme), "changed": 0, "reordered": 0, "rank1_changed": 0,
+                   "cefr_changed": 0, "cefr_shift": Counter(), "ranks_not_1_to_n": 0,
+                   "ngsl_stale": 0, "ngsl_add": 0, "ngsl_remove": 0}
+    for lid, ((lemma, pos, lcefr, band, proper), senses) in sorted(
+            by_lexeme.items(), key=lambda kv: kv[1][0][:2]):
+        current = lexicon_service.tie_ordered(senses)
+        ordered = lexicon_service.order_senses(
+            current, cefr=lambda x: x.cefr, oewn_count=lambda x: x.oewn_count,
+            row_count=lambda x: uses.get(x.id, 0), sense_rank=lambda x: x.sense_rank)
+        reorder = [x.id for x in ordered] != [x.id for x in current]
+        bad_ranks = sorted(x.sense_rank for x in current) != list(range(1, len(current) + 1))
+        new_cefr = None if proper else ordered[0].cefr
+        cefr_off = not proper and lcefr != new_cefr
+        add = remove = 0
+        for rank, x in enumerate(ordered, start=1):
+            want = rank == 1 and not proper and ngsl_conflict(x.cefr, band)
+            has = "ngsl_conflict" in x.reasons
+            add += want and not has
+            remove += has and not want and not x.approved  # approved: history, the op keeps it
+        if not (reorder or bad_ranks or cefr_off or add or remove):
+            continue
+        stats["changed"] += 1
+        stats["reordered"] += reorder
+        stats["ranks_not_1_to_n"] += bad_ranks
+        stats["ngsl_stale"] += bool(add or remove)
+        stats["ngsl_add"] += add
+        stats["ngsl_remove"] += remove
+        if ordered[0].id != current[0].id:
+            stats["rank1_changed"] += 1
+        if cefr_off:
+            stats["cefr_changed"] += 1
+            stats["cefr_shift"][f"{lcefr or '-'}->{new_cefr or '-'}"] += 1
+        lines.append({"op": "rerank_senses", "lexeme_id": str(lid), "note": "easiest first",
+                      "order": [str(x.id) for x in ordered], "_lemma": f"{lemma} ({pos or '-'})"})
+    return lines, stats
 
 
 async def op_noop(ctx: Ctx, o: dict) -> Done:
@@ -1654,7 +1752,7 @@ HANDLERS = {
     "merge_senses": op_merge_senses, "delete_lexeme": op_delete_lexeme,
     "merge_lexeme": op_merge_lexeme, "rename_lexeme": op_rename_lexeme,
     "mark_function_word": op_mark_function_word, "create_phrase": op_create_phrase,
-    "add_sense": op_add_sense, "relink_rows": op_relink_rows, "delete_sense": op_delete_sense, "delete_rows": op_delete_rows, "set_sense": op_set_sense,
+    "add_sense": op_add_sense, "relink_rows": op_relink_rows, "delete_sense": op_delete_sense, "delete_rows": op_delete_rows, "set_sense": op_set_sense, "rerank_senses": op_rerank_senses,
     "keep": op_noop, "skip": op_noop, "human": op_noop,
 }
 

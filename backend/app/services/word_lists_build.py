@@ -96,6 +96,7 @@ from app.models.lexicon import Lexeme, LexemeSense
 from app.models.vocabulary import MaterialVocabulary
 from app.models.word_list import WordList, WordListEntry
 from app.services import lexicon_enrich as le
+from app.services import lexicon as lexicon_service
 from app.services import lexicon_hints
 from app.services.lexicon import (
     WORDLISTS,
@@ -1065,12 +1066,17 @@ async def write_new_sense(session, view: LexiconView, item: NewSense,
     )
     session.add(sense)
     await session.flush()
-    if created_lexeme or rank == 1:
-        await session.execute(
-            sa_update(Lexeme).where(Lexeme.id == lexeme_info.id).values(cefr=planned.cefr))
-    info = SenseInfo(id=sense.id, lexeme_id=lexeme_info.id, sense_rank=rank,
+    # Easiest first (`lexicon.rerank_lexemes`): the new sense may take rank 1,
+    # and the old ranks, `Lexeme.cefr` and the rank-1 flag follow; the view's
+    # copies of the ranks are refreshed so later units read the new order.
+    await lexicon_service.rerank_lexemes(session, [lexeme_info.id])
+    info = SenseInfo(id=sense.id, lexeme_id=lexeme_info.id, sense_rank=sense.sense_rank,
                      definition_en=sense.definition_en, oewn_synset_id=sense.oewn_synset_id,
                      cefr=sense.cefr, source_id=sense.source_id)
+    for other in view.senses_of.get(lexeme_info.id, []):
+        fresh = await session.get(LexemeSense, other.id)
+        if fresh is not None:
+            other.sense_rank = fresh.sense_rank
     view.add_sense(info)
     report.new_senses[sense.source_id] += 1
     return info

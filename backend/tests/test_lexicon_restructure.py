@@ -671,7 +671,9 @@ async def test_merge_lexeme_absorbs_moves_and_leaves_an_alias(clean):
         senses = (await session.exec(select(LexemeSense).where(
             LexemeSense.lexeme_id == w.alpha).order_by(LexemeSense.sense_rank))).all()
         assert [s.sense_rank for s in senses] == [1, 2, 3, 4]
-        assert senses[-1].id == w.o2  # moved ones are appended
+        # easiest first: a3 (B1), a2 (B2, 2 rows), o2 (B2, moved in, no rows), a1 (C1)
+        assert [x.id for x in senses] == [w.a3, w.a2, w.o2, w.a1]
+        assert (await session.get(Lexeme, w.alpha)).cefr == "B1"
         ro1 = await session.get(MaterialVocabulary, w.ro1)
         assert (ro1.lexeme_id, ro1.sense_id, ro1.lemma) == (w.alpha, w.a2, "omega")  # lemma kept
         await session.rollback()
@@ -872,7 +874,7 @@ async def test_add_sense_appends_a_locked_sense_without_re_enrichment(clean):
         assert alpha.enriched_at == stamp  # never sent back through enrichment
         new = (await session.exec(select(LexemeSense).where(
             LexemeSense.cald_ref == "alpha#0#4"))).one()
-        assert new.sense_rank == 4 and new.definition_source == "cald" and new.licence == "cald"
+        assert new.sense_rank == 3 and new.definition_source == "cald" and new.licence == "cald"
         assert new.approved_by is not None and new.provisional is False
         assert (await session.get(MaterialVocabulary, w.r1)).sense_id == new.id
         await session.rollback()
@@ -1094,3 +1096,256 @@ async def test_set_sense_refuses_a_person_approved_sense_and_bad_values(clean):
     assert "person" in results[0].detail
     assert (await get(LexemeSense, w.a2)).approved_by == w.user
     assert (await get(LexemeSense, w.a2)).cefr == "B2"
+
+
+# --- easiest first ------------------------------------------------------------------------------------------
+
+
+def test_sense_order_key_is_level_then_semcor_then_use_then_rank():
+    key = lexicon_service.sense_order_key
+    rows = [  # (cefr, oewn_count, row_count, sense_rank)
+        ("B2", None, 9, 1), ("A2", None, 0, 2), ("A2", 3, 0, 3), ("A2", 9, 0, 4),
+        ("A2", 9, 5, 5), (None, 99, 99, 6), ("A1", None, 0, 7), ("B2", None, 9, 0),
+    ]
+    got = [r[3] for r in sorted(rows, key=lambda r: key(*r))]
+    # A1; A2 with counts (9 with more rows first, then 9, then 3); A2 with none; B2 by rank; no level last
+    assert got == [7, 5, 4, 3, 2, 0, 1, 6]
+
+
+def test_order_senses_leaves_an_ungraded_lexeme_alone():
+    items = [{"c": None, "n": 9, "r": 3}, {"c": None, "n": 1, "r": 1}, {"c": None, "n": 5, "r": 2}]
+    got = lexicon_service.order_senses(items, cefr=lambda i: i["c"], oewn_count=lambda i: i["n"],
+                                       row_count=lambda i: 0, sense_rank=lambda i: i["r"])
+    assert [i["r"] for i in got] == [1, 2, 3]
+
+
+async def test_rerank_senses_applies_undoes_and_validates_the_permutation(clean):
+    w = await world()
+    before = await dump()
+    good = ids(w.a3, w.a2, w.a1)
+    results, run_id = await run(clean, [
+        op("rerank_senses", lexeme_id=w.alpha, order=ids(w.a3, w.a2)),                # missing one
+        op("rerank_senses", lexeme_id=w.alpha, order=ids(w.a3, w.a2, w.a1, w.o1)),    # a stranger
+        op("rerank_senses", lexeme_id=w.alpha, order=ids(w.a3, w.a2, w.a2)),          # twice
+        op("rerank_senses", lexeme_id=w.alpha, order=good),
+        op("rerank_senses", lexeme_id=w.alpha, order=good),
+    ])
+    assert outcomes(results) == ["rejected", "rejected", "rejected", "applied", "unchanged"], results
+    assert "exactly the senses" in results[0].detail and "rank 1 C1 -> B1" in results[3].detail
+    async with async_session_factory() as session:
+        ranks = {x.id: x.sense_rank for x in (await session.exec(select(LexemeSense).where(
+            LexemeSense.lexeme_id == w.alpha))).all()}
+        assert ranks == {w.a3: 1, w.a2: 2, w.a1: 3}
+        assert (await session.get(Lexeme, w.alpha)).cefr == "B1"
+        await session.rollback()
+    await undo(clean, run_id)
+    assert await dump() == before
+
+
+async def test_plan_rerank_writes_one_line_per_lexeme_the_rule_would_change(clean):
+    w = await world()
+    async with async_session_factory() as session:
+        lines, stats = await lr.plan_rerank(session)
+        await session.rollback()
+    # alpha (n): C1, B2, B1 -> B1, B2, C1; omega: B1, B2 already easiest first; alpha (v): one sense
+    assert [x["lexeme_id"] for x in lines] == [str(w.alpha)]
+    assert lines[0]["order"] == ids(w.a3, w.a2, w.a1) and lines[0]["op"] == "rerank_senses"
+    assert stats["changed"] == 1 and stats["rank1_changed"] == 1 and stats["cefr_changed"] == 1
+    assert stats["cefr_shift"] == {"C1->B1": 1}
+    # the lines are valid decisions: apply them and a second plan is empty
+    results, _ = await run(clean, list(lines))
+    assert outcomes(results) == ["applied"]
+    async with async_session_factory() as session:
+        again, _ = await lr.plan_rerank(session)
+        await session.rollback()
+    assert again == []
+
+
+async def test_add_sense_ranks_a_new_easy_sense_first(clean):
+    w = await world()
+    results, _ = await run(clean, [op(
+        "add_sense", lexeme_id=w.alpha,
+        **_new_sense_fields(cald_ref="alpha#0#9", cefr="A2", cald_cefr="A2"))])
+    assert outcomes(results) == ["applied"]
+    new = await get_by_ref("alpha#0#9")
+    assert new.sense_rank == 1 and (await get(Lexeme, w.alpha)).cefr == "A2"
+    assert (await get(LexemeSense, w.a1)).sense_rank == 4
+
+
+def test_enrichment_ranks_with_the_same_rule():
+    graded = [
+        le.Sense(id=None, definition_en="hard", cefr="C1", row_ids=[uuid.uuid4()] * 5, sense_rank=1),
+        le.Sense(id=None, definition_en="easy", cefr="A2", row_ids=[], sense_rank=0),
+        le.Sense(id=None, definition_en="mid", cefr="A2", oewn_count=4, row_ids=[], sense_rank=2),
+    ]
+    assert [s.definition_en for s in le.rank_senses(graded)] == ["mid", "easy", "hard"]
+    assert sorted(s.sense_rank for s in graded) == [1, 2, 3]
+    ungraded = [
+        le.Sense(id=None, definition_en="b", row_ids=[], oewn_rank=2, sense_rank=1),
+        le.Sense(id=None, definition_en="a", row_ids=[uuid.uuid4()], sense_rank=2),
+    ]
+    assert [s.definition_en for s in le.rank_senses(ungraded)] == ["a", "b"]  # the older rule
+
+
+# --- who keeps the order true -------------------------------------------------------------------------------
+
+
+def test_enrichment_keeps_the_old_rank_as_the_tie_break():
+    # `clone` carries sense_rank, so a tie on level/count/use falls to the order the
+    # senses already had -- not to the alphabet (which plan-rerank would then undo).
+    zeta = le.Sense(id=uuid.uuid4(), definition_en="zeta", cefr="B1", oewn_synset_id="t-1",
+                    oewn_rank=1, sense_rank=2)
+    alpha_ = le.Sense(id=uuid.uuid4(), definition_en="alpha", cefr="B1", sense_rank=1)
+    kept = [le.Sense(id=s.id, definition_en=s.definition_en, cefr=s.cefr, sense_rank=s.sense_rank)
+            for s in (zeta, alpha_)]
+    assert [s.definition_en for s in le.rank_senses(kept)] == ["alpha", "zeta"]
+    from tests.test_lexicon_enrich import OEWN, _row, _work
+
+    top = uuid.uuid4()
+    rows = [_row(top, "the river bank")]
+    work = _work([le.Sense(id=top, oewn_synset_id="t-1", oewn_rank=1, meaning_uz="qirg'oq",
+                           sense_rank=4)], rows)
+    uses = le.build_uses(rows)
+    le.plan_senses(work, uses, {"uses": {uses[0].id: "S1"}, "senses": {}})
+    assert next(s for s in work.plan if s.id == top).sense_rank == 4  # clone() copied it
+
+
+async def _set(model, ident, **fields):
+    async with async_session_factory() as session:
+        obj = await session.get(model, ident)
+        for k, v in fields.items():
+            setattr(obj, k, v)
+        session.add(obj)
+        await session.commit()
+
+
+async def test_rerank_lexemes_orders_and_follows_the_rank_one_flag(clean):
+    w = await world()
+    await _set(Lexeme, w.omega, frequency_band="core")
+    # a2 (rank 2 now) carries a stale flag AND an open learner report; a1 is flagged
+    # and unapproved; o1/o2 will tie at C1 with o2 approved
+    await _set(LexemeSense, w.a2, review_reasons=["ngsl_conflict"], needs_review=True)
+    await _set(LexemeSense, w.o1, cefr="C1")
+    await _set(LexemeSense, w.o2, cefr="C1", approved_by=w.user,
+               approved_at=datetime.now(timezone.utc))
+    async with async_session_factory() as session:
+        counts = await lexicon_service.rerank_lexemes(session, [w.alpha, w.omega])
+        await session.commit()
+    assert counts["reordered"] == 1 and counts["cefr"] == 2  # alpha B1, omega C1
+    async with async_session_factory() as session:
+        order = [x.id for x in (await session.exec(select(LexemeSense).where(
+            LexemeSense.lexeme_id == w.alpha).order_by(LexemeSense.sense_rank))).all()]
+        assert order == [w.a3, w.a2, w.a1]
+        assert (await session.get(Lexeme, w.alpha)).cefr == "B1"
+        a1, a2 = await session.get(LexemeSense, w.a1), await session.get(LexemeSense, w.a2)
+        assert a1.review_reasons == [] and a1.needs_review is False   # stale, unapproved, no report
+        assert a2.review_reasons == [] and a2.needs_review is True    # the learner's report is open
+        # omega: o1 (C1, a row) stays rank 1 on a core word -> evaluated, flagged, needs review
+        o1, o2 = await session.get(LexemeSense, w.o1), await session.get(LexemeSense, w.o2)
+        assert (o1.sense_rank, o2.sense_rank) == (1, 2)
+        assert o1.review_reasons == ["ngsl_conflict"] and o1.needs_review is True
+        assert o2.review_reasons == []
+        await session.rollback()
+    # an APPROVED sense that loses rank 1 keeps its reason as history
+    await _set(LexemeSense, w.o1, cefr="B1")
+    await _set(LexemeSense, w.o2, cefr="C1", review_reasons=["ngsl_conflict"])
+    async with async_session_factory() as session:
+        await lexicon_service.rerank_lexemes(session, [w.omega])
+        await session.commit()
+    o2 = await get(LexemeSense, w.o2)
+    assert o2.sense_rank == 2 and o2.review_reasons == ["ngsl_conflict"] and o2.approved_at
+
+
+async def test_studio_fix_re_ranks_the_lexeme_and_keeps_the_fixed_senses_reasons(clean):
+    from app.services import lexicon_review
+
+    w = await world()
+    async with async_session_factory() as session:
+        a1 = await session.get(LexemeSense, w.a1)
+        await lexicon_review.fix_and_approve(
+            session, a1, admin_id=w.user, meaning_uz=None, definition_en=None, cefr="A1")
+    async with async_session_factory() as session:
+        order = [x.id for x in (await session.exec(select(LexemeSense).where(
+            LexemeSense.lexeme_id == w.alpha).order_by(LexemeSense.sense_rank))).all()]
+        assert order == [w.a1, w.a3, w.a2]
+        a1 = await session.get(LexemeSense, w.a1)
+        assert a1.review_reasons == ["ngsl_conflict"] and a1.needs_review is False  # history
+        assert (await session.get(Lexeme, w.alpha)).cefr == "A1"
+        await session.rollback()
+
+
+async def test_apply_work_sends_what_a_dropped_sense_leaves_to_the_most_tagged_sense(clean):
+    w = await world()
+    async with async_session_factory() as session:
+        deep = LexemeSense(lexeme_id=w.alpha, sense_rank=4, definition_en="deep", meaning_uz="x",
+                           cefr="C2", provisional=False)
+        session.add(deep)
+        await session.flush()
+        report = TranslationReport(user_id=w.user, lexeme_sense_id=deep.id, status="open", note="n")
+        session.add(report)
+        await session.commit()
+        deep_id, report_id = deep.id, report.id
+    plan = []
+    async with async_session_factory() as session:
+        for sid, rank, count in ((w.a3, 1, None), (w.a2, 2, 9), (w.a1, 3, 3)):
+            row = await session.get(LexemeSense, sid)
+            plan.append(le.Sense(
+                id=sid, definition_en=row.definition_en, meaning_uz=row.meaning_uz, cefr=row.cefr,
+                oewn_count=count, sense_rank=rank, source_id=row.source_id, licence=row.licence))
+        work = le.LexemeWork(id=w.alpha, lemma="alpha", pos="n", is_phrase=False,
+                             frequency_band="core", oewn=[], senses=[], rows=[], plan=plan)
+        work.deleted = {deep_id: None}
+        await le.apply_work(session, work)
+        await session.commit()
+    # rank 1 is a3 (the easiest, no count); the report goes to a2, the most tagged
+    assert (await get(TranslationReport, report_id)).lexeme_sense_id == w.a2
+
+
+async def test_plan_rerank_also_catches_bad_ranks_and_stale_flags_and_the_line_fixes_them(clean):
+    w = await world()
+    await _set(Lexeme, w.alpha, frequency_band="core")
+    await _set(Lexeme, w.omega, frequency_band="core")
+    async with async_session_factory() as session:
+        await lexicon_service.rerank_lexemes(session, [w.alpha])   # alpha is right
+        await session.commit()
+    # omega: order right, but ranks 1 and 7 -- and a stale flag: o1 is C1 at rank 1 on a core word
+    await _set(LexemeSense, w.o1, cefr="C1")
+    await _set(LexemeSense, w.o2, cefr="C1", sense_rank=7)
+    async with async_session_factory() as session:
+        lines, stats = await lr.plan_rerank(session)
+        await session.rollback()
+    assert [x["lexeme_id"] for x in lines] == [str(w.omega)]
+    assert lines[0]["order"] == ids(w.o1, w.o2)
+    assert stats["reordered"] == 0 and stats["ranks_not_1_to_n"] == 1 and stats["ngsl_add"] == 1
+    before = await dump()
+    results, run_id = await run(clean, list(lines))
+    assert outcomes(results) == ["applied"]
+    assert "ngsl_conflict +1" in results[0].detail
+    o1, o2 = await get(LexemeSense, w.o1), await get(LexemeSense, w.o2)
+    assert (o1.sense_rank, o2.sense_rank) == (1, 2) and o1.review_reasons == ["ngsl_conflict"]
+    async with async_session_factory() as session:
+        again, _ = await lr.plan_rerank(session)
+        await session.rollback()
+    assert again == []
+    await undo(clean, run_id)
+    assert await dump() == before
+
+
+async def test_plan_rerank_ignores_a_stale_reason_on_an_approved_sense(clean):
+    w = await world()
+    async with async_session_factory() as session:
+        await lexicon_service.rerank_lexemes(session, [w.alpha, w.omega])
+        await session.commit()
+    # omega's rank-2 sense is approved and still carries the reason: history, not work
+    await _set(Lexeme, w.omega, frequency_band="core")
+    await _set(LexemeSense, w.o2, review_reasons=["ngsl_conflict"], approved_by=w.user,
+               approved_at=datetime.now(timezone.utc))
+    async with async_session_factory() as session:
+        lines, stats = await lr.plan_rerank(session)
+        await session.rollback()
+    assert lines == [] and stats["ngsl_remove"] == 0 and stats["changed"] == 0
+    await _set(LexemeSense, w.o2, approved_by=None, approved_at=None)   # unapproved: it is work
+    async with async_session_factory() as session:
+        lines, stats = await lr.plan_rerank(session)
+        await session.rollback()
+    assert [x["lexeme_id"] for x in lines] == [str(w.omega)] and stats["ngsl_remove"] == 1

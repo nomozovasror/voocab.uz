@@ -82,6 +82,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
@@ -334,6 +335,125 @@ def lexeme_is_phrase(lemma: str, pos: str) -> bool:
     own docstring (`_lexeme_is_phrase`) for why an OR of both signals is
     used rather than trusting either alone."""
     return (" " in lemma) or (pos == "phr")
+
+
+# --- Sense order: easiest first ----------------------------------------------
+
+#: The CEFR scale, easiest first (the same tuple `lexicon_review`/`lexicon_enrich`
+#: carry; here because this module is the one both of them import).
+CEFR_LEVELS: tuple[str, ...] = ("A1", "A2", "B1", "B2", "C1", "C2")
+
+
+def sense_order_key(cefr: str | None, oewn_count: int | None, row_count: int,
+                    sense_rank: int) -> tuple[int, bool, int, int, int]:
+    """THE order of a lexeme's senses (`LexemeSense.sense_rank` is this order,
+    renumbered): easiest level first (NULL last), so the word's own level --
+    `Lexeme.cefr`, the rank-1 sense -- is its basic meaning's; then the more
+    SemCor-tagged sense first (a sense with no count after any count); then
+    the sense more material rows use; then the order it already had. Every
+    writer that ranks senses uses this (`lexicon_enrich.rank_senses`, the
+    restructure ops, `plan-rerank`); a lexeme none of whose senses has a level
+    (a proper noun) is left in its order -- see :func:`order_senses`."""
+    level = CEFR_LEVELS.index(cefr) if cefr in CEFR_LEVELS else len(CEFR_LEVELS)
+    return (level, oewn_count is None, -(oewn_count or 0), -row_count, sense_rank)
+
+
+def order_senses(items: list, *, cefr, oewn_count, row_count, sense_rank) -> list:
+    """``items`` in sense order. The four arguments are functions of an item.
+    Nothing graded at all: the current order (by ``sense_rank``) stands."""
+    if all(cefr(i) not in CEFR_LEVELS for i in items):
+        return sorted(items, key=sense_rank)
+    return sorted(items, key=lambda i: sense_order_key(
+        cefr(i), oewn_count(i), row_count(i), sense_rank(i)))
+
+
+def tie_ordered(senses: list) -> list:
+    """Senses in their CURRENT order with a total tie-break (rank, then
+    creation, then id) -- the one `rerank_lexemes`, the restructure ops and
+    `plan-rerank` all start from, so duplicate ranks cannot make them disagree."""
+    return sorted(senses, key=lambda x: (x.sense_rank, x.created_at, str(x.id)))
+
+
+async def rerank_lexemes(session: AsyncSession, lexeme_ids, *, chunk: int = 500,
+                         reorder: bool = True) -> dict[str, int]:
+    """THE keeper of the sense order (see :func:`sense_order_key`): for each
+    lexeme, order its senses by the rule, renumber them 1..n, set
+    `Lexeme.cefr` from the new rank 1 (a name keeps none), and bring the
+    RANK-1 property `ngsl_conflict` (rank-1 sense C1/C2 on an NGSL-core word)
+    in line -- the old rank 1 loses a stale flag, the new one is evaluated.
+
+    Call it wherever a sense's level or a lexeme's set of senses changes:
+    the CALD apply/restore, Studio's fix, the AI review's undo, a new sense
+    from the word-list build, every restructure op. Flushes; the caller
+    commits. Approvals are never touched: a reason is added to an approved
+    sense but `needs_review` is raised only on an unapproved one; a stale
+    reason is removed from an UNAPPROVED sense only (on an approved one it is
+    history), and the last reason going away clears `needs_review` unless a
+    learner's report is open. Returns counts (``reordered``, ``cefr``, ``ngsl added/removed``)."""
+    from sqlalchemy import select as core_select
+
+    from app.services.lexicon_enrich import ngsl_conflict
+
+    ids = list(dict.fromkeys(lexeme_ids))
+    counts = {"reordered": 0, "cefr": 0, "ngsl added": 0, "ngsl removed": 0}
+    for start in range(0, len(ids), chunk):
+        part = ids[start:start + chunk]
+        lexemes = {lx.id: lx for lx in (await session.exec(
+            select(Lexeme).where(Lexeme.id.in_(part)))).all()}
+        by_lexeme: dict[uuid.UUID, list[LexemeSense]] = {}
+        for sense in (await session.exec(
+                select(LexemeSense).where(LexemeSense.lexeme_id.in_(part)))).all():
+            by_lexeme.setdefault(sense.lexeme_id, []).append(sense)
+        sense_ids = [x.id for group in by_lexeme.values() for x in group]
+        uses = {sid: n for sid, n in (await session.execute(
+            core_select(MaterialVocabulary.sense_id, func.count())
+            .where(MaterialVocabulary.sense_id.in_(sense_ids))
+            .group_by(MaterialVocabulary.sense_id))).all()} if sense_ids else {}
+        dropped: list[LexemeSense] = []
+        for lexeme_id, senses in by_lexeme.items():
+            lexeme = lexemes[lexeme_id]
+            ordered = tie_ordered(senses) if not reorder else order_senses(
+                tie_ordered(senses), cefr=lambda x: x.cefr, oewn_count=lambda x: x.oewn_count,
+                row_count=lambda x: uses.get(x.id, 0), sense_rank=lambda x: x.sense_rank)
+            moved = False
+            for rank, sense in enumerate(ordered, start=1):
+                if sense.sense_rank != rank:
+                    sense.sense_rank = rank
+                    session.add(sense)
+                    moved = True
+            counts["reordered"] += moved
+            if not lexeme.is_proper_noun and lexeme.cefr != ordered[0].cefr:
+                lexeme.cefr = ordered[0].cefr
+                session.add(lexeme)
+                counts["cefr"] += 1
+            for rank, sense in enumerate(ordered, start=1):
+                want = (rank == 1 and not lexeme.is_proper_noun
+                        and ngsl_conflict(sense.cefr, lexeme.frequency_band))
+                has = "ngsl_conflict" in sense.review_reasons
+                if want and not has:
+                    sense.review_reasons = [*sense.review_reasons, "ngsl_conflict"]
+                    if sense.approved_at is None:
+                        sense.needs_review = True
+                    session.add(sense)
+                    counts["ngsl added"] += 1
+                elif has and not want and sense.approved_at is None:
+                    # An APPROVED sense keeps the reason: after a review it is
+                    # the audit trail of what was flagged (`status` counts it).
+                    sense.review_reasons = [r for r in sense.review_reasons if r != "ngsl_conflict"]
+                    session.add(sense)
+                    counts["ngsl removed"] += 1
+                    if not sense.review_reasons and sense.needs_review:
+                        dropped.append(sense)
+        if dropped:
+            reported = set((await session.exec(
+                select(TranslationReport.lexeme_sense_id).where(
+                    TranslationReport.lexeme_sense_id.in_([x.id for x in dropped]),
+                    TranslationReport.status == "open"))).all())
+            for sense in dropped:
+                if sense.id not in reported:
+                    sense.needs_review = False
+        await session.flush()
+    return counts
 
 
 # --- Proper nouns ------------------------------------------------------------

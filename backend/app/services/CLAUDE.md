@@ -1108,8 +1108,46 @@ unchanged (one sense).
 - **Order:** the anchor sense first overall (`used_here` in the lookup, the
   learner's `saved` sense on the word page); then the anchor's POS group,
   then other groups (best SemCor count first, then n/v/adj/adv); inside a
-  group `oewn_rank` senses by rank, then senses with no SemCor data by our
-  `sense_rank`.
+  group by our `sense_rank`, which IS the easiest-first order (next bullet).
+  `lemma_senses._sense_key` no longer re-sorts by SemCor: two orders in two
+  places was how `college` listed "faculty and students" (C1) above the
+  institution (A2).
+- **Sense order is easiest first, in ONE function**
+  (`lexicon.sense_order_key` / `order_senses`): CEFR A1..C2 ascending (none
+  last), then SemCor `oewn_count` descending (none after any count), then the
+  sense more material rows use, then the rank it had. `sense_rank` stores it and
+  `Lexeme.cefr` copies rank 1, so a word's level is its basic meaning's. A
+  lexeme none of whose senses has a level (a name) is left in its order. Every
+  writer that adds or reorders senses uses it, and ONE helper keeps it true:
+  `lexicon.rerank_lexemes(session, lexeme_ids)` orders by the rule from the
+  senses' current order (`tie_ordered`: rank, creation, id), renumbers 1..n,
+  sets `Lexeme.cefr` from rank 1 (a name keeps none) and brings the RANK-1
+  property `ngsl_conflict` in line (the old rank 1 loses a stale flag, the new
+  one is evaluated). Called by: the CALD apply/restore (`_recompute_lexeme_cefr`,
+  hence the worker hook too), Studio's `fix_and_approve` when a level changed
+  (after the approval stamp), the AI review's `undo`, `word_lists_build
+  .write_new_sense`, and every restructure op that adds, moves, drops or
+  re-levels a sense (`_rerank`; journaled, `_capture_lexeme` holds all the
+  senses) plus `rerank_senses`. `lexicon_enrich.rank_senses` applies the same
+  key to a freshly planned lexeme (`clone()` copies `sense_rank`, so the old
+  order is the tie-break; the older used/OEWN/model rule only when nothing is
+  graded).
+- **The flag follows rank 1, and approvals are never touched.** A reason is
+  added to an approved sense too, but `needs_review` is raised only on an
+  unapproved one. A stale reason is removed from an UNAPPROVED sense only (on an
+  approved one it is the audit trail `status` counts, as everywhere else); when
+  the last reason goes, `needs_review` is cleared unless a learner's report is
+  open. Consequence to know: a CALD restore or an AI-review undo gives the
+  levels back but not the old ORDER -- the lexeme is re-ranked by the rule.
+- **What else reads the order**, checked: the review queue's core bucket and
+  `fix_and_approve` (rank 1 = `Lexeme.cefr`; follow the rule), `word_lists_build`
+  (display sort by `sense_rank`), export/heteronym/recording scans (order only
+  for stable output). NOT changed on purpose: `vocabulary._from_lexicon` (the
+  lookup fallback picks the most-used sense by SemCor count: a selection, not
+  a display order), `lemma_senses` POS-group order and labels (counts),
+  practice and distractors (they take the saved sense, not a rank), and
+  `apply_work`'s fallback target for a dropped deep OEWN sense, which is the
+  most SemCor-tagged sense (rank 1 is the easiest now, not the commonest).
 - **Labels come from COUNTS, never ranks** (`LexemeSense.oewn_count`, a
   persisted copy of the extract's SemCor `count`; rank 2 can be 20 against
   25 or 1 against 25). Relative to the word's top count across the lemma's
@@ -1406,6 +1444,16 @@ change can silently break:
   account and has a `cald`/`human` definition, so the CALD apply and
   `lexicon_enrich` leave it alone; text not from CALD is `human` (locked),
   never `model` (enrichment would rewrite it).
+- **Easiest first** (`rerank_senses` {lexeme_id, order}: exactly a
+  permutation of the lexeme's senses, renumbered 1..n, `Lexeme.cefr` from the
+  new rank 1, the rank-1 `ngsl_conflict` flag in line; no approval is touched).
+  `plan-rerank --out F` (read only; default
+  `app/data/private/restructure/rerank.decisions.jsonl`) writes one line per
+  lexeme that is wrong in ANY of: order, ranks not exactly 1..n, `Lexeme.cefr`
+  not the new rank 1's, a stale rank-1 flag (that line carries the order the
+  lexeme already has). It prints the counts, `Lexeme.cefr` by old->new level
+  and the flag adds/removes. Every op that adds, moves, drops or re-levels a
+  sense re-ranks the lexeme in the same op.
 - **Nothing is re-enriched.** `Lexeme.enriched_at` is never cleared (a new
   phrase lexeme gets it set): clearing it sends the lexeme back through
   enrichment, which re-translates its unlocked senses.

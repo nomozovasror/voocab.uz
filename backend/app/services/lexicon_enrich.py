@@ -65,11 +65,14 @@ work that fixes that, one lexeme at a time.
 
 ## Ranking rule (``sense_rank``)
 
-Senses our materials use come first, most material rows first (ties: OEWN
-rank, then definition) -- the corpus is what the learner meets, so its
-commonest sense is "the usual meaning" and what `Lexeme.cefr` copies. Then
-the remaining OEWN senses in OEWN's own (frequency) order, then any unused
-model sense.
+EASIEST FIRST (`lexicon.sense_order_key`): CEFR A1..C2 ascending (no level
+last), then the SemCor tag count descending (no count after any count), then
+the sense more material rows use, then the order it already had (a new sense
+last). `Lexeme.cefr` copies the rank-1 sense, so a word's level is its basic
+meaning's, however narrow the sense the corpus happens to use most. A lexeme
+no sense of which has a level (a name; a model that did not answer) keeps the
+older rule: used senses by rows (ties: OEWN rank, then definition), then the
+remaining OEWN senses in OEWN's order, then any unused model sense.
 
 ## Review reasons (D3/D5)
 
@@ -118,7 +121,7 @@ from app.models.lexicon import (
 from app.models.vocabulary import MaterialVocabulary, SavedWord, SavedWordContext
 from app.models.word_list import WordListEntry
 from app.services.dictionary import GEMINI_CHAT_URL
-from app.services.lexicon import WORDLISTS
+from app.services.lexicon import WORDLISTS, sense_order_key
 
 logger = logging.getLogger("app.services.lexicon_enrich")
 
@@ -772,7 +775,7 @@ def plan_senses(work: LexemeWork, uses: list[Use], answer: dict | None) -> None:
             oewn_count=old.oewn_count,
             source_id=old.source_id, licence=old.licence,
             review_reasons=list(old.review_reasons), provisional=old.provisional,
-            locked=old.locked, lost_rows=old.lost_rows,
+            locked=old.locked, lost_rows=old.lost_rows, sense_rank=old.sense_rank,
         )
 
     # 1. OEWN groups reuse the sense already carrying that synset.
@@ -1020,14 +1023,23 @@ def pos_mismatch(lexeme_pos: str, info: dict) -> bool:
 
 
 def rank_senses(senses: list[Sense]) -> list[Sense]:
-    """Order and number a lexeme's senses -- see the module docstring."""
-    used = sorted((s for s in senses if s.row_ids),
-                  key=lambda s: (-len(s.row_ids), s.oewn_rank or 10**6, s.definition_en))
-    oewn = sorted((s for s in senses if not s.row_ids and s.oewn_rank is not None),
-                  key=lambda s: s.oewn_rank)
-    model = sorted((s for s in senses if not s.row_ids and s.oewn_rank is None),
-                   key=lambda s: s.definition_en)
-    ordered = used + oewn + model
+    """Order and number a lexeme's senses -- see the module docstring.
+
+    Once any sense has a level: `lexicon.sense_order_key` (easiest first, then
+    SemCor count, then material use, then the order it had; a new sense counts
+    as last). Nothing graded (a name; a model that did not answer): the older
+    rule -- used senses by rows, then OEWN order, then model senses."""
+    if any(s.cefr in CEFR_ORDER for s in senses):
+        ordered = sorted(senses, key=lambda s: (sense_order_key(
+            s.cefr, s.oewn_count, len(s.row_ids), s.sense_rank or 10**6), s.definition_en))
+    else:
+        used = sorted((s for s in senses if s.row_ids),
+                      key=lambda s: (-len(s.row_ids), s.oewn_rank or 10**6, s.definition_en))
+        oewn = sorted((s for s in senses if not s.row_ids and s.oewn_rank is not None),
+                      key=lambda s: s.oewn_rank)
+        model = sorted((s for s in senses if not s.row_ids and s.oewn_rank is None),
+                       key=lambda s: s.definition_en)
+        ordered = used + oewn + model
     for rank, sense in enumerate(ordered, start=1):
         sense.sense_rank = rank
     return ordered
@@ -1839,10 +1851,13 @@ async def apply_work(session, work: LexemeWork) -> None:
         for old_id in planned.absorbed:
             work.deleted[old_id] = planned.id
     first = next((s for s in work.plan if s.sense_rank == 1), None)
+    # Rank 1 is the EASIEST sense now, not the commonest: what an unused deep
+    # OEWN sense leaves behind (a translation report, a saved word) goes to the
+    # most SemCor-tagged sense, rank 1 only when none has a count.
+    counted = [s for s in work.plan if s.oewn_count is not None]
+    fallback = max(counted, key=lambda s: (s.oewn_count, -s.sense_rank)) if counted else first
     for old_id, new_id in work.deleted.items():
-        # An unused deep OEWN sense has no absorber: anything that still
-        # points at it (a translation report) moves to the rank-1 sense.
-        new_id = new_id or (first.id if first else None)
+        new_id = new_id or (fallback.id if fallback else None)
         await session.execute(
             sa_update(MaterialVocabulary).where(MaterialVocabulary.sense_id == old_id)
             .values(sense_id=new_id)

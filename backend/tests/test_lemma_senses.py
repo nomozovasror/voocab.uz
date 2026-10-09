@@ -53,29 +53,29 @@ def test_labels_are_relative_to_the_top_count_and_null_without_data() -> None:
     assert label_for(5, None) is None
 
 
-def test_semcor_ranked_senses_come_before_unranked_and_ours_follow_sense_rank() -> None:
+def test_senses_follow_sense_rank_and_labels_still_come_from_counts() -> None:
+    # `sense_rank` carries the easiest-first rule (`lexicon.sense_order_key`);
+    # the display order is that rank, whatever the SemCor counts say.
     n = _lx()
     a = _sn(n, "ours-first", sense_rank=1)
     b = _sn(n, "semcor-2", rank=2, count=10, sense_rank=2)
     c = _sn(n, "semcor-1", rank=1, count=20, sense_rank=3)
     d = _sn(n, "ours-second", sense_rank=4)
-    views = arrange([(n, x) for x in (a, b, c, d)], anchor_lexeme_id=n.id, anchor_sense_id=None)
-    assert _names(views) == ["semcor-1", "semcor-2", "ours-first", "ours-second"]
-    assert [v.label for v in views] == ["most common", "common", None, None]
+    views = arrange([(n, x) for x in (d, c, b, a)], anchor_lexeme_id=n.id, anchor_sense_id=None)
+    assert _names(views) == ["ours-first", "semcor-2", "semcor-1", "ours-second"]
+    assert [v.label for v in views] == [None, "common", "most common", None]
 
 
-def test_within_a_pos_group_senses_order_by_count_not_rank() -> None:
-    # March-style: file order puts count-0 senses (ranks 1-2) above the
-    # month (rank 3, count 9); the capitalised entry's tail has no rank issue.
+def test_within_a_pos_group_senses_order_by_sense_rank_not_count() -> None:
     n = _lx()
-    month = _sn(n, "month", rank=3, count=9, sense_rank=3)
+    month = _sn(n, "month", rank=3, count=9, sense_rank=2)
     walk = _sn(n, "walk", rank=1, count=0, sense_rank=1)
-    demo = _sn(n, "demo", rank=2, count=0, sense_rank=2)
+    demo = _sn(n, "demo", rank=2, count=0, sense_rank=3)
     ours = _sn(n, "ours", sense_rank=4)
     views = arrange([(n, x) for x in (walk, demo, ours, month)],
                     anchor_lexeme_id=n.id, anchor_sense_id=None)
-    assert _names(views) == ["month", "walk", "demo", "ours"]
-    assert [v.label for v in views] == ["most common", "less common", "less common", None]
+    assert _names(views) == ["walk", "month", "demo", "ours"]
+    assert [v.label for v in views] == ["less common", "most common", "less common", None]
 
 
 def test_used_here_goes_first_overall_and_the_rest_keep_order() -> None:
@@ -125,7 +125,7 @@ def test_a_blank_sense_is_not_listed() -> None:
 
 
 async def _seed(lemma: str) -> dict:
-    """noun: a (rank1,20) b (rank2,6) c (ours); verb: d (rank1,3);
+    """noun (sense_rank order): a (20) b (6) c (ours); verb: d (rank1,3);
     a proper-noun lexeme and a function-word lexeme under the same lemma."""
     async with async_session_factory() as session:
         noun = Lexeme(lemma=lemma, pos="n")
@@ -135,11 +135,11 @@ async def _seed(lemma: str) -> dict:
         session.add_all([noun, verb, adj, adv])
         await session.flush()
         senses = {
-            "a": LexemeSense(lexeme_id=noun.id, definition_en="a", meaning_uz="A", sense_rank=2,
+            "a": LexemeSense(lexeme_id=noun.id, definition_en="a", meaning_uz="A", sense_rank=1,
                              oewn_rank=1, oewn_count=20, cefr="B1"),
-            "b": LexemeSense(lexeme_id=noun.id, definition_en="b", meaning_uz="B", sense_rank=3,
+            "b": LexemeSense(lexeme_id=noun.id, definition_en="b", meaning_uz="B", sense_rank=2,
                              oewn_rank=2, oewn_count=6),
-            "c": LexemeSense(lexeme_id=noun.id, definition_en="c", meaning_uz="C", sense_rank=1),
+            "c": LexemeSense(lexeme_id=noun.id, definition_en="c", meaning_uz="C", sense_rank=3),
             "d": LexemeSense(lexeme_id=verb.id, definition_en="d", meaning_uz="D", sense_rank=1,
                              oewn_rank=1, oewn_count=3),
             "p": LexemeSense(lexeme_id=adj.id, definition_en="p", meaning_uz="P"),

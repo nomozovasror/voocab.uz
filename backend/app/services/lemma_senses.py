@@ -57,11 +57,11 @@ def label_for(count: int | None, top: int | None) -> str | None:
     return LESS_COMMON
 
 
-def _sense_key(s: LexemeSense) -> tuple[bool, int, int, int]:
-    # Senses with SemCor data first, by COUNT desc (rank is file order, with
-    # capitalised entries appended, so it can put a high-count sense below
-    # count-0 ones); rank breaks ties; then ours (by sense_rank).
-    return (s.oewn_count is None, -(s.oewn_count or 0), s.oewn_rank or 0, s.sense_rank)
+def _sense_key(s: LexemeSense) -> tuple[int, int]:
+    # `sense_rank` IS the order: easiest level first, then SemCor count, then
+    # use (`lexicon.sense_order_key`, written by every ranking writer). The
+    # SemCor counts still drive the LABELS (`label_for`), never the order.
+    return (s.sense_rank, s.oewn_rank or 0)
 
 
 def _pos_key(pos: str) -> tuple[int, str]:
@@ -77,8 +77,8 @@ def arrange(
     """Order and label one lemma's senses (``rows`` are only that lemma's).
 
     The anchor sense first overall; then the anchor lexeme's POS group, then
-    the other groups (best-attested first); inside a group SemCor-counted
-    senses by count (rank breaks ties), the rest by our `sense_rank`. A
+    the other groups (best-attested first); inside a group by our
+    `sense_rank` (easiest first). A
     definition identical to one already listed is listed once.
     """
     usable = [(lx, s) for lx, s in rows if s.definition_en.strip() or s.meaning_uz.strip()]

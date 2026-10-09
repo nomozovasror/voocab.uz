@@ -104,6 +104,7 @@ from app.models.lexicon import (
 from app.models.user import REVIEW_BOT_EMAIL, REVIEW_BOT_NAME, User
 from app.models.vocabulary import MaterialVocabulary
 from app.services import lexicon_review
+from app.services import lexicon as lexicon_service
 from app.services.lexicon import frequency_lists
 
 REVIEW_DIR = Path(__file__).resolve().parents[1] / "data" / "private" / "review"
@@ -614,6 +615,7 @@ async def undo(
         stmt = stmt.where(LexiconAiReview.sense_id.in_(sense_ids))
     logs = (await session.exec(stmt)).all()
     results: list[Result] = []
+    reranked: list[uuid.UUID] = []
     for log in logs:
         sense = await session.get(LexemeSense, log.sense_id, with_for_update=write)
         lexeme = await session.get(Lexeme, sense.lexeme_id) if sense else None
@@ -658,6 +660,7 @@ async def undo(
         if sense.sense_rank == 1:
             lexeme.cefr = before["lexeme_cefr"]
             session.add(lexeme)
+        reranked.append(sense.lexeme_id)
         for fix in log.material_fixes:
             row = rows[uuid.UUID(fix["row_id"])]
             old = fix["before"]
@@ -670,6 +673,8 @@ async def undo(
         session.add(log)
         results.append(Result(sid, lemma, "undone", log.action))
     await session.flush()
+    if reranked:  # a level went back: the order and the rank-1 flag follow
+        await lexicon_service.rerank_lexemes(session, reranked)
     return results
 
 

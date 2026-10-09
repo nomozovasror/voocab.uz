@@ -85,6 +85,7 @@ from app.models.lexicon import REVIEW_REASONS, Lexeme, LexemeSense, TranslationR
 from app.models.material import Material
 from app.models.user import User
 from app.models.vocabulary import LookupEvent, MaterialVocabulary, SavedWord
+from app.services import lexicon as lexicon_service
 
 #: Independent of any other module's notion of a level -- a sense's `cefr`
 #: is a plain checked string, and this is the whole of what "Fix" may set
@@ -501,6 +502,7 @@ async def fix_and_approve(
     pair and passes it, with ``commit=False`` so a whole run is one
     transaction. ``None`` leaves a field alone; ``""`` empties it.
     """
+    rerank = False
     if meaning_uz is not None:
         sense.meaning_uz = meaning_uz
     if meaning_uz_alt is not None:
@@ -514,16 +516,19 @@ async def fix_and_approve(
         if sense.cefr_source == "cald" and cefr != sense.cefr:
             sense.cefr_source = "ours"
         sense.cefr = cefr
-        if sense.sense_rank == 1:
-            lexeme = await session.get(Lexeme, sense.lexeme_id)
-            if lexeme is not None:
-                lexeme.cefr = cefr
-                session.add(lexeme)
+        rerank = True
 
     sense.needs_review = False
     sense.approved_by = admin_id
     sense.approved_at = datetime.now(timezone.utc)
     session.add(sense)
+    if rerank:
+        # A level changed: re-order the lexeme's senses easiest first (the
+        # fixed sense may no longer be rank 1), `Lexeme.cefr` and the rank-1
+        # `ngsl_conflict` flag with it. After the approval stamp: the fixed
+        # sense keeps its reasons as history.
+        await session.flush()
+        await lexicon_service.rerank_lexemes(session, [sense.lexeme_id])
     await _close_open_reports(session, sense.id)
     return await _finish(session, sense, commit)
 
