@@ -1,1450 +1,1455 @@
 {
-  "refused": [
-    {
-      "lemma": "alo",
-      "run": "bf6c34ca98dd",
-      "op": 24
-    },
-    {
-      "lemma": "anfiteatro",
-      "run": "bf6c34ca98dd",
-      "op": 26
-    },
-    {
-      "lemma": "atavus",
-      "run": "bf6c34ca98dd",
-      "op": 44
-    },
-    {
-      "lemma": "baori",
-      "run": "bf6c34ca98dd",
-      "op": 61
-    },
-    {
-      "lemma": "camara",
-      "run": "bf6c34ca98dd",
-      "op": 111
-    },
-    {
-      "lemma": "com",
-      "run": "9ebd7c044234",
-      "op": 27
-    },
-    {
-      "lemma": "coquinara",
-      "run": "9ebd7c044234",
-      "op": 45
-    },
-    {
-      "lemma": "crassipes",
-      "run": "9ebd7c044234",
-      "op": 59
-    },
-    {
-      "lemma": "ctscan",
-      "run": "9ebd7c044234",
-      "op": 69
-    },
-    {
-      "lemma": "cutty",
-      "run": "9ebd7c044234",
-      "op": 76
-    },
-    {
-      "lemma": "dentata",
-      "run": "9ebd7c044234",
-      "op": 101
-    },
-    {
-      "lemma": "erectus",
-      "run": "2cfe143016c7",
-      "op": 31
-    },
-    {
-      "lemma": "fragrans",
-      "run": "2cfe143016c7",
-      "op": 108
-    },
-    {
-      "lemma": "franca",
-      "run": "2cfe143016c7",
-      "op": 110
-    },
-    {
-      "lemma": "inunguis",
-      "run": "e304fcd7766e",
-      "op": 101
-    },
-    {
-      "lemma": "kinyongia",
-      "run": "e304fcd7766e",
-      "op": 116
-    },
-    {
-      "lemma": "knock-on",
-      "run": "e304fcd7766e",
-      "op": 117
-    },
-    {
-      "lemma": "kund",
-      "run": "e304fcd7766e",
-      "op": 118
-    },
-    {
-      "lemma": "lingua",
-      "run": "c5617f2943b6",
-      "op": 28
-    },
-    {
-      "lemma": "llerin",
-      "run": "c5617f2943b6",
-      "op": 29
-    },
-    {
-      "lemma": "llewyn",
-      "run": "c5617f2943b6",
-      "op": 30
-    },
-    {
-      "lemma": "magomberae",
-      "run": "c5617f2943b6",
-      "op": 58
-    },
-    {
-      "lemma": "manatus",
-      "run": "c5617f2943b6",
-      "op": 61
-    },
-    {
-      "lemma": "marka",
-      "run": "c5617f2943b6",
-      "op": 71
-    },
-    {
-      "lemma": "moya",
-      "run": "c5617f2943b6",
-      "op": 124
-    },
-    {
-      "lemma": "multocida",
-      "run": "dcc39949ef3a",
-      "op": 3
-    },
-    {
-      "lemma": "munintuma'a",
-      "run": "dcc39949ef3a",
-      "op": 4
-    },
-    {
-      "lemma": "naledi",
-      "run": "dcc39949ef3a",
-      "op": 7
-    },
-    {
-      "lemma": "nihilo",
-      "run": "dcc39949ef3a",
-      "op": 24
-    },
-    {
-      "lemma": "orbicularis",
-      "run": "dcc39949ef3a",
-      "op": 83
-    },
-    {
-      "lemma": "ori",
-      "run": "dcc39949ef3a",
-      "op": 84
-    },
-    {
-      "lemma": "peruviana",
-      "run": "dcc39949ef3a",
-      "op": 116
-    },
-    {
-      "lemma": "pheidole",
-      "run": "dcc39949ef3a",
-      "op": 118
-    },
-    {
-      "lemma": "pilae",
-      "run": "dcc39949ef3a",
-      "op": 125
-    },
-    {
-      "lemma": "planulae",
-      "run": "dcc39949ef3a",
-      "op": 132
-    },
-    {
-      "lemma": "pounamu",
-      "run": "67cc9ce834b6",
-      "op": 11
-    },
-    {
-      "lemma": "pruinosa",
-      "run": "67cc9ce834b6",
-      "op": 43
-    },
-    {
-      "lemma": "raffles",
-      "run": "67cc9ce834b6",
-      "op": 53
-    },
-    {
-      "lemma": "sapiens",
-      "run": "67cc9ce834b6",
-      "op": 125
-    },
-    {
-      "lemma": "sark",
-      "run": "67cc9ce834b6",
-      "op": 126
-    },
-    {
-      "lemma": "scyphozoa",
-      "run": "5917391d2cf4",
-      "op": 1
-    },
-    {
-      "lemma": "sehirliistiremediklerimizdensiniz",
-      "run": "5917391d2cf4",
-      "op": 6
-    },
-    {
-      "lemma": "senegalensis",
-      "run": "5917391d2cf4",
-      "op": 18
-    },
-    {
-      "lemma": "silbador",
-      "run": "5917391d2cf4",
-      "op": 39
-    },
-    {
-      "lemma": "suber",
-      "run": "5917391d2cf4",
-      "op": 109
-    },
-    {
-      "lemma": "th-century",
-      "run": "13507d7ef8ae",
-      "op": 14
-    },
-    {
-      "lemma": "tico",
-      "run": "13507d7ef8ae",
-      "op": 33
-    },
-    {
-      "lemma": "tuberculata",
-      "run": "13507d7ef8ae",
-      "op": 69
-    },
-    {
-      "lemma": "vav",
-      "run": "13507d7ef8ae",
-      "op": 107
-    },
-    {
-      "lemma": "versa",
-      "run": "13507d7ef8ae",
-      "op": 108
-    },
-    {
-      "lemma": "von",
-      "run": "13507d7ef8ae",
-      "op": 117
-    },
-    {
-      "lemma": "whakairo",
-      "run": "91ef2c27a29d",
-      "op": 10
-    },
-    {
-      "lemma": "work-life",
-      "run": "91ef2c27a29d",
-      "op": 22
-    },
-    {
-      "lemma": "worst-case",
-      "run": "91ef2c27a29d",
-      "op": 27
-    },
-    {
-      "lemma": "year-old",
-      "run": "91ef2c27a29d",
-      "op": 30
-    },
-    {
-      "lemma": "zygomaticus",
-      "run": "91ef2c27a29d",
-      "op": 34
-    }
-  ],
-  "aliases": [
-    {
-      "from": {
-        "lemma": "accused",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "accuse",
-        "pos": "v"
-      },
-      "run": "bf6c34ca98dd",
-      "op": 4
-    },
-    {
-      "from": {
-        "lemma": "advertising",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "advertising",
-        "pos": "n"
-      },
-      "run": "bf6c34ca98dd",
-      "op": 12
-    },
-    {
-      "from": {
-        "lemma": "agribots",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "agribot",
-        "pos": "n"
-      },
-      "run": "bf6c34ca98dd",
-      "op": 19
-    },
-    {
-      "from": {
-        "lemma": "antibodies",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "antibody",
-        "pos": "n"
-      },
-      "run": "bf6c34ca98dd",
-      "op": 33
-    },
-    {
-      "from": {
-        "lemma": "appliances",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "appliance",
-        "pos": "n"
-      },
-      "run": "bf6c34ca98dd",
-      "op": 35
-    },
-    {
-      "from": {
-        "lemma": "archtophilist",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "arctophilist",
-        "pos": "n"
-      },
-      "run": "bf6c34ca98dd",
-      "op": 39
-    },
-    {
-      "from": {
-        "lemma": "art-work",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "artwork",
-        "pos": "n"
-      },
-      "run": "bf6c34ca98dd",
-      "op": 40
-    },
-    {
-      "from": {
-        "lemma": "banning",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "ban",
-        "pos": "v"
-      },
-      "run": "bf6c34ca98dd",
-      "op": 60
-    },
-    {
-      "from": {
-        "lemma": "barking",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "bark",
-        "pos": "n"
-      },
-      "run": "bf6c34ca98dd",
-      "op": 64
-    },
-    {
-      "from": {
-        "lemma": "barrels",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "barrel",
-        "pos": "n"
-      },
-      "run": "bf6c34ca98dd",
-      "op": 65
-    },
-    {
-      "from": {
-        "lemma": "calibrating",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "calibrate",
-        "pos": "v"
-      },
-      "run": "bf6c34ca98dd",
-      "op": 109
-    },
-    {
-      "from": {
-        "lemma": "censoring",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "censor",
-        "pos": "v"
-      },
-      "run": "bf6c34ca98dd",
-      "op": 126
-    },
-    {
-      "from": {
-        "lemma": "ceremonies",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "ceremony",
-        "pos": "n"
-      },
-      "run": "bf6c34ca98dd",
-      "op": 130
-    },
-    {
-      "from": {
-        "lemma": "circling",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "circle",
-        "pos": "v"
-      },
-      "run": "9ebd7c044234",
-      "op": 6
-    },
-    {
-      "from": {
-        "lemma": "clicking",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "click",
-        "pos": "v"
-      },
-      "run": "9ebd7c044234",
-      "op": 10
-    },
-    {
-      "from": {
-        "lemma": "co-operative",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "cooperative",
-        "pos": "adj"
-      },
-      "run": "9ebd7c044234",
-      "op": 20
-    },
-    {
-      "from": {
-        "lemma": "complications",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "complication",
-        "pos": "n"
-      },
-      "run": "9ebd7c044234",
-      "op": 34
-    },
-    {
-      "from": {
-        "lemma": "connecting",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "connect",
-        "pos": "v"
-      },
-      "run": "9ebd7c044234",
-      "op": 42
-    },
-    {
-      "from": {
-        "lemma": "counseling",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "counselling",
-        "pos": "n"
-      },
-      "run": "9ebd7c044234",
-      "op": 49
-    },
-    {
-      "from": {
-        "lemma": "coworker",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "co-worker",
-        "pos": "n"
-      },
-      "run": "9ebd7c044234",
-      "op": 56
-    },
-    {
-      "from": {
-        "lemma": "descriptions",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "description",
-        "pos": "n"
-      },
-      "run": "9ebd7c044234",
-      "op": 104
-    },
-    {
-      "from": {
-        "lemma": "detective",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "detective",
-        "pos": "n"
-      },
-      "run": "9ebd7c044234",
-      "op": 107
-    },
-    {
-      "from": {
-        "lemma": "diagnosed",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "diagnose",
-        "pos": "v"
-      },
-      "run": "9ebd7c044234",
-      "op": 109
-    },
-    {
-      "from": {
-        "lemma": "draw",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "drawn",
-        "pos": "adj"
-      },
-      "run": "9ebd7c044234",
-      "op": 130
-    },
-    {
-      "from": {
-        "lemma": "dubbed",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "dub",
-        "pos": "v"
-      },
-      "run": "2cfe143016c7",
-      "op": 7
-    },
-    {
-      "from": {
-        "lemma": "enzymes",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "enzyme",
-        "pos": "n"
-      },
-      "run": "2cfe143016c7",
-      "op": 29
-    },
-    {
-      "from": {
-        "lemma": "evolving",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "evolve",
-        "pos": "v"
-      },
-      "run": "2cfe143016c7",
-      "op": 41
-    },
-    {
-      "from": {
-        "lemma": "fading",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "fade",
-        "pos": "v"
-      },
-      "run": "2cfe143016c7",
-      "op": 51
-    },
-    {
-      "from": {
-        "lemma": "feasting",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "feast",
-        "pos": "v"
-      },
-      "run": "2cfe143016c7",
-      "op": 60
-    },
-    {
-      "from": {
-        "lemma": "fertilised",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "fertilise",
-        "pos": "v"
-      },
-      "run": "2cfe143016c7",
-      "op": 63
-    },
-    {
-      "from": {
-        "lemma": "fertilized",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "fertilize",
-        "pos": "v"
-      },
-      "run": "2cfe143016c7",
-      "op": 64
-    },
-    {
-      "from": {
-        "lemma": "film-making",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "filmmaking",
-        "pos": "n"
-      },
-      "run": "2cfe143016c7",
-      "op": 69
-    },
-    {
-      "from": {
-        "lemma": "founds",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "found",
-        "pos": "v"
-      },
-      "run": "2cfe143016c7",
-      "op": 103
-    },
-    {
-      "from": {
-        "lemma": "generated",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "generate",
-        "pos": "v"
-      },
-      "run": "2cfe143016c7",
-      "op": 126
-    },
-    {
-      "from": {
-        "lemma": "great-grandchildren",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "great-grandchild",
-        "pos": "n"
-      },
-      "run": "e304fcd7766e",
-      "op": 10
-    },
-    {
-      "from": {
-        "lemma": "harvesting",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "harvest",
-        "pos": "v"
-      },
-      "run": "e304fcd7766e",
-      "op": 28
-    },
-    {
-      "from": {
-        "lemma": "homeowners",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "homeowner",
-        "pos": "n"
-      },
-      "run": "e304fcd7766e",
-      "op": 55
-    },
-    {
-      "from": {
-        "lemma": "humpback",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "humpback",
-        "pos": "n"
-      },
-      "run": "e304fcd7766e",
-      "op": 70
-    },
-    {
-      "from": {
-        "lemma": "immunisations",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "immunisation",
-        "pos": "n"
-      },
-      "run": "e304fcd7766e",
-      "op": 81
-    },
-    {
-      "from": {
-        "lemma": "inactivated",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "inactivate",
-        "pos": "v"
-      },
-      "run": "e304fcd7766e",
-      "op": 83
-    },
-    {
-      "from": {
-        "lemma": "indoor",
-        "pos": "adv"
-      },
-      "to": {
-        "lemma": "indoors",
-        "pos": "adv"
-      },
-      "run": "e304fcd7766e",
-      "op": 84
-    },
-    {
-      "from": {
-        "lemma": "jamming",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "jam",
-        "pos": "v"
-      },
-      "run": "e304fcd7766e",
-      "op": 106
-    },
-    {
-      "from": {
-        "lemma": "landmark",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "landmark",
-        "pos": "n"
-      },
-      "run": "e304fcd7766e",
-      "op": 125
-    },
-    {
-      "from": {
-        "lemma": "lecturing",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "lecture",
-        "pos": "v"
-      },
-      "run": "c5617f2943b6",
-      "op": 7
-    },
-    {
-      "from": {
-        "lemma": "lenses",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "lens",
-        "pos": "n"
-      },
-      "run": "c5617f2943b6",
-      "op": 13
-    },
-    {
-      "from": {
-        "lemma": "lifecycle",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "life cycle",
-        "pos": "phr"
-      },
-      "run": "c5617f2943b6",
-      "op": 14
-    },
-    {
-      "from": {
-        "lemma": "longer-term",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "long-term",
-        "pos": "adj"
-      },
-      "run": "c5617f2943b6",
-      "op": 39
-    },
-    {
-      "from": {
-        "lemma": "lose",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "lost",
-        "pos": "adj"
-      },
-      "run": "c5617f2943b6",
-      "op": 42
-    },
-    {
-      "from": {
-        "lemma": "machine-learning",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "machine learning",
-        "pos": "phr"
-      },
-      "run": "c5617f2943b6",
-      "op": 57
-    },
-    {
-      "from": {
-        "lemma": "manmade",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "man-made",
-        "pos": "adj"
-      },
-      "run": "c5617f2943b6",
-      "op": 63
-    },
-    {
-      "from": {
-        "lemma": "mix",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "mixed",
-        "pos": "adj"
-      },
-      "run": "c5617f2943b6",
-      "op": 110
-    },
-    {
-      "from": {
-        "lemma": "move",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "moving",
-        "pos": "adj"
-      },
-      "run": "c5617f2943b6",
-      "op": 123
-    },
-    {
-      "from": {
-        "lemma": "neat",
-        "pos": "adv"
-      },
-      "to": {
-        "lemma": "neatly",
-        "pos": "adv"
-      },
-      "run": "dcc39949ef3a",
-      "op": 10
-    },
-    {
-      "from": {
-        "lemma": "negotiations",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "negotiation",
-        "pos": "n"
-      },
-      "run": "dcc39949ef3a",
-      "op": 12
-    },
-    {
-      "from": {
-        "lemma": "northwards",
-        "pos": "adv"
-      },
-      "to": {
-        "lemma": "northward",
-        "pos": "adv"
-      },
-      "run": "dcc39949ef3a",
-      "op": 62
-    },
-    {
-      "from": {
-        "lemma": "octopuses",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "octopus",
-        "pos": "n"
-      },
-      "run": "dcc39949ef3a",
-      "op": 73
-    },
-    {
-      "from": {
-        "lemma": "out-compete",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "outcompete",
-        "pos": "v"
-      },
-      "run": "dcc39949ef3a",
-      "op": 85
-    },
-    {
-      "from": {
-        "lemma": "overlapped",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "overlap",
-        "pos": "v"
-      },
-      "run": "dcc39949ef3a",
-      "op": 92
-    },
-    {
-      "from": {
-        "lemma": "palaeo-anthropologist",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "palaeoanthropologist",
-        "pos": "n"
-      },
-      "run": "dcc39949ef3a",
-      "op": 102
-    },
-    {
-      "from": {
-        "lemma": "patrons",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "patron",
-        "pos": "n"
-      },
-      "run": "dcc39949ef3a",
-      "op": 106
-    },
-    {
-      "from": {
-        "lemma": "policy-maker",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "policymaker",
-        "pos": "n"
-      },
-      "run": "67cc9ce834b6",
-      "op": 3
-    },
-    {
-      "from": {
-        "lemma": "pre-install",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "preinstall",
-        "pos": "v"
-      },
-      "run": "67cc9ce834b6",
-      "op": 18
-    },
-    {
-      "from": {
-        "lemma": "problem-solving",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "problem-solving",
-        "pos": "n"
-      },
-      "run": "67cc9ce834b6",
-      "op": 38
-    },
-    {
-      "from": {
-        "lemma": "raw-material",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "raw material",
-        "pos": "phr"
-      },
-      "run": "67cc9ce834b6",
-      "op": 56
-    },
-    {
-      "from": {
-        "lemma": "reconnecting",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "reconnect",
-        "pos": "v"
-      },
-      "run": "67cc9ce834b6",
-      "op": 72
-    },
-    {
-      "from": {
-        "lemma": "reptile's",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "reptile",
-        "pos": "n"
-      },
-      "run": "67cc9ce834b6",
-      "op": 90
-    },
-    {
-      "from": {
-        "lemma": "rethinking",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "rethink",
-        "pos": "v"
-      },
-      "run": "67cc9ce834b6",
-      "op": 98
-    },
-    {
-      "from": {
-        "lemma": "reward",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "rewarding",
-        "pos": "adj"
-      },
-      "run": "67cc9ce834b6",
-      "op": 100
-    },
-    {
-      "from": {
-        "lemma": "salespeople",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "salesperson",
-        "pos": "n"
-      },
-      "run": "67cc9ce834b6",
-      "op": 120
-    },
-    {
-      "from": {
-        "lemma": "savoring",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "savour",
-        "pos": "v"
-      },
-      "run": "67cc9ce834b6",
-      "op": 128
-    },
-    {
-      "from": {
-        "lemma": "seducing",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "seduce",
-        "pos": "v"
-      },
-      "run": "5917391d2cf4",
-      "op": 5
-    },
-    {
-      "from": {
-        "lemma": "shipping",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "shipping",
-        "pos": "n"
-      },
-      "run": "5917391d2cf4",
-      "op": 29
-    },
-    {
-      "from": {
-        "lemma": "shipping",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "ship",
-        "pos": "v"
-      },
-      "run": "5917391d2cf4",
-      "op": 28
-    },
-    {
-      "from": {
-        "lemma": "space-flight",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "spaceflight",
-        "pos": "n"
-      },
-      "run": "5917391d2cf4",
-      "op": 70
-    },
-    {
-      "from": {
-        "lemma": "sportspeople",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "sportsperson",
-        "pos": "n"
-      },
-      "run": "5917391d2cf4",
-      "op": 78
-    },
-    {
-      "from": {
-        "lemma": "spotting",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "spot",
-        "pos": "v"
-      },
-      "run": "5917391d2cf4",
-      "op": 79
-    },
-    {
-      "from": {
-        "lemma": "statistics",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "statistic",
-        "pos": "n"
-      },
-      "run": "5917391d2cf4",
-      "op": 87
-    },
-    {
-      "from": {
-        "lemma": "strangest-looking",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "strange-looking",
-        "pos": "adj"
-      },
-      "run": "5917391d2cf4",
-      "op": 99
-    },
-    {
-      "from": {
-        "lemma": "strengths",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "strength",
-        "pos": "n"
-      },
-      "run": "5917391d2cf4",
-      "op": 102
-    },
-    {
-      "from": {
-        "lemma": "super-hot",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "superhot",
-        "pos": "adj"
-      },
-      "run": "5917391d2cf4",
-      "op": 117
-    },
-    {
-      "from": {
-        "lemma": "super-intelligent",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "superintelligent",
-        "pos": "adj"
-      },
-      "run": "5917391d2cf4",
-      "op": 118
-    },
-    {
-      "from": {
-        "lemma": "tax",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "taxing",
-        "pos": "adj"
-      },
-      "run": "13507d7ef8ae",
-      "op": 4
-    },
-    {
-      "from": {
-        "lemma": "teleservices",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "teleservice",
-        "pos": "n"
-      },
-      "run": "13507d7ef8ae",
-      "op": 9
-    },
-    {
-      "from": {
-        "lemma": "theme",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "themed",
-        "pos": "adj"
-      },
-      "run": "13507d7ef8ae",
-      "op": 16
-    },
-    {
-      "from": {
-        "lemma": "thumbprints",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "thumbprint",
-        "pos": "n"
-      },
-      "run": "13507d7ef8ae",
-      "op": 32
-    },
-    {
-      "from": {
-        "lemma": "trail-followers",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "trail-follower",
-        "pos": "n"
-      },
-      "run": "13507d7ef8ae",
-      "op": 46
-    },
-    {
-      "from": {
-        "lemma": "transferred",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "transfer",
-        "pos": "v"
-      },
-      "run": "13507d7ef8ae",
-      "op": 51
-    },
-    {
-      "from": {
-        "lemma": "transplanting",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "transplant",
-        "pos": "v"
-      },
-      "run": "13507d7ef8ae",
-      "op": 56
-    },
-    {
-      "from": {
-        "lemma": "trialled",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "trial",
-        "pos": "v"
-      },
-      "run": "13507d7ef8ae",
-      "op": 61
-    },
-    {
-      "from": {
-        "lemma": "trialling",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "trial",
-        "pos": "v"
-      },
-      "run": "13507d7ef8ae",
-      "op": 62
-    },
-    {
-      "from": {
-        "lemma": "underpinning",
-        "pos": "v"
-      },
-      "to": {
-        "lemma": "underpin",
-        "pos": "v"
-      },
-      "run": "13507d7ef8ae",
-      "op": 88
-    },
-    {
-      "from": {
-        "lemma": "vitamins",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "vitamin",
-        "pos": "n"
-      },
-      "run": "13507d7ef8ae",
-      "op": 114
-    },
-    {
-      "from": {
-        "lemma": "voyaging",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "voyage",
-        "pos": "n"
-      },
-      "run": "13507d7ef8ae",
-      "op": 120
-    },
-    {
-      "from": {
-        "lemma": "wages",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "wage",
-        "pos": "n"
-      },
-      "run": "13507d7ef8ae",
-      "op": 121
-    },
-    {
-      "from": {
-        "lemma": "weaknesses",
-        "pos": "n"
-      },
-      "to": {
-        "lemma": "weakness",
-        "pos": "n"
-      },
-      "run": "13507d7ef8ae",
-      "op": 127
-    },
-    {
-      "from": {
-        "lemma": "westwards",
-        "pos": "adv"
-      },
-      "to": {
-        "lemma": "westward",
-        "pos": "adv"
-      },
-      "run": "91ef2c27a29d",
-      "op": 8
-    },
-    {
-      "from": {
-        "lemma": "wetter",
-        "pos": "adj"
-      },
-      "to": {
-        "lemma": "wet",
-        "pos": "adj"
-      },
-      "run": "91ef2c27a29d",
-      "op": 9
-    }
-  ]
+ "refused": [
+  {
+   "lemma": "alo",
+   "run": "bf6c34ca98dd",
+   "op": 24
+  },
+  {
+   "lemma": "anfiteatro",
+   "run": "bf6c34ca98dd",
+   "op": 26
+  },
+  {
+   "lemma": "atavus",
+   "run": "bf6c34ca98dd",
+   "op": 44
+  },
+  {
+   "lemma": "baori",
+   "run": "bf6c34ca98dd",
+   "op": 61
+  },
+  {
+   "lemma": "camara",
+   "run": "bf6c34ca98dd",
+   "op": 111
+  },
+  {
+   "lemma": "com",
+   "run": "9ebd7c044234",
+   "op": 27
+  },
+  {
+   "lemma": "coquinara",
+   "run": "9ebd7c044234",
+   "op": 45
+  },
+  {
+   "lemma": "crassipes",
+   "run": "9ebd7c044234",
+   "op": 59
+  },
+  {
+   "lemma": "ctscan",
+   "run": "9ebd7c044234",
+   "op": 69
+  },
+  {
+   "lemma": "cutty",
+   "run": "9ebd7c044234",
+   "op": 76
+  },
+  {
+   "lemma": "dentata",
+   "run": "9ebd7c044234",
+   "op": 101
+  },
+  {
+   "lemma": "erectus",
+   "run": "2cfe143016c7",
+   "op": 31
+  },
+  {
+   "lemma": "fragrans",
+   "run": "2cfe143016c7",
+   "op": 108
+  },
+  {
+   "lemma": "franca",
+   "run": "2cfe143016c7",
+   "op": 110
+  },
+  {
+   "lemma": "inunguis",
+   "run": "e304fcd7766e",
+   "op": 101
+  },
+  {
+   "lemma": "kinyongia",
+   "run": "e304fcd7766e",
+   "op": 116
+  },
+  {
+   "lemma": "knock-on",
+   "run": "e304fcd7766e",
+   "op": 117
+  },
+  {
+   "lemma": "kund",
+   "run": "e304fcd7766e",
+   "op": 118
+  },
+  {
+   "lemma": "lingua",
+   "run": "c5617f2943b6",
+   "op": 28
+  },
+  {
+   "lemma": "llerin",
+   "run": "c5617f2943b6",
+   "op": 29
+  },
+  {
+   "lemma": "llewyn",
+   "run": "c5617f2943b6",
+   "op": 30
+  },
+  {
+   "lemma": "magomberae",
+   "run": "c5617f2943b6",
+   "op": 58
+  },
+  {
+   "lemma": "manatus",
+   "run": "c5617f2943b6",
+   "op": 61
+  },
+  {
+   "lemma": "marka",
+   "run": "c5617f2943b6",
+   "op": 71
+  },
+  {
+   "lemma": "moya",
+   "run": "c5617f2943b6",
+   "op": 124
+  },
+  {
+   "lemma": "multocida",
+   "run": "dcc39949ef3a",
+   "op": 3
+  },
+  {
+   "lemma": "munintuma'a",
+   "run": "dcc39949ef3a",
+   "op": 4
+  },
+  {
+   "lemma": "naledi",
+   "run": "dcc39949ef3a",
+   "op": 7
+  },
+  {
+   "lemma": "nihilo",
+   "run": "dcc39949ef3a",
+   "op": 24
+  },
+  {
+   "lemma": "orbicularis",
+   "run": "dcc39949ef3a",
+   "op": 83
+  },
+  {
+   "lemma": "ori",
+   "run": "dcc39949ef3a",
+   "op": 84
+  },
+  {
+   "lemma": "peruviana",
+   "run": "dcc39949ef3a",
+   "op": 116
+  },
+  {
+   "lemma": "pheidole",
+   "run": "dcc39949ef3a",
+   "op": 118
+  },
+  {
+   "lemma": "pilae",
+   "run": "dcc39949ef3a",
+   "op": 125
+  },
+  {
+   "lemma": "planulae",
+   "run": "dcc39949ef3a",
+   "op": 132
+  },
+  {
+   "lemma": "pounamu",
+   "run": "67cc9ce834b6",
+   "op": 11
+  },
+  {
+   "lemma": "pruinosa",
+   "run": "67cc9ce834b6",
+   "op": 43
+  },
+  {
+   "lemma": "raffles",
+   "run": "67cc9ce834b6",
+   "op": 53
+  },
+  {
+   "lemma": "sapiens",
+   "run": "67cc9ce834b6",
+   "op": 125
+  },
+  {
+   "lemma": "sark",
+   "run": "67cc9ce834b6",
+   "op": 126
+  },
+  {
+   "lemma": "scyphozoa",
+   "run": "5917391d2cf4",
+   "op": 1
+  },
+  {
+   "lemma": "sehirliistiremediklerimizdensiniz",
+   "run": "5917391d2cf4",
+   "op": 6
+  },
+  {
+   "lemma": "senegalensis",
+   "run": "5917391d2cf4",
+   "op": 18
+  },
+  {
+   "lemma": "silbador",
+   "run": "5917391d2cf4",
+   "op": 39
+  },
+  {
+   "lemma": "suber",
+   "run": "5917391d2cf4",
+   "op": 109
+  },
+  {
+   "lemma": "th-century",
+   "run": "13507d7ef8ae",
+   "op": 14
+  },
+  {
+   "lemma": "tico",
+   "run": "13507d7ef8ae",
+   "op": 33
+  },
+  {
+   "lemma": "tuberculata",
+   "run": "13507d7ef8ae",
+   "op": 69
+  },
+  {
+   "lemma": "turn on or off",
+   "run": "83c3fd3bf5c6",
+   "op": 2
+  },
+  {
+   "lemma": "vav",
+   "run": "13507d7ef8ae",
+   "op": 107
+  },
+  {
+   "lemma": "versa",
+   "run": "13507d7ef8ae",
+   "op": 108
+  },
+  {
+   "lemma": "von",
+   "run": "13507d7ef8ae",
+   "op": 117
+  },
+  {
+   "lemma": "whakairo",
+   "run": "91ef2c27a29d",
+   "op": 10
+  },
+  {
+   "lemma": "work-life",
+   "run": "91ef2c27a29d",
+   "op": 22
+  },
+  {
+   "lemma": "worst-case",
+   "run": "91ef2c27a29d",
+   "op": 27
+  },
+  {
+   "lemma": "year-old",
+   "run": "91ef2c27a29d",
+   "op": 30
+  },
+  {
+   "lemma": "zygomaticus",
+   "run": "91ef2c27a29d",
+   "op": 34
+  }
+ ],
+ "aliases": [
+  {
+   "from": {
+    "lemma": "accused",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "accuse",
+    "pos": "v"
+   },
+   "run": "bf6c34ca98dd",
+   "op": 4
+  },
+  {
+   "from": {
+    "lemma": "advertising",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "advertising",
+    "pos": "n"
+   },
+   "run": "bf6c34ca98dd",
+   "op": 12
+  },
+  {
+   "from": {
+    "lemma": "agribots",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "agribot",
+    "pos": "n"
+   },
+   "run": "bf6c34ca98dd",
+   "op": 19
+  },
+  {
+   "from": {
+    "lemma": "antibodies",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "antibody",
+    "pos": "n"
+   },
+   "run": "bf6c34ca98dd",
+   "op": 33
+  },
+  {
+   "from": {
+    "lemma": "appliances",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "appliance",
+    "pos": "n"
+   },
+   "run": "bf6c34ca98dd",
+   "op": 35
+  },
+  {
+   "from": {
+    "lemma": "archtophilist",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "arctophilist",
+    "pos": "n"
+   },
+   "run": "bf6c34ca98dd",
+   "op": 39
+  },
+  {
+   "from": {
+    "lemma": "art-work",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "artwork",
+    "pos": "n"
+   },
+   "run": "bf6c34ca98dd",
+   "op": 40
+  },
+  {
+   "from": {
+    "lemma": "banning",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "ban",
+    "pos": "v"
+   },
+   "run": "bf6c34ca98dd",
+   "op": 60
+  },
+  {
+   "from": {
+    "lemma": "barking",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "bark",
+    "pos": "n"
+   },
+   "run": "bf6c34ca98dd",
+   "op": 64
+  },
+  {
+   "from": {
+    "lemma": "barrels",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "barrel",
+    "pos": "n"
+   },
+   "run": "bf6c34ca98dd",
+   "op": 65
+  },
+  {
+   "from": {
+    "lemma": "calibrating",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "calibrate",
+    "pos": "v"
+   },
+   "run": "bf6c34ca98dd",
+   "op": 109
+  },
+  {
+   "from": {
+    "lemma": "censoring",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "censor",
+    "pos": "v"
+   },
+   "run": "bf6c34ca98dd",
+   "op": 126
+  },
+  {
+   "from": {
+    "lemma": "ceremonies",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "ceremony",
+    "pos": "n"
+   },
+   "run": "bf6c34ca98dd",
+   "op": 130
+  },
+  {
+   "from": {
+    "lemma": "circling",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "circle",
+    "pos": "v"
+   },
+   "run": "9ebd7c044234",
+   "op": 6
+  },
+  {
+   "from": {
+    "lemma": "clicking",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "click",
+    "pos": "v"
+   },
+   "run": "9ebd7c044234",
+   "op": 10
+  },
+  {
+   "from": {
+    "lemma": "co-operative",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "cooperative",
+    "pos": "adj"
+   },
+   "run": "9ebd7c044234",
+   "op": 20
+  },
+  {
+   "from": {
+    "lemma": "complications",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "complication",
+    "pos": "n"
+   },
+   "run": "9ebd7c044234",
+   "op": 34
+  },
+  {
+   "from": {
+    "lemma": "connecting",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "connect",
+    "pos": "v"
+   },
+   "run": "9ebd7c044234",
+   "op": 42
+  },
+  {
+   "from": {
+    "lemma": "counseling",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "counselling",
+    "pos": "n"
+   },
+   "run": "9ebd7c044234",
+   "op": 49
+  },
+  {
+   "from": {
+    "lemma": "coworker",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "co-worker",
+    "pos": "n"
+   },
+   "run": "9ebd7c044234",
+   "op": 56
+  },
+  {
+   "from": {
+    "lemma": "descriptions",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "description",
+    "pos": "n"
+   },
+   "run": "9ebd7c044234",
+   "op": 104
+  },
+  {
+   "from": {
+    "lemma": "detective",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "detective",
+    "pos": "n"
+   },
+   "run": "9ebd7c044234",
+   "op": 107
+  },
+  {
+   "from": {
+    "lemma": "diagnosed",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "diagnose",
+    "pos": "v"
+   },
+   "run": "9ebd7c044234",
+   "op": 109
+  },
+  {
+   "from": {
+    "lemma": "draw",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "drawn",
+    "pos": "adj"
+   },
+   "run": "9ebd7c044234",
+   "op": 130
+  },
+  {
+   "from": {
+    "lemma": "dubbed",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "dub",
+    "pos": "v"
+   },
+   "run": "2cfe143016c7",
+   "op": 7
+  },
+  {
+   "from": {
+    "lemma": "enzymes",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "enzyme",
+    "pos": "n"
+   },
+   "run": "2cfe143016c7",
+   "op": 29
+  },
+  {
+   "from": {
+    "lemma": "evolving",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "evolve",
+    "pos": "v"
+   },
+   "run": "2cfe143016c7",
+   "op": 41
+  },
+  {
+   "from": {
+    "lemma": "fading",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "fade",
+    "pos": "v"
+   },
+   "run": "2cfe143016c7",
+   "op": 51
+  },
+  {
+   "from": {
+    "lemma": "feasting",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "feast",
+    "pos": "v"
+   },
+   "run": "2cfe143016c7",
+   "op": 60
+  },
+  {
+   "from": {
+    "lemma": "fertilised",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "fertilise",
+    "pos": "v"
+   },
+   "run": "2cfe143016c7",
+   "op": 63
+  },
+  {
+   "from": {
+    "lemma": "fertilized",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "fertilize",
+    "pos": "v"
+   },
+   "run": "2cfe143016c7",
+   "op": 64
+  },
+  {
+   "from": {
+    "lemma": "film-making",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "filmmaking",
+    "pos": "n"
+   },
+   "run": "2cfe143016c7",
+   "op": 69
+  },
+  {
+   "from": {
+    "lemma": "founds",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "found",
+    "pos": "v"
+   },
+   "run": "2cfe143016c7",
+   "op": 103
+  },
+  {
+   "from": {
+    "lemma": "generated",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "generate",
+    "pos": "v"
+   },
+   "run": "2cfe143016c7",
+   "op": 126
+  },
+  {
+   "from": {
+    "lemma": "great-grandchildren",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "great-grandchild",
+    "pos": "n"
+   },
+   "run": "e304fcd7766e",
+   "op": 10
+  },
+  {
+   "from": {
+    "lemma": "harvesting",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "harvest",
+    "pos": "v"
+   },
+   "run": "e304fcd7766e",
+   "op": 28
+  },
+  {
+   "from": {
+    "lemma": "homeowners",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "homeowner",
+    "pos": "n"
+   },
+   "run": "e304fcd7766e",
+   "op": 55
+  },
+  {
+   "from": {
+    "lemma": "humpback",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "humpback",
+    "pos": "n"
+   },
+   "run": "e304fcd7766e",
+   "op": 70
+  },
+  {
+   "from": {
+    "lemma": "immunisations",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "immunisation",
+    "pos": "n"
+   },
+   "run": "e304fcd7766e",
+   "op": 81
+  },
+  {
+   "from": {
+    "lemma": "inactivated",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "inactivate",
+    "pos": "v"
+   },
+   "run": "e304fcd7766e",
+   "op": 83
+  },
+  {
+   "from": {
+    "lemma": "indoor",
+    "pos": "adv"
+   },
+   "to": {
+    "lemma": "indoors",
+    "pos": "adv"
+   },
+   "run": "e304fcd7766e",
+   "op": 84
+  },
+  {
+   "from": {
+    "lemma": "jamming",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "jam",
+    "pos": "v"
+   },
+   "run": "e304fcd7766e",
+   "op": 106
+  },
+  {
+   "from": {
+    "lemma": "landmark",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "landmark",
+    "pos": "n"
+   },
+   "run": "e304fcd7766e",
+   "op": 125
+  },
+  {
+   "from": {
+    "lemma": "lecturing",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "lecture",
+    "pos": "v"
+   },
+   "run": "c5617f2943b6",
+   "op": 7
+  },
+  {
+   "from": {
+    "lemma": "lenses",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "lens",
+    "pos": "n"
+   },
+   "run": "c5617f2943b6",
+   "op": 13
+  },
+  {
+   "from": {
+    "lemma": "lifecycle",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "life cycle",
+    "pos": "phr"
+   },
+   "run": "c5617f2943b6",
+   "op": 14
+  },
+  {
+   "from": {
+    "lemma": "longer-term",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "long-term",
+    "pos": "adj"
+   },
+   "run": "c5617f2943b6",
+   "op": 39
+  },
+  {
+   "from": {
+    "lemma": "lose",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "lost",
+    "pos": "adj"
+   },
+   "run": "c5617f2943b6",
+   "op": 42
+  },
+  {
+   "from": {
+    "lemma": "machine-learning",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "machine learning",
+    "pos": "phr"
+   },
+   "run": "c5617f2943b6",
+   "op": 57
+  },
+  {
+   "from": {
+    "lemma": "manmade",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "man-made",
+    "pos": "adj"
+   },
+   "run": "c5617f2943b6",
+   "op": 63
+  },
+  {
+   "from": {
+    "lemma": "mix",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "mixed",
+    "pos": "adj"
+   },
+   "run": "c5617f2943b6",
+   "op": 110
+  },
+  {
+   "from": {
+    "lemma": "move",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "moving",
+    "pos": "adj"
+   },
+   "run": "c5617f2943b6",
+   "op": 123
+  },
+  {
+   "from": {
+    "lemma": "neat",
+    "pos": "adv"
+   },
+   "to": {
+    "lemma": "neatly",
+    "pos": "adv"
+   },
+   "run": "dcc39949ef3a",
+   "op": 10
+  },
+  {
+   "from": {
+    "lemma": "negotiations",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "negotiation",
+    "pos": "n"
+   },
+   "run": "dcc39949ef3a",
+   "op": 12
+  },
+  {
+   "from": {
+    "lemma": "northwards",
+    "pos": "adv"
+   },
+   "to": {
+    "lemma": "northward",
+    "pos": "adv"
+   },
+   "run": "dcc39949ef3a",
+   "op": 62
+  },
+  {
+   "from": {
+    "lemma": "octopuses",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "octopus",
+    "pos": "n"
+   },
+   "run": "dcc39949ef3a",
+   "op": 73
+  },
+  {
+   "from": {
+    "lemma": "out-compete",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "outcompete",
+    "pos": "v"
+   },
+   "run": "dcc39949ef3a",
+   "op": 85
+  },
+  {
+   "from": {
+    "lemma": "overlapped",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "overlap",
+    "pos": "v"
+   },
+   "run": "dcc39949ef3a",
+   "op": 92
+  },
+  {
+   "from": {
+    "lemma": "palaeo-anthropologist",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "palaeoanthropologist",
+    "pos": "n"
+   },
+   "run": "dcc39949ef3a",
+   "op": 102
+  },
+  {
+   "from": {
+    "lemma": "patrons",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "patron",
+    "pos": "n"
+   },
+   "run": "dcc39949ef3a",
+   "op": 106
+  },
+  {
+   "from": {
+    "lemma": "policy-maker",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "policymaker",
+    "pos": "n"
+   },
+   "run": "67cc9ce834b6",
+   "op": 3
+  },
+  {
+   "from": {
+    "lemma": "pre-install",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "preinstall",
+    "pos": "v"
+   },
+   "run": "67cc9ce834b6",
+   "op": 18
+  },
+  {
+   "from": {
+    "lemma": "problem-solving",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "problem-solving",
+    "pos": "n"
+   },
+   "run": "67cc9ce834b6",
+   "op": 38
+  },
+  {
+   "from": {
+    "lemma": "raw-material",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "raw material",
+    "pos": "phr"
+   },
+   "run": "67cc9ce834b6",
+   "op": 56
+  },
+  {
+   "from": {
+    "lemma": "reconnecting",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "reconnect",
+    "pos": "v"
+   },
+   "run": "67cc9ce834b6",
+   "op": 72
+  },
+  {
+   "from": {
+    "lemma": "reptile's",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "reptile",
+    "pos": "n"
+   },
+   "run": "67cc9ce834b6",
+   "op": 90
+  },
+  {
+   "from": {
+    "lemma": "rethinking",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "rethink",
+    "pos": "v"
+   },
+   "run": "67cc9ce834b6",
+   "op": 98
+  },
+  {
+   "from": {
+    "lemma": "reward",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "rewarding",
+    "pos": "adj"
+   },
+   "run": "67cc9ce834b6",
+   "op": 100
+  },
+  {
+   "from": {
+    "lemma": "salespeople",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "salesperson",
+    "pos": "n"
+   },
+   "run": "67cc9ce834b6",
+   "op": 120
+  },
+  {
+   "from": {
+    "lemma": "savoring",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "savour",
+    "pos": "v"
+   },
+   "run": "67cc9ce834b6",
+   "op": 128
+  },
+  {
+   "from": {
+    "lemma": "seducing",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "seduce",
+    "pos": "v"
+   },
+   "run": "5917391d2cf4",
+   "op": 5
+  },
+  {
+   "from": {
+    "lemma": "shipping",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "shipping",
+    "pos": "n"
+   },
+   "run": "5917391d2cf4",
+   "op": 29
+  },
+  {
+   "from": {
+    "lemma": "shipping",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "ship",
+    "pos": "v"
+   },
+   "run": "5917391d2cf4",
+   "op": 28
+  },
+  {
+   "from": {
+    "lemma": "space-flight",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "spaceflight",
+    "pos": "n"
+   },
+   "run": "5917391d2cf4",
+   "op": 70
+  },
+  {
+   "from": {
+    "lemma": "sportspeople",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "sportsperson",
+    "pos": "n"
+   },
+   "run": "5917391d2cf4",
+   "op": 78
+  },
+  {
+   "from": {
+    "lemma": "spotting",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "spot",
+    "pos": "v"
+   },
+   "run": "5917391d2cf4",
+   "op": 79
+  },
+  {
+   "from": {
+    "lemma": "statistics",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "statistic",
+    "pos": "n"
+   },
+   "run": "5917391d2cf4",
+   "op": 87
+  },
+  {
+   "from": {
+    "lemma": "strangest-looking",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "strange-looking",
+    "pos": "adj"
+   },
+   "run": "5917391d2cf4",
+   "op": 99
+  },
+  {
+   "from": {
+    "lemma": "strengths",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "strength",
+    "pos": "n"
+   },
+   "run": "5917391d2cf4",
+   "op": 102
+  },
+  {
+   "from": {
+    "lemma": "super-hot",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "superhot",
+    "pos": "adj"
+   },
+   "run": "5917391d2cf4",
+   "op": 117
+  },
+  {
+   "from": {
+    "lemma": "super-intelligent",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "superintelligent",
+    "pos": "adj"
+   },
+   "run": "5917391d2cf4",
+   "op": 118
+  },
+  {
+   "from": {
+    "lemma": "tax",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "taxing",
+    "pos": "adj"
+   },
+   "run": "13507d7ef8ae",
+   "op": 4
+  },
+  {
+   "from": {
+    "lemma": "teleservices",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "teleservice",
+    "pos": "n"
+   },
+   "run": "13507d7ef8ae",
+   "op": 9
+  },
+  {
+   "from": {
+    "lemma": "theme",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "themed",
+    "pos": "adj"
+   },
+   "run": "13507d7ef8ae",
+   "op": 16
+  },
+  {
+   "from": {
+    "lemma": "thumbprints",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "thumbprint",
+    "pos": "n"
+   },
+   "run": "13507d7ef8ae",
+   "op": 32
+  },
+  {
+   "from": {
+    "lemma": "trail-followers",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "trail-follower",
+    "pos": "n"
+   },
+   "run": "13507d7ef8ae",
+   "op": 46
+  },
+  {
+   "from": {
+    "lemma": "transferred",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "transfer",
+    "pos": "v"
+   },
+   "run": "13507d7ef8ae",
+   "op": 51
+  },
+  {
+   "from": {
+    "lemma": "transplanting",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "transplant",
+    "pos": "v"
+   },
+   "run": "13507d7ef8ae",
+   "op": 56
+  },
+  {
+   "from": {
+    "lemma": "trialled",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "trial",
+    "pos": "v"
+   },
+   "run": "13507d7ef8ae",
+   "op": 61
+  },
+  {
+   "from": {
+    "lemma": "trialling",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "trial",
+    "pos": "v"
+   },
+   "run": "13507d7ef8ae",
+   "op": 62
+  },
+  {
+   "from": {
+    "lemma": "underpinning",
+    "pos": "v"
+   },
+   "to": {
+    "lemma": "underpin",
+    "pos": "v"
+   },
+   "run": "13507d7ef8ae",
+   "op": 88
+  },
+  {
+   "from": {
+    "lemma": "vitamins",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "vitamin",
+    "pos": "n"
+   },
+   "run": "13507d7ef8ae",
+   "op": 114
+  },
+  {
+   "from": {
+    "lemma": "voyaging",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "voyage",
+    "pos": "n"
+   },
+   "run": "13507d7ef8ae",
+   "op": 120
+  },
+  {
+   "from": {
+    "lemma": "wages",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "wage",
+    "pos": "n"
+   },
+   "run": "13507d7ef8ae",
+   "op": 121
+  },
+  {
+   "from": {
+    "lemma": "weaknesses",
+    "pos": "n"
+   },
+   "to": {
+    "lemma": "weakness",
+    "pos": "n"
+   },
+   "run": "13507d7ef8ae",
+   "op": 127
+  },
+  {
+   "from": {
+    "lemma": "westwards",
+    "pos": "adv"
+   },
+   "to": {
+    "lemma": "westward",
+    "pos": "adv"
+   },
+   "run": "91ef2c27a29d",
+   "op": 8
+  },
+  {
+   "from": {
+    "lemma": "wetter",
+    "pos": "adj"
+   },
+   "to": {
+    "lemma": "wet",
+    "pos": "adj"
+   },
+   "run": "91ef2c27a29d",
+   "op": 9
+  }
+ ]
 }
